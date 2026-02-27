@@ -4,6 +4,7 @@ import typer
 
 from muzik.commands import cache as cache_mod
 from muzik.commands import config as config_mod
+from muzik.commands.bandcamp import bandcamp_cmd
 from muzik.commands.download import download_cmd
 from muzik.commands.import_ import import_cmd
 from muzik.commands.init import init_cmd
@@ -27,6 +28,7 @@ app = typer.Typer(
 # Single-command subcommands registered directly on the root app
 app.command("init", help="Create XDG directories and configure beets.")(init_cmd)
 app.command("import", help="Import an existing music library into beets.")(import_cmd)
+app.command("bandcamp", help="Download Bandcamp collection via bandsnatch + organize with beets.")(bandcamp_cmd)
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd

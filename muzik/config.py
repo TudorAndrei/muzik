@@ -38,8 +38,17 @@ XDG_DATA_HOME = _xdg("XDG_DATA_HOME", Path.home() / ".local" / "share")
 # Cache directory shared with the bash scripts (yt_<id>.txt, split_<hash>.txt …)
 CACHE_DIR = XDG_CACHE_HOME / "music-scripts"
 
+# muzik-specific cache dir ($XDG_CACHE_HOME/muzik/)
+MUZIK_CACHE_DIR = XDG_CACHE_HOME / "muzik"
+
+# Bandcamp download-tracking cache (pipe-delimited, one entry per purchased item)
+BANDCAMP_CACHE_FILE = MUZIK_CACHE_DIR / "bandcamp.cache"
+
 # Default beets config location
 BEETS_CONFIG = XDG_CONFIG_HOME / "beets" / "config.yaml"
+
+# muzik config dir — stores per-service credentials (e.g. Bandcamp cookies)
+MUZIK_CONFIG_DIR = XDG_CONFIG_HOME / "muzik"
 
 # Default directories for downloaded audio and chapter-split tracks.
 # Both live under $XDG_DATA_HOME/muzik/ so they are:
@@ -47,6 +56,7 @@ BEETS_CONFIG = XDG_CONFIG_HOME / "beets" / "config.yaml"
 #   • out of the way of the working directory
 #   • easy to locate on any XDG-compliant system
 DEFAULT_DOWNLOAD_DIR = XDG_DATA_HOME / "muzik" / "downloads"
+DEFAULT_BANDCAMP_DIR = XDG_DATA_HOME / "muzik" / "bandcamp"
 DEFAULT_SPLITS_DIR = XDG_DATA_HOME / "muzik" / "splits"
 
 # ---------------------------------------------------------------------------

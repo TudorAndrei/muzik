@@ -12,6 +12,10 @@ dependencies = [
     "pyyaml>=6.0.3",
     "musicbrainzngs>=0.7.1",
     "beets>=2.6.2",
+    "playwright>=1.40",
+    "aiohttp>=3.10",
+    "stamina>=24.2",
+    "beautifulsoup4>=4.12",
 ]
 
 [project.scripts]

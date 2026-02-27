@@ -3,7 +3,10 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:docs.beets.io)",
-      "WebFetch(domain:specifications.freedesktop.org)"
+      "WebFetch(domain:specifications.freedesktop.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)"
     ]
   }
 }
