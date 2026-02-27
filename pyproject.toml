@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "muzik"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pyyaml>=6.0.3",
+    "musicbrainzngs>=0.7.1",
+    "beets>=2.6.2",
+]
+
+[project.scripts]
+muzik = "muzik.app:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["muzik"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.3",
+]
