@@ -6,7 +6,8 @@
       "WebFetch(domain:specifications.freedesktop.org)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(prek:*)"
     ]
   }
 }

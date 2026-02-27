@@ -1,9 +1,8 @@
-<p align="center">
-  <img src="assets/logo.jpeg" alt="muzik" width="180" />
-</p>
+# muzik
 
-<h1 align="center">muzik</h1>
-<p align="center">Music organizer CLI — download, split, and organize music from YouTube and Bandcamp.</p>
+![muzik](assets/logo.jpeg)
+
+Music organizer CLI — download, split, and organize music from YouTube and Bandcamp.
 
 ---
 
@@ -40,6 +39,13 @@ uv run muzik init
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik cache` | Manage the `~/.cache/music-scripts` cache |
 | `muzik config` | Manage beets configuration |
+
+## Credits
+
+- Bandcamp collection downloading is a Python port of [bandsnatch](https://github.com/Ovyerus/bandsnatch)
+- Audio downloading via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
+- Audio processing via [FFmpeg](https://ffmpeg.org/)
+- Music library management via [beets](https://beets.io/)
 
 ## Quick start
 
