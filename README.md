@@ -3,11 +3,11 @@
 </p>
 
 <h1 align="center">muzik</h1>
-<p align="center">Music organizer CLI — download, split, and organize music from YouTube.</p>
+<p align="center">Music organizer CLI — download, split, and organize music from YouTube and Bandcamp.</p>
 
 ---
 
-Wraps **yt-dlp**, **ffmpeg**, and **beets** with better progress feedback and an interactive chapter editor.
+Wraps **yt-dlp**, **ffmpeg**, and **beets** with better progress feedback and an interactive chapter editor. Also downloads your full Bandcamp collection.
 
 ## Requirements
 
@@ -21,6 +21,7 @@ Wraps **yt-dlp**, **ffmpeg**, and **beets** with better progress feedback and an
 git clone <repo>
 cd muzik
 uv sync
+uv run playwright install chromium
 uv run muzik init
 ```
 
@@ -31,6 +32,7 @@ uv run muzik init
 | `muzik init` | Create XDG directories and configure beets |
 | `muzik workflow <url>` | Full pipeline: download → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
+| `muzik bandcamp` | Download Bandcamp collection and organize with beets |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Tag/import audio with beets |
 | `muzik import <dir>` | Import an existing music library into beets |
@@ -44,6 +46,9 @@ uv run muzik init
 ```sh
 # Download, split by chapters, and import into beets
 muzik workflow "https://youtube.com/watch?v=..."
+
+# Download your full Bandcamp collection (opens browser on first run)
+muzik bandcamp
 
 # Import an existing music collection
 muzik import ~/Music --copy
