@@ -121,7 +121,7 @@ def split_cmd(
 
     # Optional review / edit loop
     if review:
-        chapters = edit_chapters(chapters)  # type: ignore[assignment]
+        chapters = edit_chapters(chapters)
         if chapters is None:
             raise typer.Exit(0)
     else:
