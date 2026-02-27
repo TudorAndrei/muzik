@@ -5,6 +5,7 @@ import typer
 from muzik.commands import cache as cache_mod
 from muzik.commands import config as config_mod
 from muzik.commands.download import download_cmd
+from muzik.commands.init import init_cmd
 from muzik.commands.split import split_cmd
 from muzik.commands.organize import organize_cmd
 from muzik.commands.workflow import workflow_cmd
@@ -23,6 +24,7 @@ app = typer.Typer(
 )
 
 # Single-command subcommands registered directly on the root app
+app.command("init", help="Create XDG directories and configure beets.")(init_cmd)
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd

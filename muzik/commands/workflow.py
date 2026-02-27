@@ -20,7 +20,13 @@ import typer
 from muzik.commands.download import download_cmd
 from muzik.commands.split import split_cmd
 from muzik.commands.organize import organize_cmd
-from muzik.config import AUDIO_EXTENSIONS, BEETS_CONFIG, CACHE_DIR
+from muzik.config import (
+    AUDIO_EXTENSIONS,
+    BEETS_CONFIG,
+    CACHE_DIR,
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_SPLITS_DIR,
+)
 from muzik.core.audio import extract_metadata, get_duration
 from muzik.core.chapters import find_chapters, serialize_chapters
 import muzik.core.cache as cache_mod
@@ -161,13 +167,13 @@ def _find_by_id(directory: Path, yt_id: str) -> list[Path]:
 def workflow_cmd(
     url: str = typer.Argument(..., help="YouTube URL to download and process."),
     output: Path = typer.Option(
-        Path("./downloads"),
+        DEFAULT_DOWNLOAD_DIR,
         "--output",
         "-o",
         help="Directory to save downloaded files.",
     ),
     splits: Path = typer.Option(
-        Path("./splits"),
+        DEFAULT_SPLITS_DIR,
         "--splits",
         help="Directory for chapter-split tracks (album scenario only).",
     ),

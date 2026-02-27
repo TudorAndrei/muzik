@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "WebSearch",
-      "WebFetch(domain:docs.beets.io)"
+      "WebFetch(domain:docs.beets.io)",
+      "WebFetch(domain:specifications.freedesktop.org)"
     ]
   }
 }

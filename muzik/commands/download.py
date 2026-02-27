@@ -7,7 +7,7 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from muzik.config import AUDIO_EXTENSIONS, YTDLP_OUTPUT_TEMPLATE
+from muzik.config import AUDIO_EXTENSIONS, DEFAULT_DOWNLOAD_DIR, YTDLP_OUTPUT_TEMPLATE
 from muzik.core.chapters import find_chapters
 from muzik.core.runner import run_streaming
 from muzik.ui.console import console, err
@@ -27,7 +27,7 @@ def _scenario_label(chapters_count: int) -> str:
 def download_cmd(
     url: str = typer.Argument(..., help="YouTube URL (video, playlist, or album)."),
     output: Path = typer.Option(
-        Path("./downloads"),
+        DEFAULT_DOWNLOAD_DIR,
         "--output",
         "-o",
         help="Directory to save downloaded files.",
