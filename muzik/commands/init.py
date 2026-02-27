@@ -1,11 +1,14 @@
 """muzik init — create XDG directories and configure beets for use with muzik."""
 
 import re
-from pathlib import Path
 
-import typer
 
-from muzik.config import BEETS_CONFIG, CACHE_DIR, DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+from muzik.config import (
+    BEETS_CONFIG,
+    CACHE_DIR,
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_SPLITS_DIR,
+)
 from muzik.ui.console import console
 
 

@@ -261,12 +261,16 @@ def workflow_cmd(
         )
 
         if dry_run:
-            console.print(f"  [dim]Would process playlist {playlist_id} per-video[/dim]")
+            console.print(
+                f"  [dim]Would process playlist {playlist_id} per-video[/dim]"
+            )
         else:
             console.print("  [dim]Fetching video list…[/dim]")
             video_ids = _get_playlist_video_ids(url)
             if not video_ids:
-                err("[red]Could not fetch playlist video IDs — check the URL and yt-dlp.[/red]")
+                err(
+                    "[red]Could not fetch playlist video IDs — check the URL and yt-dlp.[/red]"
+                )
                 raise typer.Exit(1)
             console.print(f"  [dim]{len(video_ids)} video(s) in playlist[/dim]")
 
@@ -314,7 +318,9 @@ def workflow_cmd(
                         cached = Path(entry["audio_file"])
                         if cached.exists():
                             af = cached
-                            console.print(f"  [green]Already downloaded[/green] → {af.name}")
+                            console.print(
+                                f"  [green]Already downloaded[/green] → {af.name}"
+                            )
 
                     if af is None:
                         video_url = f"https://www.youtube.com/watch?v={vid_id}"
@@ -330,7 +336,9 @@ def workflow_cmd(
                             )
                         except (SystemExit, typer.Exit) as exc:
                             if getattr(exc, "code", 0) != 0:
-                                err(f"  [red]Download failed for {vid_id} — skipping[/red]")
+                                err(
+                                    f"  [red]Download failed for {vid_id} — skipping[/red]"
+                                )
                                 continue
 
                         after = set(output.glob("*")) if output.exists() else set()
@@ -358,7 +366,9 @@ def workflow_cmd(
                     # Classify and split
                     chapters = _get_chapters_for(af, no_split)
                     if chapters:
-                        console.print(f"\n[bold]Split[/bold] — {len(chapters)} chapters")
+                        console.print(
+                            f"\n[bold]Split[/bold] — {len(chapters)} chapters"
+                        )
                         out_dir = splits / af.stem
                         try:
                             split_cmd(
@@ -402,7 +412,9 @@ def workflow_cmd(
 
                 # Organize the split directory
                 if split_dir_for_vid is not None and not no_organize:
-                    console.print(f"\n[bold]Organize[/bold] — {split_dir_for_vid.name}/")
+                    console.print(
+                        f"\n[bold]Organize[/bold] — {split_dir_for_vid.name}/"
+                    )
                     try:
                         organize_cmd(
                             directory=split_dir_for_vid,

@@ -17,7 +17,9 @@ def _beet_bin() -> str:
 
 
 def import_cmd(
-    directory: Path = typer.Argument(..., help="Root directory of the existing music library to import."),
+    directory: Path = typer.Argument(
+        ..., help="Root directory of the existing music library to import."
+    ),
     copy: bool = typer.Option(
         False,
         "--copy",
