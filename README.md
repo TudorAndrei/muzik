@@ -1,0 +1,50 @@
+<p align="center">
+  <img src="assets/logo.jpeg" alt="muzik" width="180" />
+</p>
+
+<h1 align="center">muzik</h1>
+<p align="center">Music organizer CLI — download, split, and organize music from YouTube.</p>
+
+---
+
+Wraps **yt-dlp**, **ffmpeg**, and **beets** with better progress feedback and an interactive chapter editor.
+
+## Requirements
+
+- Python 3.11+
+- [`uv`](https://github.com/astral-sh/uv)
+- `yt-dlp`, `ffmpeg`, `ffprobe` on `$PATH`
+
+## Install
+
+```sh
+git clone <repo>
+cd muzik
+uv sync
+uv run muzik init
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `muzik init` | Create XDG directories and configure beets |
+| `muzik workflow <url>` | Full pipeline: download → split → organize |
+| `muzik download <url>` | Download audio from YouTube via yt-dlp |
+| `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
+| `muzik organize <dir>` | Tag/import audio with beets |
+| `muzik import <dir>` | Import an existing music library into beets |
+| `muzik archive <dir>` | Process existing downloaded files (split + organize) |
+| `muzik validate <dir>` | Validate audio files, chapters, and metadata |
+| `muzik cache` | Manage the `~/.cache/music-scripts` cache |
+| `muzik config` | Manage beets configuration |
+
+## Quick start
+
+```sh
+# Download, split by chapters, and import into beets
+muzik workflow "https://youtube.com/watch?v=..."
+
+# Import an existing music collection
+muzik import ~/Music --copy
+```
