@@ -1,5 +1,6 @@
 """muzik import — import an existing music library into beets."""
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Optional
@@ -9,6 +10,22 @@ import typer
 from muzik.config import BEETS_CONFIG
 from muzik.core.runner import run_passthrough
 from muzik.ui.console import console, err
+
+
+def _notify(directory: Path) -> None:
+    try:
+        from desktop_notifier import DesktopNotifier
+
+        async def _send() -> None:
+            notifier = DesktopNotifier(app_name="muzik")
+            await notifier.send(
+                title="beets needs your input",
+                message=f"Importing: {directory.name}",
+            )
+
+        asyncio.run(_send())
+    except Exception:
+        pass
 
 
 def _beet_bin() -> str:
@@ -98,6 +115,8 @@ def import_cmd(
     cmd += subcmd + [str(directory)]
 
     console.print(f"[bold]beet import[/bold] {directory}")
+    if not quiet:
+        _notify(directory)
     rc = run_passthrough(cmd)
     if rc != 0:
         err(f"[red]beet exited with code {rc}[/red]")

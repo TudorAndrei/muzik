@@ -16,6 +16,7 @@ dependencies = [
     "aiohttp>=3.10",
     "stamina>=24.2",
     "beautifulsoup4>=4.12",
+    "desktop-notifier>=6.0",
 ]
 
 [project.scripts]
