@@ -1,6 +1,7 @@
 """music split <path> — ffmpeg chapter splitter with optional interactive review."""
 
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -39,7 +40,7 @@ def _split_track(
     Returns (success, chapter_title).
     """
     safe_title = safe_filename(chapter.title)
-    out_path = output_dir / f"{chapter.index:02d}-{safe_title}.flac"
+    out_path = output_dir / f"{chapter.index:02d}-{safe_title}{audio_path.suffix}"
 
     cmd = [
         "ffmpeg",
@@ -136,7 +137,9 @@ def split_cmd(
     else:
         out_dir = output
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True)
 
     # Check split cache (shares key scheme with bash scripts)
     base = path.with_suffix("")

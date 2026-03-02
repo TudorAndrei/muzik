@@ -28,7 +28,10 @@ app = typer.Typer(
 # Single-command subcommands registered directly on the root app
 app.command("init", help="Create XDG directories and configure beets.")(init_cmd)
 app.command("import", help="Import an existing music library into beets.")(import_cmd)
-app.command("bandcamp", help="Download Bandcamp collection via bandsnatch + organize with beets.")(bandcamp_cmd)
+app.command(
+    "bandcamp",
+    help="Download Bandcamp collection via bandsnatch + organize with beets.",
+)(bandcamp_cmd)
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd
@@ -43,7 +46,6 @@ app.command("archive", help="Process existing downloaded files (split + organize
 app.command("validate", help="Validate audio files, chapters, and metadata.")(
     validate_cmd
 )
-
 # Multi-command subcommand groups
 app.add_typer(cache_mod.app, name="cache")
 app.add_typer(config_mod.app, name="config")

@@ -13,8 +13,15 @@ from muzik.ui.console import console
 
 
 # The beets import setting muzik requires.
-_IMPORT_BLOCK = "import:\n  duplicate_action: skip\n"
-_DUPLICATE_LINE = "  duplicate_action: skip"
+_IMPORT_BLOCK = (
+    "import:\n"
+    "  duplicate_action: skip\n"
+    "  none_rec_action: asis\n"
+    "match:\n"
+    "  strong_rec_thresh: 0.10\n"
+    "  medium_rec_thresh: 0.20\n"
+)
+_DUPLICATE_LINE = "  duplicate_action: skip\n  none_rec_action: asis"
 
 
 def _ensure_dirs() -> None:
@@ -82,7 +89,7 @@ def init_cmd() -> None:
     Creates:
       $XDG_DATA_HOME/muzik/downloads   — default download directory
       $XDG_DATA_HOME/muzik/splits      — default splits directory
-      $XDG_CACHE_HOME/music-scripts    — cache directory
+      $XDG_CACHE_HOME/muzik            — cache directory
       $XDG_CONFIG_HOME/beets/          — beets config directory
 
     \b

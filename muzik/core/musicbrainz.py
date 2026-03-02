@@ -127,6 +127,8 @@ def lookup_chapters(
             releases = search_releases(q_artist, clean_album, q_year, limit=5)
             if releases:
                 best = releases[0]
+                if int(best.get("score", 0)) < 80:
+                    continue
                 rid = best.get("id", "")
                 release_title = best.get("title", album)
                 if not rid:

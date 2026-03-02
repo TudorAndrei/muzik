@@ -68,8 +68,6 @@ def download_cmd(
         "--format",
         format,
         "--extract-audio",
-        "--audio-format",
-        "flac",
         "--audio-quality",
         quality,
         "--embed-metadata",

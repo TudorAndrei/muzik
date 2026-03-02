@@ -1,6 +1,6 @@
 """File-based cache compatible with the bash scripts.
 
-Same directory (~/.cache/music-scripts) and key scheme (yt_<id>, chapters_<id>,
+Same directory (~/.cache/muzik) and key scheme (yt_<id>, chapters_<id>,
 split_<audio_hash>_<chapters_hash>) so Python and bash share the cache transparently.
 """
 

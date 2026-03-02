@@ -35,14 +35,11 @@ XDG_DATA_HOME = _xdg("XDG_DATA_HOME", Path.home() / ".local" / "share")
 # Application paths
 # ---------------------------------------------------------------------------
 
-# Cache directory shared with the bash scripts (yt_<id>.txt, split_<hash>.txt …)
-CACHE_DIR = XDG_CACHE_HOME / "music-scripts"
-
-# muzik-specific cache dir ($XDG_CACHE_HOME/muzik/)
-MUZIK_CACHE_DIR = XDG_CACHE_HOME / "muzik"
+# Cache directory ($XDG_CACHE_HOME/muzik/)
+CACHE_DIR = XDG_CACHE_HOME / "muzik"
 
 # Bandcamp download-tracking cache (pipe-delimited, one entry per purchased item)
-BANDCAMP_CACHE_FILE = MUZIK_CACHE_DIR / "bandcamp.cache"
+BANDCAMP_CACHE_FILE = CACHE_DIR / "bandcamp.cache"
 
 # Default beets config location
 BEETS_CONFIG = XDG_CONFIG_HOME / "beets" / "config.yaml"
@@ -74,8 +71,6 @@ YTDLP_FLAGS = [
     "--format",
     "bestaudio",
     "--extract-audio",
-    "--audio-format",
-    "flac",
     "--audio-quality",
     "0",
     "--embed-metadata",

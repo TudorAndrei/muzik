@@ -5,11 +5,11 @@ from typing import Optional
 import typer
 from rich.table import Table
 
-from muzik.config import CACHE_DIR
+from muzik.config import CACHE_DIR, DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
 from muzik.core import cache as cache_mod
 from muzik.ui.console import console, err
 
-app = typer.Typer(help="Manage the ~/.cache/music-scripts cache.")
+app = typer.Typer(help="Manage the ~/.cache/muzik cache.")
 
 
 def _human_size(n: int) -> str:
@@ -92,6 +92,51 @@ def cache_size() -> None:
     console.print(
         f"[bold]Cache:[/bold] {CACHE_DIR}\n  {len(files)} file(s), {_human_size(total)}"
     )
+
+
+@app.command("purge")
+def cache_purge() -> None:
+    """Delete all cache entries and all downloaded files."""
+    import shutil
+
+    cache_files = cache_mod.list_all()
+    dl_files = (
+        sorted(DEFAULT_DOWNLOAD_DIR.iterdir()) if DEFAULT_DOWNLOAD_DIR.exists() else []
+    )
+    split_files = (
+        sorted(DEFAULT_SPLITS_DIR.iterdir()) if DEFAULT_SPLITS_DIR.exists() else []
+    )
+
+    if not cache_files and not dl_files and not split_files:
+        console.print("[dim]Nothing to purge.[/dim]")
+        return
+
+    lines = []
+    if cache_files:
+        lines.append(f"{len(cache_files)} cache entry/entries ({CACHE_DIR})")
+    if dl_files:
+        lines.append(f"{len(dl_files)} downloaded file(s) ({DEFAULT_DOWNLOAD_DIR})")
+    if split_files:
+        lines.append(f"{len(split_files)} split dir(s) ({DEFAULT_SPLITS_DIR})")
+
+    console.print("[bold red]This will permanently delete:[/bold red]")
+    for line in lines:
+        console.print(f"  • {line}")
+
+    typer.confirm("Continue?", abort=True)
+
+    for p in cache_files:
+        p.unlink(missing_ok=True)
+
+    if DEFAULT_DOWNLOAD_DIR.exists():
+        shutil.rmtree(DEFAULT_DOWNLOAD_DIR)
+        DEFAULT_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+    if DEFAULT_SPLITS_DIR.exists():
+        shutil.rmtree(DEFAULT_SPLITS_DIR)
+        DEFAULT_SPLITS_DIR.mkdir(parents=True, exist_ok=True)
+
+    console.print("[green]Purge complete.[/green]")
 
 
 @app.command("clean")
