@@ -17,6 +17,7 @@ dependencies = [
     "stamina>=24.2",
     "beautifulsoup4>=4.12",
     "desktop-notifier>=6.0",
+    "pydantic-ai-slim[openrouter]>=0.0.14",
 ]
 
 [project.scripts]

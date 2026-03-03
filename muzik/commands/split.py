@@ -105,6 +105,12 @@ def split_cmd(
         "--keep-source",
         help="Keep original audio and sidecar files after splitting.",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Ignore split cache and re-split even if already done.",
+    ),
 ) -> None:
     """Split an audio file into individual tracks using chapter markers."""
     if not path.exists():
@@ -148,7 +154,7 @@ def split_cmd(
     if txt_path.exists():
         cache_key = cache_mod.split_cache_key(path, txt_path)
         cached = cache_mod.get(cache_key)
-        if cached and Path(cached.strip()).exists():
+        if not force and cached and Path(cached.strip()).exists():
             console.print(
                 f"[green]Already split (cached).[/green] Output: {cached.strip()}"
             )

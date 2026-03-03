@@ -30,7 +30,15 @@ from muzik.config import (
 from muzik.core.audio import extract_metadata, get_duration
 from muzik.core.chapters import find_chapters, serialize_chapters
 import muzik.core.cache as cache_mod
-from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters
+from muzik.core.musicbrainz import (
+    MIN_ALBUM_DURATION,
+    lookup_chapters_verbose as lookup_chapters,
+)
+from muzik.core.description_chapters import (
+    description_has_timestamps,
+    extract_chapters_from_description,
+    get_description_from_info_json,
+)
 from muzik.ui.chapter_editor import display_chapter_table
 from muzik.ui.console import console, err
 
@@ -127,9 +135,55 @@ def _get_chapters_for(af: Path, no_split: bool) -> Optional[list]:
         f"([dim]{int(duration) // 60}m, looks like an album[/dim])"
     )
     console.print(f"  [dim]Querying MusicBrainz for {artist!r} / {album_name!r}…[/dim]")
-    mb_chapters, mb_title = lookup_chapters(artist, album_name, year)
+    mb_chapters, mb_title, mb_diag = lookup_chapters(artist, album_name, year)
     if not mb_chapters:
         console.print("  [dim]MusicBrainz: no match found.[/dim]")
+        for line in mb_diag.splitlines():
+            console.print(f"  [dim]  {line}[/dim]")
+        # Try extracting chapters from the video description via LLM
+        import os
+
+        jsn = af.with_suffix("").with_suffix(".info.json")
+        if jsn.exists() and os.environ.get("OPENROUTER_API_KEY"):
+            description = get_description_from_info_json(jsn)
+            if description and description_has_timestamps(description):
+                console.print(
+                    "  [dim]Querying LLM for chapters in video description…[/dim]"
+                )
+                llm_chapters, llm_err = extract_chapters_from_description(description)
+                if llm_err:
+                    console.print(f"  [red]LLM error:[/red] {llm_err}")
+                elif llm_chapters:
+                    console.print(
+                        f"  [cyan]LLM found:[/cyan] {len(llm_chapters)} tracks in description"
+                    )
+                    display_chapter_table(llm_chapters, title="LLM — description")
+                    try:
+                        raw = (
+                            input("  Use these chapters? [Y/n/e=edit]: ")
+                            .strip()
+                            .lower()
+                            or "y"
+                        )
+                    except (EOFError, KeyboardInterrupt):
+                        raw = "n"
+                    if raw == "e":
+                        from muzik.ui.chapter_editor import edit_chapters
+
+                        llm_chapters = edit_chapters(llm_chapters) or llm_chapters
+                        raw = "y"
+                    if raw == "y":
+                        sidecar = af.with_suffix(".chapters.txt")
+                        sidecar.write_text(
+                            serialize_chapters(llm_chapters), encoding="utf-8"
+                        )
+                        console.print(f"  [green]Saved:[/green] {sidecar.name}")
+                        return llm_chapters
+                    console.print("  [dim]Skipping LLM chapters.[/dim]")
+                else:
+                    console.print(
+                        "  [dim]LLM: no timestamps found in description.[/dim]"
+                    )
         return None
     console.print(
         f"  [cyan]MusicBrainz found:[/cyan] [bold]{mb_title}[/bold] — {len(mb_chapters)} tracks"
@@ -228,6 +282,12 @@ def workflow_cmd(
         "--keep-source/--no-keep-source",
         help="Keep downloaded files after splitting (default: delete after split).",
     ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Ignore download/split cache and reprocess from scratch.",
+    ),
 ) -> None:
     """Full pipeline: download from YouTube → detect scenario → split/organize.
 
@@ -281,6 +341,9 @@ def workflow_cmd(
                 console.rule(style="dim")
 
                 entry = playlist_state["videos"].get(vid_id, {})
+                if force and entry.get("status") in ("split", "organized"):
+                    entry = {k: v for k, v in entry.items() if k != "status"}
+                    entry["status"] = "downloaded"
 
                 # Backfill from individual cache if not yet tracked in playlist state
                 if not entry:
@@ -377,6 +440,7 @@ def workflow_cmd(
                                 jobs=jobs,
                                 output=out_dir,
                                 keep_source=keep_source,
+                                force=force,
                             )
                         except (SystemExit, typer.Exit) as exc:
                             if getattr(exc, "code", 0) != 0:
@@ -460,12 +524,13 @@ def workflow_cmd(
                     f"  [green]Already downloaded[/green] (source deleted after split,"
                     f" skipping yt-dlp)\n  [dim]{cached_path.name}[/dim]"
                 )
-                expected_split = splits / cached_path.stem
-                if expected_split.exists():
-                    pre_split_dirs.append(expected_split)
-                    console.print(
-                        f"  [dim]Found existing split dir: {expected_split.name}[/dim]"
-                    )
+                if not force:
+                    expected_split = splits / cached_path.stem
+                    if expected_split.exists():
+                        pre_split_dirs.append(expected_split)
+                        console.print(
+                            f"  [dim]Found existing split dir: {expected_split.name}[/dim]"
+                        )
         else:
             # Not in cache — check output dir by ID (fast, avoids yt-dlp)
             if yt_id and output.exists():
@@ -554,6 +619,7 @@ def workflow_cmd(
                         jobs=jobs,
                         output=out_dir,
                         keep_source=keep_source,
+                        force=force,
                     )
                 except (SystemExit, typer.Exit) as exc:
                     if getattr(exc, "code", 0) != 0:
