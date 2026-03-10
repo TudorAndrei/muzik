@@ -23,13 +23,13 @@ def organize_cmd(
         False,
         "--import",
         "-i",
-        help="Import files into beets library (moves files).",
+        help="Import files into beets library by moving them (same as default behavior).",
     ),
     tag_only: bool = typer.Option(
         False,
         "--tag-only",
         "-t",
-        help="Only write tags; do not move or import files.",
+        help="Only write tags; do not import or move files.",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -70,7 +70,7 @@ def organize_cmd(
 
     if import_:
         console.print(f"[bold]beet import[/bold] {directory}")
-        subcmd = ["import", "--incremental"]
+        subcmd = ["import", "--incremental", "--move"]
         if dry_run:
             subcmd.append("--pretend")
         cmd += subcmd + [str(directory)]
@@ -78,9 +78,9 @@ def organize_cmd(
         console.print(f"[bold]beet write[/bold] (tag-only) {directory}")
         cmd += ["write"] + (["--yes"] if not dry_run else []) + [str(directory)]
     else:
-        # Default: import with auto-tagging, skipping already-imported directories
+        # Default: import with auto-tagging, moving files into the beets library.
         console.print(f"[bold]beet import[/bold] {directory}")
-        subcmd = ["import", "--incremental"]
+        subcmd = ["import", "--incremental", "--move"]
         if dry_run:
             subcmd.append("--pretend")
         cmd += subcmd + [str(directory)]

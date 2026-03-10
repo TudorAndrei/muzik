@@ -8,7 +8,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(curl:*)",
       "Bash(prek:*)",
-      "WebFetch(domain:ai.pydantic.dev)"
+      "WebFetch(domain:ai.pydantic.dev)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__query-docs"
     ]
   }
 }

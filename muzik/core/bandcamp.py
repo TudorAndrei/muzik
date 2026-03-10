@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Optional
+from typing import Any, Mapping, Optional, Sequence
 from urllib.parse import urlparse
 
 import aiohttp
@@ -69,7 +69,6 @@ def _retry():
         wait_initial=10.0,
         wait_max=60.0,
         wait_jitter=0.0,
-        wait_exp=1.0,
     )
 
 
@@ -126,7 +125,9 @@ class DigitalItem:
             return "0000"
         try:
             return str(
-                datetime.strptime(self.package_release_date, "%d %b %Y %H:%M:%S %Z").year
+                datetime.strptime(
+                    self.package_release_date, "%d %b %Y %H:%M:%S %Z"
+                ).year
             )
         except ValueError:
             return "0000"
@@ -180,7 +181,9 @@ def load_cookies(path: Path) -> list[tuple[str, str, str]]:
     return _load_cookies_netscape(path)
 
 
-def write_netscape_cookies(raw_cookies: list[dict], dest: Path) -> None:
+def write_netscape_cookies(
+    raw_cookies: Sequence[Mapping[str, Any]], dest: Path
+) -> None:
     """Serialise a Playwright cookie list to Netscape cookies.txt."""
     lines = ["# Netscape HTTP Cookie File\n"]
     for c in raw_cookies:
@@ -268,7 +271,10 @@ class BandcampApi:
         el = soup.find(id="pagedata")
         if not el:
             raise RuntimeError(f"Could not find #pagedata element on {url}")
-        return json.loads(el["data-blob"])  # type: ignore[index]
+        blob = el.get("data-blob")
+        if not isinstance(blob, str):
+            raise RuntimeError(f"Invalid #pagedata blob on {url}")
+        return json.loads(blob)
 
     async def get_download_urls(self, username: str) -> dict[str, DownloadInfo]:
         """Scrape the user's collection page, paginating as needed."""
@@ -299,7 +305,9 @@ class BandcampApi:
         collection_data = data.get("collection_data", {})
         urls = _enrich(collection_data.get("redownload_urls") or {})
 
-        if (collection_data.get("item_count") or 0) > (collection_data.get("batch_size") or 0):
+        if (collection_data.get("item_count") or 0) > (
+            collection_data.get("batch_size") or 0
+        ):
             last_token = collection_data.get("last_token", "")
             more_available = True
             while more_available:
@@ -528,5 +536,15 @@ def run(
 ) -> None:
     """Synchronous entry point — runs the async downloader via asyncio.run()."""
     asyncio.run(
-        _run_async(username, cookies_path, output, audio_format, jobs, force, dry_run, after, limit)
+        _run_async(
+            username,
+            cookies_path,
+            output,
+            audio_format,
+            jobs,
+            force,
+            dry_run,
+            after,
+            limit,
+        )
     )

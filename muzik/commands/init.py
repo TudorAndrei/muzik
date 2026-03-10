@@ -15,13 +15,13 @@ from muzik.ui.console import console
 # The beets import setting muzik requires.
 _IMPORT_BLOCK = (
     "import:\n"
+    "  move: yes\n"
     "  duplicate_action: skip\n"
     "  none_rec_action: asis\n"
     "match:\n"
     "  strong_rec_thresh: 0.10\n"
     "  medium_rec_thresh: 0.20\n"
 )
-_DUPLICATE_LINE = "  duplicate_action: skip\n  none_rec_action: asis"
 
 
 def _ensure_dirs() -> None:
@@ -39,12 +39,12 @@ def _ensure_dirs() -> None:
 
 
 def _configure_beets() -> None:
-    """Ensure BEETS_CONFIG contains ``import.duplicate_action: skip``.
+    """Ensure BEETS_CONFIG contains muzik's required import defaults.
 
     • If the config file doesn't exist yet, a minimal one is created.
-    • If it already has ``duplicate_action`` set, nothing is changed.
-    • If it has an ``import:`` section but no ``duplicate_action``, the line
-      is inserted right after ``import:``.
+    • If it already has the required import settings, nothing is changed.
+    • If it has an ``import:`` section, any missing required keys are inserted
+      right after ``import:``.
     • Otherwise the full ``import:`` block is appended.
     """
     cfg = BEETS_CONFIG
@@ -60,26 +60,35 @@ def _configure_beets() -> None:
 
     text = cfg.read_text()
 
-    if "duplicate_action" in text:
+    if "move:" in text and "duplicate_action" in text and "none_rec_action" in text:
         console.print(
-            f"  Beets cfg  {cfg}  [dim]duplicate_action already set — skipped[/dim]"
+            f"  Beets cfg  {cfg}  [dim]import defaults already set — skipped[/dim]"
         )
         return
 
     # Insert after an existing `import:` line if present
     if re.search(r"^import\s*:", text, re.MULTILINE):
-        text = re.sub(
-            r"(^import\s*:[ \t]*$)",
-            f"\\1\n{_DUPLICATE_LINE}",
-            text,
-            count=1,
-            flags=re.MULTILINE,
-        )
+        missing = []
+        if not re.search(r"^\s+move\s*:", text, re.MULTILINE):
+            missing.append("  move: yes")
+        if not re.search(r"^\s+duplicate_action\s*:", text, re.MULTILINE):
+            missing.append("  duplicate_action: skip")
+        if not re.search(r"^\s+none_rec_action\s*:", text, re.MULTILINE):
+            missing.append("  none_rec_action: asis")
+
+        if missing:
+            text = re.sub(
+                r"(^import\s*:[ \t]*$)",
+                "\\1\n" + "\n".join(missing),
+                text,
+                count=1,
+                flags=re.MULTILINE,
+            )
     else:
         text = text.rstrip("\n") + "\n\n" + _IMPORT_BLOCK
 
     cfg.write_text(text)
-    console.print(f"  Beets cfg  {cfg}  [green]added duplicate_action: skip[/green]")
+    console.print(f"  Beets cfg  {cfg}  [green]added import defaults[/green]")
 
 
 def init_cmd() -> None:
@@ -94,6 +103,7 @@ def init_cmd() -> None:
 
     \b
     Beets config changes:
+      Sets import.move = yes so imports move files into the beets library.
       Sets import.duplicate_action = skip so that albums already present in
       the library are silently skipped on every workflow re-run.
       Existing settings are preserved; the file is only written if the

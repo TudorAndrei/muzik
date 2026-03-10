@@ -73,9 +73,8 @@ def _playwright_setup() -> tuple[Path, str]:
             resp = api_page.goto("https://bandcamp.com/api/fan/2/collection_summary")
             if resp and resp.ok:
                 data = resp.json()
-                username = (
-                    data.get("fan_data", {}).get("username")
-                    or data.get("username")
+                username = data.get("fan_data", {}).get("username") or data.get(
+                    "username"
                 )
             api_page.close()
         except Exception:
@@ -135,7 +134,9 @@ def _ensure_credentials(
 
 
 def bandcamp_cmd(
-    user: Optional[str] = typer.Argument(None, help="Bandcamp username (saved after first run)."),
+    user: Optional[str] = typer.Argument(
+        None, help="Bandcamp username (saved after first run)."
+    ),
     output: Path = typer.Option(
         DEFAULT_BANDCAMP_DIR,
         "--output",

@@ -52,7 +52,9 @@ def _split_track(
         chapter.start_ts,
     ]
     if chapter.end is not None:
-        cmd += ["-to", chapter.end_ts]
+        end_ts = chapter.end_ts
+        if end_ts is not None:
+            cmd.extend(["-to", end_ts])
 
     cmd += [
         "-vn",
