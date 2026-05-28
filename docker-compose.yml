@@ -1,0 +1,17 @@
+services:
+  slskd:
+    image: slskd/slskd:latest
+    container_name: slskd
+    user: "501:20"
+    ports:
+      - "5030:5030"
+      - "5031:5031"
+      - "50300:50300"
+    environment:
+      SLSKD_REMOTE_CONFIGURATION: "true"
+      SLSKD_API_KEY: "${SLSKD_API_KEY:?Set SLSKD_API_KEY before starting slskd}"
+      SLSKD_DOWNLOADS_DIR: /downloads
+    volumes:
+      - /Users/tudor/.local/share/slskd:/app:rw
+      - /Users/tudor/.local/share/muzik/soulseek:/downloads:rw
+    restart: unless-stopped

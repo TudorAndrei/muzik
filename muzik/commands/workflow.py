@@ -9,9 +9,8 @@ classified, split (if needed), and organized before the next one starts,
 so you can review/edit chapters as they arrive.
 """
 
-import re
-import subprocess
 from datetime import datetime
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -39,26 +38,40 @@ from muzik.core.description_chapters import (
     extract_chapters_from_description,
     get_description_from_info_json,
 )
+from muzik.core.sources.base import (
+    Candidate,
+    DownloadRequest,
+    DownloadResult,
+    ResolvedRelease,
+    ResolvedTrack,
+)
+from muzik.core.sources.soulseek import SoulseekError, SoulseekSource
+from muzik.core.sources.youtube import (
+    YouTubeSource,
+    find_audio_by_id,
+    get_playlist_video_ids,
+    playlist_id as parse_youtube_playlist_id,
+    prepopulate_archive,
+    video_id_from_path,
+    youtube_id as parse_youtube_id,
+)
 from muzik.ui.chapter_editor import display_chapter_table
 from muzik.ui.console import console, err
 
 
 def _youtube_id(url: str) -> Optional[str]:
     """Extract the 11-char YouTube video ID from a URL, or None for playlists."""
-    m = re.search(r"(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})", url)
-    return m.group(1) if m else None
+    return parse_youtube_id(url)
 
 
 def _playlist_id(url: str) -> Optional[str]:
     """Extract YouTube playlist ID from URL (e.g. PLxxx)."""
-    m = re.search(r"[?&]list=([A-Za-z0-9_-]+)", url)
-    return m.group(1) if m else None
+    return parse_youtube_playlist_id(url)
 
 
 def _video_id_from_path(path: Path) -> Optional[str]:
     """Extract 11-char YouTube video ID from filename like 'Title [ID].flac'."""
-    m = re.search(r"\[([A-Za-z0-9_-]{11})\]", path.stem)
-    return m.group(1) if m else None
+    return video_id_from_path(path)
 
 
 def _load_playlist_state(playlist_id: str) -> dict:
@@ -80,35 +93,12 @@ def _prepopulate_archive(archive_file: Path) -> None:
     already present in the archive, so yt-dlp skips re-downloading songs that
     were previously processed as standalone ``muzik workflow <video-url>`` runs.
     """
-    existing: set[str] = set()
-    if archive_file.exists():
-        for line in archive_file.read_text().splitlines():
-            parts = line.strip().split()
-            if len(parts) >= 2:
-                existing.add(parts[1])
-
-    new_lines: list[str] = []
-    for p in CACHE_DIR.glob("yt_*.txt"):
-        vid_id = p.stem[3:]  # strip "yt_" prefix
-        if re.fullmatch(r"[A-Za-z0-9_-]{11}", vid_id) and vid_id not in existing:
-            new_lines.append(f"youtube {vid_id}\n")
-
-    if new_lines:
-        CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        with archive_file.open("a") as fh:
-            fh.writelines(new_lines)
+    prepopulate_archive(archive_file)
 
 
 def _get_playlist_video_ids(url: str) -> list[str]:
     """Return ordered video IDs in a YouTube playlist via yt-dlp."""
-    result = subprocess.run(
-        ["yt-dlp", "--flat-playlist", "--print", "%(id)s", url],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return get_playlist_video_ids(url)
 
 
 def _get_chapters_for(af: Path, no_split: bool) -> Optional[list]:
@@ -209,13 +199,338 @@ def _get_chapters_for(af: Path, no_split: bool) -> Optional[list]:
 
 def _find_by_id(directory: Path, yt_id: str) -> list[Path]:
     """Return audio files in *directory* whose name contains ``[yt_id]``."""
-    return sorted(
-        f
-        for f in directory.iterdir()
-        if f.is_file()
-        and f.suffix.lower() in AUDIO_EXTENSIONS
-        and f"[{yt_id}]" in f.name
+    return find_audio_by_id(directory, yt_id)
+
+
+def _find_audio_inputs(paths: list[Path]) -> list[Path]:
+    """Return supported audio files from a mix of files and directories."""
+    audio_files: list[Path] = []
+    seen: set[Path] = set()
+    for path in paths:
+        if not path.exists():
+            continue
+        candidates = [path]
+        if path.is_dir():
+            candidates = sorted(path.rglob("*"))
+        for candidate in candidates:
+            if candidate.is_file() and candidate.suffix.lower() in AUDIO_EXTENSIONS:
+                resolved = candidate.resolve()
+                if resolved not in seen:
+                    audio_files.append(candidate)
+                    seen.add(resolved)
+    return sorted(audio_files)
+
+
+def _common_parent(paths: list[Path]) -> Optional[Path]:
+    if not paths:
+        return None
+    if len(paths) == 1:
+        return paths[0]
+    try:
+        return Path(os.path.commonpath([str(path.parent) for path in paths]))
+    except ValueError:
+        return None
+
+
+def _validated_audio_files(
+    audio_files: list[Path],
+    *,
+    dry_run: bool,
+    no_organize: bool,
+) -> list[Path]:
+    """Return files that are plausible enough to pass to split/organize."""
+    if dry_run or no_organize:
+        return audio_files
+
+    valid: list[Path] = []
+    for path in audio_files:
+        if not path.exists():
+            err(f"  [red]Skipping missing audio file:[/red] {path}")
+            continue
+        if path.suffix.lower() not in AUDIO_EXTENSIONS:
+            err(f"  [red]Skipping unsupported audio file:[/red] {path}")
+            continue
+        duration = get_duration(path)
+        if duration is None or duration <= 0:
+            err(f"  [red]Skipping unprobeable audio file:[/red] {path}")
+            continue
+        valid.append(path)
+
+    if audio_files and not valid:
+        err("[red]No downloaded audio files passed validation.[/red]")
+        raise typer.Exit(1)
+    return valid
+
+
+def _process_audio_files(
+    *,
+    audio_inputs: list[Path],
+    pre_split_dirs: list[Path],
+    splits: Path,
+    review: bool,
+    no_split: bool,
+    no_organize: bool,
+    import_: bool,
+    tag_only: bool,
+    dry_run: bool,
+    jobs: int,
+    config: Optional[Path],
+    keep_source: bool,
+    force: bool,
+) -> None:
+    """Classify, split, and organize local audio files/directories."""
+    audio_files = _find_audio_inputs(audio_inputs)
+    audio_files = _validated_audio_files(
+        audio_files,
+        dry_run=dry_run,
+        no_organize=no_organize,
     )
+    if not audio_files and not pre_split_dirs and not dry_run:
+        err("[yellow]No audio files found in output directory.[/yellow]")
+        raise typer.Exit(0)
+
+    albums: list[tuple[Path, list]] = []
+    singles: list[Path] = []
+
+    for af in audio_files:
+        chapters = _get_chapters_for(af, no_split)
+        if chapters:
+            albums.append((af, chapters))
+        else:
+            singles.append(af)
+
+    if albums:
+        console.print(
+            f"\n  [cyan]Album(s) detected:[/cyan] "
+            f"{len(albums)} file(s) with chapter markers"
+        )
+    if singles:
+        console.print(
+            f"\n  [yellow]Single track(s) detected:[/yellow] "
+            f"{len(singles)} file(s) without chapters"
+        )
+
+    split_dirs: list[Path] = list(pre_split_dirs)
+
+    if albums:
+        console.print("\n[bold]Step 2a — Split (album)[/bold]")
+
+        for af, chapters in albums:
+            console.print(f"  [cyan]{af.name}[/cyan] — {len(chapters)} chapters")
+            out_dir = splits / af.stem
+            if dry_run:
+                console.print(f"  [dim]Would split → {out_dir}[/dim]")
+            else:
+                try:
+                    split_cmd(
+                        path=af,
+                        review=review,
+                        jobs=jobs,
+                        output=out_dir,
+                        keep_source=keep_source,
+                        force=force,
+                    )
+                except (SystemExit, typer.Exit) as exc:
+                    if getattr(exc, "code", 0) != 0:
+                        err(f"  [red]Split failed for {af.name}[/red]")
+                        continue
+                if out_dir.exists():
+                    split_dirs.append(out_dir)
+
+    if singles:
+        console.print("\n[bold]Step 2b — Single track(s)[/bold]")
+        single_root = _common_parent(singles)
+        if single_root and single_root.is_dir() and len(singles) > 1:
+            console.print(
+                f"  [yellow]{len(singles)} track files[/yellow] — "
+                f"will organize directory {single_root}"
+            )
+        else:
+            for af in singles:
+                console.print(
+                    f"  [yellow]{af.name}[/yellow] — no chapters, will organize directly"
+                )
+
+    if no_organize:
+        console.rule()
+        console.print("[bold green]Workflow complete (organize skipped).[/bold green]")
+        return
+
+    console.print("\n[bold]Step 3 — Organize[/bold]")
+
+    for sd in split_dirs:
+        console.print(f"  beet import [dim]{sd}[/dim]")
+        if not dry_run:
+            try:
+                organize_cmd(
+                    directory=sd,
+                    import_=import_,
+                    tag_only=tag_only,
+                    dry_run=dry_run,
+                    config=config,
+                )
+            except (SystemExit, typer.Exit) as exc:
+                if getattr(exc, "code", 0) != 0:
+                    err(f"  [red]beet failed for {sd}[/red]")
+
+    if singles:
+        single_root = _common_parent(singles)
+        organize_targets = (
+            [single_root]
+            if single_root and single_root.is_dir() and len(singles) > 1
+            else singles
+        )
+        for target in organize_targets:
+            console.print(f"  beet import [dim]{target}[/dim]")
+            if not dry_run:
+                try:
+                    organize_cmd(
+                        directory=target,
+                        import_=import_,
+                        tag_only=tag_only,
+                        dry_run=dry_run,
+                        config=config,
+                    )
+                except (SystemExit, typer.Exit) as exc:
+                    if getattr(exc, "code", 0) != 0:
+                        err(f"  [red]beet failed for {target}[/red]")
+
+    console.rule()
+    console.print("[bold green]Workflow complete.[/bold green]")
+
+
+def _resolve_soulseek_request(
+    request: str,
+    *,
+    prefer: str,
+    source: SoulseekSource,
+) -> ResolvedRelease | ResolvedTrack:
+    """Resolve the request into metadata suitable for Soulseek search."""
+    if _youtube_id(request):
+        console.print("  [dim]Resolving YouTube metadata for Soulseek search…[/dim]")
+        resolved = YouTubeSource().resolve(
+            DownloadRequest(raw=request, source="youtube")
+        )
+        if not isinstance(resolved, (ResolvedRelease, ResolvedTrack)):
+            raise ValueError("Expected a single YouTube video, got a playlist")
+        return resolved
+
+    return source.resolve(
+        DownloadRequest(
+            raw=request,
+            source="soulseek",
+            prefer_format=prefer,
+            album=True,
+        )
+    )
+
+
+def _search_soulseek_candidates(
+    source: SoulseekSource,
+    resolved: ResolvedRelease | ResolvedTrack,
+    *,
+    prefer: str,
+    limit: int = 10,
+) -> list[Candidate]:
+    return source.search(resolved, prefer=prefer, limit=limit)
+
+
+def _select_soulseek_candidate(
+    candidates: list[Candidate],
+    *,
+    interactive: bool,
+) -> Candidate:
+    for idx, candidate in enumerate(candidates[:5], 1):
+        console.print(
+            f"  [dim]{idx}.[/dim] {candidate.title} "
+            f"[dim]score={candidate.score:.1f} "
+            f"files={len(candidate.files)} "
+            f"user={candidate.user or '?'}[/dim]"
+        )
+    choice = 1
+    if interactive:
+        raw = typer.prompt("  Soulseek candidate", default="1")
+        try:
+            choice = int(raw)
+        except ValueError as exc:
+            err("[red]Invalid Soulseek candidate number.[/red]")
+            raise typer.Exit(1) from exc
+    if choice < 1 or choice > min(5, len(candidates)):
+        err("[red]Soulseek candidate number out of range.[/red]")
+        raise typer.Exit(1)
+    return candidates[choice - 1]
+
+
+def _download_soulseek_candidate(
+    source: SoulseekSource,
+    candidate: Candidate,
+) -> DownloadResult:
+    try:
+        return source.download(candidate, wait=True)
+    except SoulseekError as exc:
+        err(f"[red]Soulseek download failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+
+def _record_soulseek_download(request: str, result: DownloadResult) -> None:
+    cache_mod.set_json(
+        cache_mod.workflow_cache_key("soulseek", request),
+        {
+            "status": "downloaded",
+            "source": "soulseek",
+            "source_id": result.source_id,
+            "files": [str(path.resolve()) for path in result.files],
+            "metadata_path": (
+                str(result.metadata_path.resolve()) if result.metadata_path else None
+            ),
+        },
+    )
+
+
+def _acquire_from_soulseek(
+    request: str,
+    *,
+    prefer: str,
+    interactive: bool,
+    fallback: str,
+) -> list[Path]:
+    """Search/download audio through Soulseek and return local audio paths.
+
+    When *request* is a YouTube URL, yt-dlp is used only to resolve metadata; the
+    actual audio still comes from Soulseek.
+    """
+    source = SoulseekSource()
+    try:
+        resolved = _resolve_soulseek_request(request, prefer=prefer, source=source)
+        candidates = _search_soulseek_candidates(source, resolved, prefer=prefer)
+    except Exception as exc:
+        if fallback == "youtube" and _youtube_id(request):
+            console.print(
+                f"  [yellow]Soulseek failed:[/yellow] {exc}; falling back to YouTube"
+            )
+            return []
+        err(f"[red]Soulseek search failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if not candidates:
+        if fallback == "youtube" and _youtube_id(request):
+            console.print(
+                "  [yellow]No Soulseek candidates; falling back to YouTube[/yellow]"
+            )
+            return []
+        err("[yellow]No Soulseek candidates found.[/yellow]")
+        raise typer.Exit(0)
+
+    candidate = _select_soulseek_candidate(candidates, interactive=interactive)
+    result = _download_soulseek_candidate(source, candidate)
+    _record_soulseek_download(request, result)
+    if not result.files:
+        err(
+            "[yellow]Soulseek download was enqueued, but no local audio files "
+            "were found. Check SLSKD_DOWNLOAD_DIR.[/yellow]"
+        )
+        raise typer.Exit(0)
+    return result.files
 
 
 def workflow_cmd(
@@ -287,6 +602,31 @@ def workflow_cmd(
         "--force",
         "-f",
         help="Ignore download/split cache and reprocess from scratch.",
+    ),
+    metadata_source: str = typer.Option(
+        "auto",
+        "--metadata-source",
+        help="Metadata source: youtube, musicbrainz, none, or auto.",
+    ),
+    audio_source: str = typer.Option(
+        "youtube",
+        "--audio-source",
+        help="Audio source: soulseek, youtube, or auto.",
+    ),
+    prefer: str = typer.Option(
+        "lossless",
+        "--prefer",
+        help="Preferred audio quality for source searches.",
+    ),
+    fallback: str = typer.Option(
+        "youtube",
+        "--fallback",
+        help="Fallback source when the preferred source has no acceptable result.",
+    ),
+    interactive: bool = typer.Option(
+        True,
+        "--interactive/--no-interactive",
+        help="Prompt for source candidate choices when multiple results are available.",
     ),
 ) -> None:
     """Full pipeline: download from YouTube → detect scenario → split/organize.
@@ -367,6 +707,61 @@ def workflow_cmd(
 
                 af: Optional[Path] = None
                 split_dir_for_vid: Optional[Path] = None
+                video_url = f"https://www.youtube.com/watch?v={vid_id}"
+
+                if audio_source == "soulseek":
+                    files_for_vid: list[Path] = []
+                    if entry.get("status") == "downloaded":
+                        cached_files = entry.get("files") or []
+                        files_for_vid = [
+                            Path(file) for file in cached_files if Path(file).exists()
+                        ]
+                        if files_for_vid:
+                            console.print(
+                                f"  [green]Already downloaded[/green] "
+                                f"→ {len(files_for_vid)} file(s)"
+                            )
+
+                    if not files_for_vid:
+                        try:
+                            files_for_vid = _acquire_from_soulseek(
+                                video_url,
+                                prefer=prefer,
+                                interactive=interactive,
+                                fallback=fallback,
+                            )
+                        except (SystemExit, typer.Exit) as exc:
+                            if getattr(exc, "code", 0) != 0:
+                                err(
+                                    f"  [red]Soulseek download failed for {vid_id} — skipping[/red]"
+                                )
+                            continue
+                        playlist_state["videos"][vid_id] = {
+                            "status": "downloaded",
+                            "source": "soulseek",
+                            "files": [str(path.resolve()) for path in files_for_vid],
+                        }
+                        _save_playlist_state(playlist_id, playlist_state)
+
+                    _process_audio_files(
+                        audio_inputs=files_for_vid,
+                        pre_split_dirs=[],
+                        splits=splits,
+                        review=review,
+                        no_split=no_split,
+                        no_organize=no_organize,
+                        import_=import_,
+                        tag_only=tag_only,
+                        dry_run=dry_run,
+                        jobs=jobs,
+                        config=config,
+                        keep_source=keep_source,
+                        force=force,
+                    )
+                    if not no_organize:
+                        playlist_state["videos"][vid_id]["status"] = "organized"
+                        _save_playlist_state(playlist_id, playlist_state)
+                    continue
 
                 # Resume from "split" state — skip straight to organize
                 if entry.get("status") == "split":
@@ -386,7 +781,6 @@ def workflow_cmd(
                             )
 
                     if af is None:
-                        video_url = f"https://www.youtube.com/watch?v={vid_id}"
                         before = set(output.glob("*")) if output.exists() else set()
                         try:
                             download_cmd(
@@ -503,12 +897,40 @@ def workflow_cmd(
     pre_split_dirs: list[Path] = []
 
     if dry_run:
-        console.print(f"  [dim]Would download {url} → {output}[/dim]")
+        if audio_source == "soulseek":
+            console.print(
+                f"  [dim]Would search Soulseek for {url!r} "
+                f"(metadata={metadata_source}, prefer={prefer})[/dim]"
+            )
+        else:
+            console.print(f"  [dim]Would download {url} → {output}[/dim]")
     else:
+        local_path = Path(url).expanduser()
+        local_input = local_path.exists()
+        if local_input:
+            console.print(f"  [cyan]Local input:[/cyan] {local_path}")
+            audio_files = _find_audio_inputs([local_path])
+
+        if not local_input and audio_source == "soulseek" and not playlist_id:
+            console.print(
+                f"  [cyan]Soulseek search:[/cyan] {url} "
+                f"[dim](metadata={metadata_source}, prefer={prefer})[/dim]"
+            )
+            audio_files = _acquire_from_soulseek(
+                url,
+                prefer=prefer,
+                interactive=interactive,
+                fallback=fallback,
+            )
+
         cache_key = f"yt_{yt_id}" if yt_id else None
 
         # Check persistent cache first — records downloads even after source is deleted
-        cached_entry = cache_mod.get(cache_key) if cache_key else None
+        cached_entry = (
+            cache_mod.get(cache_key)
+            if cache_key and not audio_files and not local_input
+            else None
+        )
         if cached_entry:
             cached_path = Path(cached_entry.strip())
             if cached_path.exists():
@@ -531,17 +953,17 @@ def workflow_cmd(
                         console.print(
                             f"  [dim]Found existing split dir: {expected_split.name}[/dim]"
                         )
-        else:
+        elif not local_input:
             # Not in cache — check output dir by ID (fast, avoids yt-dlp)
-            if yt_id and output.exists():
+            if not audio_files and yt_id and output.exists():
                 audio_files = _find_by_id(output, yt_id)
-                if audio_files:
-                    console.print(
-                        "  [green]Already downloaded[/green] — skipping yt-dlp\n"
-                        + "\n".join(f"  [dim]{f.name}[/dim]" for f in audio_files)
-                    )
-                    if cache_key:
-                        cache_mod.set(cache_key, str(audio_files[0]))
+            if audio_files:
+                console.print(
+                    "  [green]Already downloaded[/green] — skipping yt-dlp\n"
+                    + "\n".join(f"  [dim]{f.name}[/dim]" for f in audio_files)
+                )
+                if cache_key:
+                    cache_mod.set(cache_key, str(audio_files[0]))
 
             if not audio_files:
                 before = set(output.glob("*")) if output.exists() else set()
@@ -573,109 +995,18 @@ def workflow_cmd(
                 if audio_files and cache_key:
                     cache_mod.set(cache_key, str(audio_files[0]))
 
-    if not audio_files and not pre_split_dirs and not dry_run:
-        err("[yellow]No audio files found in output directory.[/yellow]")
-        raise typer.Exit(0)
-
-    # ── Classify each file ────────────────────────────────────────────────
-    albums: list[tuple[Path, list]] = []  # (file, chapters)
-    singles: list[Path] = []
-
-    for af in audio_files:
-        chapters = _get_chapters_for(af, no_split)
-        if chapters:
-            albums.append((af, chapters))
-        else:
-            singles.append(af)
-
-    if albums:
-        console.print(
-            f"\n  [cyan]Album(s) detected:[/cyan] "
-            f"{len(albums)} file(s) with chapter markers"
-        )
-    if singles:
-        console.print(
-            f"\n  [yellow]Single track(s) detected:[/yellow] "
-            f"{len(singles)} file(s) without chapters"
-        )
-
-    # ── Step 2a: Album path — split by chapters ───────────────────────────
-    # Pre-populate with dirs discovered in Step 1 (source deleted, split already done)
-    split_dirs: list[Path] = list(pre_split_dirs)
-
-    if albums:
-        console.print("\n[bold]Step 2a — Split (album)[/bold]")
-
-        for af, chapters in albums:
-            console.print(f"  [cyan]{af.name}[/cyan] — {len(chapters)} chapters")
-            out_dir = splits / af.stem
-            if dry_run:
-                console.print(f"  [dim]Would split → {out_dir}[/dim]")
-            else:
-                try:
-                    split_cmd(
-                        path=af,
-                        review=review,
-                        jobs=jobs,
-                        output=out_dir,
-                        keep_source=keep_source,
-                        force=force,
-                    )
-                except (SystemExit, typer.Exit) as exc:
-                    if getattr(exc, "code", 0) != 0:
-                        err(f"  [red]Split failed for {af.name}[/red]")
-                        continue
-                # Add dir whether freshly split or served from cache (SystemExit(0))
-                if out_dir.exists():
-                    split_dirs.append(out_dir)
-
-    # ── Step 2b: Single track path — nothing to split ─────────────────────
-    if singles:
-        console.print("\n[bold]Step 2b — Single track(s)[/bold]")
-        for af in singles:
-            console.print(
-                f"  [yellow]{af.name}[/yellow] — no chapters, will organize directly"
-            )
-
-    # ── Step 3: Organize ──────────────────────────────────────────────────
-    if no_organize:
-        console.rule()
-        console.print("[bold green]Workflow complete (organize skipped).[/bold green]")
-        return
-
-    console.print("\n[bold]Step 3 — Organize[/bold]")
-
-    # Organize split tracks (album scenario)
-    for sd in split_dirs:
-        console.print(f"  beet import [dim]{sd}[/dim]")
-        if not dry_run:
-            try:
-                organize_cmd(
-                    directory=sd,
-                    import_=import_,
-                    tag_only=tag_only,
-                    dry_run=dry_run,
-                    config=config,
-                )
-            except (SystemExit, typer.Exit) as exc:
-                if getattr(exc, "code", 0) != 0:
-                    err(f"  [red]beet failed for {sd}[/red]")
-
-    # Organize single tracks directly — pass the file path; beet import accepts files too
-    for af in singles:
-        console.print(f"  beet import [dim]{af}[/dim]")
-        if not dry_run:
-            try:
-                organize_cmd(
-                    directory=af,
-                    import_=import_,
-                    tag_only=tag_only,
-                    dry_run=dry_run,
-                    config=config,
-                )
-            except (SystemExit, typer.Exit) as exc:
-                if getattr(exc, "code", 0) != 0:
-                    err(f"  [red]beet failed for {af.name}[/red]")
-
-    console.rule()
-    console.print("[bold green]Workflow complete.[/bold green]")
+    _process_audio_files(
+        audio_inputs=audio_files,
+        pre_split_dirs=pre_split_dirs,
+        splits=splits,
+        review=review,
+        no_split=no_split,
+        no_organize=no_organize,
+        import_=import_,
+        tag_only=tag_only,
+        dry_run=dry_run,
+        jobs=jobs,
+        config=config,
+        keep_source=keep_source,
+        force=force,
+    )

@@ -18,6 +18,7 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "desktop-notifier>=6.0",
     "pydantic-ai-slim[openrouter]>=0.0.14",
+    "slskd-api>=0.2.4",
 ]
 
 [project.scripts]
@@ -29,6 +30,7 @@ packages = ["muzik"]
 [dependency-groups]
 dev = [
     "prek>=0.3.3",
+    "pytest>=9.0.3",
     "ruff>=0.15.3",
     "ty>=0.0.19",
 ]

@@ -1,21 +1,25 @@
 """music download <url> — yt-dlp wrapper with post-download scenario report."""
 
-import re
 from pathlib import Path
 from typing import Optional
 
 import typer
 from rich.table import Table
 
-from muzik.config import AUDIO_EXTENSIONS, DEFAULT_DOWNLOAD_DIR, YTDLP_OUTPUT_TEMPLATE
+from muzik.config import DEFAULT_DOWNLOAD_DIR
 from muzik.core.chapters import find_chapters
 from muzik.core.runner import run_streaming
+from muzik.core.sources.youtube import (
+    build_download_command,
+    find_audio_by_id,
+    new_audio_files,
+    youtube_id,
+)
 from muzik.ui.console import console, err
 
 
 def _youtube_id(url: str) -> Optional[str]:
-    m = re.search(r"(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})", url)
-    return m.group(1) if m else None
+    return youtube_id(url)
 
 
 def _scenario_label(chapters_count: int) -> str:
@@ -63,23 +67,13 @@ def download_cmd(
     """
     output.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
-        "yt-dlp",
-        "--format",
-        format,
-        "--extract-audio",
-        "--audio-quality",
-        quality,
-        "--embed-metadata",
-        "--add-metadata",
-        "--output",
-        YTDLP_OUTPUT_TEMPLATE,
-    ]
-    if not no_chapters:
-        cmd += ["--write-info-json", "--embed-chapters"]
-    if archive_file:
-        cmd += ["--download-archive", str(archive_file)]
-    cmd.append(url)
+    cmd = build_download_command(
+        url,
+        format=format,
+        quality=quality,
+        no_chapters=no_chapters,
+        archive_file=archive_file,
+    )
 
     console.print(f"[bold cyan]Downloading:[/bold cyan] {url}")
     console.print(f"[dim]Output: {output.resolve()}[/dim]")
@@ -97,23 +91,13 @@ def download_cmd(
 
     # ── Post-download scenario report ─────────────────────────────────────
     after = set(output.glob("*")) if output.exists() else set()
-    new_audio = sorted(
-        f
-        for f in (after - before)
-        if f.is_file() and f.suffix.lower() in AUDIO_EXTENSIONS
-    )
+    new_audio = new_audio_files(before, after)
 
     # yt-dlp skips re-downloading existing files — fall back to ID-based lookup
     if not new_audio and output.exists():
         yt_id = _youtube_id(url)
         if yt_id:
-            new_audio = sorted(
-                f
-                for f in output.iterdir()
-                if f.is_file()
-                and f.suffix.lower() in AUDIO_EXTENSIONS
-                and f"[{yt_id}]" in f.name
-            )
+            new_audio = find_audio_by_id(output, yt_id)
 
     if not new_audio:
         return

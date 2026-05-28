@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from muzik.core.metadata import find_muzik_metadata
 from muzik.core.runner import run_silent
 
 
@@ -65,10 +66,48 @@ def extract_metadata(path: Path) -> dict:
     """Return a dict with keys: title, artist, album, year.
 
     Preference order:
-    1. Sidecar .info.json (yt-dlp metadata)
-    2. ffprobe embedded tags
-    3. Reasonable fallbacks
+    1. Source-neutral .muzik.json metadata
+    2. Sidecar .info.json (yt-dlp metadata)
+    3. ffprobe embedded tags
+    4. Reasonable fallbacks
     """
+    muzik_meta = find_muzik_metadata(path)
+    if muzik_meta:
+        resolved = muzik_meta.get("resolved") or {}
+        if not isinstance(resolved, dict):
+            resolved = {}
+        candidate = muzik_meta.get("candidate") or {}
+        if not isinstance(candidate, dict):
+            candidate = {}
+
+        title = (
+            resolved.get("title")
+            or resolved.get("track")
+            or muzik_meta.get("title")
+            or path.stem
+        )
+        artist = (
+            resolved.get("artist")
+            or muzik_meta.get("artist")
+            or candidate.get("artist")
+            or "Unknown Artist"
+        )
+        album = (
+            resolved.get("album")
+            or muzik_meta.get("album")
+            or candidate.get("album")
+            or resolved.get("title")
+            or "Unknown Album"
+        )
+        year_raw = resolved.get("year") or muzik_meta.get("year")
+        year = str(year_raw) if year_raw else "Unknown"
+        return {
+            "title": str(title),
+            "artist": str(artist),
+            "album": str(album),
+            "year": year[:4] if year != "Unknown" else year,
+        }
+
     base = path.with_suffix("")
     info_path = base.with_suffix(".info.json")
 

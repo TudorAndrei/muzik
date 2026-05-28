@@ -13,11 +13,12 @@ app = typer.Typer(help="Manage the ~/.cache/muzik cache.")
 
 
 def _human_size(n: int) -> str:
+    value = float(n)
     for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024  # type: ignore[assignment]
-    return f"{n:.1f} TB"
+        if value < 1024:
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} TB"
 
 
 @app.command("list")

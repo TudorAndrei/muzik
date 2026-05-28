@@ -8,7 +8,88 @@ from rich.table import Table
 from muzik.config import AUDIO_EXTENSIONS
 from muzik.core.audio import probe
 from muzik.core.chapters import parse_chapters_txt
+from muzik.core.metadata import read_muzik_metadata
+from muzik.core.quality import is_lossless, quality_from_name
 from muzik.ui.console import console, err
+
+
+def _metadata_quality_details(data: dict) -> tuple[str, list[str]]:
+    details: list[str] = []
+    warnings: list[str] = []
+
+    source = data.get("source")
+    if source:
+        details.append(f"source={source}")
+    source_id = data.get("source_id")
+    if source_id:
+        details.append(f"source_id={source_id}")
+    prefer = data.get("prefer") or data.get("preferred_format")
+    if prefer:
+        details.append(f"prefer={prefer}")
+
+    candidate = data.get("candidate") or {}
+    if isinstance(candidate, dict):
+        quality = candidate.get("quality") or {}
+        if isinstance(quality, dict):
+            fmt = quality.get("format")
+            lossless = bool(quality.get("lossless"))
+            if fmt:
+                details.append(f"format={fmt}")
+                details.append(f"lossless={'yes' if lossless else 'no'}")
+
+            requested = str(data.get("requested") or "").lower()
+            prefer = str(prefer or "")
+            wants_lossless = (
+                "lossless" in prefer.lower()
+                or "flac" in prefer.lower()
+                or "flac" in requested
+            )
+            if wants_lossless and fmt and not lossless:
+                warnings.append("requested lossless but metadata says lossy")
+
+    return " ".join(details), warnings
+
+
+def _audio_quality_details(path: Path, metadata: dict | None) -> tuple[str, list[str]]:
+    quality = quality_from_name(path.name)
+    details = [
+        f"detected={quality.format or '?'}",
+        f"lossless={'yes' if is_lossless(quality.format) else 'no'}",
+    ]
+    warnings: list[str] = []
+
+    if metadata:
+        meta_details, meta_warnings = _metadata_quality_details(metadata)
+        if meta_details:
+            details.append(meta_details)
+        warnings.extend(meta_warnings)
+    else:
+        warnings.append("metadata sidecar missing")
+
+    return " ".join(details), warnings
+
+
+def _album_completeness_warnings(sidecar: Path, metadata: dict) -> list[str]:
+    candidate = metadata.get("candidate") or {}
+    if not isinstance(candidate, dict):
+        return []
+    expected_files = candidate.get("files") or []
+    if not isinstance(expected_files, list) or not expected_files:
+        return []
+
+    root = sidecar.parent
+    if sidecar.name != ".muzik.json":
+        root = sidecar.parent
+    actual_audio = [
+        file
+        for file in root.rglob("*")
+        if file.is_file() and file.suffix.lower() in AUDIO_EXTENSIONS
+    ]
+    if len(actual_audio) < len(expected_files):
+        return [
+            f"album appears incomplete ({len(actual_audio)}/{len(expected_files)} audio files)"
+        ]
+    return []
 
 
 def validate_cmd(
@@ -26,7 +107,7 @@ def validate_cmd(
         help="Show per-file details (duration, codec, chapter count…).",
     ),
 ) -> None:
-    """Validate audio files, chapter sidecars, and metadata (info.json)."""
+    """Validate audio files, chapter sidecars, and metadata sidecars."""
     if not path.exists():
         err(f"[red]Not found: {path}[/red]")
         raise typer.Exit(1)
@@ -46,6 +127,7 @@ def validate_cmd(
         if f.suffix.lower() in AUDIO_EXTENSIONS
         or f.name.endswith(".chapters.txt")
         or f.name.endswith(".info.json")
+        or f.name.endswith(".muzik.json")
     ]
 
     if not relevant:
@@ -66,16 +148,19 @@ def validate_cmd(
 
     valid_count = 0
     invalid_count = 0
+    warn_count = 0
 
     for f in relevant:
         status = "[green]OK[/green]"
         details = ""
         file_type = ""
+        warnings: list[str] = []
 
         try:
             if f.suffix.lower() in AUDIO_EXTENSIONS:
                 file_type = "audio"
                 data = probe(f)
+                metadata = read_muzik_metadata(f)
                 if verbose:
                     fmt = data.get("format", {})
                     streams = data.get("streams", [{}])
@@ -83,7 +168,13 @@ def validate_cmd(
                     dur = float(fmt.get("duration", 0))
                     mm, ss = divmod(int(dur), 60)
                     hh, mm = divmod(mm, 60)
-                    details = f"codec={codec} dur={hh:02d}:{mm:02d}:{ss:02d}"
+                    quality_details, warnings = _audio_quality_details(f, metadata)
+                    details = (
+                        f"codec={codec} dur={hh:02d}:{mm:02d}:{ss:02d} "
+                        f"{quality_details}"
+                    )
+                elif metadata is None:
+                    warnings.append("metadata sidecar missing")
 
             elif f.name.endswith(".chapters.txt"):
                 file_type = "chapters"
@@ -105,6 +196,30 @@ def validate_cmd(
                     ch_count = len(data.get("chapters") or [])
                     details = f"title={title!r} chapters={ch_count}"
 
+            elif f.name.endswith(".muzik.json"):
+                file_type = "muzik"
+                data = read_muzik_metadata(f)
+                if not isinstance(data, dict):
+                    raise ValueError("Root is not a JSON object")
+                if not data.get("source"):
+                    warnings.append("missing source")
+                if not data.get("source_id"):
+                    warnings.append("missing source_id")
+                if verbose:
+                    quality_details, quality_warnings = _metadata_quality_details(data)
+                    warnings.extend(quality_warnings)
+                    warnings.extend(_album_completeness_warnings(f, data))
+                    details = quality_details or f"source={data.get('source', '?')}"
+                else:
+                    warnings.extend(_album_completeness_warnings(f, data))
+
+            if warnings:
+                status = "[yellow]WARN[/yellow]"
+                warn_count += 1
+                if verbose:
+                    suffix = "; ".join(warnings)
+                    details = f"{details}; {suffix}" if details else suffix
+
             valid_count += 1
 
         except Exception as exc:
@@ -123,7 +238,7 @@ def validate_cmd(
     summary_color = "green" if invalid_count == 0 else "red"
     console.print(
         f"[{summary_color}]"
-        f"{valid_count} valid, {invalid_count} invalid "
+        f"{valid_count} valid, {warn_count} warnings, {invalid_count} invalid "
         f"({len(relevant)} files checked)"
         f"[/{summary_color}]"
     )

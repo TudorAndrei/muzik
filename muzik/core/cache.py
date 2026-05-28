@@ -8,7 +8,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from muzik.config import CACHE_DIR
 
@@ -113,3 +113,32 @@ def file_hash(path: Path) -> str:
 def split_cache_key(audio_path: Path, chapters_path: Path) -> str:
     """Cache key for a split operation — matches bash script scheme."""
     return f"split_{file_hash(audio_path)}_{file_hash(chapters_path)}"
+
+
+def stable_hash(value: Any) -> str:
+    """Return a short deterministic hash for source/cache identifiers."""
+    try:
+        raw = json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
+    except TypeError:
+        raw = str(value)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def download_cache_key(source: str, source_id: str) -> str:
+    """Source-neutral cache key for a downloaded candidate."""
+    return f"download_{source}_{stable_hash(source_id)}"
+
+
+def workflow_cache_key(source: str, request: Any) -> str:
+    """Source-neutral cache key for workflow resume state."""
+    return f"workflow_{source}_{stable_hash(request)}"
+
+
+def candidate_cache_key(candidate: Any) -> str:
+    """Source-neutral cache key for a ranked source candidate."""
+    if hasattr(candidate, "to_dict"):
+        candidate = candidate.to_dict()
+    source = (
+        candidate.get("source", "unknown") if isinstance(candidate, dict) else "unknown"
+    )
+    return f"candidate_{source}_{stable_hash(candidate)}"

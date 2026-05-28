@@ -11,7 +11,12 @@ import yaml
 from rich.syntax import Syntax
 from rich.table import Table
 
-from muzik.config import BEETS_CONFIG
+from muzik.config import (
+    BEETS_CONFIG,
+    DEFAULT_SOULSEEK_DIR,
+    MUZIK_CONFIG_FILE,
+    get_slskd_settings,
+)
 from muzik.ui.console import console
 
 app = typer.Typer(help="Manage beets configuration.")
@@ -90,6 +95,24 @@ def config_show(
         raw = yaml.dump(data, default_flow_style=False, allow_unicode=True)
         console.print(Syntax(raw, "yaml", theme="ansi_dark", line_numbers=False))
 
+    soulseek = get_slskd_settings()
+    soulseek_table = Table(title="muzik config", show_header=False, border_style="dim")
+    soulseek_table.add_column("Key", style="bold cyan", width=18)
+    soulseek_table.add_column("Value")
+    soulseek_table.add_row("Config file", str(MUZIK_CONFIG_FILE))
+    soulseek_table.add_row(
+        "Exists",
+        "[green]yes[/green]" if MUZIK_CONFIG_FILE.exists() else "[dim]no[/dim]",
+    )
+    soulseek_table.add_row("slskd url", soulseek["url"])
+    soulseek_table.add_row(
+        "slskd api key",
+        "[green]set[/green]" if soulseek["api_key"] else "[yellow]not set[/yellow]",
+    )
+    soulseek_table.add_row("slskd downloads", soulseek["download_dir"])
+    console.print()
+    console.print(soulseek_table)
+
 
 @app.command("set-library")
 def config_set_library(
@@ -147,6 +170,49 @@ def config_set_library(
     console.print(
         "\n[green]Config saved.[/green]  Run [bold]music config show[/bold] to verify."
     )
+
+
+@app.command("set-soulseek")
+def config_set_soulseek(
+    url: str = typer.Option(
+        "http://localhost:5030",
+        "--url",
+        help="slskd base URL.",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None,
+        "--api-key",
+        help="slskd API key. If omitted, existing value is kept.",
+    ),
+    download_dir: Path = typer.Option(
+        DEFAULT_SOULSEEK_DIR,
+        "--download-dir",
+        help="Local filesystem path where slskd completed downloads appear.",
+    ),
+) -> None:
+    """Set Soulseek/slskd connection settings in muzik config."""
+    data = _load_config(MUZIK_CONFIG_FILE)
+    slskd = data.get("slskd") or {}
+    if not isinstance(slskd, dict):
+        slskd = {}
+
+    slskd["url"] = url.rstrip("/")
+    if api_key is not None:
+        slskd["api_key"] = api_key
+    elif "api_key" not in slskd:
+        slskd["api_key"] = ""
+    slskd["download_dir"] = str(download_dir.expanduser())
+    data["slskd"] = slskd
+
+    _save_config(MUZIK_CONFIG_FILE, data)
+    download_dir.expanduser().mkdir(parents=True, exist_ok=True)
+
+    console.print(f"[green]Soulseek config saved:[/green] {MUZIK_CONFIG_FILE}")
+    console.print(f"  url: [dim]{slskd['url']}[/dim]")
+    console.print(
+        f"  api_key: {'[green]set[/green]' if slskd.get('api_key') else '[yellow]not set[/yellow]'}"
+    )
+    console.print(f"  download_dir: [dim]{slskd['download_dir']}[/dim]")
 
 
 @app.command("edit")

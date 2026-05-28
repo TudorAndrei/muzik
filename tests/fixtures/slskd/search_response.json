@@ -1,0 +1,23 @@
+{
+  "username": "fixture-peer",
+  "token": "fixture-token",
+  "hasFreeUploadSlot": true,
+  "queueLength": 1,
+  "uploadSpeed": 750000,
+  "files": [
+    {
+      "filename": "Artist/Fixture Album/01 Fixture One.flac",
+      "size": 123000000,
+      "sampleRate": 44100,
+      "bitDepth": 16,
+      "length": 180
+    },
+    {
+      "filename": "Artist/Fixture Album/02 Fixture Two.flac",
+      "size": 124000000,
+      "sampleRate": 44100,
+      "bitDepth": 16,
+      "length": 190
+    }
+  ]
+}

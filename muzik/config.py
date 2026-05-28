@@ -8,6 +8,9 @@ mandated default is used instead.
 
 import os
 from pathlib import Path
+from typing import Mapping
+
+import yaml
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +49,7 @@ BEETS_CONFIG = XDG_CONFIG_HOME / "beets" / "config.yaml"
 
 # muzik config dir — stores per-service credentials (e.g. Bandcamp cookies)
 MUZIK_CONFIG_DIR = XDG_CONFIG_HOME / "muzik"
+MUZIK_CONFIG_FILE = MUZIK_CONFIG_DIR / "config.yaml"
 
 # Default directories for downloaded audio and chapter-split tracks.
 # Both live under $XDG_DATA_HOME/muzik/ so they are:
@@ -54,7 +58,80 @@ MUZIK_CONFIG_DIR = XDG_CONFIG_HOME / "muzik"
 #   • easy to locate on any XDG-compliant system
 DEFAULT_DOWNLOAD_DIR = XDG_DATA_HOME / "muzik" / "downloads"
 DEFAULT_BANDCAMP_DIR = XDG_DATA_HOME / "muzik" / "bandcamp"
+DEFAULT_SOULSEEK_DIR = XDG_DATA_HOME / "muzik" / "soulseek"
 DEFAULT_SPLITS_DIR = XDG_DATA_HOME / "muzik" / "splits"
+
+
+def load_muzik_config(path: Path = MUZIK_CONFIG_FILE) -> dict:
+    """Load muzik's own config file, returning an empty dict when absent."""
+    if not path.exists():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _env_or_config(
+    env: Mapping[str, str],
+    env_name: str,
+    config: dict,
+    section: str,
+    key: str,
+    default: str,
+) -> str:
+    raw = env.get(env_name, "").strip()
+    if raw:
+        return raw
+    section_data = config.get(section) or {}
+    if isinstance(section_data, dict):
+        value = section_data.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return default
+
+
+def get_slskd_settings(
+    *,
+    env: Mapping[str, str] = os.environ,
+    config_path: Path = MUZIK_CONFIG_FILE,
+) -> dict[str, str]:
+    """Return slskd settings from environment, muzik config, then defaults."""
+    config = load_muzik_config(config_path)
+    return {
+        "url": _env_or_config(
+            env,
+            "SLSKD_URL",
+            config,
+            "slskd",
+            "url",
+            "http://localhost:5030",
+        ).rstrip("/"),
+        "api_key": _env_or_config(
+            env,
+            "SLSKD_API_KEY",
+            config,
+            "slskd",
+            "api_key",
+            "",
+        ),
+        "download_dir": _env_or_config(
+            env,
+            "SLSKD_DOWNLOAD_DIR",
+            config,
+            "slskd",
+            "download_dir",
+            str(DEFAULT_SOULSEEK_DIR),
+        ),
+    }
+
+
+# slskd/Soulseek backend settings. Env vars override $XDG_CONFIG_HOME/muzik/config.yaml.
+_SLSKD_SETTINGS = get_slskd_settings()
+SLSKD_URL = _SLSKD_SETTINGS["url"]
+SLSKD_API_KEY = _SLSKD_SETTINGS["api_key"]
+SLSKD_DOWNLOAD_DIR = _SLSKD_SETTINGS["download_dir"]
 
 # ---------------------------------------------------------------------------
 # Constants

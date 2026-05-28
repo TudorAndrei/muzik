@@ -4,6 +4,7 @@ Supported formats
 -----------------
 .chapters.txt sidecar  — one line per chapter, ``HH:MM:SS Title`` or ``MM:SS Title``
 .info.json sidecar     — yt-dlp JSON with a ``chapters`` array
+.cue sidecar           — common album cue sheet with ``TRACK``/``INDEX 01`` entries
 """
 
 import json
@@ -74,6 +75,9 @@ def _secs_to_ts(secs: int) -> str:
 # ---------------------------------------------------------------------------
 
 _CHAPTER_RE = re.compile(r"^(\d+:\d{2}(?::\d{2})?)\s+(.+)$")
+_CUE_TRACK_RE = re.compile(r"^\s*TRACK\s+(\d+)\s+\S+", re.IGNORECASE)
+_CUE_TITLE_RE = re.compile(r'^\s*TITLE\s+"?(.*?)"?\s*$', re.IGNORECASE)
+_CUE_INDEX_RE = re.compile(r"^\s*INDEX\s+01\s+(\d{2}):(\d{2}):(\d{2})", re.IGNORECASE)
 
 
 def parse_chapters_txt(path: Path) -> list[Chapter]:
@@ -128,6 +132,69 @@ def parse_chapters_json(path: Path) -> list[Chapter]:
     return chapters
 
 
+def _cue_ts_to_secs(minutes: str, seconds: str, frames: str) -> int:
+    """Convert CUE MM:SS:FF timestamps to whole seconds."""
+    total = int(minutes) * 60 + int(seconds)
+    if int(frames) >= 38:
+        total += 1
+    return total
+
+
+def parse_cue(path: Path) -> list[Chapter]:
+    """Parse a CUE sheet into chapters.
+
+    The parser intentionally uses only track ``TITLE`` and ``INDEX 01`` data,
+    which is enough to split the common Soulseek case of one album audio file
+    plus a same-folder cue sheet.
+    """
+    raw: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        track_match = _CUE_TRACK_RE.match(line)
+        if track_match:
+            current = {
+                "index": int(track_match.group(1)),
+                "title": f"Track {int(track_match.group(1))}",
+            }
+            raw.append(current)
+            continue
+
+        if current is None:
+            continue
+
+        title_match = _CUE_TITLE_RE.match(line)
+        if title_match:
+            current["title"] = title_match.group(1).strip() or current["title"]
+            continue
+
+        index_match = _CUE_INDEX_RE.match(line)
+        if index_match:
+            current["start"] = _cue_ts_to_secs(*index_match.groups())
+
+    entries: list[tuple[int, int, str]] = []
+    for entry in raw:
+        index = entry.get("index")
+        start = entry.get("start")
+        title = entry.get("title")
+        if isinstance(index, int) and isinstance(start, int):
+            entries.append((index, start, str(title)))
+    entries.sort(key=lambda entry: entry[0])
+
+    chapters: list[Chapter] = []
+    for idx, (index, start, title) in enumerate(entries):
+        end = entries[idx + 1][1] if idx + 1 < len(entries) else None
+        chapters.append(
+            Chapter(
+                index=index,
+                start=start,
+                end=end,
+                title=title,
+            )
+        )
+    return chapters
+
+
 # ---------------------------------------------------------------------------
 # Discovery
 # ---------------------------------------------------------------------------
@@ -139,6 +206,7 @@ def find_chapters(audio_path: Path) -> list[Chapter]:
     Search order:
     1. ``<stem>.chapters.txt`` sidecar
     2. ``<stem>.info.json`` sidecar (yt-dlp)
+    3. ``<stem>.cue`` sidecar, then a single ``*.cue`` in the same directory
     Returns an empty list when nothing is found.
     """
     base = audio_path.with_suffix("")
@@ -150,6 +218,17 @@ def find_chapters(audio_path: Path) -> list[Chapter]:
     jsn = base.with_suffix(".info.json")
     if jsn.exists():
         chapters = parse_chapters_json(jsn)
+        if chapters:
+            return chapters
+
+    cue = base.with_suffix(".cue")
+    cue_candidates = [cue] if cue.exists() else []
+    if not cue_candidates and audio_path.parent.exists():
+        cue_candidates = sorted(audio_path.parent.glob("*.cue"))
+        if len(cue_candidates) != 1:
+            cue_candidates = []
+    for cue_path in cue_candidates:
+        chapters = parse_cue(cue_path)
         if chapters:
             return chapters
 

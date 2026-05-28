@@ -7,7 +7,11 @@ from muzik.config import (
     BEETS_CONFIG,
     CACHE_DIR,
     DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_SOULSEEK_DIR,
     DEFAULT_SPLITS_DIR,
+    SLSKD_API_KEY,
+    SLSKD_DOWNLOAD_DIR,
+    SLSKD_URL,
 )
 from muzik.ui.console import console
 
@@ -27,6 +31,7 @@ _IMPORT_BLOCK = (
 def _ensure_dirs() -> None:
     dirs = {
         "Downloads": DEFAULT_DOWNLOAD_DIR,
+        "Soulseek ": DEFAULT_SOULSEEK_DIR,
         "Splits   ": DEFAULT_SPLITS_DIR,
         "Cache    ": CACHE_DIR,
         "Beets cfg": BEETS_CONFIG.parent,
@@ -97,6 +102,7 @@ def init_cmd() -> None:
     \b
     Creates:
       $XDG_DATA_HOME/muzik/downloads   — default download directory
+      $XDG_DATA_HOME/muzik/soulseek    — default Soulseek download directory
       $XDG_DATA_HOME/muzik/splits      — default splits directory
       $XDG_CACHE_HOME/muzik            — cache directory
       $XDG_CONFIG_HOME/beets/          — beets config directory
@@ -114,6 +120,18 @@ def init_cmd() -> None:
 
     console.print("\n[bold]Beets configuration[/bold]")
     _configure_beets()
+
+    console.print("\n[bold]Soulseek configuration[/bold]")
+    console.print(f"  SLSKD_URL           [dim]{SLSKD_URL}[/dim]")
+    console.print(f"  SLSKD_DOWNLOAD_DIR  [dim]{SLSKD_DOWNLOAD_DIR}[/dim]")
+    if SLSKD_API_KEY:
+        console.print("  SLSKD_API_KEY       [green]set[/green]")
+    else:
+        console.print("  SLSKD_API_KEY       [yellow]not set[/yellow]")
+        console.print(
+            "  [dim]Set SLSKD_URL, SLSKD_API_KEY, and SLSKD_DOWNLOAD_DIR "
+            "to use Soulseek via slskd.[/dim]"
+        )
 
     console.rule()
     console.print("[bold green]muzik init complete.[/bold green]")
