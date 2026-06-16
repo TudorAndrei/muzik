@@ -22,6 +22,20 @@ your full Bandcamp collection.
 - Optional for Soulseek: a running [`slskd`](https://github.com/slskd/slskd)
   instance
 
+Check external tools before running a full workflow:
+
+```sh
+yt-dlp --version
+ffmpeg -version
+ffprobe -version
+uv run muzik soulseek check      # when using Soulseek/slskd
+uv run playwright install chromium
+```
+
+Bandcamp collection downloads use Playwright browser automation. The first
+Bandcamp run opens a browser so you can log in, then stores cookies under the
+app data directory.
+
 ## Soulseek setup
 
 Configure `muzik` to talk to `slskd` with environment variables:
@@ -74,8 +88,27 @@ uv run muzik init
 | `muzik import <dir>` | Import an existing music library into beets |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
+| `muzik tui` | Open the Textual workflow UI |
 | `muzik cache` | Manage the `~/.cache/music-scripts` cache |
 | `muzik config` | Manage beets configuration |
+
+## Textual TUI
+
+Run the terminal UI with:
+
+```sh
+uv run muzik tui
+```
+
+The TUI provides a workflow launcher, pipeline progress/log view, source
+candidate table, chapter review/editor, and beets match/duplicate decision
+screens. It uses the same workflow and beets service layer as the CLI, with
+long-running workflow work executed in Textual workers so the interface remains
+responsive.
+
+Textual is the first GUI target for this project. A native PySide6 desktop app
+should only be evaluated after this service boundary has been validated in
+regular use.
 
 ## Credits
 

@@ -1,4 +1,4 @@
-"""music organize <dir> — beets passthrough for tagging and importing."""
+"""music organize <dir> — beets tagging and importing."""
 
 import sys
 from pathlib import Path
@@ -7,6 +7,8 @@ from typing import Optional
 import typer
 
 from muzik.config import BEETS_CONFIG
+from muzik.core.beets.decisions import NonInteractiveBeetsDecisions
+from muzik.core.beets.importer import ImportOptions, import_paths
 from muzik.core.runner import run_passthrough
 from muzik.ui.console import console, err
 
@@ -15,6 +17,54 @@ def _beet_bin() -> str:
     """Return the path to the beet binary in the same venv as this Python."""
     beet = Path(sys.executable).parent / "beet"
     return str(beet) if beet.exists() else "beet"
+
+
+def _beet_command(
+    directory: Path,
+    *,
+    tag_only: bool,
+    dry_run: bool,
+    config: Optional[Path],
+) -> list[str]:
+    cmd = [_beet_bin()]
+    if config and config.exists():
+        cmd += ["-c", str(config)]
+
+    if tag_only:
+        subcmd = ["write"]
+        if not dry_run:
+            subcmd.append("--yes")
+        return cmd + subcmd + [str(directory)]
+
+    subcmd = ["import", "--incremental", "--move"]
+    if dry_run:
+        subcmd.append("--pretend")
+    return cmd + subcmd + [str(directory)]
+
+
+def _run_beet_passthrough(
+    directory: Path,
+    *,
+    tag_only: bool,
+    dry_run: bool,
+    config: Optional[Path],
+) -> None:
+    if tag_only:
+        console.print(f"[bold]beet write[/bold] (tag-only) {directory}")
+    else:
+        console.print(f"[bold]beet import[/bold] {directory}")
+
+    rc = run_passthrough(
+        _beet_command(
+            directory,
+            tag_only=tag_only,
+            dry_run=dry_run,
+            config=config,
+        )
+    )
+    if rc != 0:
+        err(f"[red]beet exited with code {rc}[/red]")
+        raise typer.Exit(rc)
 
 
 def organize_cmd(
@@ -46,7 +96,8 @@ def organize_cmd(
 ) -> None:
     """Organize/tag audio files using beets.
 
-    Passes stdin/stdout directly to beet so interactive prompts work.
+    Uses the internal beets API for imports. Tag-only writes still use the
+    isolated beets write subprocess path.
     Run ``muzik init`` first to configure beets with sensible defaults
     (duplicate_action: skip).
     """
@@ -63,31 +114,30 @@ def organize_cmd(
         )
         # Don't abort — beet itself will handle the missing config
 
-    # Build beet command — use venv-local binary so it works under `uv run`
-    cmd = [_beet_bin()]
-    if beets_cfg.exists():
-        cmd += ["-c", str(beets_cfg)]
+    if tag_only:
+        _run_beet_passthrough(
+            directory,
+            tag_only=tag_only,
+            dry_run=dry_run,
+            config=beets_cfg,
+        )
+        console.print("[green]beet finished.[/green]")
+        return
 
-    if import_:
-        console.print(f"[bold]beet import[/bold] {directory}")
-        subcmd = ["import", "--incremental", "--move"]
-        if dry_run:
-            subcmd.append("--pretend")
-        cmd += subcmd + [str(directory)]
-    elif tag_only:
-        console.print(f"[bold]beet write[/bold] (tag-only) {directory}")
-        cmd += ["write"] + (["--yes"] if not dry_run else []) + [str(directory)]
-    else:
-        # Default: import with auto-tagging, moving files into the beets library.
-        console.print(f"[bold]beet import[/bold] {directory}")
-        subcmd = ["import", "--incremental", "--move"]
-        if dry_run:
-            subcmd.append("--pretend")
-        cmd += subcmd + [str(directory)]
-
-    rc = run_passthrough(cmd)
-    if rc != 0:
-        err(f"[red]beet exited with code {rc}[/red]")
-        raise typer.Exit(rc)
+    console.print(f"[bold]beet import[/bold] {directory}")
+    try:
+        import_paths(
+            ImportOptions(
+                paths=[directory],
+                config_path=beets_cfg if beets_cfg.exists() else None,
+                move=True,
+                dry_run=dry_run,
+                incremental=True,
+            ),
+            decisions=NonInteractiveBeetsDecisions(),
+        )
+    except Exception as exc:
+        err(f"[red]beets import failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     console.print("[green]beet finished.[/green]")

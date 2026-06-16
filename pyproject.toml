@@ -19,6 +19,7 @@ dependencies = [
     "desktop-notifier>=6.0",
     "pydantic-ai-slim[openrouter]>=0.0.14",
     "slskd-api>=0.2.4",
+    "textual>=8.2.7",
 ]
 
 [project.scripts]

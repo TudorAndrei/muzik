@@ -1,14 +1,14 @@
 """muzik import — import an existing music library into beets."""
 
 import asyncio
-import sys
 from pathlib import Path
 from typing import Optional
 
 import typer
 
 from muzik.config import BEETS_CONFIG
-from muzik.core.runner import run_passthrough
+from muzik.core.beets.decisions import NonInteractiveBeetsDecisions
+from muzik.core.beets.importer import ImportOptions, import_paths
 from muzik.ui.console import console, err
 
 
@@ -26,11 +26,6 @@ def _notify(directory: Path) -> None:
         asyncio.run(_send())
     except Exception:
         pass
-
-
-def _beet_bin() -> str:
-    beet = Path(sys.executable).parent / "beet"
-    return str(beet) if beet.exists() else "beet"
 
 
 def import_cmd(
@@ -75,7 +70,7 @@ def import_cmd(
 ) -> None:
     """Import an existing music library into beets.
 
-    Runs ``beet import`` with ``--incremental`` so already-imported albums are
+    Runs a beets import with ``--incremental`` so already-imported albums are
     skipped.  By default files are **moved** into the beets library directory.
     Use ``--copy`` to keep originals in place, or ``--link`` to create symlinks.
 
@@ -93,33 +88,26 @@ def import_cmd(
             "Run [bold]muzik init[/bold] to create one."
         )
 
-    cmd = [_beet_bin()]
-    if beets_cfg.exists():
-        cmd += ["-c", str(beets_cfg)]
-
-    subcmd = ["import", "--incremental"]
-
-    if dry_run:
-        subcmd.append("--pretend")
-    if copy:
-        subcmd.append("--copy")
-    elif link:
-        subcmd.append("--link")
-    else:
-        subcmd.append("--move")
-    if nowrite:
-        subcmd.append("--nowrite")
-    if quiet:
-        subcmd.append("--quiet")
-
-    cmd += subcmd + [str(directory)]
-
     console.print(f"[bold]beet import[/bold] {directory}")
     if not quiet:
         _notify(directory)
-    rc = run_passthrough(cmd)
-    if rc != 0:
-        err(f"[red]beet exited with code {rc}[/red]")
-        raise typer.Exit(rc)
+    try:
+        import_paths(
+            ImportOptions(
+                paths=[directory],
+                config_path=beets_cfg if beets_cfg.exists() else None,
+                copy=copy,
+                link=link,
+                move=not copy and not link,
+                nowrite=nowrite,
+                quiet=quiet,
+                dry_run=dry_run,
+                incremental=True,
+            ),
+            decisions=NonInteractiveBeetsDecisions(quiet=quiet),
+        )
+    except Exception as exc:
+        err(f"[red]beets import failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
     console.print("[green]Import complete.[/green]")

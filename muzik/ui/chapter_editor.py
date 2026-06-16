@@ -11,11 +11,17 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Protocol
 
 from rich.table import Table
 
 from muzik.core.chapters import Chapter, parse_chapters_txt, serialize_chapters
+from muzik.core.workflow.decisions import ChapterDecision, WorkflowDecisionError
 from muzik.ui.console import console
+
+
+class ChapterReviewDecisions(Protocol):
+    def choose_action(self, chapters: list[Chapter]) -> ChapterDecision: ...
 
 
 def display_chapter_table(chapters: list[Chapter], title: str = "Chapters") -> None:
@@ -51,32 +57,35 @@ def _find_editor() -> str:
     return "vi"
 
 
-def edit_chapters(chapters: list[Chapter]) -> list[Chapter] | None:
+def edit_chapters(
+    chapters: list[Chapter],
+    decisions: ChapterReviewDecisions | None = None,
+) -> list[Chapter] | None:
     """Interactive chapter editor loop.
 
     Returns the (possibly updated) chapter list when the user continues,
     or ``None`` if the user aborts.
     """
-    while True:
-        display_chapter_table(chapters)
+    if decisions is None:
+        from muzik.ui.cli.decisions import CliChapterReviewDecisions
 
-        console.print(
-            "\n  [bold][c][/bold]ontinue  [bold][e][/bold]dit  [bold][a][/bold]bort",
-        )
+        decisions = CliChapterReviewDecisions()
+
+    while True:
         try:
-            raw = input("  Choice [c]: ").strip().lower() or "c"
-        except (EOFError, KeyboardInterrupt):
+            action = decisions.choose_action(chapters)
+        except WorkflowDecisionError:
+            console.print("[dim]Please enter c, e, or a.[/dim]")
+            continue
+
+        if action == ChapterDecision.REJECT:
             console.print("\n[yellow]Aborted.[/yellow]")
             return None
 
-        if raw == "c":
+        if action == ChapterDecision.ACCEPT:
             return chapters
 
-        if raw == "a":
-            console.print("[yellow]Aborted.[/yellow]")
-            return None
-
-        if raw == "e":
+        if action == ChapterDecision.EDIT:
             # Write current chapters to a temp file and open editor
             tmp = tempfile.NamedTemporaryFile(
                 mode="w",
@@ -126,5 +135,3 @@ def edit_chapters(chapters: list[Chapter]) -> list[Chapter] | None:
                 console.print(f"[red]Error parsing edited chapters: {exc}[/red]")
             finally:
                 tmp_path.unlink(missing_ok=True)
-        else:
-            console.print("[dim]Please enter c, e, or a.[/dim]")

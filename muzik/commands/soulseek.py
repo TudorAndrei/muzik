@@ -12,6 +12,8 @@ from muzik.commands.organize import organize_cmd
 import muzik.core.cache as cache_mod
 from muzik.core.sources.base import Candidate, DownloadRequest
 from muzik.core.sources.soulseek import SoulseekError, SoulseekSource
+from muzik.core.workflow.decisions import WorkflowDecisionError
+from muzik.ui.cli.decisions import CliWorkflowDecisions
 from muzik.ui.console import console, err
 
 
@@ -233,19 +235,17 @@ def download_cmd(
 
         _store_candidates(candidates)
         console.print(_candidate_table(candidates, limit=limit))
-        choice = 1
-        if not no_interactive:
-            raw = typer.prompt("Candidate number", default="1")
-            try:
-                choice = int(raw)
-            except ValueError as exc:
-                err("[red]Invalid candidate number.[/red]")
-                raise typer.Exit(1) from exc
-        if choice < 1 or choice > min(limit, len(candidates)):
-            err("[red]Candidate number out of range.[/red]")
-            raise typer.Exit(1)
-
-        candidate = candidates[choice - 1]
+        decisions = CliWorkflowDecisions(
+            interactive=not no_interactive,
+            candidate_limit=limit,
+            candidate_prompt="Candidate number",
+            display_soulseek_candidates=False,
+        )
+        try:
+            candidate = decisions.choose_soulseek_candidate(candidates)
+        except WorkflowDecisionError as exc:
+            err(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
     if dry_run:
         console.print(f"[dim]Would download:[/dim] {candidate.title}")
         console.print(f"  User: [dim]{candidate.user or '?'}[/dim]")

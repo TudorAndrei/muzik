@@ -401,7 +401,7 @@ def test_workflow_playlist_uses_soulseek_per_video(
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: None)
 
-    def fake_acquire(request, *, prefer, interactive, fallback):
+    def fake_acquire(request, *, prefer, interactive, fallback, decisions, events):
         calls.append(request)
         audio = tmp_path / "downloads" / f"{request[-11:]}.flac"
         audio.parent.mkdir(exist_ok=True)
