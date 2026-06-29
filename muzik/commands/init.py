@@ -1,4 +1,4 @@
-"""muzik init — create XDG directories and configure beets for use with muzik."""
+"""muzik init — create app directories and configure beets for use with muzik."""
 
 import re
 
@@ -97,15 +97,15 @@ def _configure_beets() -> None:
 
 
 def init_cmd() -> None:
-    """Set up muzik: create XDG directories and configure beets.
+    """Set up muzik: create app directories and configure beets.
 
     \b
     Creates:
-      $XDG_DATA_HOME/muzik/downloads   — default download directory
-      $XDG_DATA_HOME/muzik/soulseek    — default Soulseek download directory
-      $XDG_DATA_HOME/muzik/splits      — default splits directory
-      $XDG_CACHE_HOME/muzik            — cache directory
-      $XDG_CONFIG_HOME/beets/          — beets config directory
+      platform user data dir/downloads   — default download directory
+      platform user data dir/soulseek    — default Soulseek download directory
+      platform user data dir/splits      — default splits directory
+      platform user cache dir            — cache directory
+      platform beets config dir          — beets config directory
 
     \b
     Beets config changes:

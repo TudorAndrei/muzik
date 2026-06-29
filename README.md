@@ -76,7 +76,7 @@ uv run muzik init
 
 | Command | Description |
 |---------|-------------|
-| `muzik init` | Create XDG directories and configure beets |
+| `muzik init` | Create app directories and configure beets |
 | `muzik workflow <url>` | Full pipeline: download → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik soulseek check` | Verify slskd connectivity and auth |
@@ -89,7 +89,7 @@ uv run muzik init
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik tui` | Open the Textual workflow UI |
-| `muzik cache` | Manage the `~/.cache/music-scripts` cache |
+| `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage beets configuration |
 
 ## Textual TUI

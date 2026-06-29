@@ -9,7 +9,7 @@ from muzik.config import CACHE_DIR, DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
 from muzik.core import cache as cache_mod
 from muzik.ui.console import console, err
 
-app = typer.Typer(help="Manage the ~/.cache/muzik cache.")
+app = typer.Typer(help="Manage the muzik cache.")
 
 
 def _human_size(n: int) -> str:

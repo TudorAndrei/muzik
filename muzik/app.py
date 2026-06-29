@@ -28,7 +28,7 @@ app = typer.Typer(
 )
 
 # Single-command subcommands registered directly on the root app
-app.command("init", help="Create XDG directories and configure beets.")(init_cmd)
+app.command("init", help="Create app directories and configure beets.")(init_cmd)
 app.command("import", help="Import an existing music library into beets.")(import_cmd)
 app.command(
     "bandcamp",

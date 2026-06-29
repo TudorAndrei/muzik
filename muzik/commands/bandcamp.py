@@ -205,7 +205,7 @@ def bandcamp_cmd(
 
     On first run, opens a browser window for you to log in to Bandcamp.
     Cookies and username are captured automatically and stored in
-    $XDG_CONFIG_HOME/muzik/ — subsequent runs need no arguments at all.
+    muzik's config directory — subsequent runs need no arguments at all.
 
     Re-run login after cookies expire: [bold]muzik bandcamp --setup[/bold]
     """

@@ -1,9 +1,56 @@
+import importlib
 from pathlib import Path
 
+import platformdirs
 import yaml
+from beets import config as beets_config
 
 from muzik import config
 from muzik.commands import config as config_cmd
+
+
+def test_paths_use_platformdirs_and_beets_config_helper(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_platform_dirs = platformdirs.PlatformDirs
+    original_beets_user_config_path = beets_config.user_config_path
+    calls = []
+
+    class FakePlatformDirs:
+        def __init__(self, appname: str, appauthor: str | bool | None = None) -> None:
+            calls.append((appname, appauthor))
+            self.user_cache_path = tmp_path / "cache" / appname
+            self.user_config_path = tmp_path / "config" / appname
+            self.user_data_path = tmp_path / "data" / appname
+
+    monkeypatch.setattr(platformdirs, "PlatformDirs", FakePlatformDirs)
+    monkeypatch.setattr(
+        beets_config,
+        "user_config_path",
+        lambda: str(tmp_path / "beets" / "config.yaml"),
+    )
+
+    try:
+        reloaded = importlib.reload(config)
+
+        assert calls == [("muzik", False)]
+        assert reloaded.CACHE_DIR == tmp_path / "cache" / "muzik"
+        assert reloaded.BANDCAMP_CACHE_FILE == reloaded.CACHE_DIR / "bandcamp.cache"
+        assert reloaded.MUZIK_CONFIG_DIR == tmp_path / "config" / "muzik"
+        assert reloaded.MUZIK_CONFIG_FILE == reloaded.MUZIK_CONFIG_DIR / "config.yaml"
+        assert reloaded.BEETS_CONFIG == tmp_path / "beets" / "config.yaml"
+        assert (
+            reloaded.DEFAULT_DOWNLOAD_DIR == tmp_path / "data" / "muzik" / "downloads"
+        )
+        assert reloaded.DEFAULT_BANDCAMP_DIR == tmp_path / "data" / "muzik" / "bandcamp"
+        assert reloaded.DEFAULT_SOULSEEK_DIR == tmp_path / "data" / "muzik" / "soulseek"
+        assert reloaded.DEFAULT_SPLITS_DIR == tmp_path / "data" / "muzik" / "splits"
+    finally:
+        monkeypatch.setattr(platformdirs, "PlatformDirs", original_platform_dirs)
+        monkeypatch.setattr(
+            beets_config, "user_config_path", original_beets_user_config_path
+        )
+        importlib.reload(config)
 
 
 def test_slskd_settings_read_from_muzik_config(tmp_path: Path) -> None:

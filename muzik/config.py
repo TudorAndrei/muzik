@@ -1,65 +1,46 @@
-"""Central configuration — paths, constants, defaults.
+"""Central configuration: paths, constants, defaults.
 
-Directory locations follow the XDG Base Directory Specification
-(https://specifications.freedesktop.org/basedir/latest/).  Each XDG variable
-is read from the environment; if unset, empty, or not absolute the spec-
-mandated default is used instead.
+Directory locations are resolved with platformdirs. On Linux this follows the
+XDG Base Directory Specification, while macOS and Windows use their native
+per-user application directories.
 """
 
 import os
 from pathlib import Path
 from typing import Mapping
 
+from beets import config as beets_config
+from platformdirs import PlatformDirs
 import yaml
-
-
-# ---------------------------------------------------------------------------
-# XDG helpers
-# ---------------------------------------------------------------------------
-
-
-def _xdg(env_var: str, default: Path) -> Path:
-    """Return the XDG directory for *env_var*, falling back to *default*.
-
-    The spec requires the path to be absolute; relative or empty values are
-    treated as unset.
-    """
-    raw = os.environ.get(env_var, "").strip()
-    p = Path(raw) if raw else None
-    return p if (p and p.is_absolute()) else default
-
-
-XDG_CACHE_HOME = _xdg("XDG_CACHE_HOME", Path.home() / ".cache")
-XDG_CONFIG_HOME = _xdg("XDG_CONFIG_HOME", Path.home() / ".config")
-XDG_DATA_HOME = _xdg("XDG_DATA_HOME", Path.home() / ".local" / "share")
 
 
 # ---------------------------------------------------------------------------
 # Application paths
 # ---------------------------------------------------------------------------
 
-# Cache directory ($XDG_CACHE_HOME/muzik/)
-CACHE_DIR = XDG_CACHE_HOME / "muzik"
+_APP_DIRS = PlatformDirs("muzik", appauthor=False)
+CACHE_DIR = _APP_DIRS.user_cache_path
 
 # Bandcamp download-tracking cache (pipe-delimited, one entry per purchased item)
 BANDCAMP_CACHE_FILE = CACHE_DIR / "bandcamp.cache"
 
-# Default beets config location
-BEETS_CONFIG = XDG_CONFIG_HOME / "beets" / "config.yaml"
+# Default beets config location. Use beets' own helper so muzik matches beet.
+BEETS_CONFIG = Path(beets_config.user_config_path())
 
 # muzik config dir — stores per-service credentials (e.g. Bandcamp cookies)
-MUZIK_CONFIG_DIR = XDG_CONFIG_HOME / "muzik"
+MUZIK_CONFIG_DIR = _APP_DIRS.user_config_path
 MUZIK_CONFIG_FILE = MUZIK_CONFIG_DIR / "config.yaml"
 
 # Default directories for downloaded audio and chapter-split tracks.
-# Both live under $XDG_DATA_HOME/muzik/ so they are:
+# These live under the platform-specific user data directory so they are:
 #   • persistent across runs (not in cache)
 #   • out of the way of the working directory
-#   • easy to locate on any XDG-compliant system
-DEFAULT_DOWNLOAD_DIR = XDG_DATA_HOME / "muzik" / "downloads"
-DEFAULT_BANDCAMP_DIR = XDG_DATA_HOME / "muzik" / "bandcamp"
-DEFAULT_SOULSEEK_DIR = XDG_DATA_HOME / "muzik" / "soulseek"
-DEFAULT_SPLITS_DIR = XDG_DATA_HOME / "muzik" / "splits"
+#   • easy to locate on each supported OS
+_DATA_DIR = _APP_DIRS.user_data_path
+DEFAULT_DOWNLOAD_DIR = _DATA_DIR / "downloads"
+DEFAULT_BANDCAMP_DIR = _DATA_DIR / "bandcamp"
+DEFAULT_SOULSEEK_DIR = _DATA_DIR / "soulseek"
+DEFAULT_SPLITS_DIR = _DATA_DIR / "splits"
 
 
 def load_muzik_config(path: Path = MUZIK_CONFIG_FILE) -> dict:
@@ -127,7 +108,7 @@ def get_slskd_settings(
     }
 
 
-# slskd/Soulseek backend settings. Env vars override $XDG_CONFIG_HOME/muzik/config.yaml.
+# slskd/Soulseek backend settings. Env vars override muzik's config file.
 _SLSKD_SETTINGS = get_slskd_settings()
 SLSKD_URL = _SLSKD_SETTINGS["url"]
 SLSKD_API_KEY = _SLSKD_SETTINGS["api_key"]

@@ -20,6 +20,7 @@ dependencies = [
     "pydantic-ai-slim[openrouter]>=0.0.14",
     "slskd-api>=0.2.4",
     "textual>=8.2.7",
+    "platformdirs>=4.0",
 ]
 
 [project.scripts]
