@@ -16,7 +16,7 @@ your full Bandcamp collection.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.14+
 - [`uv`](https://github.com/astral-sh/uv)
 - `yt-dlp`, `ffmpeg`, `ffprobe` on `$PATH`
 - Optional for Soulseek: a running [`slskd`](https://github.com/slskd/slskd)

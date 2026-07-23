@@ -6,7 +6,6 @@ from pathlib import Path
 
 from beets import config, plugins
 from beets.library import Library
-from beets.ui import get_path_formats, get_replacements
 
 
 def open_library(config_path: Path | None = None) -> Library:
@@ -18,8 +17,6 @@ def open_library(config_path: Path | None = None) -> Library:
     lib = Library(
         config["library"].as_filename(),
         config["directory"].as_filename(),
-        get_path_formats(),
-        get_replacements(),
     )
     plugins.send("library_opened", lib=lib)
     return lib
