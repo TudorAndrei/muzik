@@ -13,6 +13,7 @@ from muzik.core.beets.events import (
     RecordingBeetsEventEmitter,
 )
 from muzik.core.beets.importer import (
+    BeetsImporterAdapter,
     ImportOptions,
     MuzikImportSession,
     apply_duplicate_decision,
@@ -46,6 +47,7 @@ class FakeDecisions:
 class FakeTask:
     paths = ["/tmp/Album"]
     is_album = True
+    candidates = []
 
     def __init__(self) -> None:
         self.choice = None
@@ -140,6 +142,22 @@ def test_apply_duplicate_decision_sets_task_flags() -> None:
     task = FakeTask()
     apply_duplicate_decision(task, BeetsDuplicateDecision.KEEP_ALL)
     assert task.choice is None
+
+
+def test_importer_adapter_exposes_only_opaque_view_ids() -> None:
+    task = FakeTask()
+    candidate = object()
+    task.candidates = [candidate]
+    adapter = BeetsImporterAdapter()
+
+    view = adapter.view_for(task)
+
+    assert view.task_id == "task-0"
+    assert view.matches[0].candidate_id == "task-0:match:0"
+    assert not hasattr(view, "raw")
+    assert adapter.resolve_choice(task, view.matches[0].candidate_id) is candidate
+    with pytest.raises(ValueError, match="Unknown Beets candidate ID"):
+        adapter.resolve_choice(task, "stale-id")
 
 
 def test_import_paths_applies_options_runs_session_and_emits_events(

@@ -49,6 +49,10 @@ from muzik.core.workflow.events import (
     WorkflowEventEmitter,
 )
 from muzik.core.workflow.cancellation import CancellationToken
+from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
+from muzik.core.beets.events import BeetsEventEmitter, NullBeetsEventEmitter
+from muzik.core.beets.importer import ImportOptions
+from muzik.core.beets.service import organize_paths
 from muzik.core.workflow.service import (
     WorkflowOptions,
     WorkflowRequest,
@@ -69,6 +73,7 @@ from muzik.core.workflow.service import (
 )
 from muzik.core.sources.youtube import YouTubeSource
 from muzik.ui.cli.decisions import CliWorkflowDecisions
+from muzik.ui.cli.events import RichWorkflowEventRenderer
 from muzik.ui.chapter_editor import display_chapter_table
 from muzik.ui.console import console, err
 
@@ -320,6 +325,8 @@ def _process_audio_files(
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
     cancellation: CancellationToken | None = None,
+    beets_decisions: BeetsDecisions | None = None,
+    beets_events: BeetsEventEmitter | None = None,
 ) -> None:
     """Classify, split, and organize local audio files/directories."""
     audio_files = _find_audio_inputs(audio_inputs)
@@ -334,6 +341,8 @@ def _process_audio_files(
 
     decisions = decisions or CliWorkflowDecisions()
     events = events or NullWorkflowEventEmitter()
+    beets_decisions = beets_decisions or NonInteractiveBeetsDecisions()
+    beets_events = beets_events or NullBeetsEventEmitter()
     options = WorkflowOptions(
         review=review,
         no_split=no_split,
@@ -365,6 +374,19 @@ def _process_audio_files(
 
     def organize_operation(target: Path) -> bool:
         try:
+            if not tag_only:
+                organize_paths(
+                    ImportOptions(
+                        paths=[target],
+                        config_path=config if config and config.exists() else None,
+                        move=True,
+                        dry_run=dry_run,
+                        incremental=True,
+                    ),
+                    decisions=beets_decisions,
+                    events=beets_events,
+                )
+                return True
             organize_cmd(
                 directory=target,
                 import_=import_,
@@ -376,6 +398,9 @@ def _process_audio_files(
             if getattr(exc, "code", 0) != 0:
                 err(f"  [red]beet failed for {target}[/red]")
                 return False
+        except Exception as exc:
+            err(f"  [red]beets failed for {target}: {exc}[/red]")
+            return False
         return True
 
     process_audio_plan(
@@ -582,19 +607,19 @@ def workflow_cmd(
         interactive=interactive,
     )
     decisions: WorkflowDecisions = CliWorkflowDecisions(interactive=options.interactive)
-    events: WorkflowEventEmitter = NullWorkflowEventEmitter()
+    events: WorkflowEventEmitter = RichWorkflowEventRenderer()
 
     def download_audio(
-        url: str,
-        output: Path,
+        source_url: str,
+        destination: Path,
         archive_file: Path | None,
         *,
         cancellation: CancellationToken | None = None,
     ) -> bool:
         try:
             _download_audio(
-                url=url,
-                output=output,
+                url=source_url,
+                output=destination,
                 format="bestaudio",
                 quality="0",
                 no_chapters=False,

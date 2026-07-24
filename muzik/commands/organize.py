@@ -8,7 +8,8 @@ import typer
 
 from muzik.config import BEETS_CONFIG
 from muzik.core.beets.decisions import NonInteractiveBeetsDecisions
-from muzik.core.beets.importer import ImportOptions, import_paths
+from muzik.core.beets.importer import ImportOptions
+from muzik.core.beets.service import organize_paths
 from muzik.core.runner import run_passthrough
 from muzik.ui.console import console, err
 
@@ -49,9 +50,7 @@ def _run_beet_passthrough(
     dry_run: bool,
     config: Optional[Path],
 ) -> None:
-    if tag_only:
-        console.print(f"[bold]beet write[/bold] (tag-only) {directory}")
-    else:
+    if not tag_only:
         console.print(f"[bold]beet import[/bold] {directory}")
 
     rc = run_passthrough(
@@ -115,18 +114,11 @@ def organize_cmd(
         # Don't abort — beet itself will handle the missing config
 
     if tag_only:
-        _run_beet_passthrough(
-            directory,
-            tag_only=tag_only,
-            dry_run=dry_run,
-            config=beets_cfg,
-        )
-        console.print("[green]beet finished.[/green]")
-        return
-
-    console.print(f"[bold]beet import[/bold] {directory}")
+        console.print(f"[bold]beet write[/bold] (tag-only) {directory}")
+    else:
+        console.print(f"[bold]beet import[/bold] {directory}")
     try:
-        import_paths(
+        organize_paths(
             ImportOptions(
                 paths=[directory],
                 config_path=beets_cfg if beets_cfg.exists() else None,
@@ -134,7 +126,14 @@ def organize_cmd(
                 dry_run=dry_run,
                 incremental=True,
             ),
+            tag_only=tag_only,
             decisions=NonInteractiveBeetsDecisions(),
+            tag_only_runner=lambda path, _options: _run_beet_passthrough(
+                path,
+                tag_only=True,
+                dry_run=dry_run,
+                config=beets_cfg,
+            ),
         )
     except Exception as exc:
         err(f"[red]beets import failed:[/red] {exc}")

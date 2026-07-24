@@ -213,10 +213,10 @@ def test_process_audio_files_emits_organize_steps(
     split_dir.mkdir(parents=True)
     organized: list[Path] = []
 
-    def fake_organize_cmd(**kwargs):
-        organized.append(kwargs["directory"])
+    def fake_organize_paths(options, **kwargs):
+        organized.extend(options.paths)
 
-    monkeypatch.setattr(workflow, "organize_cmd", fake_organize_cmd)
+    monkeypatch.setattr(workflow, "organize_paths", fake_organize_paths)
     events = RecordingWorkflowEventEmitter()
 
     workflow._process_audio_files(

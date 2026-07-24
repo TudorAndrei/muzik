@@ -3,24 +3,27 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+import inspect
 from pathlib import Path
 from typing import cast
 
-import typer
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Log, ProgressBar, Static
 from textual.worker import Worker, WorkerState
 
-from muzik.commands.download import _download_audio
-from muzik.commands.workflow import (
-    _acquire_from_soulseek,
-    _get_playlist_video_ids,
-    _prepopulate_archive,
-    _process_audio_files,
-    _soulseek_ready,
+from muzik.core.beets.decisions import BeetsDuplicateDecision
+from muzik.core.beets.events import (
+    BeetsDuplicateEvent,
+    BeetsErrorEvent,
+    BeetsEvent,
+    BeetsImportFinishedEvent,
+    BeetsImportStartedEvent,
+    BeetsLogEvent,
+    BeetsTaskEvent,
 )
+from muzik.core.beets.views import BeetsTaskView
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate
 from muzik.core.workflow.decisions import (
@@ -49,20 +52,20 @@ from muzik.core.workflow.service import (
     WorkflowServiceError,
     run_workflow,
 )
+from muzik.core.workflow.operations import build_workflow_operations
 from muzik.tui.screens import (
+    BeetsMatchScreen,
     CandidateSelectionScreen,
     ChapterEditScreen,
     ChapterReviewScreen,
+    DuplicateResolutionScreen,
     WorkflowLaunchConfig,
     WorkflowLauncherScreen,
 )
 from muzik.tui.widgets import BeetsMatchTable, CandidateTable, ChapterTable
 
 
-WorkflowOperationsFactory = Callable[
-    [WorkflowLaunchConfig, WorkflowDecisions, WorkflowEventEmitter],
-    WorkflowRunOperations,
-]
+WorkflowOperationsFactory = Callable[..., WorkflowRunOperations]
 
 
 class TuiWorkflowEventEmitter:
@@ -144,6 +147,65 @@ class TuiWorkflowDecisions:
         )
         self.cancellation.raise_if_cancelled()
         return cast(list[Chapter] | None, edited)
+
+
+class TuiBeetsDecisions:
+    """Beets decisions backed by Textual modals and opaque candidate IDs."""
+
+    def __init__(
+        self, screen: "PipelineScreen", cancellation: CancellationToken
+    ) -> None:
+        self.screen = screen
+        self.cancellation = cancellation
+
+    def should_resume_beets_import(self, path: Path) -> bool:
+        return False
+
+    def choose_beets_album_match(self, task: BeetsTaskView) -> str | None:
+        return self._choose_match(task)
+
+    def choose_beets_track_match(self, task: BeetsTaskView) -> str | None:
+        return self._choose_match(task)
+
+    def _choose_match(self, task: BeetsTaskView) -> str | None:
+        self.cancellation.raise_if_cancelled()
+        choice = self.screen.app.call_from_thread(
+            self.screen.request_beets_match,
+            task,
+        )
+        self.cancellation.raise_if_cancelled()
+        return cast(str | None, choice)
+
+    def resolve_beets_duplicate(
+        self,
+        task: BeetsTaskView,
+        duplicates,
+    ) -> BeetsDuplicateDecision:
+        self.cancellation.raise_if_cancelled()
+        decision = self.screen.app.call_from_thread(
+            self.screen.request_duplicate_decision,
+            duplicates,
+        )
+        self.cancellation.raise_if_cancelled()
+        return cast(BeetsDuplicateDecision, decision or BeetsDuplicateDecision.SKIP)
+
+
+class TuiBeetsEventEmitter:
+    """Bridge safe Beets events from an importer worker into the pipeline UI."""
+
+    def __init__(
+        self, screen: "PipelineScreen", cancellation: CancellationToken
+    ) -> None:
+        self.screen = screen
+        self.cancellation = cancellation
+
+    def emit(self, event: BeetsEvent) -> None:
+        if self.cancellation.is_cancelled() or not self.screen.is_mounted:
+            return
+        try:
+            self.screen.app.call_from_thread(self.screen.handle_beets_event, event)
+        except RuntimeError:
+            self.screen.handle_beets_event(event)
 
 
 class PipelineScreen(Screen[None]):
@@ -307,6 +369,12 @@ class PipelineScreen(Screen[None]):
     ) -> list[Chapter] | None:
         return await self.app.push_screen_wait(ChapterEditScreen(chapters))
 
+    async def request_beets_match(self, task: BeetsTaskView) -> str | None:
+        return await self.app.push_screen_wait(BeetsMatchScreen(task))
+
+    async def request_duplicate_decision(self, duplicates) -> BeetsDuplicateDecision:
+        return await self.app.push_screen_wait(DuplicateResolutionScreen(duplicates))
+
     def handle_workflow_event(self, event: WorkflowEvent) -> None:
         if isinstance(event, StepStartedEvent):
             detail = f": {event.detail}" if event.detail else ""
@@ -346,6 +414,22 @@ class PipelineScreen(Screen[None]):
             prefix = "Fatal" if event.fatal else "Error"
             self._log(f"{prefix}: {event.message}")
 
+    def handle_beets_event(self, event: BeetsEvent) -> None:
+        if isinstance(event, BeetsTaskEvent):
+            self.query_one("#pipeline-beets", BeetsMatchTable).load_task(event.task)
+            self._log(f"Beets match requested for {event.task.task_id}.")
+        elif isinstance(event, BeetsDuplicateEvent):
+            self._log(f"Beets found {len(event.duplicates)} duplicate(s).")
+        elif isinstance(event, BeetsImportStartedEvent):
+            self._log(f"Beets import started for {len(event.paths)} path(s).")
+        elif isinstance(event, BeetsImportFinishedEvent):
+            status = "finished" if event.success else "failed"
+            self._log(f"Beets import {status}.")
+        elif isinstance(event, BeetsLogEvent):
+            self._log(event.message)
+        elif isinstance(event, BeetsErrorEvent):
+            self._log(f"Beets error: {event.message}")
+
     def _run_workflow(self) -> None:
         request = WorkflowRequest(
             raw=self.config.raw,
@@ -370,12 +454,32 @@ class PipelineScreen(Screen[None]):
             interactive=self.config.interactive,
         )
         events = TuiWorkflowEventEmitter(self, self._cancellation)
+        beets_events = TuiBeetsEventEmitter(self, self._cancellation)
+        beets_decisions = TuiBeetsDecisions(self, self._cancellation)
         decisions = TuiWorkflowDecisions(
             self,
             interactive=self.config.interactive,
             cancellation=self._cancellation,
         )
-        operations = self.operations_factory(self.config, decisions, events)
+        parameters = inspect.signature(self.operations_factory).parameters.values()
+        supports_beets_adapters = (
+            any(
+                parameter.kind == inspect.Parameter.VAR_POSITIONAL
+                or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters
+            )
+            or len(inspect.signature(self.operations_factory).parameters) >= 5
+        )
+        if supports_beets_adapters:
+            operations = self.operations_factory(
+                self.config,
+                decisions,
+                events,
+                beets_decisions,
+                beets_events,
+            )
+        else:
+            operations = self.operations_factory(self.config, decisions, events)
         try:
             run_workflow(
                 request,
@@ -461,74 +565,34 @@ def _default_operations(
     config: WorkflowLaunchConfig,
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter,
+    beets_decisions: TuiBeetsDecisions | None = None,
+    beets_events: TuiBeetsEventEmitter | None = None,
 ) -> WorkflowRunOperations:
-    def download_audio(
-        url: str,
-        output: Path,
-        archive_file: Path | None,
-        *,
-        cancellation: CancellationToken | None = None,
-    ) -> bool:
-        try:
-            _download_audio(
-                url=url,
-                output=output,
-                format="bestaudio",
-                quality="0",
-                no_chapters=False,
-                archive_file=archive_file,
-                cancellation=cancellation,
-            )
-        except (SystemExit, typer.Exit) as exc:
-            return _exit_code(exc) == 0
-        return True
-
-    def process_audio(
-        audio_inputs: list[Path],
-        pre_split_dirs: list[Path],
-        *,
-        cancellation: CancellationToken | None = None,
-    ) -> None:
-        _process_audio_files(
-            audio_inputs=audio_inputs,
-            pre_split_dirs=pre_split_dirs,
-            splits=config.splits,
-            review=config.review,
-            no_split=config.no_split,
-            no_organize=config.no_organize,
-            import_=config.import_,
-            tag_only=config.tag_only,
-            dry_run=config.dry_run,
-            jobs=config.jobs,
-            config=config.config,
-            keep_source=config.keep_source,
-            force=config.force,
-            metadata_source=config.metadata_source,
-            decisions=decisions,
-            events=events,
-            cancellation=cancellation,
-        )
-
-    return WorkflowRunOperations(
-        download_audio=download_audio,
-        process_audio=process_audio,
-        acquire_soulseek=lambda raw, *, cancellation=None: _acquire_from_soulseek(
-            raw,
-            prefer=config.prefer,
-            interactive=config.interactive,
-            fallback=config.fallback,
-            decisions=decisions,
-            events=events,
-            cancellation=cancellation,
-        ),
-        prepopulate_archive=_prepopulate_archive,
-        get_playlist_video_ids=_get_playlist_video_ids,
-        soulseek_ready=_soulseek_ready,
+    options = WorkflowOptions(
+        review=config.review,
+        no_split=config.no_split,
+        no_organize=config.no_organize,
+        import_=config.import_,
+        tag_only=config.tag_only,
+        dry_run=config.dry_run,
+        jobs=config.jobs,
+        config=config.config,
+        keep_source=config.keep_source,
+        force=config.force,
+        metadata_source=config.metadata_source,
+        audio_source=config.audio_source,
+        prefer=config.prefer,
+        fallback=config.fallback,
+        interactive=config.interactive,
     )
-
-
-def _exit_code(exc: BaseException) -> int:
-    return int(getattr(exc, "exit_code", getattr(exc, "code", 1)) or 0)
+    return build_workflow_operations(
+        splits=config.splits,
+        options=options,
+        decisions=decisions,
+        events=events,
+        beets_decisions=beets_decisions,
+        beets_events=beets_events,
+    )
 
 
 def tui_cmd() -> None:

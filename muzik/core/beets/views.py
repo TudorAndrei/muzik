@@ -14,15 +14,14 @@ class BeetsMatchView:
     album: str | None = None
     title: str | None = None
     distance: float | None = None
-    raw: Any = None
 
 
 @dataclass(frozen=True, slots=True)
 class BeetsTaskView:
+    task_id: str
     paths: list[Path] = field(default_factory=list)
     is_album: bool = False
     matches: list[BeetsMatchView] = field(default_factory=list)
-    raw: Any = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,10 +30,9 @@ class BeetsDuplicateView:
     artist: str | None = None
     album: str | None = None
     title: str | None = None
-    raw: Any = None
 
 
-def task_view(task: Any) -> BeetsTaskView:
+def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
     paths = []
     for path in getattr(task, "paths", []) or []:
         try:
@@ -44,25 +42,26 @@ def task_view(task: Any) -> BeetsTaskView:
 
     candidates = []
     for index, candidate in enumerate(getattr(task, "candidates", []) or []):
-        candidates.append(match_view(candidate, index=index))
+        candidates.append(
+            match_view(candidate, candidate_id=f"{task_id}:match:{index}")
+        )
 
     return BeetsTaskView(
+        task_id=task_id,
         paths=paths,
         is_album=bool(getattr(task, "is_album", False)),
         matches=candidates,
-        raw=task,
     )
 
 
-def match_view(candidate: Any, *, index: int = 0) -> BeetsMatchView:
+def match_view(candidate: Any, *, candidate_id: str) -> BeetsMatchView:
     info = getattr(candidate, "info", candidate)
     return BeetsMatchView(
-        candidate_id=str(getattr(candidate, "id", None) or index),
+        candidate_id=candidate_id,
         artist=_field(info, "artist"),
         album=_field(info, "album"),
         title=_field(info, "title"),
         distance=_distance(candidate),
-        raw=candidate,
     )
 
 
@@ -74,7 +73,6 @@ def duplicate_view(duplicate: Any) -> BeetsDuplicateView:
         artist=_field(duplicate, "artist"),
         album=_field(duplicate, "album"),
         title=_field(duplicate, "title"),
-        raw=duplicate,
     )
 
 

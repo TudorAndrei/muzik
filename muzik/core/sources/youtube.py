@@ -11,6 +11,7 @@ from muzik.config import AUDIO_EXTENSIONS, CACHE_DIR, YTDLP_OUTPUT_TEMPLATE
 from muzik.core import cache as cache_mod
 from muzik.core.metadata import write_muzik_metadata
 from muzik.core.runner import run_silent, run_streaming
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.sources.base import (
     Candidate,
     DownloadRequest,
@@ -212,21 +213,27 @@ class YouTubeSource:
         quality: str = "0",
         no_chapters: bool = False,
         archive_file: Optional[Path] = None,
+        cancellation: CancellationToken | None = None,
     ) -> DownloadResult:
         output.mkdir(parents=True, exist_ok=True)
         before = set(output.glob("*")) if output.exists() else set()
         url = candidate.path or candidate.source_id
-        rc = run_streaming(
-            build_download_command(
-                url,
-                format=format,
-                quality=quality,
-                no_chapters=no_chapters,
-                archive_file=archive_file,
-            ),
-            cwd=output,
-            label="yt-dlp",
+        command = build_download_command(
+            url,
+            format=format,
+            quality=quality,
+            no_chapters=no_chapters,
+            archive_file=archive_file,
         )
+        if cancellation is None:
+            rc = run_streaming(command, cwd=output, label="yt-dlp")
+        else:
+            rc = run_streaming(
+                command,
+                cwd=output,
+                label="yt-dlp",
+                cancellation=cancellation,
+            )
         if rc != 0:
             raise RuntimeError(f"yt-dlp exited with code {rc}")
 

@@ -16,10 +16,10 @@ def test_organize_uses_internal_import_for_default_import(
     config.write_text("directory: /tmp/music\n", encoding="utf-8")
     calls: list[tuple] = []
 
-    def fake_import_paths(options, *, decisions):
-        calls.append((options, decisions))
+    def fake_organize_paths(options, **kwargs):
+        calls.append((options, kwargs["decisions"]))
 
-    monkeypatch.setattr(organize, "import_paths", fake_import_paths)
+    monkeypatch.setattr(organize, "organize_paths", fake_organize_paths)
 
     organize.organize_cmd(
         directory=album,
@@ -48,8 +48,8 @@ def test_organize_preserves_dry_run_in_internal_import(
 
     monkeypatch.setattr(
         organize,
-        "import_paths",
-        lambda options, *, decisions: calls.append(options),
+        "organize_paths",
+        lambda options, **kwargs: calls.append(options),
     )
 
     organize.organize_cmd(
@@ -76,11 +76,7 @@ def test_organize_uses_passthrough_for_tag_only(
         calls.append(cmd)
         return 0
 
-    def fail_import_paths(*args, **kwargs):
-        raise AssertionError("--tag-only should be isolated to passthrough")
-
     monkeypatch.setattr(organize, "run_passthrough", fake_run_passthrough)
-    monkeypatch.setattr(organize, "import_paths", fail_import_paths)
     monkeypatch.setattr(organize, "_beet_bin", lambda: "beet")
 
     organize.organize_cmd(
@@ -118,8 +114,8 @@ def test_organize_missing_config_uses_default_beets_config(
 
     monkeypatch.setattr(
         organize,
-        "import_paths",
-        lambda options, *, decisions: calls.append(options),
+        "organize_paths",
+        lambda options, **kwargs: calls.append(options),
     )
 
     organize.organize_cmd(

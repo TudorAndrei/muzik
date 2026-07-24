@@ -25,10 +25,50 @@ from muzik.core.beets.events import (
     BeetsTaskEvent,
     NullBeetsEventEmitter,
 )
-from muzik.core.beets.views import duplicate_view, task_view
+from muzik.core.beets.views import BeetsTaskView, duplicate_view, task_view
 
 
 _IMPORT_LOCK = Lock()
+
+
+class BeetsImporterAdapter:
+    """Keep live Beets objects worker-local behind stable opaque view IDs."""
+
+    def __init__(self) -> None:
+        self._next_task_id = 0
+        self._task_ids: dict[int, str] = {}
+        self._candidates: dict[str, dict[str, Any]] = {}
+
+    def view_for(self, task: Any) -> BeetsTaskView:
+        key = id(task)
+        task_id = self._task_ids.get(key)
+        if task_id is None:
+            task_id = f"task-{self._next_task_id}"
+            self._next_task_id += 1
+            self._task_ids[key] = task_id
+        view = task_view(task, task_id=task_id)
+        self._candidates[task_id] = {
+            match.candidate_id: candidate
+            for match, candidate in zip(
+                view.matches,
+                getattr(task, "candidates", []) or [],
+                strict=True,
+            )
+        }
+        return view
+
+    def resolve_choice(self, task: Any, choice: Any) -> Any:
+        if choice is None:
+            return importer.Action.SKIP
+        if not isinstance(choice, str):
+            return choice
+        task_id = self._task_ids.get(id(task))
+        if task_id is None:
+            raise ValueError("Unknown Beets task ID.")
+        try:
+            return self._candidates[task_id][choice]
+        except KeyError as exc:
+            raise ValueError(f"Unknown Beets candidate ID: {choice}") from exc
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,22 +130,30 @@ class MuzikImportSession(importer.ImportSession):
         super().__init__(lib, loghandler, [os.fsencode(path) for path in paths], query)
         self.decisions = decisions
         self.events = events or NullBeetsEventEmitter()
+        self.adapter = BeetsImporterAdapter()
 
     def should_resume(self, path: bytes) -> bool:
         return self.decisions.should_resume_beets_import(Path(os.fsdecode(path)))
 
     def choose_match(self, task: Any) -> Any:
-        self.events.emit(BeetsTaskEvent(task_view(task)))
-        return self.decisions.choose_beets_album_match(task)
+        view = self.adapter.view_for(task)
+        self.events.emit(BeetsTaskEvent(view))
+        return self.adapter.resolve_choice(
+            task, self.decisions.choose_beets_album_match(view)
+        )
 
     def choose_item(self, task: Any) -> Any:
-        self.events.emit(BeetsTaskEvent(task_view(task)))
-        return self.decisions.choose_beets_track_match(task)
+        view = self.adapter.view_for(task)
+        self.events.emit(BeetsTaskEvent(view))
+        return self.adapter.resolve_choice(
+            task, self.decisions.choose_beets_track_match(view)
+        )
 
     def resolve_duplicate(self, task: Any, found_duplicates: list[Any]) -> None:
+        view = self.adapter.view_for(task)
         duplicates = [duplicate_view(duplicate) for duplicate in found_duplicates]
-        self.events.emit(BeetsDuplicateEvent(task_view(task), duplicates))
-        decision = self.decisions.resolve_beets_duplicate(task, found_duplicates)
+        self.events.emit(BeetsDuplicateEvent(view, duplicates))
+        decision = self.decisions.resolve_beets_duplicate(view, duplicates)
         apply_duplicate_decision(task, decision)
 
 

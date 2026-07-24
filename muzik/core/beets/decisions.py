@@ -8,6 +8,8 @@ from typing import Any, Protocol
 
 from beets import importer
 
+from muzik.core.beets.views import BeetsDuplicateView, BeetsTaskView
+
 
 class BeetsDuplicateDecision(str, Enum):
     SKIP = "skip"
@@ -19,14 +21,14 @@ class BeetsDuplicateDecision(str, Enum):
 class BeetsDecisions(Protocol):
     def should_resume_beets_import(self, path: Path) -> bool: ...
 
-    def choose_beets_album_match(self, task: Any) -> Any: ...
+    def choose_beets_album_match(self, task: BeetsTaskView) -> Any: ...
 
-    def choose_beets_track_match(self, task: Any) -> Any: ...
+    def choose_beets_track_match(self, task: BeetsTaskView) -> Any: ...
 
     def resolve_beets_duplicate(
         self,
-        task: Any,
-        duplicates: list[Any],
+        task: BeetsTaskView,
+        duplicates: list[BeetsDuplicateView],
     ) -> BeetsDuplicateDecision: ...
 
 
@@ -45,15 +47,15 @@ class NonInteractiveBeetsDecisions:
     def should_resume_beets_import(self, path: Path) -> bool:
         return False
 
-    def choose_beets_album_match(self, task: Any) -> Any:
+    def choose_beets_album_match(self, task: BeetsTaskView) -> Any:
         return importer.Action.SKIP if self.quiet else importer.Action.APPLY
 
-    def choose_beets_track_match(self, task: Any) -> Any:
+    def choose_beets_track_match(self, task: BeetsTaskView) -> Any:
         return importer.Action.SKIP if self.quiet else importer.Action.APPLY
 
     def resolve_beets_duplicate(
         self,
-        task: Any,
-        duplicates: list[Any],
+        task: BeetsTaskView,
+        duplicates: list[BeetsDuplicateView],
     ) -> BeetsDuplicateDecision:
         return self.duplicate_decision

@@ -325,10 +325,10 @@ def test_workflow_local_folder_organizes_directory_once(
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
 
-    def fake_organize_cmd(**kwargs):
-        organized.append(kwargs["directory"])
+    def fake_organize_paths(options, **kwargs):
+        organized.extend(options.paths)
 
-    monkeypatch.setattr(workflow, "organize_cmd", fake_organize_cmd)
+    monkeypatch.setattr(workflow, "organize_paths", fake_organize_paths)
 
     workflow.workflow_cmd(
         url=str(album),
