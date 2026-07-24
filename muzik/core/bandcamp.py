@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
 from pathlib import Path
 from threading import Lock
 from typing import Any, Mapping, Optional, Sequence
@@ -27,6 +30,7 @@ from rich.progress import (
     TimeRemainingColumn,
     TransferSpeedColumn,
 )
+from yarl import URL
 
 from muzik.config import BANDCAMP_CACHE_FILE
 from muzik.ui.console import console, err
@@ -145,8 +149,18 @@ class DigitalItem:
 # ---------------------------------------------------------------------------
 
 
-def _load_cookies_json(path: Path) -> list[tuple[str, str, str]]:
-    """Firefox Cookie Quick Manager format: [{Host raw, Name raw, Content raw}]."""
+@dataclass(frozen=True, slots=True)
+class ScopedCookie:
+    domain: str
+    path: str
+    secure: bool
+    expires: int | None
+    name: str
+    value: str
+
+
+def _load_cookies_json(path: Path) -> list[ScopedCookie]:
+    """Load Firefox Cookie Quick Manager cookies while preserving their scope."""
     result = []
     for c in json.loads(path.read_text()):
         host = c.get("Host raw", "")
@@ -156,11 +170,20 @@ def _load_cookies_json(path: Path) -> list[tuple[str, str, str]]:
         name = c.get("Name raw", "")
         value = c.get("Content raw", "")
         if name:
-            result.append((domain, name, value))
+            result.append(
+                ScopedCookie(
+                    domain=domain,
+                    path=c.get("Path raw") or c.get("path") or "/",
+                    secure=bool(c.get("Is secure raw") or c.get("secure")),
+                    expires=_cookie_expiry(c.get("Expires raw") or c.get("expires")),
+                    name=name,
+                    value=value,
+                )
+            )
     return result
 
 
-def _load_cookies_netscape(path: Path) -> list[tuple[str, str, str]]:
+def _load_cookies_netscape(path: Path) -> list[ScopedCookie]:
     """Netscape/Mozilla cookies.txt: tab-separated 7-column format."""
     result = []
     for line in path.read_text().splitlines():
@@ -169,13 +192,22 @@ def _load_cookies_netscape(path: Path) -> list[tuple[str, str, str]]:
             continue
         parts = line.split("\t")
         if len(parts) == 7:
-            domain, _, _, _, _, name, value = parts
-            result.append((domain, name, value))
+            domain, _, cookie_path, secure, expires, name, value = parts
+            result.append(
+                ScopedCookie(
+                    domain=domain,
+                    path=cookie_path or "/",
+                    secure=secure.upper() == "TRUE",
+                    expires=_cookie_expiry(expires),
+                    name=name,
+                    value=value,
+                )
+            )
     return result
 
 
-def load_cookies(path: Path) -> list[tuple[str, str, str]]:
-    """Load cookies from a JSON or Netscape file. Returns [(domain, name, value)]."""
+def load_cookies(path: Path) -> list[ScopedCookie]:
+    """Load cookies from a JSON or Netscape file with origin/path scope."""
     if path.suffix.lower() == ".json":
         return _load_cookies_json(path)
     return _load_cookies_netscape(path)
@@ -197,6 +229,39 @@ def write_netscape_cookies(
             f"\t{c['name']}\t{c['value']}\n"
         )
     dest.write_text("".join(lines))
+
+
+def _cookie_expiry(value: object) -> int | None:
+    if not isinstance(value, (str, int, float)):
+        return None
+    try:
+        expiry = int(float(value))
+    except TypeError, ValueError:
+        return None
+    return expiry or None
+
+
+def cookie_jar(cookies: Sequence[ScopedCookie]) -> aiohttp.CookieJar:
+    """Build an aiohttp jar which retains cookie origin/path restrictions."""
+    jar = aiohttp.CookieJar(unsafe=False)
+    for cookie in cookies:
+        domain = cookie.domain.lstrip(".")
+        if not domain:
+            continue
+        scheme = "https" if cookie.secure else "http"
+        response_url = URL.build(scheme=scheme, host=domain, path=cookie.path)
+        scoped = SimpleCookie()
+        scoped[cookie.name] = cookie.value
+        morsel = scoped[cookie.name]
+        morsel["path"] = cookie.path
+        morsel["domain"] = cookie.domain
+        morsel["secure"] = cookie.secure
+        if cookie.expires is not None:
+            morsel["max-age"] = str(
+                max(0, cookie.expires - int(datetime.now().timestamp()))
+            )
+        jar.update_cookies(scoped, response_url=response_url)
+    return jar
 
 
 # ---------------------------------------------------------------------------
@@ -383,37 +448,68 @@ class BandcampApi:
                         raise _RateLimited(download_url)
                     resp.raise_for_status()
 
-                    disposition = resp.headers.get("Content-Disposition", "")
-                    filename: Optional[str] = None
-                    for part in disposition.split(";"):
-                        part = part.strip()
-                        if part.lower().startswith("filename="):
-                            filename = part[9:].strip().strip('"').strip("'")
-                            break
-                    if not filename:
-                        raise RuntimeError(
-                            f"No Content-Disposition filename for "
-                            f"{item.artist} - {item.title}"
-                        )
-
                     dest_dir.mkdir(parents=True, exist_ok=True)
-                    dest_path = dest_dir / filename
+                    dest_path = safe_download_path(
+                        dest_dir, resp.headers.get("Content-Disposition", "")
+                    )
                     label = f"{item.artist} - {item.title}"
                     task = progress.add_task(label, total=resp.content_length)
 
-                    with dest_path.open("wb") as f:
-                        async for chunk in resp.content.iter_chunked(8192):
-                            f.write(chunk)
-                            progress.advance(task, len(chunk))
-
-                    progress.remove_task(task)
+                    partial = dest_path.with_name(f".{dest_path.name}.part")
+                    try:
+                        with partial.open("wb") as f:
+                            async for chunk in resp.content.iter_chunked(8192):
+                                f.write(chunk)
+                                progress.advance(task, len(chunk))
+                        os.replace(partial, dest_path)
+                    except Exception:
+                        partial.unlink(missing_ok=True)
+                        raise
+                    finally:
+                        progress.remove_task(task)
 
         if not item.is_single():
             await asyncio.to_thread(_extract_zip, dest_path, dest_dir)
 
 
+def safe_download_path(dest_dir: Path, disposition: str) -> Path:
+    """Return a safe path for a Content-Disposition filename in *dest_dir*."""
+    match = re.search(
+        r"filename\*?=(?:UTF-8''|)?(?:\"([^\"]+)\"|'([^']+)'|([^;]+))",
+        disposition,
+        re.I,
+    )
+    filename = next((part for part in match.groups() if part), "") if match else ""
+    filename = filename.strip().strip('"').strip("'")
+    if (
+        not filename
+        or any(char in filename for char in ("/", "\\", "\x00"))
+        or Path(filename).is_absolute()
+        or re.match(r"^[A-Za-z]:", filename)
+        or filename in {".", ".."}
+    ):
+        raise RuntimeError("Unsafe or missing Content-Disposition filename.")
+    destination = (dest_dir.resolve() / filename).resolve()
+    try:
+        destination.relative_to(dest_dir.resolve())
+    except ValueError as exc:
+        raise RuntimeError(
+            "Download filename escapes its destination directory."
+        ) from exc
+    return destination
+
+
 def _extract_zip(path: Path, dest_dir: Path) -> None:
     with zipfile.ZipFile(path) as zf:
+        root = dest_dir.resolve()
+        for member in zf.infolist():
+            target = (root / member.filename).resolve()
+            try:
+                target.relative_to(root)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "ZIP member escapes its destination directory."
+                ) from exc
         zf.extractall(dest_dir)
     path.unlink()
 
@@ -436,7 +532,7 @@ async def _run_async(
 ) -> None:
     output.mkdir(parents=True, exist_ok=True)
 
-    cookies = {name: value for _, name, value in load_cookies(cookies_path)}
+    cookies = load_cookies(cookies_path)
     cache = Cache(BANDCAMP_CACHE_FILE)
 
     headers = {
@@ -446,7 +542,7 @@ async def _run_async(
     }
 
     async with aiohttp.ClientSession(
-        cookies=cookies,
+        cookie_jar=cookie_jar(cookies),
         headers=headers,
         connector=aiohttp.TCPConnector(limit=jobs),
     ) as session:
