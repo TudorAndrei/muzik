@@ -46,3 +46,42 @@ def test_bandcamp_dry_run_uses_downloader_without_organizing(
             "dry_run": True,
         }
     ]
+
+
+def test_bandcamp_organizes_only_successful_release_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# cookies\n", encoding="utf-8")
+    existing_artist_release = tmp_path / "bandcamp" / "Existing Artist" / "New Release"
+    new_artist_release = tmp_path / "bandcamp" / "New Artist" / "Release"
+    organized: list[Path] = []
+
+    monkeypatch.setattr(bandcamp, "_ensure_credentials", lambda *args: (cookies, "fan"))
+    monkeypatch.setattr(
+        bandcamp,
+        "bc_run",
+        lambda **kwargs: [existing_artist_release, new_artist_release],
+    )
+    monkeypatch.setattr(
+        bandcamp,
+        "organize_cmd",
+        lambda **kwargs: organized.append(kwargs["directory"]),
+    )
+
+    bandcamp.bandcamp_cmd(
+        user="fan",
+        output=tmp_path / "bandcamp",
+        format="flac",
+        cookies=cookies,
+        setup=False,
+        jobs=2,
+        dry_run=False,
+        force=False,
+        no_organize=False,
+        import_=False,
+        tag_only=False,
+        beets_config=None,
+    )
+
+    assert organized == [existing_artist_release, new_artist_release]

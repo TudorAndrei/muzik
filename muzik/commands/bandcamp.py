@@ -217,9 +217,7 @@ def bandcamp_cmd(
     console.print(f"[bold cyan]Bandcamp download:[/bold cyan] {username}")
     console.print(f"[dim]Format: {format} · Output: {output.resolve()}[/dim]")
 
-    before = {d for d in output.iterdir() if d.is_dir()} if output.exists() else set()
-
-    bc_run(
+    successful_dirs = bc_run(
         username=username,
         cookies_path=cookies_path,
         output=output,
@@ -232,14 +230,10 @@ def bandcamp_cmd(
     if no_organize or dry_run:
         return
 
-    after_dirs = {d for d in output.iterdir() if d.is_dir()}
-    new_dirs = sorted(after_dirs - before)
-
-    if not new_dirs:
-        new_dirs = [output]
-
-    console.print(f"\n[bold]Organize[/bold] — {len(new_dirs)} director(ies) via beets")
-    for d in new_dirs:
+    console.print(
+        f"\n[bold]Organize[/bold] — {len(successful_dirs)} director(ies) via beets"
+    )
+    for d in successful_dirs:
         console.print(f"  beet import [dim]{d}[/dim]")
         try:
             organize_cmd(

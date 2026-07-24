@@ -65,6 +65,10 @@ class _RateLimited(Exception):
     """Raised on HTTP 429 so stamina knows to back off and retry."""
 
 
+class DigitalItemUnavailable(Exception):
+    """A purchased item has no terminally available digital download."""
+
+
 def _retry():
     """Shared stamina retry context: up to MAX_RETRIES attempts, 10 s constant wait."""
     return stamina.retry_context(
@@ -142,6 +146,13 @@ class DigitalItem:
             / _make_fs_safe(self.artist)
             / f"{_make_fs_safe(self.title)} ({self.release_year()})"
         )
+
+
+@dataclass(frozen=True, slots=True)
+class DownloadResult:
+    item_id: str
+    status: str
+    destination: Path | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -276,27 +287,33 @@ class Cache:
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = Lock()
+        self._ids = self._read_ids()
 
-    def content(self) -> set[str]:
+    def _read_ids(self) -> set[str]:
         if not self._path.exists():
             return set()
-        ids: set[str] = set()
-        for line in self._path.read_text().splitlines():
-            item_id = line.split("|", 1)[0].strip()
-            if item_id:
-                ids.add(item_id)
-        return ids
+        return {
+            line.split("|", 1)[0].strip()
+            for line in self._path.read_text().splitlines()
+            if line.split("|", 1)[0].strip()
+        }
+
+    def content(self) -> set[str]:
+        with self._lock:
+            return set(self._ids)
 
     def add(self, item_id: str, description: str) -> None:
         with self._lock:
             with self._path.open("a") as f:
                 f.write(f"{item_id}| {description}\n")
+            self._ids.add(item_id)
 
     def add_if_missing(self, item_id: str, description: str) -> None:
         with self._lock:
-            if item_id not in self.content():
+            if item_id not in self._ids:
                 with self._path.open("a") as f:
                     f.write(f"{item_id}| {description}\n")
+                self._ids.add(item_id)
 
 
 # ---------------------------------------------------------------------------
@@ -394,17 +411,13 @@ class BandcampApi:
 
         return urls
 
-    async def get_digital_item(self, url: str) -> Optional[DigitalItem]:
+    async def get_digital_item(self, url: str) -> DigitalItem:
         """Fetch download metadata for a single purchase page."""
-        try:
-            data = await self._page_blob(url)
-        except Exception as exc:
-            err(f"  [red]Failed to get item info for {url}: {exc}[/red]")
-            return None
+        data = await self._page_blob(url)
 
         digital_items = data.get("digital_items", [])
         if not digital_items:
-            return None
+            raise DigitalItemUnavailable("No digital item is available.")
 
         raw = digital_items[0]
         downloads: Optional[dict[str, DigitalItemDownload]] = None
@@ -529,7 +542,9 @@ async def _run_async(
     dry_run: bool,
     after: Optional[datetime],
     limit: Optional[int],
-) -> None:
+) -> list[Path]:
+    if jobs < 1:
+        raise ValueError("jobs must be at least 1")
     output.mkdir(parents=True, exist_ok=True)
 
     cookies = load_cookies(cookies_path)
@@ -564,7 +579,7 @@ async def _run_async(
             console.print(f"  [dim]Would download {len(items)} release(s)[/dim]")
             for item_id, _ in items:
                 console.print(f"  [dim]{item_id}[/dim]")
-            return
+            return []
 
         console.print(f"  Downloading [bold]{len(items)}[/bold] release(s)")
 
@@ -578,45 +593,51 @@ async def _run_async(
         )
         sem = asyncio.Semaphore(jobs)
 
-        async def _download_one(item_id: str, info: DownloadInfo) -> None:
+        async def _download_one(item_id: str, info: DownloadInfo) -> DownloadResult:
             async with sem:
                 if after and info.purchased:
                     purchased_dt = _parse_purchase_date(info.purchased)
                     if purchased_dt and purchased_dt < after:
                         cache.add_if_missing(item_id, "Skipped (--after filter)")
-                        return
+                        return DownloadResult(item_id, "skipped")
 
-                item = await api.get_digital_item(info.url)
-                if item is None:
+                try:
+                    item = await api.get_digital_item(info.url)
+                except DigitalItemUnavailable:
                     cache.add(item_id, "UNKNOWN")
-                    return
+                    return DownloadResult(item_id, "unavailable")
+                except Exception as exc:
+                    err(f"  [red]Failed to get item info for {item_id}: {exc}[/red]")
+                    return DownloadResult(item_id, "failed")
 
                 if not item.downloads:
                     console.print(
                         f"  [yellow]Skipping {item_id} — no downloads available[/yellow]"
                     )
                     cache.add(item_id, "No downloads")
-                    return
+                    return DownloadResult(item_id, "unavailable")
 
                 dest = item.destination_path(output)
                 try:
                     await api.download_item(item, dest, audio_format, progress)
                 except Exception as exc:
                     err(f"  [red]Failed {item.artist} - {item.title}: {exc}[/red]")
-                    return
+                    return DownloadResult(item_id, "failed")
 
                 cache.add_if_missing(
                     item_id,
                     f"{item.title} ({item.release_year()}) by {item.artist}",
                 )
                 console.print(f"  [green]✓[/green] {item.artist} - {item.title}")
+                return DownloadResult(item_id, "downloaded", dest)
 
         with progress:
-            await asyncio.gather(
+            results = await asyncio.gather(
                 *[_download_one(item_id, info) for item_id, info in items]
             )
 
     console.print("[green]Finished![/green]")
+    return [result.destination for result in results if result.destination is not None]
 
 
 def run(
@@ -629,9 +650,11 @@ def run(
     dry_run: bool = False,
     after: Optional[datetime] = None,
     limit: Optional[int] = None,
-) -> None:
+) -> list[Path]:
     """Synchronous entry point — runs the async downloader via asyncio.run()."""
-    asyncio.run(
+    if jobs < 1:
+        raise ValueError("jobs must be at least 1")
+    return asyncio.run(
         _run_async(
             username,
             cookies_path,

@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import zipfile
 from pathlib import Path
 from typing import Any, cast
@@ -15,7 +16,9 @@ from muzik.core.bandcamp import (
     cookie_jar,
     load_cookies,
     safe_download_path,
+    run,
     write_netscape_cookies,
+    Cache,
 )
 from rich.progress import Progress
 
@@ -184,3 +187,40 @@ def test_interrupted_download_leaves_no_final_or_partial_file(tmp_path: Path) ->
 
     assert not (tmp_path / "release.zip").exists()
     assert not (tmp_path / ".release.zip.part").exists()
+
+
+def test_cache_reads_once_and_suppresses_concurrent_duplicates(
+    tmp_path: Path, monkeypatch
+) -> None:
+    path = tmp_path / "bandcamp.cache"
+    path.write_text("existing| prior\n")
+    reads = 0
+    original_read_text = Path.read_text
+
+    def counted_read_text(self, *args, **kwargs):
+        nonlocal reads
+        if self == path:
+            reads += 1
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    cache = Cache(path)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda _: cache.add_if_missing("same", "release"), range(16)))
+
+    cache.add_if_missing("next", "release")
+    assert reads == 1
+    assert path.read_text().splitlines() == [
+        "existing| prior",
+        "same| release",
+        "next| release",
+    ]
+
+
+@pytest.mark.parametrize("jobs", [0, -1])
+def test_run_rejects_invalid_job_count_before_opening_session(
+    tmp_path: Path, jobs: int
+) -> None:
+    with pytest.raises(ValueError, match="at least 1"):
+        run("fan", tmp_path / "cookies.txt", tmp_path / "output", jobs=jobs)
