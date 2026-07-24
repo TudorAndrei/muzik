@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -526,6 +527,123 @@ def test_run_workflow_processes_playlist_with_soulseek(
     state = cache_mod.get_json("playlist_PL123")
     assert state is not None
     assert state["videos"]["abcdefghijk"]["status"] == "downloaded"
+
+
+def test_workflow_uses_spotify_export_as_soulseek_metadata_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = tmp_path / "playlist.spotify.json"
+    export.write_text(
+        """{
+          "version": 1,
+          "source": "spotify",
+          "type": "playlist",
+          "id": "playlist-1",
+          "title": "Playlist",
+          "entries": [{"index": 1, "title": "Song", "artist": "Artist", "album": "Album"}]
+        }""",
+        encoding="utf-8",
+    )
+    audio = tmp_path / "downloads" / "song.flac"
+    audio.parent.mkdir()
+    audio.write_bytes(b"audio")
+    acquired: list[str] = []
+    processed: list[list[Path]] = []
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(
+            AssertionError("yt-dlp must not run")
+        ),
+        process_audio=lambda files, split_dirs: processed.append(files),
+        acquire_soulseek=lambda query: acquired.append(query) or [audio],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: [],
+    )
+
+    service.run_workflow(
+        service.WorkflowRequest(
+            raw=str(export), output=tmp_path / "downloads", splits=tmp_path / "splits"
+        ),
+        service.WorkflowOptions(audio_source="soulseek", no_organize=True),
+        operations=operations,
+    )
+
+    assert acquired == ["Artist - Song - Album"]
+    assert processed == [[audio]]
+    state = cache_mod.get_json("playlist_spotify_playlist-1")
+    assert state is not None
+    assert next(iter(state["videos"].values()))["source"] == "soulseek"
+
+
+def test_spotify_playlist_state_survives_reordering_and_processes_new_entries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = tmp_path / "playlist.spotify.json"
+
+    def write_export(entries: list[dict[str, object]]) -> None:
+        export.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "source": "spotify",
+                    "type": "playlist",
+                    "id": "playlist-1",
+                    "title": "Playlist",
+                    "entries": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    first: dict[str, object] = {
+        "index": 1,
+        "title": "First",
+        "artist": "Artist",
+        "source_id": "spotify:track:first",
+    }
+    second: dict[str, object] = {
+        "index": 2,
+        "title": "Second",
+        "artist": "Artist",
+        "source_id": "spotify:track:second",
+    }
+    third: dict[str, object] = {
+        "index": 3,
+        "title": "Third",
+        "artist": "Artist",
+        "source_id": "spotify:track:third",
+    }
+    write_export([first, second])
+    acquired: list[str] = []
+    audio = tmp_path / "audio.flac"
+    audio.write_bytes(b"audio")
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(AssertionError("no yt-dlp")),
+        process_audio=lambda *args: None,
+        acquire_soulseek=lambda query: acquired.append(query) or [audio],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: [],
+    )
+    request = service.WorkflowRequest(
+        raw=str(export), output=tmp_path / "downloads", splits=tmp_path / "splits"
+    )
+    options = service.WorkflowOptions(audio_source="soulseek")
+
+    service.run_workflow(request, options, operations=operations)
+    write_export([second, first, third])
+    service.run_workflow(request, options, operations=operations)
+
+    assert acquired == ["Artist - First", "Artist - Second", "Artist - Third"]
+    state = cache_mod.get_json("playlist_spotify_playlist-1")
+    assert state is not None
+    assert set(state["videos"]) == {
+        "spotify:track:first#0",
+        "spotify:track:second#0",
+        "spotify:track:third#0",
+    }
 
 
 def test_playlist_cancellation_stops_before_later_entries(

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "source": "spotify",
+  "type": "playlist",
+  "id": "fixture-playlist",
+  "title": "Fixture playlist",
+  "snapshot_id": "fixture-snapshot",
+  "entries": [
+    {
+      "index": 1,
+      "title": "Fixture song",
+      "artist": "Fixture artist",
+      "album": "Fixture album",
+      "release_date": "2024-01-02",
+      "duration_ms": 180000,
+      "source_id": "spotify:track:fixture-track"
+    }
+  ]
+}

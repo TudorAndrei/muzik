@@ -87,7 +87,7 @@ The same checks run in CI and as individual pre-push hooks.
 | Command | Description |
 |---------|-------------|
 | `muzik init` | Create app directories and configure beets |
-| `muzik workflow <url>` | Full pipeline: download → split → organize |
+| `muzik workflow <url-or-path>` | Full pipeline: acquire → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik soulseek check` | Verify slskd connectivity and auth |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
@@ -101,6 +101,29 @@ The same checks run in CI and as individual pre-push hooks.
 | `muzik tui` | Open the Textual workflow UI |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage beets configuration |
+
+## Spotify playlist exports
+
+`muzik` accepts a canonical version-1 Spotify playlist JSON file and
+Exportify-style CSV files as metadata-only workflow inputs. It does not sign in
+to Spotify, call the Spotify API, or pass Spotify URLs to `yt-dlp`.
+
+Use Soulseek (or `auto` when `muzik soulseek check` reports ready) to acquire
+audio for the exported tracks:
+
+```sh
+uv run muzik workflow playlist.spotify.json --audio-source soulseek --fallback none
+uv run muzik workflow exportify-playlist.csv --audio-source soulseek --fallback none
+```
+
+Spotify exports reject episodes and require track title, artist, positive unique
+position, and a deterministic track identity. Local tracks are supported with a
+stable synthetic identity. Re-running an updated export skips entries already
+organized by track ID, tolerates reordering, and acquires only new entries.
+`--audio-source youtube` is intentionally rejected for Spotify exports.
+
+See [SPOTIFY.md](SPOTIFY.md) for the supported JSON/CSV fields and the
+metadata-only policy.
 
 ## Textual TUI
 

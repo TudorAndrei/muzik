@@ -5,7 +5,9 @@ from typing import cast
 
 from textual.widgets import Input, Switch
 
+from muzik.core import cache as cache_mod
 from muzik.core.workflow.service import WorkflowRunOperations
+from muzik.core.workflow.service import AudioSource
 from muzik.tui.app import MuzikTuiApp, PipelineScreen
 from muzik.tui.screens import WorkflowLaunchConfig, WorkflowLauncherScreen
 
@@ -165,5 +167,56 @@ def test_pipeline_back_waits_for_workflow_teardown() -> None:
                 if isinstance(app.screen, WorkflowLauncherScreen):
                     break
             assert isinstance(app.screen, WorkflowLauncherScreen)
+
+    asyncio.run(run())
+
+
+def test_pipeline_routes_spotify_export_file_to_soulseek(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """The actual TUI worker handles a Spotify file input without yt-dlp."""
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = Path("tests/fixtures/spotify/playlist_v1.json").resolve()
+    audio = tmp_path / "downloads" / "fixture.flac"
+    audio.parent.mkdir()
+    audio.write_bytes(b"audio")
+    acquired: list[str] = []
+    processed: list[list[Path]] = []
+    done = Event()
+
+    def operations_factory(config, decisions, events):
+        def process_audio(audio_inputs, pre_split_dirs):
+            processed.append(audio_inputs)
+            done.set()
+
+        return WorkflowRunOperations(
+            download_audio=lambda *args: (_ for _ in ()).throw(
+                AssertionError("Spotify media must never reach yt-dlp")
+            ),
+            process_audio=process_audio,
+            acquire_soulseek=lambda query: acquired.append(query) or [audio],
+            prepopulate_archive=lambda archive_file: None,
+            get_playlist_video_ids=lambda raw: [],
+        )
+
+    async def run() -> None:
+        config = WorkflowLaunchConfig(
+            raw=str(export),
+            output=tmp_path / "downloads",
+            splits=tmp_path / "splits",
+            no_organize=True,
+            audio_source=AudioSource.SOULSEEK,
+        )
+        app = MuzikTuiApp(operations_factory=operations_factory)
+        async with app.run_test() as pilot:
+            await app.push_screen(
+                PipelineScreen(config, operations_factory=operations_factory)
+            )
+            await asyncio.to_thread(done.wait, 2)
+            await pilot.pause()
+
+            assert acquired == ["Fixture artist - Fixture song - Fixture album"]
+            assert processed == [[audio]]
 
     asyncio.run(run())

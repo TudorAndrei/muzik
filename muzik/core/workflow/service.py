@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
+import hashlib
 import os
 import inspect
 from dataclasses import dataclass
@@ -19,9 +20,11 @@ from muzik.core.sources.base import (
     Candidate,
     DownloadRequest,
     DownloadResult,
+    ResolvedPlaylist,
     ResolvedRelease,
     ResolvedTrack,
 )
+from muzik.core.sources.spotify import is_spotify_export, load_playlist
 from muzik.core.sources.soulseek import SoulseekError, SoulseekSource
 from muzik.core.sources.youtube import (
     YouTubeSource,
@@ -607,6 +610,19 @@ def run_workflow(
     cancellation.raise_if_cancelled()
     events.emit(StepStartedEvent(name="download", detail=request.raw))
 
+    local_path = Path(request.raw).expanduser()
+    spotify_playlist = _load_spotify_playlist(local_path)
+    if spotify_playlist is not None:
+        _run_resolved_playlist_workflow(
+            spotify_playlist,
+            options=options,
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+        )
+        events.emit(StepFinishedEvent(name="download", detail=request.raw))
+        return
+
     yt_id = parse_youtube_id(request.raw)
     playlist_id = parse_playlist_id(request.raw)
 
@@ -663,7 +679,6 @@ def _run_playlist_workflow(
         raise WorkflowServiceError(
             "Could not fetch playlist video IDs — check the URL and yt-dlp."
         )
-
     for video_id in video_ids:
         cancellation.raise_if_cancelled()
         _process_playlist_video(
@@ -677,6 +692,91 @@ def _run_playlist_workflow(
             events=events,
             cancellation=cancellation,
         )
+
+
+def _load_spotify_playlist(path: Path) -> ResolvedPlaylist | None:
+    if not is_spotify_export(path):
+        return None
+    try:
+        return load_playlist(path)
+    except ValueError as exc:
+        raise WorkflowServiceError(str(exc)) from exc
+
+
+def _run_resolved_playlist_workflow(
+    playlist: ResolvedPlaylist,
+    *,
+    options: WorkflowOptions,
+    operations: WorkflowRunOperations,
+    events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
+) -> None:
+    """Acquire and process any metadata-only resolved playlist entry-by-entry."""
+    source_label = playlist.source.capitalize()
+    if options.audio_source == AudioSource.YOUTUBE:
+        raise WorkflowServiceError(
+            f"{source_label} exports are metadata-only; use --audio-source soulseek or auto."
+        )
+    if options.audio_source == AudioSource.AUTO and not operations.soulseek_ready():
+        raise WorkflowServiceError(
+            f"Soulseek is not ready for {source_label} metadata acquisition."
+        )
+    playlist_id = playlist.source_id or playlist.source
+    state_id = f"{playlist.source}_{playlist_id}"
+    state = load_playlist_state(state_id)
+    if options.dry_run:
+        return
+    entries = [entry for entry in playlist.entries if isinstance(entry, ResolvedTrack)]
+    source_ids = [
+        track.source_id or f"{playlist.source}:{track.index}" for track in entries
+    ]
+    state["snapshot_hash"] = hashlib.sha256("\n".join(source_ids).encode()).hexdigest()
+    state["snapshot_id"] = playlist.source_metadata.get("snapshot_id")
+    occurrences: dict[str, int] = {}
+    for track in entries:
+        cancellation.raise_if_cancelled()
+        source_id = track.source_id or f"{playlist.source}:{track.index}"
+        occurrence = occurrences.get(source_id, 0)
+        occurrences[source_id] = occurrence + 1
+        entry_id = f"{source_id}#{occurrence}"
+        entry = state["videos"].get(entry_id, {})
+        if entry.get("status") == "organized":
+            continue
+        query = " - ".join(
+            part for part in (track.artist, track.title, track.album) if part
+        )
+        events.emit(
+            MessageEvent(
+                message=f"Acquiring {track.title} from Soulseek using {playlist.source} metadata."
+            )
+        )
+        files = cast(
+            list[Path],
+            _call_with_cancellation(
+                operations.acquire_soulseek,
+                query,
+                cancellation=cancellation,
+            ),
+        )
+        if not files:
+            raise WorkflowServiceError(
+                f"No Soulseek audio files were acquired for {track.title}."
+            )
+        cancellation.raise_if_cancelled()
+        state["videos"][entry_id] = {
+            "status": "downloaded",
+            "source": "soulseek",
+            "files": [str(path.resolve()) for path in files],
+            "track": track.to_dict(),
+        }
+        save_playlist_state(state_id, state)
+        _call_with_cancellation(
+            operations.process_audio, files, [], cancellation=cancellation
+        )
+        cancellation.raise_if_cancelled()
+        if not options.no_organize:
+            state["videos"][entry_id]["status"] = "organized"
+            save_playlist_state(state_id, state)
 
 
 def _process_playlist_video(

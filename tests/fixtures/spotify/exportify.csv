@@ -1,0 +1,2 @@
+position,track_name,artist_name,artist_names,album_name,release_date,duration_ms,spotify_track_uri,spotify_track_id,spotify_track_url,isrc,disc_number,album_track_number,added_at
+1,Fixture song,Fixture artist,Fixture artist,Fixture album,2024-01-02,180000,spotify:track:fixture-track,fixture-track,https://open.spotify.com/track/fixture-track,USFIXTURE0001,1,1,2024-01-03T00:00:00Z
