@@ -14,6 +14,12 @@ def test_open_library_uses_beets_212_library_constructor(monkeypatch) -> None:
             return self.value
 
     class FakeConfig:
+        def clear(self) -> None:
+            calls.append("clear")
+
+        def read(self, *, user: bool) -> None:
+            calls.append(("read", user))
+
         def set_file(self, value: str) -> None:
             calls.append(("set_file", value))
 
@@ -38,6 +44,8 @@ def test_open_library_uses_beets_212_library_constructor(monkeypatch) -> None:
     library = beets_service.open_library(Path("beets.yaml"))
 
     assert calls == [
+        "clear",
+        ("read", False),
         ("set_file", "beets.yaml"),
         "load",
         ("library", "library.blb", "music"),

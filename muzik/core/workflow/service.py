@@ -336,8 +336,15 @@ def process_audio_plan(
     organize_targets = [*split_dirs, *organize_targets_for_singles(plan.singles)]
     for target in organize_targets:
         hooks.organize_started(target)
-        if not options.dry_run:
-            organize_operation(target)
+        if not options.dry_run and not organize_operation(target):
+            events.emit(
+                StepFinishedEvent(
+                    name="organize",
+                    detail=f"failed: {target}",
+                    success=False,
+                )
+            )
+            raise WorkflowServiceError(f"Organization failed for {target}.")
     events.emit(StepFinishedEvent(name="organize"))
     hooks.complete(organized=True)
 

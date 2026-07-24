@@ -179,6 +179,42 @@ def test_process_audio_plan_runs_split_and_organize(
     ]
 
 
+def test_process_audio_plan_stops_on_failed_organizer(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "splits" / "first"
+    second = tmp_path / "splits" / "second"
+    third = tmp_path / "splits" / "third"
+    calls: list[Path] = []
+    events = RecordingWorkflowEventEmitter()
+
+    def organize_operation(target: Path) -> bool:
+        calls.append(target)
+        return target != second
+
+    with pytest.raises(service.WorkflowServiceError, match="Organization failed"):
+        service.process_audio_plan(
+            audio_files=[],
+            pre_split_dirs=[first, second, third],
+            splits=tmp_path / "splits",
+            options=service.WorkflowOptions(),
+            chapter_resolver=lambda _: [],
+            split_operation=lambda _: True,
+            organize_operation=organize_operation,
+            events=events,
+        )
+
+    assert calls == [first, second]
+    assert events.events == [
+        StepStartedEvent(name="organize"),
+        StepFinishedEvent(
+            name="organize",
+            detail=f"failed: {second}",
+            success=False,
+        ),
+    ]
+
+
 def test_process_audio_plan_skips_operations_for_dry_run(
     tmp_path: Path,
 ) -> None:
@@ -489,6 +525,66 @@ def test_run_workflow_processes_playlist_with_soulseek(
     state = cache_mod.get_json("playlist_PL123")
     assert state is not None
     assert state["videos"]["abcdefghijk"]["status"] == "downloaded"
+
+
+@pytest.mark.parametrize("audio_source", ["youtube", "soulseek"])
+def test_playlist_organization_failure_remains_resumable(
+    tmp_path: Path,
+    monkeypatch,
+    audio_source: str,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    audio = tmp_path / "downloads" / "Song [abcdefghijk].flac"
+    downloads: list[str] = []
+    acquisitions: list[str] = []
+    processed: list[list[Path]] = []
+
+    def download_audio(url: str, output: Path, archive_file: Path | None) -> bool:
+        downloads.append(url)
+        output.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"audio")
+        return True
+
+    def acquire_soulseek(url: str) -> list[Path]:
+        acquisitions.append(url)
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"audio")
+        return [audio]
+
+    def process_audio(files: list[Path], split_dirs: list[Path]) -> None:
+        processed.append(files)
+        if len(processed) == 1:
+            raise service.WorkflowServiceError("Organization failed for test.")
+
+    operations = service.WorkflowRunOperations(
+        download_audio=download_audio,
+        process_audio=process_audio,
+        acquire_soulseek=acquire_soulseek,
+        prepopulate_archive=lambda _: None,
+        get_playlist_video_ids=lambda _: ["abcdefghijk"],
+    )
+    request = service.WorkflowRequest(
+        raw="https://youtube.com/playlist?list=PL123",
+        output=tmp_path / "downloads",
+        splits=tmp_path / "splits",
+    )
+    options = service.WorkflowOptions(audio_source=audio_source)
+
+    with pytest.raises(service.WorkflowServiceError, match="Organization failed"):
+        service.run_workflow(request, options, operations=operations)
+
+    state = cache_mod.get_json("playlist_PL123")
+    assert state is not None
+    assert state["videos"]["abcdefghijk"]["status"] == "downloaded"
+
+    service.run_workflow(request, options, operations=operations)
+
+    state = cache_mod.get_json("playlist_PL123")
+    assert state is not None
+    assert state["videos"]["abcdefghijk"]["status"] == "organized"
+    assert len(processed) == 2
+    assert len(downloads) == (1 if audio_source == "youtube" else 0)
+    assert len(acquisitions) == (1 if audio_source == "soulseek" else 0)
 
 
 def test_run_workflow_skips_organized_playlist_entries(

@@ -132,8 +132,8 @@ def import_paths(
     decisions = decisions or NonInteractiveBeetsDecisions(quiet=options.quiet)
     events = events or NullBeetsEventEmitter()
     with _IMPORT_LOCK:
-        apply_import_options(options)
         lib = open_library(options.config_path)
+        apply_import_options(options)
         session = MuzikImportSession(
             lib,
             None,
@@ -145,5 +145,8 @@ def import_paths(
         events.emit(BeetsImportStartedEvent(options.paths, dry_run=options.dry_run))
         try:
             session.run()
-        finally:
+        except Exception:
+            events.emit(BeetsImportFinishedEvent(options.paths, success=False))
+            raise
+        else:
             events.emit(BeetsImportFinishedEvent(options.paths))

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from beets import config as beets_config
 from beets import importer as beets_importer
+import pytest
 
 from muzik.core.beets.decisions import BeetsDuplicateDecision
 from muzik.core.beets.events import (
@@ -171,4 +172,71 @@ def test_import_paths_applies_options_runs_session_and_emits_events(
     assert [type(event) for event in events.events] == [
         BeetsImportStartedEvent,
         BeetsImportFinishedEvent,
+    ]
+    assert isinstance(events.events[-1], BeetsImportFinishedEvent)
+    assert events.events[-1].success is True
+
+
+def test_import_paths_applies_runtime_options_after_loading_config(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        def __init__(self, *args):
+            return None
+
+        def run(self):
+            return None
+
+    def fake_open_library(path):
+        calls.append("load-config")
+        return "lib"
+
+    def fake_apply(options):
+        calls.append(
+            "runtime-options:"
+            f"{options.copy}:{options.link}:{options.move}:{options.nowrite}:"
+            f"{options.quiet}:{options.dry_run}:{options.incremental}"
+        )
+
+    monkeypatch.setattr("muzik.core.beets.importer.open_library", fake_open_library)
+    monkeypatch.setattr("muzik.core.beets.importer.apply_import_options", fake_apply)
+    monkeypatch.setattr("muzik.core.beets.importer.MuzikImportSession", FakeSession)
+
+    import_paths(
+        ImportOptions(
+            paths=[Path("Album")],
+            copy=True,
+            link=False,
+            move=True,
+            nowrite=True,
+            quiet=True,
+            dry_run=True,
+            incremental=False,
+        )
+    )
+
+    assert calls == [
+        "load-config",
+        "runtime-options:True:False:False:True:True:True:False",
+    ]
+
+
+def test_import_paths_emits_failed_event_and_reraises(monkeypatch) -> None:
+    class FailingSession:
+        def __init__(self, *args):
+            return None
+
+        def run(self):
+            raise RuntimeError("beets failed")
+
+    monkeypatch.setattr("muzik.core.beets.importer.open_library", lambda path: "lib")
+    monkeypatch.setattr("muzik.core.beets.importer.MuzikImportSession", FailingSession)
+    events = RecordingBeetsEventEmitter()
+
+    with pytest.raises(RuntimeError, match="beets failed"):
+        import_paths(ImportOptions(paths=[Path("Album")]), events=events)
+
+    assert events.events == [
+        BeetsImportStartedEvent([Path("Album")], dry_run=False),
+        BeetsImportFinishedEvent([Path("Album")], success=False),
     ]
