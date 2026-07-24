@@ -67,7 +67,7 @@ class CliWorkflowDecisions:
             return ChapterDecision.ACCEPT
         try:
             raw = input("  Use these chapters? [Y/n/e=edit]: ").strip().lower() or "y"
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             return ChapterDecision.REJECT
 
         if raw == "e":
@@ -90,7 +90,7 @@ class CliChapterReviewDecisions:
         )
         try:
             raw = input("  Choice [c]: ").strip().lower() or "c"
-        except (EOFError, KeyboardInterrupt):
+        except EOFError, KeyboardInterrupt:
             return ChapterDecision.REJECT
         if raw == "c":
             return ChapterDecision.ACCEPT

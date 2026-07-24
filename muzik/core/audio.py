@@ -58,7 +58,7 @@ def get_duration(path: Path) -> Optional[float]:
     try:
         data = probe(path)
         return float(data["format"]["duration"])
-    except (KeyError, ValueError, TypeError):
+    except KeyError, ValueError, TypeError:
         return None
 
 

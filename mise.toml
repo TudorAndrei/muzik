@@ -1,0 +1,14 @@
+[tasks.tui]
+description = "Run the Textual TUI"
+run = "uv run muzik tui"
+
+[tasks.check]
+description = "Run the complete locked verification gate"
+run = """
+uv lock --check
+uv run ruff format --check .
+uv run ruff check .
+uv run ty check . --ignore unresolved-import
+uv run pytest -q
+uv pip check
+"""

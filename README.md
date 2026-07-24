@@ -72,6 +72,16 @@ uv run playwright install chromium
 uv run muzik init
 ```
 
+## Development
+
+Run the complete locked local and CI verification gate with:
+
+```sh
+mise run check
+```
+
+The same checks run in CI and as individual pre-push hooks.
+
 ## Commands
 
 | Command | Description |

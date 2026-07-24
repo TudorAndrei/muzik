@@ -18,6 +18,38 @@ repos:
     hooks:
       - id: ty
         name: ty check
-        entry: uvx ty check . --ignore unresolved-import
-        language: python
+        entry: uv run ty check . --ignore unresolved-import
+        language: system
         types: [python]
+        pass_filenames: false
+        stages: [pre-commit, pre-push]
+      - id: lock-check
+        name: lock check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: format-check
+        name: format check
+        entry: uv run ruff format --check .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check .
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+      - id: pip-check
+        name: installed package check
+        entry: uv pip check
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

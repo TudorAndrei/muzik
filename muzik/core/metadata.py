@@ -35,7 +35,7 @@ def read_muzik_metadata(path_or_root: Path) -> Optional[dict[str, Any]]:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             continue
         if isinstance(data, dict):
             return data
