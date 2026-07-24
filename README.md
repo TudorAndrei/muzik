@@ -82,6 +82,19 @@ mise run check
 
 The same checks run in CI and as individual pre-push hooks.
 
+## Workflow source policy
+
+`--audio-source` chooses where audio comes from: `youtube`, `soulseek`, or
+`auto`. `auto` uses Soulseek when the configured service is ready and otherwise
+uses YouTube for YouTube inputs. `--fallback youtube` is available only when a
+YouTube input has no acceptable Soulseek result. `--metadata-source` controls
+chapter/metadata lookup for downloaded audio: `youtube`, `musicbrainz`, `none`,
+or `auto`.
+
+Local audio paths are processed without remote acquisition. Spotify export files
+are detected before local audio discovery and are the exception to the fallback
+rule: they are metadata-only and require Soulseek or a ready `auto` source.
+
 ## Commands
 
 | Command | Description |
@@ -137,7 +150,8 @@ The TUI provides a workflow launcher, pipeline progress/log view, source
 candidate table, chapter review/editor, and beets match/duplicate decision
 screens. It uses the same workflow and beets service layer as the CLI, with
 long-running workflow work executed in Textual workers so the interface remains
-responsive.
+responsive. Back requests cooperative cancellation and waits for worker teardown
+before returning to the launcher.
 
 Textual is the first GUI target for this project. A native PySide6 desktop app
 should only be evaluated after this service boundary has been validated in
@@ -178,5 +192,10 @@ muzik bandcamp
 # Import an existing music collection
 muzik import ~/Music --copy
 ```
+
+Bandcamp setup stores the authenticated cookies and username in the app config
+directory. Cookie scope is preserved; use `muzik bandcamp --setup` to log in
+again after expiry. Only releases downloaded successfully in a run are sent to
+Beets for organization.
 
 Only download music you are authorized to access.

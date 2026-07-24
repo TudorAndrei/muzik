@@ -1,4 +1,4 @@
-"""music workflow <url> — full pipeline: download → split → organize.
+"""music workflow <url-or-path> — full pipeline: acquire → split → organize.
 
 Handles two scenarios automatically:
   • Single track  — no chapter markers → goes straight to beets
@@ -470,7 +470,10 @@ def _acquire_from_soulseek(
 
 
 def workflow_cmd(
-    url: str = typer.Argument(..., help="YouTube URL to download and process."),
+    url: str = typer.Argument(
+        ...,
+        help="YouTube URL, local audio path, or supported Spotify export file.",
+    ),
     output: Path = typer.Option(
         DEFAULT_DOWNLOAD_DIR,
         "--output",
@@ -565,7 +568,7 @@ def workflow_cmd(
         help="Prompt for source candidate choices when multiple results are available.",
     ),
 ) -> None:
-    """Full pipeline: download from YouTube → detect scenario → split/organize.
+    """Full pipeline: acquire input → detect scenario → split/organize.
 
     \b
     Scenarios detected automatically per downloaded file:

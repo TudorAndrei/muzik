@@ -19,9 +19,9 @@ from muzik.tui.app import tui_cmd
 app = typer.Typer(
     name="muzik",
     help=(
-        "Music organizer CLI — download, split, and organize music from YouTube.\n\n"
-        "Wraps yt-dlp, ffmpeg, and beets with better progress feedback and "
-        "an interactive chapter editor."
+        "Music organizer CLI — acquire, split, tag, and organize music.\n\n"
+        "Supports YouTube, Soulseek, Bandcamp, local audio, and metadata-only "
+        "Spotify playlist exports. Wraps yt-dlp, slskd, ffmpeg, and beets."
     ),
     add_completion=False,
     no_args_is_help=True,
@@ -30,18 +30,15 @@ app = typer.Typer(
 # Single-command subcommands registered directly on the root app
 app.command("init", help="Create app directories and configure beets.")(init_cmd)
 app.command("import", help="Import an existing music library into beets.")(import_cmd)
-app.command(
-    "bandcamp",
-    help="Download Bandcamp collection via bandsnatch + organize with beets.",
-)(bandcamp_cmd)
+app.command("bandcamp", help="Download a Bandcamp collection and organize with beets.")(
+    bandcamp_cmd
+)
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd
 )
 app.command("organize", help="Tag/import audio with beets.")(organize_cmd)
-app.command("workflow", help="Full pipeline: download → split → organize.")(
-    workflow_cmd
-)
+app.command("workflow", help="Full pipeline: acquire → split → organize.")(workflow_cmd)
 app.command("archive", help="Process existing downloaded files (split + organize).")(
     archive_cmd
 )
