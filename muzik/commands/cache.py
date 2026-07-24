@@ -74,6 +74,12 @@ def cache_clear(
             p.unlink(missing_ok=True)
         console.print(f"[green]Cleared {len(files)} cache entries.[/green]")
     else:
+        try:
+            cache_mod.validate_key(key)
+        except cache_mod.CachePathError as exc:
+            err(f"[red]Invalid cache key:[/red] {exc}")
+            raise typer.Exit(1) from exc
+
         # Try all extensions
         removed = False
         for ext in ("txt", "json"):

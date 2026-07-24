@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
@@ -14,8 +15,45 @@ from muzik.config import CACHE_DIR
 # ---------------------------------------------------------------------------
 
 
+_CACHE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+_SUPPORTED_EXTENSIONS = frozenset({"txt", "json"})
+
+
+class CachePathError(ValueError):
+    """Raised when a cache key or extension cannot name a cache entry safely."""
+
+
+def validate_key(key: str) -> str:
+    """Validate and return a generated cache key."""
+    if not isinstance(key, str) or not _CACHE_KEY_RE.fullmatch(key):
+        raise CachePathError(
+            "Cache keys may contain only letters, digits, '_' and '-'."
+        )
+    return key
+
+
+def validate_extension(ext: str) -> str:
+    """Validate and return a supported cache extension without a leading dot."""
+    if ext not in _SUPPORTED_EXTENSIONS:
+        supported = ", ".join(sorted(_SUPPORTED_EXTENSIONS))
+        raise CachePathError(
+            f"Unsupported cache extension {ext!r}; expected one of: {supported}."
+        )
+    return ext
+
+
 def _path(key: str, ext: str = "txt") -> Path:
-    return CACHE_DIR / f"{key}.{ext}"
+    key = validate_key(key)
+    ext = validate_extension(ext)
+    cache_root = CACHE_DIR.resolve()
+    candidate = (cache_root / f"{key}.{ext}").resolve()
+    try:
+        candidate.relative_to(cache_root)
+    except ValueError as exc:  # Defensive containment check for future changes.
+        raise CachePathError(
+            "Cache entry resolves outside the cache directory."
+        ) from exc
+    return candidate
 
 
 # ---------------------------------------------------------------------------

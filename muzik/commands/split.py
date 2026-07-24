@@ -138,18 +138,8 @@ def split_cmd(
 
     metadata = extract_metadata(path)
 
-    # Determine output directory
-    if output is None:
-        album_slug = safe_filename(metadata["album"])
-        out_dir = path.parent.parent / "splits" / album_slug
-    else:
-        out_dir = output
-
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
-
-    # Check split cache (shares key scheme with bash scripts)
+    # Check split cache before touching any output directory. A valid cache hit
+    # must preserve the prior split output and its source audio.
     base = path.with_suffix("")
     txt_path = base.with_suffix(".chapters.txt")
     cache_key: Optional[str] = None
@@ -161,6 +151,28 @@ def split_cmd(
                 f"[green]Already split (cached).[/green] Output: {cached.strip()}"
             )
             raise typer.Exit(0)
+
+    # Determine output directory only after cache hits have returned. Existing
+    # populated output is never replaced without an explicit --force.
+    if output is None:
+        album_slug = safe_filename(metadata["album"])
+        out_dir = path.parent.parent / "splits" / album_slug
+    else:
+        out_dir = output
+
+    if out_dir.exists():
+        if not out_dir.is_dir():
+            err(f"[red]Output path is not a directory:[/red] {out_dir}")
+            raise typer.Exit(1)
+        if any(out_dir.iterdir()):
+            if not force:
+                err(
+                    "[red]Output directory is not empty.[/red] "
+                    "Use [bold]--force[/bold] to replace it."
+                )
+                raise typer.Exit(1)
+            shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine parallelism
     if jobs <= 0:
