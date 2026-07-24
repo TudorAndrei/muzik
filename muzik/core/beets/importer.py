@@ -15,6 +15,7 @@ from muzik.core.beets.config import open_library
 from muzik.core.beets.decisions import (
     BeetsDecisions,
     BeetsDuplicateDecision,
+    BeetsMatchDecision,
     NonInteractiveBeetsDecisions,
 )
 from muzik.core.beets.events import (
@@ -60,6 +61,8 @@ class BeetsImporterAdapter:
     def resolve_choice(self, task: Any, choice: Any) -> Any:
         if choice is None:
             return importer.Action.SKIP
+        if choice == BeetsMatchDecision.AS_IS:
+            return importer.Action.ASIS
         if not isinstance(choice, str):
             return choice
         task_id = self._task_ids.get(id(task))

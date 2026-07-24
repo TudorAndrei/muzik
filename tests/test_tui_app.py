@@ -6,10 +6,17 @@ from typing import cast
 from textual.widgets import Input, Switch
 
 from muzik.core import cache as cache_mod
+from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
+from muzik.core.beets.views import BeetsDuplicateView, BeetsMatchView, BeetsTaskView
 from muzik.core.workflow.service import WorkflowRunOperations
 from muzik.core.workflow.service import AudioSource
 from muzik.tui.app import MuzikTuiApp, PipelineScreen
-from muzik.tui.screens import WorkflowLaunchConfig, WorkflowLauncherScreen
+from muzik.tui.screens import (
+    BeetsMatchScreen,
+    DuplicateResolutionScreen,
+    WorkflowLaunchConfig,
+    WorkflowLauncherScreen,
+)
 
 
 def test_tui_starts_on_workflow_launcher() -> None:
@@ -218,5 +225,101 @@ def test_pipeline_routes_spotify_export_file_to_soulseek(
 
             assert acquired == ["Fixture artist - Fixture song - Fixture album"]
             assert processed == [[audio]]
+
+    asyncio.run(run())
+
+
+def test_beets_match_modal_returns_selected_as_is_and_skip_actions() -> None:
+    task = BeetsTaskView(
+        task_id="task-1",
+        matches=[BeetsMatchView(candidate_id="candidate-1", artist="Artist")],
+    )
+
+    async def run() -> None:
+        app = MuzikTuiApp()
+        async with app.run_test() as pilot:
+            for button_id, expected in (
+                ("#select-match", "candidate-1"),
+                ("#as-is-match", BeetsMatchDecision.AS_IS),
+                ("#skip-match", None),
+            ):
+                result = []
+                await app.push_screen(BeetsMatchScreen(task), callback=result.append)
+                assert isinstance(app.screen, BeetsMatchScreen)
+                await pilot.click(button_id)
+                await pilot.pause()
+                assert result == [expected]
+
+    asyncio.run(run())
+
+
+def test_duplicate_modal_returns_each_duplicate_action() -> None:
+    duplicates = [BeetsDuplicateView(artist="Artist", title="Song")]
+
+    async def run() -> None:
+        app = MuzikTuiApp()
+        async with app.run_test() as pilot:
+            for button_id, expected in (
+                ("#duplicate-skip", BeetsDuplicateDecision.SKIP),
+                ("#duplicate-keep", BeetsDuplicateDecision.KEEP_ALL),
+                ("#duplicate-remove", BeetsDuplicateDecision.REMOVE_OLD),
+                ("#duplicate-merge", BeetsDuplicateDecision.MERGE),
+            ):
+                result = []
+                await app.push_screen(
+                    DuplicateResolutionScreen(duplicates), callback=result.append
+                )
+                assert isinstance(app.screen, DuplicateResolutionScreen)
+                await pilot.click(button_id)
+                await pilot.pause()
+                assert result == [expected]
+
+    asyncio.run(run())
+
+
+def test_pipeline_cancellation_dismisses_a_pending_beets_modal() -> None:
+    started = Event()
+    stopped = Event()
+    task = BeetsTaskView(
+        task_id="task-1",
+        matches=[BeetsMatchView(candidate_id="candidate-1", artist="Artist")],
+    )
+
+    def operations_factory(config, decisions, events, beets_decisions, beets_events):
+        def process_audio(audio_inputs, pre_split_dirs):
+            started.set()
+            try:
+                beets_decisions.choose_beets_album_match(task)
+            finally:
+                stopped.set()
+
+        return WorkflowRunOperations(
+            download_audio=lambda url, output, archive_file: True,
+            process_audio=process_audio,
+            acquire_soulseek=lambda raw: [],
+            prepopulate_archive=lambda archive_file: None,
+            get_playlist_video_ids=lambda raw: [],
+        )
+
+    async def run() -> None:
+        config = WorkflowLaunchConfig(raw="local-input", dry_run=True)
+        app = MuzikTuiApp(operations_factory=operations_factory)
+        pipeline = PipelineScreen(config, operations_factory=operations_factory)
+        async with app.run_test() as pilot:
+            await app.push_screen(pipeline)
+            await asyncio.to_thread(started.wait, 2)
+            for _ in range(10):
+                await pilot.pause()
+                if isinstance(app.screen, BeetsMatchScreen):
+                    break
+            assert isinstance(app.screen, BeetsMatchScreen)
+
+            assert pipeline._request_return_to_launcher() is True
+            await asyncio.to_thread(stopped.wait, 2)
+            for _ in range(10):
+                await pilot.pause()
+                if isinstance(app.screen, WorkflowLauncherScreen):
+                    break
+            assert isinstance(app.screen, WorkflowLauncherScreen)
 
     asyncio.run(run())

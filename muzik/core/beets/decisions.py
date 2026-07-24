@@ -18,6 +18,12 @@ class BeetsDuplicateDecision(str, Enum):
     MERGE = "merge"
 
 
+class BeetsMatchDecision(str, Enum):
+    """Non-candidate choices available when resolving a Beets match."""
+
+    AS_IS = "as_is"
+
+
 class BeetsDecisions(Protocol):
     def should_resume_beets_import(self, path: Path) -> bool: ...
 

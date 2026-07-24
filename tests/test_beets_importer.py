@@ -4,7 +4,7 @@ from beets import config as beets_config
 from beets import importer as beets_importer
 import pytest
 
-from muzik.core.beets.decisions import BeetsDuplicateDecision
+from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
 from muzik.core.beets.events import (
     BeetsDuplicateEvent,
     BeetsImportFinishedEvent,
@@ -156,6 +156,10 @@ def test_importer_adapter_exposes_only_opaque_view_ids() -> None:
     assert view.matches[0].candidate_id == "task-0:match:0"
     assert not hasattr(view, "raw")
     assert adapter.resolve_choice(task, view.matches[0].candidate_id) is candidate
+    assert (
+        adapter.resolve_choice(task, BeetsMatchDecision.AS_IS)
+        is beets_importer.Action.ASIS
+    )
     with pytest.raises(ValueError, match="Unknown Beets candidate ID"):
         adapter.resolve_choice(task, "stale-id")
 

@@ -23,7 +23,7 @@ from textual.widgets import (
 )
 
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
-from muzik.core.beets.decisions import BeetsDuplicateDecision
+from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
 from muzik.core.beets.views import BeetsDuplicateView, BeetsTaskView
 from muzik.core.chapters import Chapter, serialize_chapters
 from muzik.core.sources.base import Candidate
@@ -369,7 +369,7 @@ class ChapterEditScreen(ModalScreen[list[Chapter] | None]):
         self.dismiss(None)
 
 
-class BeetsMatchScreen(ModalScreen[str | None]):
+class BeetsMatchScreen(ModalScreen[str | BeetsMatchDecision | None]):
     """Modal beets match selector."""
 
     CSS = """
@@ -401,6 +401,7 @@ class BeetsMatchScreen(ModalScreen[str | None]):
             yield BeetsMatchTable(id="beets-match-table")
             with Horizontal(id="beets-match-actions"):
                 yield Button("Use selected", variant="primary", id="select-match")
+                yield Button("As is", id="as-is-match")
                 yield Button("Skip", id="skip-match")
 
     def on_mount(self) -> None:
@@ -419,6 +420,10 @@ class BeetsMatchScreen(ModalScreen[str | None]):
     @on(Button.Pressed, "#skip-match")
     def skip_match(self) -> None:
         self.dismiss(None)
+
+    @on(Button.Pressed, "#as-is-match")
+    def use_as_is(self) -> None:
+        self.dismiss(BeetsMatchDecision.AS_IS)
 
 
 class DuplicateResolutionScreen(ModalScreen[BeetsDuplicateDecision]):

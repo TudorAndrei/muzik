@@ -9,11 +9,11 @@ from typing import cast
 
 from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Container, Horizontal, Vertical
-from textual.screen import Screen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Button, Footer, Header, Log, ProgressBar, Static
 from textual.worker import Worker, WorkerState
 
-from muzik.core.beets.decisions import BeetsDuplicateDecision
+from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
 from muzik.core.beets.events import (
     BeetsDuplicateEvent,
     BeetsErrorEvent,
@@ -161,20 +161,24 @@ class TuiBeetsDecisions:
     def should_resume_beets_import(self, path: Path) -> bool:
         return False
 
-    def choose_beets_album_match(self, task: BeetsTaskView) -> str | None:
+    def choose_beets_album_match(
+        self, task: BeetsTaskView
+    ) -> str | BeetsMatchDecision | None:
         return self._choose_match(task)
 
-    def choose_beets_track_match(self, task: BeetsTaskView) -> str | None:
+    def choose_beets_track_match(
+        self, task: BeetsTaskView
+    ) -> str | BeetsMatchDecision | None:
         return self._choose_match(task)
 
-    def _choose_match(self, task: BeetsTaskView) -> str | None:
+    def _choose_match(self, task: BeetsTaskView) -> str | BeetsMatchDecision | None:
         self.cancellation.raise_if_cancelled()
         choice = self.screen.app.call_from_thread(
             self.screen.request_beets_match,
             task,
         )
         self.cancellation.raise_if_cancelled()
-        return cast(str | None, choice)
+        return cast(str | BeetsMatchDecision | None, choice)
 
     def resolve_beets_duplicate(
         self,
@@ -324,6 +328,9 @@ class PipelineScreen(Screen[None]):
             return False
         self._return_to_launcher = True
         self._cancellation.cancel()
+        active_screen = self.app.screen
+        if active_screen is not self and isinstance(active_screen, ModalScreen):
+            active_screen.dismiss(None)
         self.query_one("#status", Static).update("Cancelling…")
         self.query_one("#back", Button).disabled = True
         return True
@@ -369,7 +376,9 @@ class PipelineScreen(Screen[None]):
     ) -> list[Chapter] | None:
         return await self.app.push_screen_wait(ChapterEditScreen(chapters))
 
-    async def request_beets_match(self, task: BeetsTaskView) -> str | None:
+    async def request_beets_match(
+        self, task: BeetsTaskView
+    ) -> str | BeetsMatchDecision | None:
         return await self.app.push_screen_wait(BeetsMatchScreen(task))
 
     async def request_duplicate_decision(self, duplicates) -> BeetsDuplicateDecision:
