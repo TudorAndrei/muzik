@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from enum import Enum
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,24 @@ from muzik.core.workflow.events import (
 )
 
 
+class MetadataSource(str, Enum):
+    NONE = "none"
+    YOUTUBE = "youtube"
+    MUSICBRAINZ = "musicbrainz"
+    AUTO = "auto"
+
+
+class AudioSource(str, Enum):
+    YOUTUBE = "youtube"
+    SOULSEEK = "soulseek"
+    AUTO = "auto"
+
+
+class AudioFallback(str, Enum):
+    YOUTUBE = "youtube"
+    NONE = "none"
+
+
 @dataclass(frozen=True, slots=True)
 class WorkflowRequest:
     raw: str
@@ -57,11 +76,18 @@ class WorkflowOptions:
     config: Path | None = None
     keep_source: bool = False
     force: bool = False
-    metadata_source: str = "auto"
-    audio_source: str = "youtube"
+    metadata_source: MetadataSource | str = MetadataSource.AUTO
+    audio_source: AudioSource | str = AudioSource.YOUTUBE
     prefer: str = "lossless"
-    fallback: str = "youtube"
+    fallback: AudioFallback | str = AudioFallback.YOUTUBE
     interactive: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "metadata_source", MetadataSource(self.metadata_source)
+        )
+        object.__setattr__(self, "audio_source", AudioSource(self.audio_source))
+        object.__setattr__(self, "fallback", AudioFallback(self.fallback))
 
 
 class WorkflowServiceError(RuntimeError):
@@ -110,6 +136,7 @@ class WorkflowRunOperations:
     acquire_soulseek: Callable[[str], list[Path]]
     prepopulate_archive: Callable[[Path], None]
     get_playlist_video_ids: Callable[[str], list[str]]
+    soulseek_ready: Callable[[], bool] = lambda: False
 
 
 class SoulseekWorkflowSource(Protocol):
@@ -617,25 +644,35 @@ def _process_playlist_video(
         return
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    if options.audio_source == "soulseek":
+    use_soulseek = options.audio_source == AudioSource.SOULSEEK or (
+        options.audio_source == AudioSource.AUTO and operations.soulseek_ready()
+    )
+    if use_soulseek:
         files_for_video = _cached_playlist_files(entry)
         if not files_for_video:
             try:
                 files_for_video = operations.acquire_soulseek(video_url)
             except WorkflowServiceError:
+                if options.fallback != AudioFallback.YOUTUBE:
+                    raise
+                use_soulseek = False
+        if use_soulseek:
+            if not files_for_video:
+                if options.fallback != AudioFallback.YOUTUBE:
+                    raise WorkflowServiceError("No Soulseek audio files were acquired.")
+                use_soulseek = False
+            else:
+                playlist_state["videos"][video_id] = {
+                    "status": "downloaded",
+                    "source": "soulseek",
+                    "files": [str(path.resolve()) for path in files_for_video],
+                }
+                save_playlist_state(playlist_id, playlist_state)
+                operations.process_audio(files_for_video, [])
+                if not options.no_organize:
+                    playlist_state["videos"][video_id]["status"] = "organized"
+                    save_playlist_state(playlist_id, playlist_state)
                 return
-            playlist_state["videos"][video_id] = {
-                "status": "downloaded",
-                "source": "soulseek",
-                "files": [str(path.resolve()) for path in files_for_video],
-            }
-            save_playlist_state(playlist_id, playlist_state)
-
-        operations.process_audio(files_for_video, [])
-        if not options.no_organize:
-            playlist_state["videos"][video_id]["status"] = "organized"
-            save_playlist_state(playlist_id, playlist_state)
-        return
 
     split_dir_for_video: Path | None = None
     audio_file: Path | None = None
@@ -705,8 +742,15 @@ def _acquire_single_workflow_inputs(
     if local_input:
         audio_files = find_audio_inputs([local_path])
 
-    if not local_input and options.audio_source == "soulseek":
-        audio_files = operations.acquire_soulseek(request.raw)
+    use_soulseek = options.audio_source == AudioSource.SOULSEEK or (
+        options.audio_source == AudioSource.AUTO and operations.soulseek_ready()
+    )
+    if not local_input and use_soulseek:
+        try:
+            audio_files = operations.acquire_soulseek(request.raw)
+        except WorkflowServiceError:
+            if not (options.fallback == AudioFallback.YOUTUBE and yt_id is not None):
+                raise
 
     cache_key = f"yt_{yt_id}" if yt_id else None
     cached_path = (

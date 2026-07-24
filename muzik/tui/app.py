@@ -19,6 +19,7 @@ from muzik.commands.workflow import (
     _get_playlist_video_ids,
     _prepopulate_archive,
     _process_audio_files,
+    _soulseek_ready,
 )
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate
@@ -430,6 +431,7 @@ def _default_operations(
             config=config.config,
             keep_source=config.keep_source,
             force=config.force,
+            metadata_source=config.metadata_source,
             decisions=decisions,
             events=events,
         )
@@ -447,6 +449,7 @@ def _default_operations(
         ),
         prepopulate_archive=_prepopulate_archive,
         get_playlist_video_ids=_get_playlist_video_ids,
+        soulseek_ready=_soulseek_ready,
     )
 
 

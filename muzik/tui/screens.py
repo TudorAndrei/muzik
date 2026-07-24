@@ -28,6 +28,7 @@ from muzik.core.beets.views import BeetsDuplicateView, BeetsTaskView
 from muzik.core.chapters import Chapter, serialize_chapters
 from muzik.core.sources.base import Candidate
 from muzik.core.workflow.decisions import ChapterDecision
+from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
 from muzik.tui.widgets import (
     BeetsMatchTable,
     CandidateTable,
@@ -51,10 +52,10 @@ class WorkflowLaunchConfig:
     config: Path | None = None
     keep_source: bool = False
     force: bool = False
-    metadata_source: str = "auto"
-    audio_source: str = "youtube"
+    metadata_source: MetadataSource = MetadataSource.AUTO
+    audio_source: AudioSource = AudioSource.YOUTUBE
     prefer: str = "lossless"
-    fallback: str = "youtube"
+    fallback: AudioFallback = AudioFallback.YOUTUBE
     interactive: bool = True
 
 
@@ -195,10 +196,14 @@ class WorkflowLauncherScreen(Screen[WorkflowLaunchConfig]):
             config=Path(config_raw).expanduser() if config_raw else None,
             keep_source=self.query_one("#keep-source", Switch).value,
             force=self.query_one("#force", Switch).value,
-            metadata_source=_select_text(self.query_one("#metadata-source", Select)),
-            audio_source=_select_text(self.query_one("#audio-source", Select)),
+            metadata_source=MetadataSource(
+                _select_text(self.query_one("#metadata-source", Select))
+            ),
+            audio_source=AudioSource(
+                _select_text(self.query_one("#audio-source", Select))
+            ),
             prefer=_select_text(self.query_one("#prefer", Select)),
-            fallback=_select_text(self.query_one("#fallback", Select)),
+            fallback=AudioFallback(_select_text(self.query_one("#fallback", Select))),
             interactive=self.query_one("#interactive", Switch).value,
         )
 

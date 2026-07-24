@@ -10,7 +10,7 @@ so you can review/edit chapters as they arrive.
 """
 
 from pathlib import Path
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 import typer
 
@@ -53,6 +53,9 @@ from muzik.core.workflow.service import (
     WorkflowRequest,
     WorkflowRunOperations,
     WorkflowServiceError,
+    AudioFallback,
+    AudioSource,
+    MetadataSource,
     SplitTask,
     MetadataWorkflowSource,
     SoulseekWorkflowSource,
@@ -97,11 +100,58 @@ def _youtube_source() -> MetadataWorkflowSource:
     return cast(MetadataWorkflowSource, YouTubeSource())
 
 
+def _soulseek_ready() -> bool:
+    """Return whether the configured Soulseek service is ready for acquisition."""
+    try:
+        state = cast(dict, cast(Any, _soulseek_source()).check())
+    except Exception:
+        return False
+    return bool(state.get("auth_valid") and state.get("server_connected"))
+
+
+def _description_chapters(
+    af: Path,
+    *,
+    decisions: WorkflowDecisions,
+    events: WorkflowEventEmitter,
+) -> Optional[list[Chapter]]:
+    """Extract and review timestamped chapters from a YouTube info sidecar."""
+    import os
+
+    info_path = af.with_suffix("").with_suffix(".info.json")
+    if not info_path.exists() or not os.environ.get("OPENROUTER_API_KEY"):
+        return None
+    description = get_description_from_info_json(info_path)
+    if not description or not description_has_timestamps(description):
+        return None
+    llm_chapters, llm_err = extract_chapters_from_description(description)
+    if llm_err or not llm_chapters:
+        return None
+    events.emit(
+        ChapterReviewRequestedEvent(
+            source=af, chapters=llm_chapters, title="YouTube — description"
+        )
+    )
+    display_chapter_table(llm_chapters, title="YouTube — description")
+    decision = decisions.confirm_chapters(af, llm_chapters)
+    if decision == ChapterDecision.EDIT:
+        edited = decisions.edit_chapters(llm_chapters)
+        llm_chapters = edited or []
+        decision = ChapterDecision.ACCEPT if edited else ChapterDecision.REJECT
+    if decision != ChapterDecision.ACCEPT:
+        return None
+    af.with_suffix(".chapters.txt").write_text(
+        serialize_chapters(llm_chapters), encoding="utf-8"
+    )
+    return llm_chapters
+
+
 def _get_chapters_for(
     af: Path,
     no_split: bool,
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
+    metadata_source: MetadataSource = MetadataSource.AUTO,
 ) -> Optional[list]:
     """Return chapter list if *af* should be split as an album, else ``None``.
 
@@ -116,9 +166,13 @@ def _get_chapters_for(
     chapters = find_chapters(af)
     if chapters:
         return chapters
+    if metadata_source == MetadataSource.NONE:
+        return None
     duration = get_duration(af)
     if not (duration and duration >= MIN_ALBUM_DURATION):
         return None
+    if metadata_source == MetadataSource.YOUTUBE:
+        return _description_chapters(af, decisions=decisions, events=events)
     meta = extract_metadata(af)
     artist = meta.get("artist", "")
     album_name = meta.get("album", "")
@@ -133,52 +187,9 @@ def _get_chapters_for(
         console.print("  [dim]MusicBrainz: no match found.[/dim]")
         for line in mb_diag.splitlines():
             console.print(f"  [dim]  {line}[/dim]")
-        # Try extracting chapters from the video description via LLM
-        import os
-
-        jsn = af.with_suffix("").with_suffix(".info.json")
-        if jsn.exists() and os.environ.get("OPENROUTER_API_KEY"):
-            description = get_description_from_info_json(jsn)
-            if description and description_has_timestamps(description):
-                console.print(
-                    "  [dim]Querying LLM for chapters in video description…[/dim]"
-                )
-                llm_chapters, llm_err = extract_chapters_from_description(description)
-                if llm_err:
-                    console.print(f"  [red]LLM error:[/red] {llm_err}")
-                elif llm_chapters:
-                    console.print(
-                        f"  [cyan]LLM found:[/cyan] {len(llm_chapters)} tracks in description"
-                    )
-                    events.emit(
-                        ChapterReviewRequestedEvent(
-                            source=af,
-                            chapters=llm_chapters,
-                            title="LLM — description",
-                        )
-                    )
-                    display_chapter_table(llm_chapters, title="LLM — description")
-                    chapter_decision = decisions.confirm_chapters(af, llm_chapters)
-                    if chapter_decision == ChapterDecision.EDIT:
-                        edited = decisions.edit_chapters(llm_chapters)
-                        if edited is None:
-                            chapter_decision = ChapterDecision.REJECT
-                        else:
-                            llm_chapters = edited
-                            chapter_decision = ChapterDecision.ACCEPT
-                    if chapter_decision == ChapterDecision.ACCEPT:
-                        sidecar = af.with_suffix(".chapters.txt")
-                        sidecar.write_text(
-                            serialize_chapters(llm_chapters), encoding="utf-8"
-                        )
-                        console.print(f"  [green]Saved:[/green] {sidecar.name}")
-                        return llm_chapters
-                    console.print("  [dim]Skipping LLM chapters.[/dim]")
-                else:
-                    console.print(
-                        "  [dim]LLM: no timestamps found in description.[/dim]"
-                    )
-        return None
+        if metadata_source == MetadataSource.MUSICBRAINZ:
+            return None
+        return _description_chapters(af, decisions=decisions, events=events)
     console.print(
         f"  [cyan]MusicBrainz found:[/cyan] [bold]{mb_title}[/bold] — {len(mb_chapters)} tracks"
     )
@@ -304,6 +315,7 @@ def _process_audio_files(
     config: Optional[Path],
     keep_source: bool,
     force: bool,
+    metadata_source: MetadataSource = MetadataSource.AUTO,
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
 ) -> None:
@@ -331,6 +343,7 @@ def _process_audio_files(
         config=config,
         keep_source=keep_source,
         force=force,
+        metadata_source=metadata_source,
     )
 
     def split_operation(task: SplitTask) -> bool:
@@ -372,6 +385,7 @@ def _process_audio_files(
             no_split,
             decisions,
             events,
+            metadata_source,
         ),
         split_operation=split_operation,
         organize_operation=organize_operation,
@@ -495,12 +509,12 @@ def workflow_cmd(
         help="Ignore download/split cache and reprocess from scratch.",
     ),
     metadata_source: str = typer.Option(
-        "auto",
+        MetadataSource.AUTO.value,
         "--metadata-source",
         help="Metadata source: youtube, musicbrainz, none, or auto.",
     ),
     audio_source: str = typer.Option(
-        "youtube",
+        AudioSource.YOUTUBE.value,
         "--audio-source",
         help="Audio source: soulseek, youtube, or auto.",
     ),
@@ -510,7 +524,7 @@ def workflow_cmd(
         help="Preferred audio quality for source searches.",
     ),
     fallback: str = typer.Option(
-        "youtube",
+        AudioFallback.YOUTUBE.value,
         "--fallback",
         help="Fallback source when the preferred source has no acceptable result.",
     ),
@@ -532,6 +546,13 @@ def workflow_cmd(
     split, and organized before the next one starts, so interactive chapter
     review (--review) works naturally and a crash mid-playlist can be resumed.
     """
+    try:
+        metadata_source = MetadataSource(metadata_source)
+        audio_source = AudioSource(audio_source)
+        fallback = AudioFallback(fallback)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
     console.print(f"[bold cyan]Workflow:[/bold cyan] {url}")
     console.rule()
 
@@ -586,6 +607,7 @@ def workflow_cmd(
             config=config,
             keep_source=keep_source,
             force=force,
+            metadata_source=metadata_source,
             decisions=decisions,
             events=events,
         )
@@ -603,6 +625,7 @@ def workflow_cmd(
         ),
         prepopulate_archive=_prepopulate_archive,
         get_playlist_video_ids=_get_playlist_video_ids,
+        soulseek_ready=_soulseek_ready,
     )
 
     try:
