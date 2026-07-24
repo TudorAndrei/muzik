@@ -12,6 +12,7 @@ from muzik.core import cache as cache_mod
 from muzik.core.audio import get_duration
 from muzik.core.metadata import write_muzik_metadata
 from muzik.core.quality import quality_from_name, score_candidate
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.sources.base import (
     Candidate,
     CandidateFile,
@@ -349,7 +350,10 @@ class SoulseekSource:
         timeout: float = 600,
         queue_timeout: float = 120,
         verify: bool = True,
+        cancellation: CancellationToken | None = None,
     ) -> DownloadResult:
+        cancellation = cancellation or CancellationToken()
+        cancellation.raise_if_cancelled()
         if not candidate.user:
             raise SoulseekError("Cannot download a Soulseek candidate without a user.")
         raw_files = candidate.metadata.get("raw_files") or []
@@ -367,10 +371,12 @@ class SoulseekSource:
                 candidate,
                 timeout=timeout,
                 queue_timeout=queue_timeout,
+                cancellation=cancellation,
             )
 
         else:
             transfer_files = []
+        cancellation.raise_if_cancelled()
         files = self._find_downloaded_files(root, candidate, before, transfer_files)
         if not files:
             raise SoulseekError(
@@ -380,6 +386,7 @@ class SoulseekSource:
             files = _verified_audio_files(files)
             if not files:
                 raise SoulseekError("Downloaded files failed ffprobe verification.")
+        cancellation.raise_if_cancelled()
         metadata_target = files[0] if len(files) == 1 else root
         metadata_path = write_muzik_metadata(
             metadata_target,
@@ -416,7 +423,9 @@ class SoulseekSource:
         *,
         timeout: float,
         queue_timeout: float,
+        cancellation: CancellationToken | None = None,
     ) -> list[dict[str, Any]]:
+        cancellation = cancellation or CancellationToken()
         assert candidate.user is not None
         deadline = time.monotonic() + timeout
         queued_since: float | None = None
@@ -427,6 +436,7 @@ class SoulseekSource:
         queued_states = {"Queued", "Initializing", "Requested", "Pending"}
 
         while time.monotonic() < deadline:
+            cancellation.raise_if_cancelled()
             transfer = self.client.transfers.get_downloads(candidate.user)
             files = _transfer_files(transfer)
             matching = [

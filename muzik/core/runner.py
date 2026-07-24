@@ -15,6 +15,7 @@ from rich.live import Live
 from rich.text import Text
 
 from muzik.ui.console import console
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
 
 # ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ def run_streaming(
     cmd: list[str],
     cwd: Optional[Path] = None,
     label: str = "",
+    cancellation: CancellationToken | None = None,
 ) -> int:
     """Run *cmd*, showing the last output line via Rich Live.
 
@@ -87,7 +89,17 @@ def run_streaming(
     t.start()
 
     with Live(last, console=console, refresh_per_second=10, transient=True):
-        proc.wait()
+        while proc.poll() is None:
+            if cancellation and cancellation.is_cancelled():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                t.join()
+                raise WorkflowCancelled("Subprocess cancelled.")
+            threading.Event().wait(0.1)
         t.join()
 
     return proc.returncode

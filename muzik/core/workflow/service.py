@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 import os
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -29,6 +30,7 @@ from muzik.core.sources.youtube import (
     youtube_id as parse_youtube_id,
 )
 from muzik.core.workflow.decisions import WorkflowDecisionError, WorkflowDecisions
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.workflow.events import (
     CandidatesFoundEvent,
     MessageEvent,
@@ -131,9 +133,11 @@ class SplitTask:
 
 @dataclass(frozen=True, slots=True)
 class WorkflowRunOperations:
-    download_audio: Callable[[str, Path, Path | None], bool]
-    process_audio: Callable[[list[Path], list[Path]], None]
-    acquire_soulseek: Callable[[str], list[Path]]
+    # Operations may opt into cooperative cancellation with a keyword-only
+    # ``cancellation`` argument. Legacy adapters remain supported.
+    download_audio: Callable[..., bool]
+    process_audio: Callable[..., None]
+    acquire_soulseek: Callable[..., list[Path]]
     prepopulate_archive: Callable[[Path], None]
     get_playlist_video_ids: Callable[[str], list[str]]
     soulseek_ready: Callable[[], bool] = lambda: False
@@ -197,6 +201,26 @@ def _default_soulseek_source() -> SoulseekWorkflowSource:
 
 def _default_youtube_source() -> MetadataWorkflowSource:
     return cast(MetadataWorkflowSource, YouTubeSource())
+
+
+def _call_with_cancellation(
+    operation: Callable[..., object],
+    *args: object,
+    cancellation: CancellationToken,
+    **kwargs: object,
+) -> object:
+    """Call a cancellation-aware adapter without breaking existing adapters."""
+    try:
+        parameters = inspect.signature(operation).parameters.values()
+    except TypeError, ValueError:
+        return operation(*args, **kwargs)
+    if any(
+        parameter.name == "cancellation"
+        or parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters
+    ):
+        return operation(*args, cancellation=cancellation, **kwargs)
+    return operation(*args, **kwargs)
 
 
 def load_playlist_state(playlist_id: str) -> dict:
@@ -312,9 +336,12 @@ def process_audio_plan(
     organize_operation: Callable[[Path], bool],
     events: WorkflowEventEmitter | None = None,
     hooks: AudioProcessingHooks | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> AudioProcessingResult:
     events = events or NullWorkflowEventEmitter()
     hooks = hooks or NullAudioProcessingHooks()
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
     plan = plan_audio_processing(
         audio_files,
         pre_split_dirs=pre_split_dirs,
@@ -332,6 +359,7 @@ def process_audio_plan(
             StepStartedEvent(name="split", detail=f"{len(plan.albums)} album(s)")
         )
         for source, chapters in plan.albums:
+            cancellation.raise_if_cancelled()
             task = SplitTask(
                 source=source,
                 chapters=chapters,
@@ -344,6 +372,7 @@ def process_audio_plan(
                 split_dirs.append(task.output)
             else:
                 hooks.split_failed(source)
+            cancellation.raise_if_cancelled()
         events.emit(
             StepFinishedEvent(
                 name="split",
@@ -362,6 +391,7 @@ def process_audio_plan(
     events.emit(StepStartedEvent(name="organize"))
     organize_targets = [*split_dirs, *organize_targets_for_singles(plan.singles)]
     for target in organize_targets:
+        cancellation.raise_if_cancelled()
         hooks.organize_started(target)
         if not options.dry_run and not organize_operation(target):
             events.emit(
@@ -372,6 +402,7 @@ def process_audio_plan(
                 )
             )
             raise WorkflowServiceError(f"Organization failed for {target}.")
+        cancellation.raise_if_cancelled()
     events.emit(StepFinishedEvent(name="organize"))
     hooks.complete(organized=True)
 
@@ -473,9 +504,12 @@ def acquire_from_soulseek(
         [],
         MetadataWorkflowSource,
     ] = _default_youtube_source,
+    cancellation: CancellationToken | None = None,
 ) -> list[Path]:
     """Search/download audio through Soulseek and return local audio paths."""
     events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
     source = source_factory()
     try:
         resolved = resolve_soulseek_request(
@@ -485,6 +519,7 @@ def acquire_from_soulseek(
             youtube_source=youtube_source_factory(),
         )
         candidates = source.search(resolved, prefer=prefer, limit=10)
+        cancellation.raise_if_cancelled()
         events.emit(
             CandidatesFoundEvent(
                 candidates=candidates,
@@ -516,13 +551,22 @@ def acquire_from_soulseek(
     )
     events.emit(MessageEvent("Downloading selected Soulseek candidate."))
     try:
-        result = source.download(candidate, wait=True)
+        result = cast(
+            DownloadResult,
+            _call_with_cancellation(
+                source.download,
+                candidate,
+                wait=True,
+                cancellation=cancellation,
+            ),
+        )
     except SoulseekError as exc:
         raise WorkflowServiceError(f"Soulseek download failed: {exc}") from exc
 
     events.emit(
         MessageEvent(f"Soulseek download returned {len(result.files)} file(s).")
     )
+    cancellation.raise_if_cancelled()
     record_soulseek_download(request, result)
     if not result.files:
         raise WorkflowServiceError(
@@ -555,9 +599,12 @@ def run_workflow(
     *,
     operations: WorkflowRunOperations,
     events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> None:
     """Run the top-level workflow using injected UI/tool operations."""
     events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
     events.emit(StepStartedEvent(name="download", detail=request.raw))
 
     yt_id = parse_youtube_id(request.raw)
@@ -570,6 +617,7 @@ def run_workflow(
             playlist_id=playlist_id,
             operations=operations,
             events=events,
+            cancellation=cancellation,
         )
         events.emit(StepFinishedEvent(name="download", detail=request.raw))
         return
@@ -580,8 +628,16 @@ def run_workflow(
         yt_id=yt_id,
         operations=operations,
     )
+    cancellation.raise_if_cancelled()
     events.emit(StepFinishedEvent(name="download", detail=request.raw))
-    operations.process_audio(audio_files, pre_split_dirs)
+    cancellation.raise_if_cancelled()
+    _call_with_cancellation(
+        operations.process_audio,
+        audio_files,
+        pre_split_dirs,
+        cancellation=cancellation,
+    )
+    cancellation.raise_if_cancelled()
 
 
 def _run_playlist_workflow(
@@ -591,21 +647,25 @@ def _run_playlist_workflow(
     playlist_id: str,
     operations: WorkflowRunOperations,
     events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
 ) -> None:
     archive_file = cache_mod.CACHE_DIR / f"ytdlp_archive_{playlist_id}.txt"
     operations.prepopulate_archive(archive_file)
+    cancellation.raise_if_cancelled()
     playlist_state = load_playlist_state(playlist_id)
 
     if options.dry_run:
         return
 
     video_ids = operations.get_playlist_video_ids(request.raw)
+    cancellation.raise_if_cancelled()
     if not video_ids:
         raise WorkflowServiceError(
             "Could not fetch playlist video IDs — check the URL and yt-dlp."
         )
 
     for video_id in video_ids:
+        cancellation.raise_if_cancelled()
         _process_playlist_video(
             video_id,
             playlist_id=playlist_id,
@@ -615,6 +675,7 @@ def _run_playlist_workflow(
             archive_file=archive_file,
             operations=operations,
             events=events,
+            cancellation=cancellation,
         )
 
 
@@ -628,7 +689,9 @@ def _process_playlist_video(
     archive_file: Path,
     operations: WorkflowRunOperations,
     events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
 ) -> None:
+    cancellation.raise_if_cancelled()
     entry = playlist_state["videos"].get(video_id, {})
     if options.force and entry.get("status") in ("split", "organized"):
         entry = {key: value for key, value in entry.items() if key != "status"}
@@ -651,7 +714,14 @@ def _process_playlist_video(
         files_for_video = _cached_playlist_files(entry)
         if not files_for_video:
             try:
-                files_for_video = operations.acquire_soulseek(video_url)
+                files_for_video = cast(
+                    list[Path],
+                    _call_with_cancellation(
+                        operations.acquire_soulseek,
+                        video_url,
+                        cancellation=cancellation,
+                    ),
+                )
             except WorkflowServiceError:
                 if options.fallback != AudioFallback.YOUTUBE:
                     raise
@@ -662,13 +732,21 @@ def _process_playlist_video(
                     raise WorkflowServiceError("No Soulseek audio files were acquired.")
                 use_soulseek = False
             else:
+                cancellation.raise_if_cancelled()
                 playlist_state["videos"][video_id] = {
                     "status": "downloaded",
                     "source": "soulseek",
                     "files": [str(path.resolve()) for path in files_for_video],
                 }
                 save_playlist_state(playlist_id, playlist_state)
-                operations.process_audio(files_for_video, [])
+                cancellation.raise_if_cancelled()
+                _call_with_cancellation(
+                    operations.process_audio,
+                    files_for_video,
+                    [],
+                    cancellation=cancellation,
+                )
+                cancellation.raise_if_cancelled()
                 if not options.no_organize:
                     playlist_state["videos"][video_id]["status"] = "organized"
                     save_playlist_state(playlist_id, playlist_state)
@@ -690,8 +768,19 @@ def _process_playlist_video(
 
         if audio_file is None:
             before = set(request.output.glob("*")) if request.output.exists() else set()
-            if not operations.download_audio(video_url, request.output, archive_file):
+            downloaded = cast(
+                bool,
+                _call_with_cancellation(
+                    operations.download_audio,
+                    video_url,
+                    request.output,
+                    archive_file,
+                    cancellation=cancellation,
+                ),
+            )
+            if not downloaded:
                 return
+            cancellation.raise_if_cancelled()
             after = set(request.output.glob("*")) if request.output.exists() else set()
             new_files = _new_audio_files(before, after)
             if not new_files:
@@ -704,16 +793,31 @@ def _process_playlist_video(
                 "audio_file": str(audio_file.resolve()),
             }
             save_playlist_state(playlist_id, playlist_state)
+            cancellation.raise_if_cancelled()
             cache_mod.set(f"yt_{video_id}", str(audio_file.resolve()))
 
-        operations.process_audio([audio_file], [])
+        cancellation.raise_if_cancelled()
+        _call_with_cancellation(
+            operations.process_audio,
+            [audio_file],
+            [],
+            cancellation=cancellation,
+        )
+        cancellation.raise_if_cancelled()
         if not options.no_organize:
             playlist_state["videos"][video_id]["status"] = "organized"
             save_playlist_state(playlist_id, playlist_state)
         return
 
     if split_dir_for_video is not None and not options.no_organize:
-        operations.process_audio([], [split_dir_for_video])
+        cancellation.raise_if_cancelled()
+        _call_with_cancellation(
+            operations.process_audio,
+            [],
+            [split_dir_for_video],
+            cancellation=cancellation,
+        )
+        cancellation.raise_if_cancelled()
         playlist_state["videos"][video_id]["status"] = "organized"
         save_playlist_state(playlist_id, playlist_state)
 

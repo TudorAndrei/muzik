@@ -143,7 +143,7 @@ def test_workflow_youtube_url_uses_youtube_metadata_for_soulseek_search(
 
     monkeypatch.setattr(workflow, "YouTubeSource", FakeYouTubeSource)
     monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
-    monkeypatch.setattr(workflow, "download_cmd", fail_download_cmd)
+    monkeypatch.setattr(workflow, "_download_audio", fail_download_cmd)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
 
@@ -200,7 +200,7 @@ def test_workflow_falls_back_to_youtube_when_soulseek_has_no_candidates(
 
     monkeypatch.setattr(workflow, "YouTubeSource", FakeYouTubeSource)
     monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
-    monkeypatch.setattr(workflow, "download_cmd", fake_download_cmd)
+    monkeypatch.setattr(workflow, "_download_audio", fake_download_cmd)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
 
@@ -241,7 +241,7 @@ def test_workflow_reads_legacy_youtube_cache(
     def fail_download(**kwargs):
         raise AssertionError("workflow should not download when legacy cache is valid")
 
-    monkeypatch.setattr(workflow, "download_cmd", fail_download)
+    monkeypatch.setattr(workflow, "_download_audio", fail_download)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: None)
 
@@ -280,7 +280,7 @@ def test_workflow_youtube_audio_source_uses_download_cmd(
         output.mkdir(parents=True, exist_ok=True)
         (output / "Downloaded [abcdefghijk].flac").write_bytes(b"audio")
 
-    monkeypatch.setattr(workflow, "download_cmd", fake_download_cmd)
+    monkeypatch.setattr(workflow, "_download_audio", fake_download_cmd)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
 
@@ -401,7 +401,16 @@ def test_workflow_playlist_uses_soulseek_per_video(
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: None)
 
-    def fake_acquire(request, *, prefer, interactive, fallback, decisions, events):
+    def fake_acquire(
+        request,
+        *,
+        prefer,
+        interactive,
+        fallback,
+        decisions,
+        events,
+        cancellation=None,
+    ):
         calls.append(request)
         audio = tmp_path / "downloads" / f"{request[-11:]}.flac"
         audio.parent.mkdir(exist_ok=True)

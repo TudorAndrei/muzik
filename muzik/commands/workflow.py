@@ -14,8 +14,8 @@ from typing import Any, Optional, cast
 
 import typer
 
-from muzik.commands.download import download_cmd
-from muzik.commands.split import split_cmd
+from muzik.commands.download import _download_audio
+from muzik.commands.split import _split_audio
 from muzik.commands.organize import organize_cmd
 from muzik.config import (
     BEETS_CONFIG,
@@ -48,6 +48,7 @@ from muzik.core.workflow.events import (
     NullWorkflowEventEmitter,
     WorkflowEventEmitter,
 )
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.workflow.service import (
     WorkflowOptions,
     WorkflowRequest,
@@ -318,6 +319,7 @@ def _process_audio_files(
     metadata_source: MetadataSource = MetadataSource.AUTO,
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> None:
     """Classify, split, and organize local audio files/directories."""
     audio_files = _find_audio_inputs(audio_inputs)
@@ -348,13 +350,14 @@ def _process_audio_files(
 
     def split_operation(task: SplitTask) -> bool:
         try:
-            split_cmd(
+            _split_audio(
                 path=task.source,
                 review=review,
                 jobs=jobs,
                 output=task.output,
                 keep_source=keep_source,
                 force=force,
+                cancellation=cancellation,
             )
         except (SystemExit, typer.Exit) as exc:
             return getattr(exc, "code", 0) == 0
@@ -391,6 +394,7 @@ def _process_audio_files(
         organize_operation=organize_operation,
         events=events,
         hooks=_CliAudioProcessingHooks(),
+        cancellation=cancellation,
     )
 
 
@@ -402,6 +406,7 @@ def _acquire_from_soulseek(
     fallback: str,
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
 ) -> list[Path]:
     """Search/download audio through Soulseek and return local audio paths.
 
@@ -421,6 +426,7 @@ def _acquire_from_soulseek(
             events=events,
             source_factory=_soulseek_source,
             youtube_source_factory=_youtube_source,
+            cancellation=cancellation,
         )
     except WorkflowServiceError as exc:
         if exc.exit_code == 0:
@@ -578,21 +584,33 @@ def workflow_cmd(
     decisions: WorkflowDecisions = CliWorkflowDecisions(interactive=options.interactive)
     events: WorkflowEventEmitter = NullWorkflowEventEmitter()
 
-    def download_audio(url: str, output: Path, archive_file: Path | None) -> bool:
+    def download_audio(
+        url: str,
+        output: Path,
+        archive_file: Path | None,
+        *,
+        cancellation: CancellationToken | None = None,
+    ) -> bool:
         try:
-            download_cmd(
+            _download_audio(
                 url=url,
                 output=output,
                 format="bestaudio",
                 quality="0",
                 no_chapters=False,
                 archive_file=archive_file,
+                cancellation=cancellation,
             )
         except (SystemExit, typer.Exit) as exc:
             return getattr(exc, "code", 0) == 0
         return True
 
-    def process_audio(audio_inputs: list[Path], pre_split_dirs: list[Path]) -> None:
+    def process_audio(
+        audio_inputs: list[Path],
+        pre_split_dirs: list[Path],
+        *,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
         _process_audio_files(
             audio_inputs=audio_inputs,
             pre_split_dirs=pre_split_dirs,
@@ -610,18 +628,20 @@ def workflow_cmd(
             metadata_source=metadata_source,
             decisions=decisions,
             events=events,
+            cancellation=cancellation,
         )
 
     operations = WorkflowRunOperations(
         download_audio=download_audio,
         process_audio=process_audio,
-        acquire_soulseek=lambda raw: _acquire_from_soulseek(
+        acquire_soulseek=lambda raw, *, cancellation=None: _acquire_from_soulseek(
             raw,
             prefer=prefer,
             interactive=interactive,
             fallback=fallback,
             decisions=decisions,
             events=events,
+            cancellation=cancellation,
         ),
         prepopulate_archive=_prepopulate_archive,
         get_playlist_video_ids=_get_playlist_video_ids,

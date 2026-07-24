@@ -6,6 +6,7 @@ import typer
 from muzik.commands import split
 from muzik.core import cache as cache_mod
 from muzik.core.chapters import Chapter
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
 
 def _configure_split(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -43,7 +44,7 @@ def test_split_cache_hit_preserves_existing_output_and_source(
     cache_mod.set(cache_mod.split_cache_key(audio, chapters), str(output))
 
     with pytest.raises(typer.Exit) as result:
-        split.split_cmd(
+        split._split_audio(
             path=audio,
             output=output,
             review=False,
@@ -140,3 +141,27 @@ def test_split_failure_preserves_source_and_does_not_cache(
     assert audio.exists()
     assert chapters.exists()
     assert cache_mod.get(cache_mod.split_cache_key(audio, chapters)) is None
+
+
+def test_split_cancellation_preserves_existing_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure_split(monkeypatch)
+    audio, _ = _audio_with_chapters(tmp_path)
+    output = tmp_path / "output"
+    retained = output / "keep.flac"
+    output.mkdir()
+    retained.write_bytes(b"keep")
+    token = CancellationToken()
+    token.cancel()
+
+    with pytest.raises(WorkflowCancelled):
+        split._split_audio(
+            path=audio,
+            output=output,
+            force=True,
+            cancellation=token,
+        )
+
+    assert retained.read_bytes() == b"keep"
+    assert audio.exists()

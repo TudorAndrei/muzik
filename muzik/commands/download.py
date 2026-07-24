@@ -9,6 +9,7 @@ from rich.table import Table
 from muzik.config import DEFAULT_DOWNLOAD_DIR
 from muzik.core.chapters import find_chapters
 from muzik.core.runner import run_streaming
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.sources.youtube import (
     build_download_command,
     find_audio_by_id,
@@ -28,37 +29,14 @@ def _scenario_label(chapters_count: int) -> str:
     return "[yellow]single track[/yellow]"
 
 
-def download_cmd(
-    url: str = typer.Argument(..., help="YouTube URL (video, playlist, or album)."),
-    output: Path = typer.Option(
-        DEFAULT_DOWNLOAD_DIR,
-        "--output",
-        "-o",
-        help="Directory to save downloaded files.",
-    ),
-    format: str = typer.Option(  # noqa: A002
-        "bestaudio",
-        "--format",
-        "-f",
-        help="yt-dlp format selector.",
-    ),
-    quality: str = typer.Option(
-        "0",
-        "--quality",
-        "-q",
-        help="Audio quality passed to yt-dlp (0 = best).",
-    ),
-    no_chapters: bool = typer.Option(
-        False,
-        "--no-chapters",
-        help="Skip writing chapter info (no .info.json).",
-    ),
-    archive_file: Optional[Path] = typer.Option(
-        None,
-        "--archive-file",
-        hidden=True,
-        help="yt-dlp download archive for deduplication.",
-    ),
+def _download_audio(
+    url: str,
+    output: Path = DEFAULT_DOWNLOAD_DIR,
+    format: str = "bestaudio",  # noqa: A002
+    quality: str = "0",
+    no_chapters: bool = False,
+    archive_file: Optional[Path] = None,
+    cancellation: CancellationToken | None = None,
 ) -> None:
     """Download audio from YouTube, saving [ID] in the filename for cache compatibility.
 
@@ -81,7 +59,15 @@ def download_cmd(
     # Snapshot existing files so we only report newly downloaded ones
     before = set(output.glob("*")) if output.exists() else set()
 
-    rc = run_streaming(cmd, cwd=output, label="yt-dlp")
+    if cancellation is None:
+        rc = run_streaming(cmd, cwd=output, label="yt-dlp")
+    else:
+        rc = run_streaming(
+            cmd,
+            cwd=output,
+            label="yt-dlp",
+            cancellation=cancellation,
+        )
 
     if rc != 0:
         err(f"[red]yt-dlp exited with code {rc}[/red]")
@@ -123,3 +109,39 @@ def download_cmd(
         table.add_row(af.name, scenario, f"[dim]{next_step}[/dim]")
 
     console.print(table)
+
+
+def download_cmd(
+    url: str = typer.Argument(..., help="YouTube URL (video, playlist, or album)."),
+    output: Path = typer.Option(
+        DEFAULT_DOWNLOAD_DIR,
+        "--output",
+        "-o",
+        help="Directory to save downloaded files.",
+    ),
+    format: str = typer.Option(  # noqa: A002
+        "bestaudio",
+        "--format",
+        "-f",
+        help="yt-dlp format selector.",
+    ),
+    quality: str = typer.Option(
+        "0",
+        "--quality",
+        "-q",
+        help="Audio quality passed to yt-dlp (0 = best).",
+    ),
+    no_chapters: bool = typer.Option(
+        False,
+        "--no-chapters",
+        help="Skip writing chapter info (no .info.json).",
+    ),
+    archive_file: Optional[Path] = typer.Option(
+        None,
+        "--archive-file",
+        hidden=True,
+        help="yt-dlp download archive for deduplication.",
+    ),
+) -> None:
+    """Download audio from YouTube and report its next processing step."""
+    _download_audio(url, output, format, quality, no_chapters, archive_file)

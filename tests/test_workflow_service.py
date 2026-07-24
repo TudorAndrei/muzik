@@ -7,6 +7,7 @@ from muzik.core import cache as cache_mod
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate, DownloadResult, ResolvedRelease
 from muzik.core.workflow.decisions import NonInteractiveWorkflowDecisions
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.events import (
     CandidatesFoundEvent,
     MessageEvent,
@@ -522,6 +523,50 @@ def test_run_workflow_processes_playlist_with_soulseek(
         ([tmp_path / "downloads" / "abcdefghijk.flac"], []),
         ([tmp_path / "downloads" / "lmnopqrstuv.flac"], []),
     ]
+    state = cache_mod.get_json("playlist_PL123")
+    assert state is not None
+    assert state["videos"]["abcdefghijk"]["status"] == "downloaded"
+
+
+def test_playlist_cancellation_stops_before_later_entries(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    token = CancellationToken()
+    processed: list[list[Path]] = []
+
+    def acquire(url: str) -> list[Path]:
+        audio = tmp_path / "downloads" / f"{url[-11:]}.flac"
+        audio.parent.mkdir(parents=True, exist_ok=True)
+        audio.write_bytes(b"audio")
+        return [audio]
+
+    def process(files: list[Path], split_dirs: list[Path]) -> None:
+        processed.append(files)
+        token.cancel()
+
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda url, output, archive: False,
+        process_audio=process,
+        acquire_soulseek=acquire,
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: ["abcdefghijk", "lmnopqrstuv"],
+    )
+
+    with pytest.raises(WorkflowCancelled):
+        service.run_workflow(
+            service.WorkflowRequest(
+                raw="https://youtube.com/playlist?list=PL123",
+                output=tmp_path / "downloads",
+                splits=tmp_path / "splits",
+            ),
+            service.WorkflowOptions(audio_source="soulseek"),
+            operations=operations,
+            cancellation=token,
+        )
+
+    assert len(processed) == 1
     state = cache_mod.get_json("playlist_PL123")
     assert state is not None
     assert state["videos"]["abcdefghijk"]["status"] == "downloaded"

@@ -13,7 +13,7 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Log, ProgressBar, Static
 from textual.worker import Worker, WorkerState
 
-from muzik.commands.download import download_cmd
+from muzik.commands.download import _download_audio
 from muzik.commands.workflow import (
     _acquire_from_soulseek,
     _get_playlist_video_ids,
@@ -41,6 +41,7 @@ from muzik.core.workflow.events import (
     WorkflowEvent,
     WorkflowEventEmitter,
 )
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.service import (
     WorkflowOptions,
     WorkflowRequest,
@@ -67,10 +68,17 @@ WorkflowOperationsFactory = Callable[
 class TuiWorkflowEventEmitter:
     """Bridge workflow events from worker threads into the Textual screen."""
 
-    def __init__(self, screen: "PipelineScreen") -> None:
+    def __init__(
+        self,
+        screen: "PipelineScreen",
+        cancellation: CancellationToken,
+    ) -> None:
         self.screen = screen
+        self.cancellation = cancellation
 
     def emit(self, event: WorkflowEvent) -> None:
+        if self.cancellation.is_cancelled() or not self.screen.is_mounted:
+            return
         try:
             self.screen.app.call_from_thread(self.screen.handle_workflow_event, event)
         except RuntimeError:
@@ -80,11 +88,19 @@ class TuiWorkflowEventEmitter:
 class TuiWorkflowDecisions:
     """Workflow decisions backed by Textual modals."""
 
-    def __init__(self, screen: "PipelineScreen", *, interactive: bool = True) -> None:
+    def __init__(
+        self,
+        screen: "PipelineScreen",
+        *,
+        interactive: bool = True,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
         self.screen = screen
         self.interactive = interactive
+        self.cancellation = cancellation or CancellationToken()
 
     def choose_soulseek_candidate(self, candidates: list[Candidate]) -> Candidate:
+        self.cancellation.raise_if_cancelled()
         if not candidates:
             raise WorkflowDecisionError("No Soulseek candidates available.")
         if not self.interactive:
@@ -99,6 +115,7 @@ class TuiWorkflowDecisions:
         )
         if selected is None:
             raise WorkflowDecisionError("No Soulseek candidate selected.")
+        self.cancellation.raise_if_cancelled()
         return cast(Candidate, selected)
 
     def confirm_chapters(
@@ -106,6 +123,7 @@ class TuiWorkflowDecisions:
         source: Path,
         chapters: list[Chapter],
     ) -> ChapterDecision:
+        self.cancellation.raise_if_cancelled()
         if not self.interactive:
             return ChapterDecision.ACCEPT
         decision = self.screen.app.call_from_thread(
@@ -113,15 +131,18 @@ class TuiWorkflowDecisions:
             source,
             chapters,
         )
+        self.cancellation.raise_if_cancelled()
         return cast(ChapterDecision, decision)
 
     def edit_chapters(self, chapters: list[Chapter]) -> list[Chapter] | None:
+        self.cancellation.raise_if_cancelled()
         if not self.interactive:
             return chapters
         edited = self.screen.app.call_from_thread(
             self.screen.request_chapter_edit,
             chapters,
         )
+        self.cancellation.raise_if_cancelled()
         return cast(list[Chapter] | None, edited)
 
 
@@ -190,6 +211,8 @@ class PipelineScreen(Screen[None]):
         self.config = config
         self.operations_factory = operations_factory
         self._workflow_worker: Worker[None] | None = None
+        self._cancellation = CancellationToken()
+        self._return_to_launcher = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -224,14 +247,34 @@ class PipelineScreen(Screen[None]):
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back":
-            if self._workflow_worker is not None:
-                self._workflow_worker.cancel()
-            await cast("MuzikTuiApp", self.app).open_launcher()
+            if not self._request_return_to_launcher():
+                await cast("MuzikTuiApp", self.app).open_launcher()
         elif event.button.id == "quit":
             self.app.exit()
 
+    def _request_return_to_launcher(self) -> bool:
+        """Request cancellation and report whether worker teardown is pending."""
+        if self._workflow_worker is None or self._workflow_worker.state in {
+            WorkerState.SUCCESS,
+            WorkerState.ERROR,
+            WorkerState.CANCELLED,
+        }:
+            return False
+        self._return_to_launcher = True
+        self._cancellation.cancel()
+        self.query_one("#status", Static).update("Cancelling…")
+        self.query_one("#back", Button).disabled = True
+        return True
+
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.name != "workflow":
+            return
+        if self._return_to_launcher and event.state in {
+            WorkerState.SUCCESS,
+            WorkerState.ERROR,
+            WorkerState.CANCELLED,
+        }:
+            self.app.call_later(cast("MuzikTuiApp", self.app).open_launcher)
             return
         if event.state == WorkerState.SUCCESS:
             self.query_one("#status", Static).update("Complete")
@@ -241,6 +284,9 @@ class PipelineScreen(Screen[None]):
             self.query_one("#status", Static).update("Failed")
             error = event.worker.error
             self._log(f"Workflow failed: {error}")
+        elif event.state == WorkerState.CANCELLED:
+            self.query_one("#status", Static).update("Cancelled")
+            self._log("Workflow cancelled.")
 
     async def request_candidate_choice(
         self,
@@ -323,11 +369,23 @@ class PipelineScreen(Screen[None]):
             fallback=self.config.fallback,
             interactive=self.config.interactive,
         )
-        events = TuiWorkflowEventEmitter(self)
-        decisions = TuiWorkflowDecisions(self, interactive=self.config.interactive)
+        events = TuiWorkflowEventEmitter(self, self._cancellation)
+        decisions = TuiWorkflowDecisions(
+            self,
+            interactive=self.config.interactive,
+            cancellation=self._cancellation,
+        )
         operations = self.operations_factory(self.config, decisions, events)
         try:
-            run_workflow(request, options, operations=operations, events=events)
+            run_workflow(
+                request,
+                options,
+                operations=operations,
+                events=events,
+                cancellation=self._cancellation,
+            )
+        except WorkflowCancelled:
+            return
         except WorkflowServiceError as exc:
             events.emit(ErrorEvent(exc.message, fatal=True))
             raise
@@ -366,6 +424,8 @@ class MuzikTuiApp(App[None]):
 
     async def open_launcher(self) -> None:
         if isinstance(self.screen, PipelineScreen):
+            if self.screen._request_return_to_launcher():
+                return
             await self.pop_screen()
         if not isinstance(self.screen, WorkflowLauncherScreen):
             self.push_screen(WorkflowLauncherScreen(), self._open_pipeline)
@@ -402,21 +462,33 @@ def _default_operations(
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter,
 ) -> WorkflowRunOperations:
-    def download_audio(url: str, output: Path, archive_file: Path | None) -> bool:
+    def download_audio(
+        url: str,
+        output: Path,
+        archive_file: Path | None,
+        *,
+        cancellation: CancellationToken | None = None,
+    ) -> bool:
         try:
-            download_cmd(
+            _download_audio(
                 url=url,
                 output=output,
                 format="bestaudio",
                 quality="0",
                 no_chapters=False,
                 archive_file=archive_file,
+                cancellation=cancellation,
             )
         except (SystemExit, typer.Exit) as exc:
             return _exit_code(exc) == 0
         return True
 
-    def process_audio(audio_inputs: list[Path], pre_split_dirs: list[Path]) -> None:
+    def process_audio(
+        audio_inputs: list[Path],
+        pre_split_dirs: list[Path],
+        *,
+        cancellation: CancellationToken | None = None,
+    ) -> None:
         _process_audio_files(
             audio_inputs=audio_inputs,
             pre_split_dirs=pre_split_dirs,
@@ -434,18 +506,20 @@ def _default_operations(
             metadata_source=config.metadata_source,
             decisions=decisions,
             events=events,
+            cancellation=cancellation,
         )
 
     return WorkflowRunOperations(
         download_audio=download_audio,
         process_audio=process_audio,
-        acquire_soulseek=lambda raw: _acquire_from_soulseek(
+        acquire_soulseek=lambda raw, *, cancellation=None: _acquire_from_soulseek(
             raw,
             prefer=config.prefer,
             interactive=config.interactive,
             fallback=config.fallback,
             decisions=decisions,
             events=events,
+            cancellation=cancellation,
         ),
         prepopulate_archive=_prepopulate_archive,
         get_playlist_video_ids=_get_playlist_video_ids,

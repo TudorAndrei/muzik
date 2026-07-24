@@ -19,6 +19,7 @@ from rich.progress import (
 from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
 from muzik.core.chapters import Chapter, find_chapters, safe_filename
+from muzik.core.workflow.cancellation import CancellationToken
 from muzik.ui.chapter_editor import display_chapter_table, edit_chapters
 from muzik.ui.console import console, err
 
@@ -82,39 +83,18 @@ def _split_track(
 # ---------------------------------------------------------------------------
 
 
-def split_cmd(
-    path: Path = typer.Argument(..., help="Audio file to split."),
-    review: bool = typer.Option(
-        False,
-        "--review",
-        "-r",
-        help="Show chapter table and open $EDITOR before splitting.",
-    ),
-    jobs: int = typer.Option(
-        0,
-        "--jobs",
-        "-j",
-        help="Parallel ffmpeg jobs (0 = auto-detect from CPU count).",
-    ),
-    output: Optional[Path] = typer.Option(
-        None,
-        "--output",
-        "-o",
-        help="Output directory (default: <audio_parent>/../splits/<album>).",
-    ),
-    keep_source: bool = typer.Option(
-        False,
-        "--keep-source",
-        help="Keep original audio and sidecar files after splitting.",
-    ),
-    force: bool = typer.Option(
-        False,
-        "--force",
-        "-f",
-        help="Ignore split cache and re-split even if already done.",
-    ),
+def _split_audio(
+    path: Path,
+    review: bool = False,
+    jobs: int = 0,
+    output: Optional[Path] = None,
+    keep_source: bool = False,
+    force: bool = False,
+    cancellation: CancellationToken | None = None,
 ) -> None:
     """Split an audio file into individual tracks using chapter markers."""
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
     if not path.exists():
         err(f"[red]File not found: {path}[/red]")
         raise typer.Exit(1)
@@ -171,6 +151,7 @@ def split_cmd(
                     "Use [bold]--force[/bold] to replace it."
                 )
                 raise typer.Exit(1)
+            cancellation.raise_if_cancelled()
             shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -214,6 +195,7 @@ def split_cmd(
                 if not ok:
                     failed.append(title)
                 progress.advance(task_id)
+                cancellation.raise_if_cancelled()
 
     if failed:
         err(f"[red]Failed to split {len(failed)} track(s):[/red]")
@@ -224,13 +206,51 @@ def split_cmd(
     console.print(f"[green]✓ {len(chapters)} tracks → {out_dir}[/green]")
 
     # Update split cache
+    cancellation.raise_if_cancelled()
     if cache_key:
         cache_mod.set(cache_key, str(out_dir))
 
     # Clean up source files unless --keep-source
     if not keep_source:
+        cancellation.raise_if_cancelled()
         path.unlink(missing_ok=True)
         for ext in (".chapters.txt", ".info.json", ".metadata.txt"):
             sidecar = base.with_suffix(ext)
             sidecar.unlink(missing_ok=True)
         console.print("[dim]Source files removed.[/dim]")
+
+
+def split_cmd(
+    path: Path = typer.Argument(..., help="Audio file to split."),
+    review: bool = typer.Option(
+        False,
+        "--review",
+        "-r",
+        help="Show chapter table and open $EDITOR before splitting.",
+    ),
+    jobs: int = typer.Option(
+        0,
+        "--jobs",
+        "-j",
+        help="Parallel ffmpeg jobs (0 = auto-detect from CPU count).",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Output directory (default: <audio_parent>/../splits/<album>).",
+    ),
+    keep_source: bool = typer.Option(
+        False,
+        "--keep-source",
+        help="Keep original audio and sidecar files after splitting.",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Ignore split cache and re-split even if already done.",
+    ),
+) -> None:
+    """Split an audio file into individual tracks using chapter markers."""
+    _split_audio(path, review, jobs, output, keep_source, force)

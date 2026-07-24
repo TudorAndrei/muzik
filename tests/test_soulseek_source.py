@@ -13,6 +13,7 @@ from muzik.core.sources.soulseek import (
     _transfer_matches_expected,
     candidate_from_response,
 )
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
 
 def test_candidate_from_response_scores_lossless_response() -> None:
@@ -181,6 +182,28 @@ def test_wait_for_candidate_fails_when_queued_too_long(monkeypatch) -> None:
 
     with pytest.raises(SoulseekError, match="queued"):
         source._wait_for_candidate(candidate, timeout=10, queue_timeout=0)
+
+
+def test_wait_for_candidate_honors_cancellation() -> None:
+    candidate = candidate_from_response(
+        {
+            "username": "peer",
+            "token": "abc",
+            "files": [{"filename": "01 One.flac", "size": 1}],
+        },
+        query="Artist Album flac",
+    )
+    token = CancellationToken()
+    token.cancel()
+    source = SoulseekSource(api_key="key")
+
+    with pytest.raises(WorkflowCancelled):
+        source._wait_for_candidate(
+            candidate,
+            timeout=10,
+            queue_timeout=0,
+            cancellation=token,
+        )
 
 
 def test_transfer_identity_rejects_same_basename_from_other_directory_or_peer() -> None:

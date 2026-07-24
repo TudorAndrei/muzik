@@ -127,3 +127,43 @@ def test_pipeline_back_returns_to_launcher() -> None:
             assert isinstance(app.screen, WorkflowLauncherScreen)
 
     asyncio.run(run())
+
+
+def test_pipeline_back_waits_for_workflow_teardown() -> None:
+    started = Event()
+    release = Event()
+
+    def operations_factory(config, decisions, events):
+        def process_audio(audio_inputs, pre_split_dirs):
+            started.set()
+            release.wait(2)
+
+        return WorkflowRunOperations(
+            download_audio=lambda url, output, archive_file: True,
+            process_audio=process_audio,
+            acquire_soulseek=lambda raw: [],
+            prepopulate_archive=lambda archive_file: None,
+            get_playlist_video_ids=lambda raw: [],
+        )
+
+    async def run() -> None:
+        config = WorkflowLaunchConfig(raw="local-input", dry_run=True)
+        app = MuzikTuiApp(operations_factory=operations_factory)
+        async with app.run_test() as pilot:
+            await app.push_screen(
+                PipelineScreen(config, operations_factory=operations_factory)
+            )
+            await asyncio.to_thread(started.wait, 2)
+            await pilot.click("#back")
+            await pilot.pause()
+
+            assert isinstance(app.screen, PipelineScreen)
+
+            release.set()
+            for _ in range(10):
+                await pilot.pause()
+                if isinstance(app.screen, WorkflowLauncherScreen):
+                    break
+            assert isinstance(app.screen, WorkflowLauncherScreen)
+
+    asyncio.run(run())
