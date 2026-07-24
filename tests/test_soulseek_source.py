@@ -9,6 +9,8 @@ from muzik.core.sources.base import ResolvedTrack
 from muzik.core.sources.soulseek import (
     SoulseekError,
     SoulseekSource,
+    _expected_transfer_files,
+    _transfer_matches_expected,
     candidate_from_response,
 )
 
@@ -74,7 +76,6 @@ def test_soulseek_download_writes_metadata_and_cache(
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     audio = tmp_path / "01 One.flac"
-    audio.write_bytes(b"")
 
     candidate = candidate_from_response(
         {
@@ -89,6 +90,7 @@ def test_soulseek_download_writes_metadata_and_cache(
         def enqueue(self, username, files):
             assert username == "peer"
             assert files[0]["filename"] == "01 One.flac"
+            audio.write_bytes(b"a")
             return True
 
     class Client:
@@ -119,7 +121,6 @@ def test_soulseek_download_verifies_files_with_ffprobe(
     monkeypatch,
 ) -> None:
     audio = tmp_path / "01 One.flac"
-    audio.write_bytes(b"")
     candidate = candidate_from_response(
         {
             "username": "peer",
@@ -131,6 +132,7 @@ def test_soulseek_download_verifies_files_with_ffprobe(
 
     class Transfers:
         def enqueue(self, username, files):
+            audio.write_bytes(b"a")
             return True
 
     class Client:
@@ -179,6 +181,112 @@ def test_wait_for_candidate_fails_when_queued_too_long(monkeypatch) -> None:
 
     with pytest.raises(SoulseekError, match="queued"):
         source._wait_for_candidate(candidate, timeout=10, queue_timeout=0)
+
+
+def test_transfer_identity_rejects_same_basename_from_other_directory_or_peer() -> None:
+    candidate = candidate_from_response(
+        {
+            "username": "chosen-peer",
+            "token": "chosen-token",
+            "files": [
+                {
+                    "filename": "Artist/Chosen Album/01 Intro.flac",
+                    "size": 100,
+                }
+            ],
+        },
+        query="Artist Chosen Album",
+    )
+    expected = _expected_transfer_files(candidate)[0]
+
+    assert _transfer_matches_expected(
+        {
+            "filename": "Artist/Chosen Album/01 Intro.flac",
+            "size": 100,
+            "token": "chosen-token",
+        },
+        expected,
+    )
+    assert not _transfer_matches_expected(
+        {
+            "filename": "Other/Album/01 Intro.flac",
+            "size": 100,
+            "token": "chosen-token",
+        },
+        expected,
+    )
+
+
+def test_transfer_fixture_matches_only_selected_remote_identity() -> None:
+    candidate = candidate_from_response(
+        {
+            "username": "chosen-peer",
+            "token": "chosen-token",
+            "files": [
+                {
+                    "filename": "Artist/Chosen Album/01 Intro.flac",
+                    "size": 100,
+                }
+            ],
+        },
+        query="Artist Chosen Album",
+    )
+    transfer = json.loads(
+        Path("tests/fixtures/slskd/transfers_same_basename.json").read_text()
+    )
+    expected = _expected_transfer_files(candidate)[0]
+
+    matching = [
+        file
+        for directory in transfer["directories"]
+        for file in directory["files"]
+        if _transfer_matches_expected(file, expected)
+    ]
+
+    assert matching == [transfer["directories"][0]["files"][1]]
+    assert not _transfer_matches_expected(
+        {
+            "filename": "Artist/Chosen Album/01 Intro.flac",
+            "size": 101,
+            "token": "chosen-token",
+        },
+        expected,
+    )
+
+
+def test_download_excludes_preexisting_same_basename(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    old = tmp_path / "old" / "01 Intro.flac"
+    old.parent.mkdir()
+    old.write_bytes(b"old")
+    candidate = candidate_from_response(
+        {
+            "username": "peer",
+            "token": "abc",
+            "files": [{"filename": "Artist/Album/01 Intro.flac", "size": 3}],
+        },
+        query="Artist Album",
+    )
+
+    class Transfers:
+        def enqueue(self, username, files):
+            return True
+
+    class Client:
+        transfers = Transfers()
+
+    source = SoulseekSource(api_key="key", download_dir=tmp_path)
+    source._client = Client()
+    with pytest.raises(SoulseekError, match="attributed"):
+        source.download(candidate, wait=False, verify=False)
+
+    assert old.exists()
+    assert (
+        cache_mod.get(cache_mod.download_cache_key("soulseek", candidate.source_id))
+        is None
+    )
 
 
 def test_soulseek_search_deletes_completed_conflicting_search() -> None:

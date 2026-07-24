@@ -1,0 +1,20 @@
+{
+  "directories": [
+    {
+      "files": [
+        {
+          "filename": "Other/Album/01 Intro.flac",
+          "size": 100,
+          "token": "other-token",
+          "state": "Completed"
+        },
+        {
+          "filename": "Artist/Chosen Album/01 Intro.flac",
+          "size": 100,
+          "token": "chosen-token",
+          "state": "Completed"
+        }
+      ]
+    }
+  ]
+}

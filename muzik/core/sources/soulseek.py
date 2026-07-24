@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,58 @@ def _load_slskd_api() -> Any:
 
 def _file_name(file_data: dict[str, Any]) -> str:
     return str(file_data.get("filename") or file_data.get("name") or "")
+
+
+def _normalized_remote_path(value: object) -> str:
+    return str(value or "").replace("\\", "/").strip("/").casefold()
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedTransferFile:
+    peer: str
+    token: str
+    remote_path: str
+    size: int | None
+
+    @property
+    def basename(self) -> str:
+        return Path(self.remote_path).name
+
+
+def _expected_transfer_files(candidate: Candidate) -> list[ExpectedTransferFile]:
+    raw_files = candidate.metadata.get("raw_files") or []
+    token = str(candidate.metadata.get("transfer_token") or "")
+    expected: list[ExpectedTransferFile] = []
+    for raw, candidate_file in zip(raw_files, candidate.files, strict=False):
+        if not isinstance(raw, dict):
+            continue
+        remote_path = _normalized_remote_path(_file_name(raw) or candidate_file.path)
+        if not remote_path:
+            continue
+        size = raw.get("size", candidate_file.size)
+        expected.append(
+            ExpectedTransferFile(
+                peer=candidate.user or "",
+                token=str(raw.get("token") or token),
+                remote_path=remote_path,
+                size=int(size) if size is not None else None,
+            )
+        )
+    return expected
+
+
+def _transfer_matches_expected(
+    transfer_file: dict[str, Any], expected: ExpectedTransferFile
+) -> bool:
+    remote_path = _normalized_remote_path(_file_name(transfer_file))
+    if remote_path != expected.remote_path:
+        return False
+    actual_size = transfer_file.get("size")
+    if expected.size is not None and actual_size is not None:
+        if int(actual_size) != expected.size:
+            return False
+    actual_token = str(transfer_file.get("token") or "")
+    return not (expected.token and actual_token and actual_token != expected.token)
 
 
 def _response_source_id(response: dict[str, Any]) -> str:
@@ -93,6 +146,7 @@ def candidate_from_response(
             "uploadSpeed": response.get("uploadSpeed"),
             "hasFreeUploadSlot": response.get("hasFreeUploadSlot"),
             "raw_files": files_raw,
+            "transfer_token": response.get("token"),
         },
     )
     if files:
@@ -302,19 +356,26 @@ class SoulseekSource:
         if not raw_files:
             raise SoulseekError("Cannot download a Soulseek candidate without files.")
 
+        root = Path(output).expanduser() if output else self.download_dir
+        before = _snapshot_download_root(root)
         ok = self.client.transfers.enqueue(candidate.user, raw_files)
         if not ok:
             raise SoulseekError("slskd refused the download enqueue request.")
 
         if wait:
-            self._wait_for_candidate(
+            transfer_files = self._wait_for_candidate(
                 candidate,
                 timeout=timeout,
                 queue_timeout=queue_timeout,
             )
 
-        root = Path(output).expanduser() if output else self.download_dir
-        files = self._find_downloaded_files(root, candidate)
+        else:
+            transfer_files = []
+        files = self._find_downloaded_files(root, candidate, before, transfer_files)
+        if not files:
+            raise SoulseekError(
+                "No downloaded files could be attributed to the selected transfer."
+            )
         if verify:
             files = _verified_audio_files(files)
             if not files:
@@ -355,11 +416,13 @@ class SoulseekSource:
         *,
         timeout: float,
         queue_timeout: float,
-    ) -> None:
+    ) -> list[dict[str, Any]]:
         assert candidate.user is not None
         deadline = time.monotonic() + timeout
         queued_since: float | None = None
-        wanted = {Path(file.name).name for file in candidate.files}
+        expected = _expected_transfer_files(candidate)
+        if not expected:
+            raise SoulseekError("Candidate has no stable transfer file identities.")
         terminal = {"Succeeded", "Completed", "Errored", "Cancelled", "Canceled"}
         queued_states = {"Queued", "Initializing", "Requested", "Pending"}
 
@@ -368,10 +431,11 @@ class SoulseekSource:
             files = _transfer_files(transfer)
             matching = [
                 file
+                for expected_file in expected
                 for file in files
-                if Path(str(file.get("filename") or "")).name in wanted
+                if _transfer_matches_expected(file, expected_file)
             ]
-            if matching and all(
+            if len(matching) == len(expected) and all(
                 str(file.get("state")) in queued_states for file in matching
             ):
                 queued_since = queued_since or time.monotonic()
@@ -381,7 +445,7 @@ class SoulseekSource:
                     )
             else:
                 queued_since = None
-            if matching and all(
+            if len(matching) == len(expected) and all(
                 str(file.get("state")) in terminal for file in matching
             ):
                 failures = [
@@ -391,16 +455,29 @@ class SoulseekSource:
                 ]
                 if failures:
                     raise SoulseekError("One or more Soulseek transfers failed.")
-                return
+                return matching
             time.sleep(2)
         raise SoulseekError("Timed out waiting for Soulseek transfers to finish.")
 
-    def _find_downloaded_files(self, root: Path, candidate: Candidate) -> list[Path]:
+    def _find_downloaded_files(
+        self,
+        root: Path,
+        candidate: Candidate,
+        before: set[tuple[str, int]],
+        transfer_files: list[dict[str, Any]],
+    ) -> list[Path]:
         if not root.exists():
             return []
-        wanted = {Path(file.name).name for file in candidate.files}
+        expected = _expected_transfer_files(candidate)
+        local_paths = _transfer_local_paths(root, transfer_files)
+        if local_paths:
+            return sorted(path for path in local_paths if path.is_file())
         return sorted(
-            path for path in root.rglob("*") if path.is_file() and path.name in wanted
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and _is_new_download(path, root, before)
+            and any(_path_matches_expected(path, root, item) for item in expected)
         )
 
 
@@ -423,6 +500,48 @@ def _transfer_files(transfer: dict[str, Any]) -> list[dict[str, Any]]:
     for directory in transfer.get("directories") or []:
         files.extend(directory.get("files") or [])
     return files
+
+
+def _snapshot_download_root(root: Path) -> set[tuple[str, int]]:
+    if not root.exists():
+        return set()
+    return {
+        (str(path.relative_to(root)), path.stat().st_size)
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
+def _is_new_download(path: Path, root: Path, before: set[tuple[str, int]]) -> bool:
+    return (str(path.relative_to(root)), path.stat().st_size) not in before
+
+
+def _path_matches_expected(
+    path: Path, root: Path, expected: ExpectedTransferFile
+) -> bool:
+    relative = _normalized_remote_path(path.relative_to(root))
+    if expected.size is not None and path.stat().st_size != expected.size:
+        return False
+    return relative.endswith(expected.remote_path) or expected.remote_path.endswith(
+        relative
+    )
+
+
+def _transfer_local_paths(root: Path, files: list[dict[str, Any]]) -> set[Path]:
+    paths: set[Path] = set()
+    for file in files:
+        value = file.get("localFilename") or file.get("localPath")
+        if not value:
+            continue
+        candidate = Path(str(value)).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        try:
+            candidate.resolve().relative_to(root.resolve())
+        except ValueError:
+            continue
+        paths.add(candidate)
+    return paths
 
 
 def _verified_audio_files(files: list[Path]) -> list[Path]:
