@@ -81,11 +81,14 @@ class WorkflowLauncherScreen(Screen[WorkflowLaunchConfig]):
 
     .field-label {
         width: 18;
+        height: 100%;
         color: $text-muted;
+        content-align: left middle;
     }
 
     .row {
-        height: auto;
+        height: 5;
+        align: left middle;
         margin-bottom: 1;
     }
 
