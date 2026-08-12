@@ -244,3 +244,36 @@ Verification used three layers:
 - The shared workflow completed with a 19-second YouTube input. An automated GUI
   worker test verified that the desktop adapter starts this same workflow and
   waits for cancellation before it returns to the launcher.
+
+## Phase 9: Review findings (hardening)
+
+A post-implementation review confirmed the threading bridge, adapters, decisions,
+modals, cancellation, and the shared-core relocation are correct. One robustness
+gap remains.
+
+### Finding 1 — `GuiBridge.drain()` has no per-callback exception isolation
+
+`drain()` (`muzik/gui/bridge.py`) runs each queued callback with no guard. If one
+UI-update callback raises, the exception leaves the render loop; the `run()` loop
+in `muzik/gui/app.py` unwinds to its `finally`, shuts the bridge down, and exits
+the app. The old Textual message loop isolated each handler, so a single bad event
+could not stop the interface. The update closures in `muzik/gui/adapters.py` are
+defensive (type checks, guarded field access), so the current risk is low, but the
+regression is real.
+
+- Wrap each callback call in `drain()` in a `try`/`except Exception`, log the
+  failure through the pipeline log (or a bridge error hook), and continue draining
+  the rest of the queue.
+- Keep `WorkflowCancelled` and any deliberate control-flow exceptions out of the
+  swallow set, or none are raised inside UI callbacks by design — confirm before
+  choosing the exception type to catch.
+- Add a `test_gui_bridge.py` case: a callback that raises does not stop a following
+  callback and does not propagate out of `drain()`.
+  **Commit:** `fix(gui): isolate render-loop callback failures in the bridge`
+
+### Resolution
+
+`GuiBridge` now accepts an error hook. It catches ordinary `Exception` values,
+reports them to the hook, and continues with the next queued callback.
+`WorkflowCancelled`, `KeyboardInterrupt`, and `SystemExit` still propagate.
+`MuzikGuiApp` uses the hook to write the error to the pipeline log.

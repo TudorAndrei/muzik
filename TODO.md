@@ -83,9 +83,18 @@
 - [x] Edge cases: cancel returns to the launcher after worker teardown, blocking requests cancel, and empty `raw` is rejected
 - [x] `dearpygui` imports and builds widgets without a display or viewport
 
+## Phase 9: Review findings (hardening)
+
+- [x] `GuiBridge.drain()`: wrap each callback in `try`/`except Exception`, log the failure, and keep draining the rest of the queue
+- [x] Confirm which exceptions to swallow (do not eat `WorkflowCancelled` or deliberate control-flow exceptions)
+- [x] Add `test_gui_bridge.py` case: a raising callback neither stops a following callback nor propagates out of `drain()`
+- [x] Run `uv run pytest`, `uv run ruff check`, `uv run ty check` — all pass
+- [x] Commit: `fix(gui): isolate render-loop callback failures in the bridge`
+
 ## Review
 
 - [x] Code reviewed
 - [x] PLAN.md records the atomic cutover approach
 - [x] The atomic cutover leaves the build working
 - [x] TODO.md items all checked off
+- [x] Phase 9 review finding resolved

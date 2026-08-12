@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import logging
 from queue import Empty, Full, Queue
 from threading import Lock
 from typing import TypeVar, cast
@@ -12,16 +13,22 @@ from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelle
 
 ResultT = TypeVar("ResultT")
 _CANCELLED = object()
+_LOGGER = logging.getLogger(__name__)
 
 
 class GuiBridge:
     """Queue interface work and route blocking decisions to the render thread."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> None:
         self._work: Queue[Callable[[], None]] = Queue()
         self._pending: set[Queue[object]] = set()
         self._lock = Lock()
         self._shutdown = False
+        self._on_error = on_error
 
     def is_shutdown(self) -> bool:
         with self._lock:
@@ -36,7 +43,7 @@ class GuiBridge:
             return True
 
     def drain(self) -> int:
-        """Run all queued callbacks and return the number that ran."""
+        """Run all queued callbacks and return the number that were processed."""
         count = 0
         while True:
             try:
@@ -44,8 +51,13 @@ class GuiBridge:
             except Empty:
                 return count
             if not self.is_shutdown():
-                callback()
                 count += 1
+                try:
+                    callback()
+                except WorkflowCancelled:
+                    raise
+                except Exception as exc:
+                    self._report_error(exc)
 
     def request(
         self,
@@ -104,6 +116,18 @@ class GuiBridge:
     def _forget(self, result: Queue[object]) -> None:
         with self._lock:
             self._pending.discard(result)
+
+    def _report_error(self, error: Exception) -> None:
+        _LOGGER.exception(
+            "DearPyGui render callback failed.",
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        if self._on_error is None:
+            return
+        try:
+            self._on_error(error)
+        except Exception:
+            _LOGGER.exception("DearPyGui bridge error hook failed.")
 
     @staticmethod
     def _put_cancelled(result: Queue[object]) -> None:

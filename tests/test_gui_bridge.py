@@ -18,6 +18,41 @@ def test_submit_and_drain_keep_order() -> None:
     assert calls == [1, 2]
 
 
+def test_drain_isolates_callback_failure_and_continues() -> None:
+    errors: list[Exception] = []
+    bridge = GuiBridge(on_error=errors.append)
+    calls: list[str] = []
+
+    def fail() -> None:
+        raise ValueError("bad update")
+
+    bridge.submit(fail)
+    bridge.submit(lambda: calls.append("after failure"))
+
+    assert bridge.drain() == 2
+    assert calls == ["after failure"]
+    assert len(errors) == 1
+    assert isinstance(errors[0], ValueError)
+
+
+def test_drain_does_not_swallow_workflow_cancelled() -> None:
+    bridge = GuiBridge()
+    calls: list[str] = []
+
+    def cancel() -> None:
+        raise WorkflowCancelled("Workflow cancelled.")
+
+    bridge.submit(cancel)
+    bridge.submit(lambda: calls.append("after cancellation"))
+
+    with pytest.raises(WorkflowCancelled):
+        bridge.drain()
+
+    assert calls == []
+    assert bridge.drain() == 1
+    assert calls == ["after cancellation"]
+
+
 def test_request_returns_modal_result() -> None:
     bridge = GuiBridge()
     answer: Queue[str | BaseException] = Queue()

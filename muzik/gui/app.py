@@ -45,7 +45,7 @@ class MuzikGuiApp:
         operations_factory: WorkflowOperationsFactory | None = None,
     ) -> None:
         self.operations_factory = operations_factory or _default_operations
-        self.bridge = GuiBridge()
+        self.bridge = GuiBridge(on_error=self._handle_bridge_error)
         self.launcher = LauncherView(self.open_pipeline, self.quit)
         self.pipeline: PipelineView | None = None
         self._worker: Thread | None = None
@@ -199,6 +199,10 @@ class MuzikGuiApp:
         if self._cancellation is not None:
             self._cancellation.cancel()
         self.bridge.cancel_pending()
+
+    def _handle_bridge_error(self, error: Exception) -> None:
+        if self.pipeline is not None:
+            self.pipeline.log(f"Interface update failed: {error}")
 
     def _poll_worker(self) -> None:
         if self._worker is None or self._worker.is_alive():
