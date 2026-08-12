@@ -71,7 +71,7 @@
 
 ## Verification
 
-- [x] `uv run pytest` — 173 tests pass; no superseded interface import remains
+- [x] `uv run pytest` — 175 tests pass; no superseded interface import remains
 - [x] Repository search for the old interface names returns nothing in code, tests, and user documentation
 - [x] New tests written: `test_gui_bridge.py`, `test_gui_adapters.py`, `test_gui_launcher.py`, `test_gui_app.py`
 - [x] Bridge tested: `submit`/`drain` order, request result, cancellation, shutdown, and late submit
