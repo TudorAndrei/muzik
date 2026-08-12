@@ -18,7 +18,7 @@ uv run muzik workflow exportify-playlist.csv --audio-source soulseek --fallback 
 ready service. `--audio-source youtube` is rejected for an export because the
 workflow never treats Spotify as a media URL.
 
-The same file can be entered as the input path in `muzik tui`; choose Soulseek
+The same file can be entered as the input path in `muzik gui`; choose Soulseek
 as the audio source before starting the workflow.
 
 ## Canonical JSON v1

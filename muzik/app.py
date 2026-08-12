@@ -14,7 +14,7 @@ from muzik.commands import soulseek as soulseek_mod
 from muzik.commands.workflow import workflow_cmd
 from muzik.commands.archive import archive_cmd
 from muzik.commands.validate import validate_cmd
-from muzik.tui.app import tui_cmd
+from muzik.gui.app import gui_cmd
 
 app = typer.Typer(
     name="muzik",
@@ -45,7 +45,7 @@ app.command("archive", help="Process existing downloaded files (split + organize
 app.command("validate", help="Validate audio files, chapters, and metadata.")(
     validate_cmd
 )
-app.command("tui", help="Open the Textual workflow UI.")(tui_cmd)
+app.command("gui", help="Open the DearPyGui workflow UI.")(gui_cmd)
 # Multi-command subcommand groups
 app.add_typer(cache_mod.app, name="cache")
 app.add_typer(config_mod.app, name="config")

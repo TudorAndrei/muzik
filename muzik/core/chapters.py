@@ -102,6 +102,25 @@ def parse_chapters_txt(path: Path) -> list[Chapter]:
     return chapters
 
 
+def parse_chapters(text: str) -> list[Chapter]:
+    """Parse editable chapter text without reading a sidecar file."""
+    raw: list[tuple[int, str]] = []
+    for line in text.splitlines():
+        match = _CHAPTER_RE.match(line.strip())
+        if match:
+            raw.append((_ts_to_secs(match.group(1)), match.group(2).strip()))
+
+    return [
+        Chapter(
+            index=index + 1,
+            start=start,
+            end=raw[index + 1][0] if index + 1 < len(raw) else None,
+            title=title,
+        )
+        for index, (start, title) in enumerate(raw)
+    ]
+
+
 def parse_chapters_json(path: Path) -> list[Chapter]:
     """Parse chapters from a yt-dlp ``.info.json`` file.
 

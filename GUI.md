@@ -1,61 +1,70 @@
-# TUI and workflow architecture
+# Desktop interface and workflow architecture
 
-`muzik tui` is the supported interactive interface. It is a Textual application
-over the same core workflow and Beets services used by the CLI; it is not a
-separate implementation of download, split, or organization behavior.
+`muzik gui` is the supported interactive interface. It uses DearPyGui over the
+same core workflow and Beets services that the command-line interface uses. It
+does not contain separate download, split, or organization logic.
 
 ## Boundaries
 
-The core workflow is driven by `run_workflow` and `WorkflowRunOperations` in
-`muzik.core.workflow.service`.
+`run_workflow` and `WorkflowRunOperations` in `muzik.core.workflow.service`
+drive the core workflow.
 
-- Source adapters return source-neutral `ResolvedTrack`, `ResolvedRelease`, and
-  `ResolvedPlaylist` values.
-- `WorkflowDecisions` requests candidate and chapter choices without depending
-  on a terminal prompt.
+- Source adapters return source-neutral track, release, and playlist values.
+- `WorkflowDecisions` requests candidate and chapter choices without a toolkit
+  dependency.
 - `WorkflowEventEmitter` reports step, progress, candidate, chapter, message,
-  and error events without depending on Rich or Textual.
-- `build_workflow_operations` supplies concrete source, splitter, and Beets
-  operations to both UI adapters.
+  and error events without a toolkit dependency.
+- `build_workflow_operations` supplies the concrete source, splitter, and Beets
+  operations to both interactive adapters.
 
-The CLI maps those decisions and events to Rich. The TUI maps them to Textual
-screens, tables, logs, and modals. Inputs may be YouTube URLs, local audio,
-or supported Spotify export files; Spotify exports are metadata-only and route
-to Soulseek when that source is selected.
+The command-line interface maps decisions and events to Rich. The desktop
+interface maps them to DearPyGui windows, tables, logs, and modal dialogs. Both
+interfaces accept YouTube URLs, local audio, and supported Spotify export files.
+
+## Render-thread bridge
+
+DearPyGui owns the main render thread. A workflow runs in a separate Python
+thread. `GuiBridge` is the only path from a workflow worker to the interface.
+
+- `submit` adds a zero-argument interface update to a thread-safe queue.
+- The manual render loop calls `drain` once per frame.
+- `request` adds a modal builder to the same queue and blocks the worker on a
+  result queue.
+- A modal callback puts one result in that queue.
+- Cancellation and shutdown unblock all current requests.
+- Shutdown rejects late submissions. A stopped pipeline cannot change a new
+  view.
+
+All DearPyGui item changes occur on the render thread. Core services and worker
+adapters do not call DearPyGui directly.
 
 ## Beets interaction
 
-`muzik.core.beets.service.organize_paths` owns organization requests. The
-importer adapter keeps mutable Beets task/candidate objects in its owning worker
-and exposes only immutable view models with opaque IDs across the UI boundary.
+`muzik.core.beets.service.organize_paths` owns organization requests. The Beets
+adapter keeps mutable task and candidate objects in its worker. It sends only
+immutable view models and opaque candidate IDs across the interface boundary.
 
-The TUI supplies `TuiBeetsDecisions` for match and duplicate modals and a
-`TuiBeetsEventEmitter` for progress, logs, completion, and failures. In
-non-interactive mode the same adapter path uses deterministic decisions rather
-than opening a modal.
+`GuiBeetsDecisions` supplies match and duplicate dialogs.
+`GuiBeetsEventEmitter` supplies progress, logs, completion, and failure events.
+Non-interactive runs use deterministic decisions and do not open dialogs.
 
 ## Cancellation
 
-Each pipeline run owns a thread-safe `CancellationToken`. The UI cancels the
-token and waits for its worker to finish before returning to the launcher or
-allowing another run. Core operations check the token at safe boundaries,
-including transfer polling, split work, playlist entries, and before state or
-source-deletion commits. Muzik-owned subprocesses are terminated on
-cancellation; unrelated processes are never targeted.
+Each pipeline run owns one thread-safe `CancellationToken`. Back cancels the
+token, closes decision dialogs, unblocks requests, and waits for the worker to
+stop before it returns to the launcher. Closing the viewport uses the same
+cancellation path. Core operations check the token at safe boundaries and stop
+processes that muzik owns.
 
-Events arriving after a screen has unmounted are ignored. This keeps a canceled
-pipeline from updating an unrelated screen.
-
-## Operating the TUI
+## Operation
 
 ```sh
-uv run muzik tui
+uv run muzik gui
 ```
 
 The launcher configures the input, destination paths, source policy, split and
-organization options, and interactivity. The pipeline screen shows progress and
-logs, then opens candidate, chapter, and Beets decision screens only when the
-chosen workflow requires them.
+organization options, and interactivity. Each path field accepts text and also
+has a file or directory picker. The pipeline view shows progress and logs. It
+opens decision dialogs only when the selected workflow needs them.
 
-For a future native desktop application, reuse these core services and adapters
-rather than calling command modules or moving Beets objects across UI threads.
+All existing command-line commands stay active for headless use.

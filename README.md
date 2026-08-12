@@ -111,7 +111,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik import <dir>` | Import an existing music library into beets |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
-| `muzik tui` | Open the Textual workflow UI |
+| `muzik gui` | Open the DearPyGui workflow interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage beets configuration |
 
@@ -138,24 +138,19 @@ organized by track ID, tolerates reordering, and acquires only new entries.
 See [SPOTIFY.md](SPOTIFY.md) for the supported JSON/CSV fields and the
 metadata-only policy.
 
-## Textual TUI
+## Desktop interface
 
-Run the terminal UI with:
+Run the desktop interface with:
 
 ```sh
-uv run muzik tui
+uv run muzik gui
 ```
 
-The TUI provides a workflow launcher, pipeline progress/log view, source
-candidate table, chapter review/editor, and beets match/duplicate decision
-screens. It uses the same workflow and beets service layer as the CLI, with
-long-running workflow work executed in Textual workers so the interface remains
-responsive. Back requests cooperative cancellation and waits for worker teardown
-before returning to the launcher.
-
-Textual is the first GUI target for this project. A native PySide6 desktop app
-should only be evaluated after this service boundary has been validated in
-regular use.
+The interface provides a workflow launcher, pipeline progress and logs, source
+candidate tables, chapter review and editing, and Beets match and duplicate
+decisions. It uses the same workflow and Beets service layer as the CLI. Long
+work runs in a background thread. Back requests cooperative cancellation and
+waits for the worker to stop before it returns to the launcher.
 
 ## Credits
 

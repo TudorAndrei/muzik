@@ -1,4 +1,4 @@
-"""Concrete core operations for CLI and TUI workflow adapters."""
+"""Concrete core operations for command-line and desktop workflow adapters."""
 
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ def build_workflow_operations(
     beets_decisions: BeetsDecisions | None = None,
     beets_events: BeetsEventEmitter | None = None,
 ) -> WorkflowRunOperations:
-    """Build concrete operations without binding to a terminal or Textual."""
+    """Build concrete operations without binding to an interface toolkit."""
     events = events or NullWorkflowEventEmitter()
     beets_decisions = beets_decisions or NonInteractiveBeetsDecisions()
     beets_events = beets_events or NullBeetsEventEmitter()

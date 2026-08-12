@@ -1,6 +1,25 @@
 from pathlib import Path
 
-from muzik.core.chapters import find_chapters, parse_cue
+from muzik.core.chapters import find_chapters, parse_chapters, parse_cue
+
+
+def test_parse_chapters_reads_editable_text() -> None:
+    chapters = parse_chapters(
+        """00:00 First
+03:12 Second
+01:02:03 Third
+not a chapter
+"""
+    )
+
+    assert [
+        (chapter.index, chapter.title, chapter.start, chapter.end)
+        for chapter in chapters
+    ] == [
+        (1, "First", 0, 192),
+        (2, "Second", 192, 3723),
+        (3, "Third", 3723, None),
+    ]
 
 
 def test_parse_cue_reads_track_titles_and_index_times(tmp_path: Path) -> None:

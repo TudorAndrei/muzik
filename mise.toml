@@ -1,6 +1,6 @@
-[tasks.tui]
-description = "Run the Textual TUI"
-run = "uv run muzik tui"
+[tasks.gui]
+description = "Run the DearPyGui desktop interface"
+run = "uv run muzik gui"
 
 [tasks.check]
 description = "Run the complete locked verification gate"
