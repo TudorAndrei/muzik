@@ -35,3 +35,41 @@ jobs:
           --generate-notes
           --title "$GITHUB_REF_NAME"
           --verify-tag
+
+  bump-homebrew-tap:
+    name: Update Homebrew tap formula
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Point the tap formula at the new release
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          url="https://github.com/TudorAndrei/muzik/releases/download/${TAG}/muzik-${version}.tar.gz"
+          sha=""
+          for _ in 1 2 3 4 5 6; do
+            if sha=$(curl -fsSL "$url" | sha256sum | cut -d' ' -f1) && [ -n "$sha" ]; then
+              break
+            fi
+            sleep 5
+          done
+          [ -n "$sha" ] || { echo "could not fetch $url"; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o StrictHostKeyChecking=accept-new"
+          git clone git@github.com:TudorAndrei/homebrew-muzik.git tap
+          cd tap
+          sed -i -E "s#url \".*\"#url \"${url}\"#" Formula/muzik.rb
+          sed -i -E "s#sha256 \"[0-9a-f]{64}\"#sha256 \"${sha}\"#" Formula/muzik.rb
+          if git diff --quiet; then
+            echo "formula already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "muzik ${version}"
+          git push
