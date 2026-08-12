@@ -49,11 +49,12 @@ installs cleanly.
   `brew install ffmpeg yt-dlp` (macOS) or `apt install ffmpeg` plus a `yt-dlp`
   install (Linux).
 
-### Option B — Homebrew tap and formula (recommended secondary, macOS/Linux)
+### Option B — Homebrew tap and formula (selected — second track)
 
-Ship a formula in a `homebrew-muzik` tap. Homebrew guidance for Python apps says
-to install the app into `libexec` with its own virtual environment, bundle all
-Python dependencies, and declare system dependencies explicitly.
+Ship a formula in a personal tap (`TudorAndrei/homebrew-muzik`, holding
+`Formula/muzik.rb`). Homebrew guidance for Python apps says to install the app into
+`libexec` with its own virtual environment and to declare system dependencies
+explicitly.
 
 ```ruby
 depends_on "python@3.14"
@@ -61,10 +62,24 @@ depends_on "ffmpeg"
 depends_on "yt-dlp"
 ```
 
-- **Pro:** one command installs the app and every external binary; the cleanest
-  "it just works" path on macOS and Linux.
-- **Con:** more maintenance (formula updates per release); Homebrew only.
-  Chromium still needs a first-run `playwright install`.
+- **Pro:** one command installs the app and the external binaries; the cleanest
+  "it just works" path on macOS arm64.
+- **Con:** more maintenance (a formula bump per release); Chromium still needs a
+  first-run `playwright install`.
+- **Dependency handling — the key choice.** A fully vendored formula
+  (`virtualenv_install_with_resources`) needs a `resource` stanza with a URL and
+  hash for every transitive Python dependency. `muzik` has many (beets, playwright,
+  pydantic-ai, aiohttp, dearpygui, and more), and `dearpygui` ships as a native
+  wheel that does not build from an sdist. Hand-vendoring all of them is heavy, and
+  the standard generator (`brew update-python-resources`) reads the package from
+  PyPI, which this project does not use. So for a personal tap the pragmatic path
+  is a `libexec` virtual environment that `pip install`s the GitHub Release wheel
+  and lets pip fetch the dependencies from PyPI at install time. The dependencies
+  are all on PyPI; only `muzik` itself comes from the GitHub Release.
+- **Tradeoff to accept:** this pip-at-install approach reaches the network during
+  `brew install` and is not reproducible, so it would not pass a `homebrew-core`
+  audit. That is acceptable for a personal tap. A fully vendored, audit-clean
+  formula becomes practical only if `muzik` is later published to PyPI.
 
 ### Option C — Frozen desktop bundle: PyInstaller, py2app, or Briefcase (not recommended as primary)
 
@@ -106,9 +121,11 @@ smaller audience than PyPI or Homebrew.
 - **Assume the external binaries are on `PATH`.** `ffmpeg`, `ffprobe`, and `yt-dlp`
   are the user's responsibility. `muzik` does not bundle, pin, or relocate them. So
   no binary-path configuration work is needed for this release.
-- **Track: Option A — GitHub Releases, installed with `uv tool`.** This is the
-  first and only release track for now. No PyPI upload, Homebrew tap, frozen
-  bundle, or Docker image in this round.
+- **Tracks: Option A + Option B.** Two install paths this round:
+  - **A — GitHub Releases, installed with `uv tool`.** The build source of truth.
+  - **B — Homebrew tap (`brew install`).** A convenience path that installs the
+    same GitHub Release wheel plus the `ffmpeg`/`yt-dlp` binaries.
+  No PyPI upload, frozen bundle, or Docker image in this round.
 
 ## Release plan (macOS arm64, GitHub Releases)
 
@@ -133,6 +150,49 @@ The build backend (`hatchling`) and the `muzik` console script are already in
    release wheel URL with `uv tool install`, then run `muzik gui` and a headless
    CLI command.
 
+## Homebrew release plan (macOS arm64, personal tap)
+
+This track runs after a GitHub Release exists (it installs the release wheel).
+
+1. **Create the tap repository.** `TudorAndrei/homebrew-muzik` with a
+   `Formula/muzik.rb` file. A user then runs
+   `brew install TudorAndrei/muzik/muzik`.
+2. **Write the formula.** Depend on `python@3.14`, `ffmpeg`, and `yt-dlp`. In
+   `install`, create a `libexec` virtual environment with `python3.14`, then
+   `pip install` the GitHub Release wheel into it, and link the `muzik` script into
+   `bin`. Sketch:
+
+   ```ruby
+   class Muzik < Formula
+     desc "Download, split, tag, and organize music from Soulseek, YouTube, and Bandcamp"
+     homepage "https://github.com/TudorAndrei/muzik"
+     url "https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0-py3-none-any.whl"
+     sha256 "<wheel-sha256>"   # from the published release asset
+     depends_on "python@3.14"
+     depends_on "ffmpeg"
+     depends_on "yt-dlp"
+
+     def install
+       venv = virtualenv_create(libexec, "python3.14")
+       system libexec/"bin/pip", "install", cached_download
+       bin.install_symlink libexec/"bin/muzik"
+     end
+
+     test do
+       system bin/"muzik", "--help"
+     end
+   end
+   ```
+
+3. **Pin the hash per release.** Update `url` and `sha256` for each new tag. A
+   `brew bump-formula-pr`-style script or a small workflow can automate this.
+4. **Verify.** `brew install --build-from-source ./Formula/muzik.rb`, then
+   `muzik --help` and `muzik gui` in a clean shell. Confirm `brew` pulled `ffmpeg`
+   and `yt-dlp`.
+5. **Keep the Chromium step manual.** State in the tap README that Bandcamp needs
+   `muzik`'s Playwright browser once: `playwright install chromium` from the
+   `libexec` environment (or a `muzik`-side first-run install).
+
 ## Implementation status
 
 - [x] Package metadata records version `0.1.0`, the README, author, Python 3.14,
@@ -144,9 +204,15 @@ The build backend (`hatchling`) and the `muzik` console script are already in
 - [x] A clean Python 3.14 `uv tool` install passes for the built wheel. The
   isolated environment resolved DearPyGui 2.3.1, `muzik --help` passed, and
   `muzik gui` opened a viewport.
-- [ ] Tag `v0.1.0` is pushed and the GitHub Release contains the wheel and source
-  archive.
-- [ ] The published wheel URL passes the install and command checks.
+- [x] Tag `v0.1.0` is pushed. GitHub Actions run `31586374054` completed
+  successfully and published the wheel and source archive.
+- [x] The published wheel URL installs in a new Python 3.14 tool environment.
+  `muzik --help` passes and `muzik gui` opens a viewport.
+- [ ] Homebrew: the `TudorAndrei/homebrew-muzik` tap exists with `Formula/muzik.rb`.
+- [ ] Homebrew: the formula pins the release wheel URL and `sha256`, and depends on
+  `python@3.14`, `ffmpeg`, and `yt-dlp`.
+- [ ] Homebrew: `brew install TudorAndrei/muzik/muzik` passes; `muzik --help` and
+  `muzik gui` run; `brew` pulled `ffmpeg` and `yt-dlp`.
 
 ## Optional, not required for this release
 
@@ -156,4 +222,6 @@ The build backend (`hatchling`) and the `muzik` console script are already in
 - **Playwright browser location.** Keep the current first-run
   `playwright install chromium` flow. Owning `PLAYWRIGHT_BROWSERS_PATH` under the
   `platformdirs` data dir is a later refinement, not a blocker.
-- **Homebrew tap and frozen bundle.** Deferred to later platform rounds.
+- **Frozen bundle.** Deferred to later platform rounds.
+- **PyPI upload with a fully vendored Homebrew formula.** A later, audit-clean path
+  if the project moves onto PyPI.
