@@ -1,0 +1,11 @@
+# gitleaks config for muzik.
+# Extends the default rule set and ignores local dotenv files, which are
+# gitignored and never committed. Real secrets in tracked files are still caught.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local dotenv files are gitignored and never committed"
+paths = [
+  '''(^|/)\.env$''',
+]

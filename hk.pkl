@@ -1,0 +1,72 @@
+amends "package://github.com/jdx/hk/releases/download/v1.55.0/hk@1.55.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.55.0/hk@1.55.0#/Builtins.pkl"
+
+local linters = new Mapping<String, Step | Group> {
+    // ── tier 1: gatekeepers. Never mutate, no ordering needed. ──
+    ["check-merge-conflict"] = Builtins.check_merge_conflict
+    ["check-added-large-files"] = Builtins.check_added_large_files
+    ["detect-private-key"] = Builtins.detect_private_key
+    ["gitleaks"] = Builtins.gitleaks
+    ["actionlint"] = Builtins.actionlint
+    ["zizmor"] = Builtins.zizmor
+
+    // ── tier 2: content fixers. `typos` is repo-wide, so it takes the barrier. ──
+    ["typos"] = (Builtins.typos) { exclusive = true }
+    // ruff and ty run through `uv run` so hk uses the project's pinned versions
+    // and config, and never drifts from the CI `mise run check` gate.
+    ["ruff"] = new Step {
+        glob = List("**/*.py")
+        stage = List("**/*.py")
+        check = "uv run ruff check {{ files }}"
+        fix = "uv run ruff check --fix {{ files }}"
+    }
+    ["rumdl"] = Builtins.rumdl
+
+    // ── tier 3: formatters. Each waits only on the fixer sharing its files. ──
+    ["ruff-format"] = new Step {
+        glob = List("**/*.py")
+        stage = List("**/*.py")
+        depends = List("ruff")
+        check = "uv run ruff format --check {{ files }}"
+        fix = "uv run ruff format {{ files }}"
+    }
+    ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
+
+    // ── tier 4: whole-repo hygiene. One barrier, both steps inside it. ──
+    ["hygiene"] = new Group {
+        steps {
+            ["trailing-whitespace"] = Builtins.trailing_whitespace
+            ["newlines"] = Builtins.newlines
+        }
+    }
+
+    // ── tier 5: validators. Read-only, must see the final bytes. ──
+    // ty runs whole-project via uv, matching the CI gate exactly.
+    ["ty"] = new Step {
+        glob = List("**/*.py")
+        check = "uv run ty check . --ignore unresolved-import"
+    }
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps { ...linters }
+    }
+    ["commit-msg"] {
+        steps {
+            ["conventional-commit"] = Builtins.check_conventional_commit
+        }
+    }
+    ["pre-push"] {
+        steps { ...linters }
+    }
+    ["check"] {
+        steps { ...linters }
+    }
+    ["fix"] {
+        fix = true
+        steps { ...linters }
+    }
+}

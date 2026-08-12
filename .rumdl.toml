@@ -1,0 +1,5 @@
+# rumdl (Markdown) config for muzik.
+# MD013 (line length) is disabled: docs wrap near 80 columns but prose and
+# tables occasionally exceed it, and hard-wrapping them adds churn.
+[global]
+disable = ["MD013"]

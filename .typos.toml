@@ -1,0 +1,5 @@
+# typos spell-check config for muzik.
+# Allowlist words that look like typos but are real (music track and artist names).
+[default.extend-words]
+# Aphex Twin, "Selected Ambient Works ... Tha" — used in test fixtures.
+Tha = "Tha"

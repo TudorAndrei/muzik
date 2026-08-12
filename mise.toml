@@ -1,3 +1,19 @@
+[tools]
+hk = "1.55.0"
+pkl = "latest"
+uv = "latest"
+rumdl = "latest"
+typos = "latest"
+gitleaks = "latest"
+actionlint = "latest"
+zizmor = "latest"
+
+[env]
+HK_MISE = 1
+
+[hooks]
+postinstall = "hk install --mise"
+
 [tasks.gui]
 description = "Run the DearPyGui desktop interface"
 run = "uv run muzik gui"

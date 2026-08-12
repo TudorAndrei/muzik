@@ -1,0 +1,8 @@
+# zizmor policy for muzik workflows.
+# Actions are pinned to release tags (for example actions/checkout@v7), which is
+# this project's convention. Require a ref pin, not a full commit-hash pin.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
