@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "muzik"
-version = "1.0.0"
+dynamic = ["version"]
 description = "Download, split, tag, and organize music from Soulseek, YouTube, and Bandcamp."
 readme = "README.md"
 license = "LicenseRef-Proprietary"
@@ -46,6 +46,9 @@ muzik = "muzik.app:app"
 [project.urls]
 Repository = "https://github.com/TudorAndrei/muzik"
 Issues = "https://github.com/TudorAndrei/muzik/issues"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["muzik"]

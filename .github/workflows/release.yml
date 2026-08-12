@@ -14,57 +14,57 @@ concurrency:
 
 jobs:
   release:
-    name: Tag and publish release
+    name: Version, tag, and publish
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      released: ${{ steps.check.outputs.released }}
-      tag: ${{ steps.check.outputs.tag }}
-      version: ${{ steps.check.outputs.version }}
+      released: ${{ steps.version.outputs.released }}
+      tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
-      - name: Read version and check for an existing release
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: jdx/mise-action@v4
+        with:
+          install: false
+          cache: false
+      - name: Compute next version from conventional commits
+        id: version
         run: |
           set -euo pipefail
-          version=$(grep -m1 -E '^version = ' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
-          tag="v${version}"
-          {
-            echo "version=${version}"
-            echo "tag=${tag}"
-          } >> "$GITHUB_OUTPUT"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "released=false" >> "$GITHUB_OUTPUT"
-            echo "Release ${tag} already exists; nothing to do."
+          if next=$(mise x cocogitto@7 -- cog bump --auto --dry-run 2>/dev/null) \
+              && [ -n "$next" ]; then
+            {
+              echo "released=true"
+              echo "tag=v${next}"
+            } >> "$GITHUB_OUTPUT"
+            echo "Next version: ${next}"
           else
-            echo "released=true" >> "$GITHUB_OUTPUT"
-            echo "Version ${version} has no release yet; will create ${tag}."
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "No conventional commits warrant a release."
           fi
       - uses: astral-sh/setup-uv@v9.0.0
-        if: steps.check.outputs.released == 'true'
+        if: steps.version.outputs.released == 'true'
         with:
           enable-cache: false
-      - name: Build distributions
-        if: steps.check.outputs.released == 'true'
-        run: uv build
-      - name: Create the tagged release
-        if: steps.check.outputs.released == 'true'
+      - name: Build and publish the release
+        if: steps.version.outputs.released == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.check.outputs.tag }}
+          TAG: ${{ steps.version.outputs.tag }}
           SHA: ${{ github.sha }}
-        run: >-
-          gh release create "$TAG"
-          dist/muzik-*.whl
-          dist/muzik-*.tar.gz
-          --target "$SHA"
-          --title "$TAG"
-          --generate-notes
+        run: |
+          set -euo pipefail
+          git tag "$TAG"          # local only, so hatch-vcs derives the version
+          uv build
+          gh release create "$TAG" \
+            dist/muzik-*.whl \
+            dist/muzik-*.tar.gz \
+            --target "$SHA" \
+            --title "$TAG" \
+            --generate-notes
 
   bump-homebrew-tap:
     name: Update Homebrew tap formula

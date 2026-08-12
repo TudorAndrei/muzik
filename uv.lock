@@ -694,7 +694,6 @@ wheels = [
 
 [[package]]
 name = "muzik"
-version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
