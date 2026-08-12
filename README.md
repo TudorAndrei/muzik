@@ -36,6 +36,24 @@ Bandcamp collection downloads use Playwright browser automation. The first
 Bandcamp run opens a browser so you can log in, then stores cookies under the
 app data directory.
 
+### macOS arm64 prerequisites
+
+Install the required command-line tools and confirm that they are on `PATH`:
+
+```sh
+brew install ffmpeg yt-dlp
+ffmpeg -version
+ffprobe -version
+yt-dlp --version
+```
+
+Before you use Bandcamp, install the Playwright Chromium browser once from a
+source checkout:
+
+```sh
+uv run playwright install chromium
+```
+
 ## Soulseek setup
 
 Configure `muzik` to talk to `slskd` with environment variables:
@@ -63,6 +81,16 @@ Then restart slskd and run `muzik soulseek check`; it should report both
 `Soulseek connected: True` and `Soulseek logged in: True`.
 
 ## Install
+
+Install the GitHub release wheel as an isolated command-line tool:
+
+```sh
+uv tool install \
+  https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0-py3-none-any.whl
+muzik --help
+```
+
+For development, install from a source checkout:
 
 ```sh
 git clone <repo>

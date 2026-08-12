@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  github-release:
+    name: Build and publish GitHub release
+    runs-on: macos-15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          prune-cache: true
+      - run: uv build
+      - name: Publish wheel and source archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dist/muzik-*.whl
+          dist/muzik-*.tar.gz
+          --generate-notes
+          --title "$GITHUB_REF_NAME"
+          --verify-tag
