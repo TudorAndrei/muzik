@@ -2,49 +2,59 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
-  github-release:
-    name: Build and publish GitHub release
-    runs-on: macos-15
+  release:
+    name: Semantic release
+    runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+    outputs:
+      released: ${{ steps.release.outputs.released || 'false' }}
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
     steps:
-      - uses: actions/checkout@v7
+      # Credentials must persist so python-semantic-release can push the version
+      # bump commit and the new tag back to main.
+      - uses: actions/checkout@v7 # zizmor: ignore[artipacked]
         with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
+          fetch-depth: 0
+      - name: Force branch to the pushed commit
+        run: git reset --hard "$GITHUB_SHA"
+      - name: Determine version, tag, and release
+        id: release
+        uses: python-semantic-release/python-semantic-release@v10.6.1
         with:
-          python-version-file: .python-version
-      - uses: astral-sh/setup-uv@v9.0.0 # zizmor: ignore[cache-poisoning]
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          git_committer_name: github-actions
+          git_committer_email: actions@users.noreply.github.com
+      - name: Upload built distributions to the release
+        uses: python-semantic-release/publish-action@v10.6.1
+        if: steps.release.outputs.released == 'true'
         with:
-          prune-cache: true
-      - run: uv build
-      - name: Publish wheel and source archive
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "$GITHUB_REF_NAME"
-          dist/muzik-*.whl
-          dist/muzik-*.tar.gz
-          --generate-notes
-          --title "$GITHUB_REF_NAME"
-          --verify-tag
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.release.outputs.tag }}
 
   bump-homebrew-tap:
     name: Update Homebrew tap formula
-    needs: github-release
+    needs: release
+    if: needs.release.outputs.released == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Point the tap formula at the new release
         env:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
