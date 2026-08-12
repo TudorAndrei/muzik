@@ -34,8 +34,12 @@ jobs:
         id: version
         run: |
           set -euo pipefail
-          if next=$(mise x cocogitto@7 -- cog bump --auto --dry-run 2>/dev/null) \
-              && [ -n "$next" ]; then
+          # cocogitto exits 0 whether or not a bump is due and prints a message
+          # on no-bump, so decide from the version token, not the exit code.
+          raw=$(mise x cocogitto@7 -- cog bump --auto --dry-run 2>/dev/null || true)
+          next=$(printf '%s\n' "$raw" | grep -oE '^v?[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
+          if [ -n "$next" ]; then
+            next="${next#v}"
             {
               echo "released=true"
               echo "tag=v${next}"
