@@ -208,11 +208,16 @@ This track runs after a GitHub Release exists (it installs the release wheel).
   successfully and published the wheel and source archive.
 - [x] The published wheel URL installs in a new Python 3.14 tool environment.
   `muzik --help` passes and `muzik gui` opens a viewport.
-- [ ] Homebrew: the `TudorAndrei/homebrew-muzik` tap exists with `Formula/muzik.rb`.
-- [ ] Homebrew: the formula pins the release wheel URL and `sha256`, and depends on
-  `python@3.14`, `ffmpeg`, and `yt-dlp`.
-- [ ] Homebrew: `brew install TudorAndrei/muzik/muzik` passes; `muzik --help` and
-  `muzik gui` run; `brew` pulled `ffmpeg` and `yt-dlp`.
+- [x] Homebrew: the formula is authored at `packaging/homebrew/muzik.rb`. It pins
+  the v0.1.0 source archive URL and `sha256`, depends on `ffmpeg`, `python@3.14`,
+  and `yt-dlp`, and builds into a `libexec` virtual environment. `brew style`
+  passes (the remaining warnings are loose-path only and clear inside a tap).
+- [x] Homebrew: the tap setup, install, update, and caveats are documented in
+  `packaging/homebrew/README.md`.
+- [ ] Homebrew: the `TudorAndrei/homebrew-muzik` tap repository exists and holds
+  `Formula/muzik.rb` (separate repository; not created from here yet).
+- [ ] Homebrew: `brew install TudorAndrei/muzik/muzik` passes on a clean machine;
+  `muzik --help` and `muzik gui` run; `brew` pulled `ffmpeg` and `yt-dlp`.
 
 ## Optional, not required for this release
 
