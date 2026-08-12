@@ -28,9 +28,11 @@ from muzik.gui.adapters import (
     GuiWorkflowDecisions,
     GuiWorkflowEventEmitter,
 )
+from muzik.core.services import check_services
 from muzik.gui.bridge import GuiBridge
 from muzik.gui.launcher import LAUNCHER_WINDOW, LauncherView
 from muzik.gui.pipeline import PipelineView
+from muzik.gui.settings import SETTINGS_WINDOW, SettingsView
 
 
 WorkflowOperationsFactory = Callable[..., WorkflowRunOperations]
@@ -46,9 +48,11 @@ class MuzikGuiApp:
     ) -> None:
         self.operations_factory = operations_factory or _default_operations
         self.bridge = GuiBridge(on_error=self._handle_bridge_error)
-        self.launcher = LauncherView(self.open_pipeline, self.quit)
+        self.launcher = LauncherView(self.open_pipeline, self.quit, self.open_settings)
         self.pipeline: PipelineView | None = None
+        self.settings: SettingsView | None = None
         self._worker: Thread | None = None
+        self._settings_worker: Thread | None = None
         self._cancellation: CancellationToken | None = None
         self._return_to_launcher = False
         self._worker_error: Exception | None = None
@@ -73,6 +77,8 @@ class MuzikGuiApp:
             self.bridge.shutdown()
             if self._worker is not None:
                 self._worker.join(timeout=5)
+            if self._settings_worker is not None:
+                self._settings_worker.join(timeout=5)
             dpg.destroy_context()
 
     def open_pipeline(self, config: WorkflowLaunchConfig) -> None:
@@ -120,6 +126,62 @@ class MuzikGuiApp:
         self._cancel_worker()
         modals.close_all_modals()
         dpg.stop_dearpygui()
+
+    def open_settings(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Open the settings window and start the service checks."""
+        if dpg.does_item_exist(SETTINGS_WINDOW):
+            return
+        if self.settings is None:
+            self.settings = SettingsView(self.recheck_services, self.close_settings)
+        self.settings.build()
+        self._start_service_checks()
+
+    def recheck_services(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Re-run the service checks for the open settings window."""
+        self._start_service_checks()
+
+    def close_settings(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Close the settings window."""
+        if self.settings is not None:
+            self.settings.destroy()
+
+    def _start_service_checks(self) -> None:
+        if self._settings_worker is not None and self._settings_worker.is_alive():
+            return
+        if self.settings is not None:
+            self.settings.set_checking()
+        self._settings_worker = Thread(
+            target=self._run_service_checks,
+            name="muzik-service-checks",
+            daemon=True,
+        )
+        self._settings_worker.start()
+
+    def _run_service_checks(self) -> None:
+        statuses = check_services()
+        if self.bridge.is_shutdown():
+            return
+
+        def update() -> None:
+            if self.settings is not None:
+                self.settings.load_statuses(statuses)
+
+        self.bridge.submit(update)
 
     def _run_workflow(self, config: WorkflowLaunchConfig) -> None:
         cancellation = self._cancellation

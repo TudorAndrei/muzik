@@ -67,7 +67,7 @@ def test_launcher_empty_jobs_and_config_use_defaults() -> None:
 
 def test_read_config_reads_dearpygui_fields() -> None:
     dpg.create_context()
-    launcher = LauncherView(lambda config: None, lambda: None)
+    launcher = LauncherView(lambda config: None, lambda: None, lambda: None)
     try:
         launcher.build()
         dpg.set_value(FIELD_TAGS["raw"], "local.flac")
@@ -88,7 +88,7 @@ def test_read_config_reads_dearpygui_fields() -> None:
 def test_run_rejects_empty_input() -> None:
     runs = []
     dpg.create_context()
-    launcher = LauncherView(runs.append, lambda: None)
+    launcher = LauncherView(runs.append, lambda: None, lambda: None)
     try:
         launcher.build()
 

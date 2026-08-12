@@ -71,9 +71,11 @@ class LauncherView:
         self,
         on_run: Callable[[WorkflowLaunchConfig], None],
         on_quit: Callable[[], None],
+        on_settings: Callable[..., None],
     ) -> None:
         self._on_run = on_run
         self._on_quit = on_quit
+        self._on_settings = on_settings
 
     def build(self) -> None:
         with dpg.window(tag=LAUNCHER_WINDOW, label="muzik workflow"):
@@ -153,6 +155,7 @@ class LauncherView:
             dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
             with dpg.group(horizontal=True):
                 dpg.add_button(label="Run", callback=self._run, width=100)
+                dpg.add_button(label="Settings", callback=self._on_settings, width=100)
                 dpg.add_button(label="Quit", callback=self._quit, width=100)
 
     def read_config(self) -> WorkflowLaunchConfig:
