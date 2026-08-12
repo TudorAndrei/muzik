@@ -13,8 +13,8 @@ class Muzik < Formula
 
   desc "Download, split, tag, and organize music from Soulseek, YouTube, and Bandcamp"
   homepage "https://github.com/TudorAndrei/muzik"
-  url "https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0.tar.gz"
-  sha256 "2b10065dcb9d31ab5a3561b8fc8279e96fbcf2d1ac1821516c9d91a090910a68"
+  url "https://github.com/TudorAndrei/muzik/releases/download/v0.2.0/muzik-0.2.0.tar.gz"
+  sha256 "4d6ef7aa6794dfd5d16126a6f9a00fc5a129ce012ca5adecd9fb41d0870bb019"
   license :cannot_represent # proprietary: all rights reserved
 
   depends_on "ffmpeg"

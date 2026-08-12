@@ -86,7 +86,7 @@ Install the GitHub release wheel as an isolated command-line tool:
 
 ```sh
 uv tool install \
-  https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0-py3-none-any.whl
+  https://github.com/TudorAndrei/muzik/releases/download/v0.2.0/muzik-0.2.0-py3-none-any.whl
 muzik --help
 ```
 
