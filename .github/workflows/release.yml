@@ -14,36 +14,57 @@ concurrency:
 
 jobs:
   release:
-    name: Semantic release
+    name: Tag and publish release
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      id-token: write
     outputs:
-      released: ${{ steps.release.outputs.released || 'false' }}
-      version: ${{ steps.release.outputs.version }}
-      tag: ${{ steps.release.outputs.tag }}
+      released: ${{ steps.check.outputs.released }}
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
     steps:
-      # Credentials must persist so python-semantic-release can push the version
-      # bump commit and the new tag back to main.
-      - uses: actions/checkout@v7 # zizmor: ignore[artipacked]
+      - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-      - name: Force branch to the pushed commit
-        run: git reset --hard "$GITHUB_SHA"
-      - name: Determine version, tag, and release
-        id: release
-        uses: python-semantic-release/python-semantic-release@v10.6.1
+          persist-credentials: false
+      - name: Read version and check for an existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 -E '^version = ' pyproject.toml | sed -E 's/.*"(.*)".*/\1/')
+          tag="v${version}"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "released=false" >> "$GITHUB_OUTPUT"
+            echo "Release ${tag} already exists; nothing to do."
+          else
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "Version ${version} has no release yet; will create ${tag}."
+          fi
+      - uses: astral-sh/setup-uv@v9.0.0
+        if: steps.check.outputs.released == 'true'
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          git_committer_name: github-actions
-          git_committer_email: actions@users.noreply.github.com
-      - name: Upload built distributions to the release
-        uses: python-semantic-release/publish-action@v10.6.1
-        if: steps.release.outputs.released == 'true'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.release.outputs.tag }}
+          enable-cache: false
+      - name: Build distributions
+        if: steps.check.outputs.released == 'true'
+        run: uv build
+      - name: Create the tagged release
+        if: steps.check.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.check.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: >-
+          gh release create "$TAG"
+          dist/muzik-*.whl
+          dist/muzik-*.tar.gz
+          --target "$SHA"
+          --title "$TAG"
+          --generate-notes
 
   bump-homebrew-tap:
     name: Update Homebrew tap formula
