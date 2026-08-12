@@ -90,6 +90,25 @@ uv tool install \
 muzik --help
 ```
 
+Or install with Homebrew, which also pulls `ffmpeg` and `yt-dlp`:
+
+```sh
+brew install TudorAndrei/muzik/muzik
+```
+
+### macOS app in Applications
+
+After installing, add a desktop entry so the interface opens from Launchpad,
+Spotlight, or Finder:
+
+```sh
+muzik install-app          # writes to /Applications, falls back to ~/Applications
+muzik install-app --user   # force ~/Applications
+```
+
+The bundle launches `muzik gui` from the current install. Re-run the command
+after reinstalling muzik to point the entry at the new location.
+
 For development, install from a source checkout:
 
 ```sh

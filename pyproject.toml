@@ -50,6 +50,9 @@ Issues = "https://github.com/TudorAndrei/muzik/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["muzik"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"assets/logo.jpeg" = "muzik/assets/logo.jpeg"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",

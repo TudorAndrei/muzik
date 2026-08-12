@@ -212,8 +212,10 @@ class LauncherView:
                 dpg.set_value(FIELD_TAGS[field], str(value))
 
         with dpg.group(horizontal=True):
+            # Label on the left as fixed-width text; DearPyGui's own labels sit to
+            # the right of a field and would push the Browse button off-screen.
+            dpg.add_text(f"{label:<13}")
             dpg.add_input_text(
-                label=label,
                 default_value=default,
                 tag=FIELD_TAGS[field],
                 width=-110,
