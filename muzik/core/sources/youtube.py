@@ -68,6 +68,10 @@ def build_download_command(
         quality,
         "--embed-metadata",
         "--add-metadata",
+        # Save the video thumbnail as a JPEG sidecar for album-cover fallback.
+        "--write-thumbnail",
+        "--convert-thumbnails",
+        "jpg",
         "--output",
         YTDLP_OUTPUT_TEMPLATE,
     ]

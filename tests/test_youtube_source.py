@@ -32,6 +32,8 @@ def test_build_download_command_includes_expected_flags() -> None:
     assert "--write-info-json" in cmd
     assert "--download-archive" in cmd
     assert "--force-overwrites" not in cmd
+    assert "--write-thumbnail" in cmd
+    assert cmd[cmd.index("--convert-thumbnails") + 1] == "jpg"
     assert cmd[-1] == "https://youtube.com/watch?v=abcdefghijk"
 
 

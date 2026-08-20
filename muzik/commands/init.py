@@ -27,6 +27,17 @@ _IMPORT_BLOCK = (
     "  medium_rec_thresh: 0.20\n"
 )
 
+# Album-art plugins. musicbrainz stays enabled (it is the default source);
+# fetchart picks up the cover.jpg the workflow drops beside split albums, and
+# embedart writes it into each track so it travels with the files.
+_PLUGINS_BLOCK = (
+    "plugins: musicbrainz fetchart embedart\n"
+    "fetchart:\n"
+    "  sources: filesystem\n"
+    "embedart:\n"
+    "  auto: yes\n"
+)
+
 
 def _ensure_dirs() -> None:
     dirs = {
@@ -58,20 +69,42 @@ def _configure_beets() -> None:
         cfg.write_text(
             "# beets config — created by muzik init\n"
             "# See https://beets.readthedocs.io/en/stable/reference/config.html\n\n"
+            + _PLUGINS_BLOCK
+            + "\n"
             + _IMPORT_BLOCK
         )
         console.print(f"  Beets cfg  {cfg}  [green]created[/green]")
         return
 
     text = cfg.read_text()
+    changed: list[str] = []
 
-    if "move:" in text and "duplicate_action" in text and "none_rec_action" in text:
-        console.print(
-            f"  Beets cfg  {cfg}  [dim]import defaults already set — skipped[/dim]"
-        )
+    has_import_defaults = (
+        "move:" in text and "duplicate_action" in text and "none_rec_action" in text
+    )
+    if not has_import_defaults:
+        text = _add_import_defaults(text)
+        changed.append("import defaults")
+
+    # Album-art plugins. Only append when there is no plugins line to merge into.
+    if "fetchart" not in text or "embedart" not in text:
+        if re.search(r"^plugins\s*:", text, re.MULTILINE):
+            console.print(
+                "  [yellow]Add 'fetchart embedart' to your beets plugins line "
+                "for album art.[/yellow]"
+            )
+        else:
+            text = text.rstrip("\n") + "\n\n" + _PLUGINS_BLOCK
+            changed.append("art plugins")
+
+    if not changed:
+        console.print(f"  Beets cfg  {cfg}  [dim]already set — skipped[/dim]")
         return
+    cfg.write_text(text)
+    console.print(f"  Beets cfg  {cfg}  [green]added {', '.join(changed)}[/green]")
 
-    # Insert after an existing `import:` line if present
+
+def _add_import_defaults(text: str) -> str:
     if re.search(r"^import\s*:", text, re.MULTILINE):
         missing = []
         if not re.search(r"^\s+move\s*:", text, re.MULTILINE):
@@ -80,7 +113,6 @@ def _configure_beets() -> None:
             missing.append("  duplicate_action: skip")
         if not re.search(r"^\s+none_rec_action\s*:", text, re.MULTILINE):
             missing.append("  none_rec_action: asis")
-
         if missing:
             text = re.sub(
                 r"(^import\s*:[ \t]*$)",
@@ -89,11 +121,8 @@ def _configure_beets() -> None:
                 count=1,
                 flags=re.MULTILINE,
             )
-    else:
-        text = text.rstrip("\n") + "\n\n" + _IMPORT_BLOCK
-
-    cfg.write_text(text)
-    console.print(f"  Beets cfg  {cfg}  [green]added import defaults[/green]")
+        return text
+    return text.rstrip("\n") + "\n\n" + _IMPORT_BLOCK
 
 
 def init_cmd() -> None:

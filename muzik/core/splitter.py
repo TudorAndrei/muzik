@@ -79,14 +79,40 @@ def split_audio(
         )
 
     cancellation.raise_if_cancelled()
+    _place_cover(base, output)
     if cache_key:
         cache_mod.set(cache_key, str(output))
     if not keep_source:
         cancellation.raise_if_cancelled()
         path.unlink(missing_ok=True)
-        for extension in (".chapters.txt", ".info.json", ".metadata.txt"):
+        for extension in (
+            ".chapters.txt",
+            ".info.json",
+            ".metadata.txt",
+            *_THUMB_EXTS,
+        ):
             base.with_suffix(extension).unlink(missing_ok=True)
     return output
+
+
+# Thumbnail extensions yt-dlp may leave beside a download, best first.
+_THUMB_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _place_cover(base: Path, output: Path) -> None:
+    """Copy a downloaded thumbnail into the album folder as cover art.
+
+    Beets' fetchart picks up a ``cover.*`` image on import, so the album gets a
+    cover even when MusicBrainz has none.
+    """
+    for extension in _THUMB_EXTS:
+        thumb = base.with_suffix(extension)
+        if thumb.exists():
+            try:
+                shutil.copyfile(thumb, output / f"cover{extension}")
+            except OSError:
+                pass
+            return
 
 
 def _split_track(
