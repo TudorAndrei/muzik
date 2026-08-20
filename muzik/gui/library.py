@@ -35,9 +35,6 @@ class LibraryView:
         with dpg.window(
             tag=LIBRARY_WINDOW,
             label="Library - downloaded audio",
-            modal=True,
-            width=820,
-            height=520,
             on_close=self._on_close,
         ):
             dpg.add_text("Downloaded audio", color=ACCENT)
@@ -49,7 +46,7 @@ class LibraryView:
                 resizable=True,
                 policy=dpg.mvTable_SizingStretchProp,
                 scrollY=True,
-                height=370,
+                height=-40,
             ):
                 dpg.add_table_column(label="Title")
                 dpg.add_table_column(
@@ -71,7 +68,7 @@ class LibraryView:
                     callback=self._on_refresh,
                     width=100,
                 )
-                dpg.add_button(label="Close", callback=self._on_close, width=100)
+                dpg.add_button(label="Back", callback=self._on_close, width=100)
 
     def destroy(self) -> None:
         if dpg.does_item_exist(LIBRARY_WINDOW):

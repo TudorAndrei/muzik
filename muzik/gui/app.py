@@ -212,7 +212,9 @@ class MuzikGuiApp:
                 self.refresh_library,
                 self.close_library,
             )
+        self.launcher.hide()
         self.library.build()
+        dpg.set_primary_window(LIBRARY_WINDOW, True)
         self._start_library_scan()
 
     def refresh_library(
@@ -230,9 +232,10 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Close the library window."""
+        """Close the library page and return to the launcher."""
         if self.library is not None:
             self.library.destroy()
+        self.launcher.show()
 
     def _start_library_scan(self) -> None:
         if self._library_worker is not None and self._library_worker.is_alive():
