@@ -9,7 +9,12 @@ import typer
 from muzik.config import BEETS_CONFIG
 from muzik.core.beets.agent_decisions import AgentBeetsDecisions
 from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
-from muzik.core.beets.importer import ImportOptions, import_paths
+from muzik.core.beets.importer import (
+    ImportOptions,
+    PruneAborted,
+    import_paths,
+    prune_missing_items,
+)
 from muzik.ui.console import console, err
 
 
@@ -72,6 +77,11 @@ def import_cmd(
         "--dry-run",
         "-d",
         help="Show what beets would do without making changes.",
+    ),
+    no_prune: bool = typer.Option(
+        False,
+        "--no-prune",
+        help="Do not remove library items orphaned by moves after the import.",
     ),
     config: Optional[Path] = typer.Option(
         None,
@@ -142,5 +152,20 @@ def import_cmd(
     except Exception as exc:
         err(f"[red]beets import failed:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+    # A move-mode re-tag can orphan the old entry; prune it so the library
+    # stays consistent. Copy/link imports move nothing, so there is nothing
+    # to prune.
+    moved = not copy and not link
+    if moved and not dry_run and not no_prune:
+        try:
+            pruned = prune_missing_items(beets_cfg if beets_cfg.exists() else None)
+            if pruned:
+                console.print(f"[dim]Pruned {pruned} item(s) orphaned by moves.[/dim]")
+        except PruneAborted as exc:
+            err(
+                f"[yellow]Skipped auto-prune:[/yellow] {exc}. "
+                "Is the library volume mounted? Use --no-prune to silence this."
+            )
 
     console.print("[green]Import complete.[/green]")

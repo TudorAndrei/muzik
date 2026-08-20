@@ -173,6 +173,48 @@ def apply_duplicate_decision(task: Any, decision: BeetsDuplicateDecision) -> Non
         raise ValueError(f"unknown duplicate decision: {decision}")
 
 
+class PruneAborted(Exception):
+    """Raised when too many files look missing to prune safely."""
+
+    def __init__(self, missing: int, total: int) -> None:
+        super().__init__(f"{missing}/{total} items missing")
+        self.missing = missing
+        self.total = total
+
+
+def _item_fullpath(item: Any, directory: str) -> str:
+    path = os.fsdecode(item.path)
+    return path if os.path.isabs(path) else os.path.join(directory, path)
+
+
+def prune_missing_items(
+    config_path: Path | None = None,
+    *,
+    safety_fraction: float = 0.5,
+) -> int:
+    """Remove library items whose files no longer exist; return the count.
+
+    A move-mode re-tag can leave the old entry orphaned once beets moves the
+    file to its new path. Pruning those keeps the library consistent. As a
+    safeguard against a whole unmounted volume, abort with ``PruneAborted`` when
+    more than ``safety_fraction`` of items look missing.
+    """
+    with _IMPORT_LOCK:
+        lib = open_library(config_path)
+        directory = os.fsdecode(lib.directory)
+        items = list(lib.items())
+        missing = [
+            item
+            for item in items
+            if not os.path.exists(_item_fullpath(item, directory))
+        ]
+        if items and len(missing) > len(items) * safety_fraction:
+            raise PruneAborted(len(missing), len(items))
+        for item in missing:
+            item.remove(delete=False, with_album=True)
+    return len(missing)
+
+
 def import_paths(
     options: ImportOptions,
     *,
