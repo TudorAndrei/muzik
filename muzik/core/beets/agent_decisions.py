@@ -201,15 +201,29 @@ def _build_chooser(model_name: str, log: Logger) -> Chooser:
         log("agent disabled: OPENROUTER_API_KEY is not set")
         return lambda _task: None
 
+    import stamina
     from pydantic_ai import Agent
+    from pydantic_ai.exceptions import ModelHTTPError
     from pydantic_ai.models.openrouter import OpenRouterModel
     from pydantic_ai.providers.openrouter import OpenRouterProvider
 
     model = OpenRouterModel(model_name, provider=OpenRouterProvider(api_key=api_key))
     agent = Agent(model, output_type=MatchDecision, system_prompt=_SYSTEM_PROMPT)
 
+    def _transient(exc: Exception) -> bool:
+        # Free OpenRouter pools return 429/5xx under load; those are worth a retry.
+        transient = {408, 409, 429, 500, 502, 503, 504}
+        return isinstance(exc, ModelHTTPError) and exc.status_code in transient
+
+    @stamina.retry(on=_transient, attempts=4, wait_initial=5.0, wait_max=30.0)
+    def _ask(task: BeetsTaskView) -> MatchDecision:
+        return cast(MatchDecision, agent.run_sync(build_prompt(task)).output)
+
     def choose(task: BeetsTaskView) -> MatchDecision | None:
-        result = agent.run_sync(build_prompt(task))
-        return cast(MatchDecision, result.output)
+        try:
+            return _ask(task)
+        except ModelHTTPError as exc:
+            log(f"model error after retries: {exc}")
+            return None
 
     return choose
