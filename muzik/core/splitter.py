@@ -141,10 +141,17 @@ def _split_track(
             "-vn",
             "-c:a",
             "copy",
+            # Drop the source's embedded tags first; for Opus/Vorbis a bare
+            # -metadata does not override them, so the track would keep the
+            # whole-video title and uploader.
+            "-map_metadata",
+            "-1",
             "-metadata",
             f"title={chapter.title}",
             "-metadata",
             f"artist={metadata['artist']}",
+            "-metadata",
+            f"albumartist={metadata['artist']}",
             "-metadata",
             f"album={metadata['album']}",
             "-metadata",

@@ -379,8 +379,9 @@ def _process_audio_files(
                         config_path=config if config and config.exists() else None,
                         move=True,
                         dry_run=dry_run,
-                        incremental=True,
-                        # --force replaces an existing library album.
+                        # --force re-imports the same split dir and replaces
+                        # the existing album.
+                        incremental=not force,
                         duplicate_action="remove" if force else None,
                     ),
                     decisions=beets_decisions,

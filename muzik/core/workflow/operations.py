@@ -131,9 +131,9 @@ def build_workflow_operations(
                         else None,
                         move=True,
                         dry_run=options.dry_run,
-                        incremental=True,
-                        # --force replaces an existing library album instead of
-                        # letting duplicate_action:skip keep the old, worse one.
+                        # --force re-imports the same split dir (incremental
+                        # would skip it) and replaces the existing album.
+                        incremental=not options.force,
                         duplicate_action="remove" if options.force else None,
                     ),
                     tag_only=options.tag_only,
