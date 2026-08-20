@@ -54,10 +54,19 @@ class NonInteractiveBeetsDecisions:
         return False
 
     def choose_beets_album_match(self, task: BeetsTaskView) -> Any:
-        return importer.Action.SKIP if self.quiet else importer.Action.APPLY
+        return self._auto_choice(task)
 
     def choose_beets_track_match(self, task: BeetsTaskView) -> Any:
-        return importer.Action.SKIP if self.quiet else importer.Action.APPLY
+        return self._auto_choice(task)
+
+    def _auto_choice(self, task: BeetsTaskView) -> Any:
+        # Action.APPLY is internal-only in beets; apply the best candidate by id,
+        # and import as-is when MusicBrainz offers no match.
+        if self.quiet:
+            return importer.Action.SKIP
+        if task.matches:
+            return task.matches[0].candidate_id
+        return importer.Action.ASIS
 
     def resolve_beets_duplicate(
         self,
