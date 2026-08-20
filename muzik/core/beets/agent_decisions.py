@@ -41,6 +41,8 @@ from muzik.core.beets.views import BeetsDuplicateView, BeetsMatchView, BeetsTask
 
 DEFAULT_BACKEND = "openrouter"
 DEFAULT_OPENROUTER_MODEL = "z-ai/glm-5.2:free"
+# Codex's fast "Spark" model; used unless MUZIK_TAG_MODEL overrides it.
+DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
 _CLI_TIMEOUT = 120
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -261,11 +263,10 @@ def _openrouter_chooser(model_name: str, log: Logger) -> Chooser:
 
 
 def _codex_chooser(model: str | None, log: Logger) -> Chooser:
+    chosen = model or DEFAULT_CODEX_MODEL
+
     def build_cmd() -> list[str]:
-        cmd = ["codex", "exec", "--skip-git-repo-check"]
-        if model:
-            cmd += ["--model", model]
-        return cmd
+        return ["codex", "exec", "--skip-git-repo-check", "--model", chosen]
 
     return _cli_chooser(build_cmd, pass_prompt_via_stdin=True, log=log)
 

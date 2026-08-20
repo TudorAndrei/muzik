@@ -189,7 +189,7 @@ Choose the backend with `MUZIK_TAG_BACKEND` and the model with `MUZIK_TAG_MODEL`
 | Backend | How | Setup |
 |---------|-----|-------|
 | `openrouter` (default) | pydantic-ai over OpenRouter | `OPENROUTER_API_KEY`; model defaults to `z-ai/glm-5.2:free` |
-| `codex` | shells out to `codex exec` | Codex CLI on `PATH`, signed in; uses your ChatGPT subscription |
+| `codex` | shells out to `codex exec` | Codex CLI on `PATH`, signed in; uses your ChatGPT subscription. Defaults to the fast `gpt-5.3-codex-spark` model |
 | `opencode` | shells out to `opencode run` | OpenCode CLI on `PATH`; set `MUZIK_TAG_MODEL=provider/model` to a free "zen" model you are authorized for |
 
 ```sh
