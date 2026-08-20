@@ -149,6 +149,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik init` | Create app directories and configure beets |
 | `muzik workflow <url-or-path>` | Full pipeline: acquire → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
+| `muzik downloaded` | List audio already in the output folder |
 | `muzik soulseek check` | Verify slskd connectivity and auth |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
 | `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
@@ -198,6 +199,17 @@ candidate tables, chapter review and editing, and Beets match and duplicate
 decisions. It uses the same workflow and Beets service layer as the CLI. Long
 work runs in a background thread. Back requests cooperative cancellation and
 waits for the worker to stop before it returns to the launcher.
+
+The launcher **Library** button lists the audio already in the output folder,
+so you can see what is downloaded before you start a run.
+
+## Avoiding re-downloads
+
+Each YouTube download keeps the video id in the filename (for example
+`Title [dQw4w9WgXcQ].m4a`). Before a playlist run, `muzik` seeds the yt-dlp
+download archive with every id already in the output folder. yt-dlp then skips
+those ids, so a track is fetched only once — even when it appears in more than
+one playlist. Use `muzik downloaded` to list the current inventory.
 
 ## Credits
 

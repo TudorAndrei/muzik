@@ -14,6 +14,7 @@ from typing import Protocol, cast
 
 from muzik.config import AUDIO_EXTENSIONS
 from muzik.core.audio import get_duration
+from muzik.core.library import seed_archive_from_downloads
 import muzik.core.cache as cache_mod
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import (
@@ -667,6 +668,8 @@ def _run_playlist_workflow(
 ) -> None:
     archive_file = cache_mod.CACHE_DIR / f"ytdlp_archive_{playlist_id}.txt"
     operations.prepopulate_archive(archive_file)
+    # Skip ids already in the output folder, even from other playlists.
+    seed_archive_from_downloads(archive_file, request.output)
     cancellation.raise_if_cancelled()
     playlist_state = load_playlist_state(playlist_id)
 

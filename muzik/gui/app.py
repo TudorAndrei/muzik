@@ -29,8 +29,11 @@ from muzik.gui.adapters import (
     GuiWorkflowEventEmitter,
 )
 from muzik.core.services import check_services
+from muzik.config import DEFAULT_DOWNLOAD_DIR
+from muzik.core.library import scan_downloads
 from muzik.gui.bridge import GuiBridge
 from muzik.gui.launcher import LAUNCHER_WINDOW, LauncherView
+from muzik.gui.library import LIBRARY_WINDOW, LibraryView
 from muzik.gui.pipeline import PipelineView
 from muzik.gui.settings import SETTINGS_WINDOW, SettingsView
 from muzik.gui.theme import apply_global_theme
@@ -49,11 +52,18 @@ class MuzikGuiApp:
     ) -> None:
         self.operations_factory = operations_factory or _default_operations
         self.bridge = GuiBridge(on_error=self._handle_bridge_error)
-        self.launcher = LauncherView(self.open_pipeline, self.quit, self.open_settings)
+        self.launcher = LauncherView(
+            self.open_pipeline,
+            self.quit,
+            self.open_settings,
+            self.open_library,
+        )
         self.pipeline: PipelineView | None = None
         self.settings: SettingsView | None = None
+        self.library: LibraryView | None = None
         self._worker: Thread | None = None
         self._settings_worker: Thread | None = None
+        self._library_worker: Thread | None = None
         self._cancellation: CancellationToken | None = None
         self._return_to_launcher = False
         self._worker_error: Exception | None = None
@@ -81,6 +91,8 @@ class MuzikGuiApp:
                 self._worker.join(timeout=5)
             if self._settings_worker is not None:
                 self._settings_worker.join(timeout=5)
+            if self._library_worker is not None:
+                self._library_worker.join(timeout=5)
             dpg.destroy_context()
 
     def open_pipeline(self, config: WorkflowLaunchConfig) -> None:
@@ -182,6 +194,66 @@ class MuzikGuiApp:
         def update() -> None:
             if self.settings is not None:
                 self.settings.load_statuses(statuses)
+
+        self.bridge.submit(update)
+
+    def open_library(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Open the library window and scan the output folder."""
+        if dpg.does_item_exist(LIBRARY_WINDOW):
+            return
+        if self.library is None:
+            self.library = LibraryView(
+                DEFAULT_DOWNLOAD_DIR,
+                self.refresh_library,
+                self.close_library,
+            )
+        self.library.build()
+        self._start_library_scan()
+
+    def refresh_library(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Re-scan the output folder for the open library window."""
+        self._start_library_scan()
+
+    def close_library(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Close the library window."""
+        if self.library is not None:
+            self.library.destroy()
+
+    def _start_library_scan(self) -> None:
+        if self._library_worker is not None and self._library_worker.is_alive():
+            return
+        if self.library is not None:
+            self.library.set_scanning()
+        self._library_worker = Thread(
+            target=self._run_library_scan,
+            name="muzik-library-scan",
+            daemon=True,
+        )
+        self._library_worker.start()
+
+    def _run_library_scan(self) -> None:
+        items = scan_downloads(DEFAULT_DOWNLOAD_DIR)
+        if self.bridge.is_shutdown():
+            return
+
+        def update() -> None:
+            if self.library is not None:
+                self.library.load_items(items)
 
         self.bridge.submit(update)
 

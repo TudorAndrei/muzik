@@ -6,6 +6,7 @@ from muzik.commands import cache as cache_mod
 from muzik.commands import config as config_mod
 from muzik.commands.bandcamp import bandcamp_cmd
 from muzik.commands.download import download_cmd
+from muzik.commands.downloaded import downloaded_cmd
 from muzik.commands.import_ import import_cmd
 from muzik.commands.init import init_cmd
 from muzik.commands.split import split_cmd
@@ -35,6 +36,9 @@ app.command("bandcamp", help="Download a Bandcamp collection and organize with b
     bandcamp_cmd
 )
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
+app.command("downloaded", help="List audio already in the output folder.")(
+    downloaded_cmd
+)
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd
 )
