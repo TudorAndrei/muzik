@@ -43,6 +43,8 @@ DEFAULT_BACKEND = "openrouter"
 DEFAULT_OPENROUTER_MODEL = "z-ai/glm-5.2:free"
 # Codex's fast "Spark" model; used unless MUZIK_TAG_MODEL overrides it.
 DEFAULT_CODEX_MODEL = "gpt-5.3-codex-spark"
+# A free OpenCode "zen" model; used unless MUZIK_TAG_MODEL overrides it.
+DEFAULT_OPENCODE_MODEL = "opencode/deepseek-v4-flash-free"
 _CLI_TIMEOUT = 120
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
@@ -272,11 +274,10 @@ def _codex_chooser(model: str | None, log: Logger) -> Chooser:
 
 
 def _opencode_chooser(model: str | None, log: Logger) -> Chooser:
+    chosen = model or DEFAULT_OPENCODE_MODEL
+
     def build_cmd() -> list[str]:
-        cmd = ["opencode", "run"]
-        if model:
-            cmd += ["--model", model]
-        return cmd
+        return ["opencode", "run", "--model", chosen]
 
     return _cli_chooser(build_cmd, pass_prompt_via_stdin=False, log=log)
 

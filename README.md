@@ -190,13 +190,17 @@ Choose the backend with `MUZIK_TAG_BACKEND` and the model with `MUZIK_TAG_MODEL`
 |---------|-----|-------|
 | `openrouter` (default) | pydantic-ai over OpenRouter | `OPENROUTER_API_KEY`; model defaults to `z-ai/glm-5.2:free` |
 | `codex` | shells out to `codex exec` | Codex CLI on `PATH`, signed in; uses your ChatGPT subscription. Defaults to the fast `gpt-5.3-codex-spark` model |
-| `opencode` | shells out to `opencode run` | OpenCode CLI on `PATH`; set `MUZIK_TAG_MODEL=provider/model` to a free "zen" model you are authorized for |
+| `opencode` | shells out to `opencode run` | OpenCode CLI on `PATH`. Defaults to the free `opencode/deepseek-v4-flash-free` zen model — free, so no paid quota, only rate limits |
 
 ```sh
 MUZIK_TAG_BACKEND=codex uv run muzik import --agent --library "mb_albumid::^$"
-MUZIK_TAG_BACKEND=opencode MUZIK_TAG_MODEL=opencode/<free-model> \
-  uv run muzik import ~/Music --agent
+MUZIK_TAG_BACKEND=opencode uv run muzik import ~/Music --agent   # free zen model
 ```
+
+For bulk tagging, prefer `openrouter` or a free `opencode` zen model: each
+`codex exec` runs a multi-turn agent loop that costs tens of thousands of tokens
+per album, which exhausts a subscription quota quickly. Keep codex for a few
+hard cases.
 
 Without a usable backend, only the strong-match fast path runs and uncertain
 albums are skipped. When a CLI backend errors (missing model, not signed in),
