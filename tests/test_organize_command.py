@@ -78,6 +78,9 @@ def test_organize_uses_passthrough_for_tag_only(
 
     monkeypatch.setattr(organize, "run_passthrough", fake_run_passthrough)
     monkeypatch.setattr(organize, "_beet_bin", lambda: "beet")
+    # Isolate from any real beets config on the machine so the -c flag is
+    # driven by the test, not the developer's environment.
+    monkeypatch.setattr(organize, "BEETS_CONFIG", tmp_path / "no-config.yaml")
 
     organize.organize_cmd(
         directory=album,
