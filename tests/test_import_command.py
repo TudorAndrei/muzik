@@ -24,6 +24,7 @@ def test_import_uses_internal_import_with_default_move(
 
     import_command.import_cmd(
         directory=library,
+        agent=False,
         copy=False,
         link=False,
         nowrite=False,
@@ -129,6 +130,7 @@ def test_import_preserves_nowrite_quiet_dry_run_and_config(
 
     import_command.import_cmd(
         directory=library,
+        agent=False,
         copy=False,
         link=False,
         nowrite=True,

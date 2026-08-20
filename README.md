@@ -156,12 +156,34 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik bandcamp` | Download Bandcamp collection and organize with beets |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Tag/import audio with beets |
-| `muzik import <dir>` | Import an existing music library into beets |
+| `muzik import <dir>` | Import an existing music library into beets (`--agent` auto-tags) |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik gui` | Open the DearPyGui workflow interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage beets configuration |
+
+## Agentic tagging
+
+`muzik import --agent` tags a library without prompts. For each album, beets
+finds candidate releases on MusicBrainz; the agent then chooses:
+
+- A **strong match** (distance ≤ 0.10) is applied at once, with no LLM call.
+- An **uncertain match** is sent to an LLM, which picks a candidate, keeps the
+  files as-is, or skips them. It only chooses from the candidates beets found;
+  it never invents tags.
+- **Confident picks are applied; the rest are skipped** for manual review.
+
+```sh
+muzik import ~/Music --agent                     # tag untracked files
+muzik import --agent --library "mb_albumid::^$"  # re-tag unmatched albums
+muzik import ~/Music --agent --dry-run           # preview (beets shows nothing to apply)
+```
+
+The LLM needs `OPENROUTER_API_KEY`. Without it, only the strong-match fast path
+runs and uncertain albums are skipped. The model defaults to
+`z-ai/glm-5.2:free` and is overridable with `MUZIK_TAG_MODEL`. Files are moved
+and retagged, so keep a backup.
 
 ## Spotify playlist exports
 

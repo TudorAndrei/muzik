@@ -7,7 +7,8 @@ from typing import Optional
 import typer
 
 from muzik.config import BEETS_CONFIG
-from muzik.core.beets.decisions import NonInteractiveBeetsDecisions
+from muzik.core.beets.agent_decisions import AgentBeetsDecisions
+from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
 from muzik.core.beets.importer import ImportOptions, import_paths
 from muzik.ui.console import console, err
 
@@ -29,8 +30,19 @@ def _notify(directory: Path) -> None:
 
 
 def import_cmd(
-    directory: Path = typer.Argument(
-        ..., help="Root directory of the existing music library to import."
+    directory: Optional[Path] = typer.Argument(
+        None, help="Root directory of the existing music library to import."
+    ),
+    agent: bool = typer.Option(
+        False,
+        "--agent",
+        help="Let an LLM auto-pick matches (applies confident ones, skips the rest).",
+    ),
+    library: Optional[str] = typer.Option(
+        None,
+        "--library",
+        help="Re-tag existing library items matching this beets query "
+        '(instead of importing a directory), e.g. "mb_albumid::^$".',
     ),
     copy: bool = typer.Option(
         False,
@@ -74,11 +86,21 @@ def import_cmd(
     skipped.  By default files are **moved** into the beets library directory.
     Use ``--copy`` to keep originals in place, or ``--link`` to create symlinks.
 
+    Pass ``--agent`` to let an LLM pick matches automatically: confident matches
+    are applied and uncertain ones are skipped. Pass ``--library`` with a beets
+    query to re-tag items already in the library instead of importing a
+    directory (for example ``--library "mb_albumid::^$"`` for unmatched albums).
+    Combine with ``--dry-run`` to preview without changing files.
+
     Run ``muzik init`` first to make sure beets is configured.
     """
     beets_cfg = config or BEETS_CONFIG
 
-    if not directory.exists():
+    if directory is None and not library:
+        err("[red]Give a DIRECTORY to import, or --library QUERY to re-tag.[/red]")
+        raise typer.Exit(1)
+
+    if directory is not None and not directory.exists():
         err(f"[red]Directory not found: {directory}[/red]")
         raise typer.Exit(1)
 
@@ -88,13 +110,24 @@ def import_cmd(
             "Run [bold]muzik init[/bold] to create one."
         )
 
-    console.print(f"[bold]beet import[/bold] {directory}")
-    if not quiet:
+    target = str(directory) if directory is not None else f"library query {library!r}"
+    console.print(f"[bold]beet import[/bold] {target}{' (agent)' if agent else ''}")
+    if not quiet and directory is not None:
         _notify(directory)
+
+    decisions: BeetsDecisions
+    if agent:
+        decisions = AgentBeetsDecisions(
+            log=lambda message: console.print(f"[dim]agent:[/dim] {message}")
+        )
+    else:
+        decisions = NonInteractiveBeetsDecisions(quiet=quiet)
+
     try:
         import_paths(
             ImportOptions(
-                paths=[directory],
+                paths=[directory] if directory is not None else [],
+                query=library,
                 config_path=beets_cfg if beets_cfg.exists() else None,
                 copy=copy,
                 link=link,
@@ -104,7 +137,7 @@ def import_cmd(
                 dry_run=dry_run,
                 incremental=True,
             ),
-            decisions=NonInteractiveBeetsDecisions(quiet=quiet),
+            decisions=decisions,
         )
     except Exception as exc:
         err(f"[red]beets import failed:[/red] {exc}")
