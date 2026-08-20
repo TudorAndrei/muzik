@@ -30,9 +30,9 @@ from muzik.core.musicbrainz import (
 )
 from muzik.core.description_chapters import (
     description_has_timestamps,
-    extract_chapters_from_description,
     get_description_from_info_json,
 )
+from muzik.core.tracklist import chapters_from_description
 from muzik.core.sources.soulseek import SoulseekSource
 from muzik.core.sources.youtube import (
     get_playlist_video_ids,
@@ -122,16 +122,14 @@ def _description_chapters(
     events: WorkflowEventEmitter,
 ) -> Optional[list[Chapter]]:
     """Extract and review timestamped chapters from a YouTube info sidecar."""
-    import os
-
     info_path = af.with_suffix("").with_suffix(".info.json")
-    if not info_path.exists() or not os.environ.get("OPENROUTER_API_KEY"):
+    if not info_path.exists():
         return None
     description = get_description_from_info_json(info_path)
     if not description or not description_has_timestamps(description):
         return None
-    llm_chapters, llm_err = extract_chapters_from_description(description)
-    if llm_err or not llm_chapters:
+    llm_chapters = chapters_from_description(description)
+    if not llm_chapters:
         return None
     events.emit(
         ChapterReviewRequestedEvent(

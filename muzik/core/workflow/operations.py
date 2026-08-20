@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import cast
 
@@ -14,9 +13,9 @@ from muzik.core.beets.service import organize_paths, tag_only_with_beet
 from muzik.core.chapters import Chapter, find_chapters, serialize_chapters
 from muzik.core.description_chapters import (
     description_has_timestamps,
-    extract_chapters_from_description,
     get_description_from_info_json,
 )
+from muzik.core.tracklist import chapters_from_description
 from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters_verbose
 from muzik.core.sources.base import Candidate
 from muzik.core.sources.soulseek import SoulseekSource
@@ -235,13 +234,16 @@ def _description_chapters(
     events: WorkflowEventEmitter,
 ) -> list[Chapter] | None:
     info_path = path.with_suffix("").with_suffix(".info.json")
-    if not info_path.exists() or not os.environ.get("OPENROUTER_API_KEY"):
+    if not info_path.exists():
         return None
     description = get_description_from_info_json(info_path)
     if not description or not description_has_timestamps(description):
         return None
-    chapters, error = extract_chapters_from_description(description)
-    if error or not chapters:
+    chapters = chapters_from_description(
+        description,
+        log=lambda message: events.emit(MessageEvent(message, severity="debug")),
+    )
+    if not chapters:
         return None
     events.emit(
         ChapterReviewRequestedEvent(

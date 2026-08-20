@@ -371,17 +371,28 @@ def decision_from_text(text: str, log: Logger) -> MatchDecision | None:
         return None
 
 
-def extract_action_json(text: str) -> dict[str, Any] | None:
-    """Return the last balanced JSON object containing an ``action`` key."""
+def extract_json_object(
+    text: str, required_key: str | None = None
+) -> dict[str, Any] | None:
+    """Return the last balanced JSON object in *text*, ignoring logs and prose.
+
+    When *required_key* is given, only objects containing that key qualify, so a
+    stray ``{}`` in the output is not mistaken for the answer.
+    """
     clean = _ANSI.sub("", text)
     found: dict[str, Any] | None = None
     for index, char in enumerate(clean):
         if char != "{":
             continue
         obj = _parse_object_at(clean, index)
-        if isinstance(obj, dict) and "action" in obj:
+        if isinstance(obj, dict) and (required_key is None or required_key in obj):
             found = obj
     return found
+
+
+def extract_action_json(text: str) -> dict[str, Any] | None:
+    """Return the last balanced JSON object containing an ``action`` key."""
+    return extract_json_object(text, "action")
 
 
 def _parse_object_at(text: str, start: int) -> Any:
