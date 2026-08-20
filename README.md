@@ -211,6 +211,10 @@ download archive with every id already in the output folder. yt-dlp then skips
 those ids, so a track is fetched only once — even when it appears in more than
 one playlist. Use `muzik downloaded` to list the current inventory.
 
+To override the skip and download again, use `--force` (`-f`) on the CLI, or the
+**Force** checkbox in the desktop launcher. Force ignores the archive and passes
+`--force-overwrites` to yt-dlp, so an existing file is replaced.
+
 ## Credits
 
 - Bandcamp collection downloading is a Python port of [bandsnatch](https://github.com/Ovyerus/bandsnatch)

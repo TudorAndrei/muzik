@@ -36,12 +36,14 @@ def _download_audio(
     quality: str = "0",
     no_chapters: bool = False,
     archive_file: Optional[Path] = None,
+    force: bool = False,
     cancellation: CancellationToken | None = None,
 ) -> None:
     """Download audio from YouTube, saving [ID] in the filename for cache compatibility.
 
     After downloading, reports whether each file is a single track or an album
-    with chapter markers, so you know what to run next.
+    with chapter markers, so you know what to run next. When *force* is set, an
+    already-downloaded file is fetched again instead of skipped.
     """
     output.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +53,7 @@ def _download_audio(
         quality=quality,
         no_chapters=no_chapters,
         archive_file=archive_file,
+        force=force,
     )
 
     console.print(f"[bold cyan]Downloading:[/bold cyan] {url}")

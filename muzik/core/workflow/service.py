@@ -669,7 +669,9 @@ def _run_playlist_workflow(
     archive_file = cache_mod.CACHE_DIR / f"ytdlp_archive_{playlist_id}.txt"
     operations.prepopulate_archive(archive_file)
     # Skip ids already in the output folder, even from other playlists.
-    seed_archive_from_downloads(archive_file, request.output)
+    # --force overrides this, so a known id is downloaded again.
+    if not options.force:
+        seed_archive_from_downloads(archive_file, request.output)
     cancellation.raise_if_cancelled()
     playlist_state = load_playlist_state(playlist_id)
 
@@ -814,7 +816,7 @@ def _process_playlist_video(
         options.audio_source == AudioSource.AUTO and operations.soulseek_ready()
     )
     if use_soulseek:
-        files_for_video = _cached_playlist_files(entry)
+        files_for_video = [] if options.force else _cached_playlist_files(entry)
         if not files_for_video:
             try:
                 files_for_video = cast(
@@ -858,13 +860,13 @@ def _process_playlist_video(
     split_dir_for_video: Path | None = None
     audio_file: Path | None = None
 
-    if entry.get("status") == "split":
+    if entry.get("status") == "split" and not options.force:
         split_dir = Path(entry.get("split_dir", ""))
         if split_dir.exists():
             split_dir_for_video = split_dir
 
     if split_dir_for_video is None:
-        if entry.get("status") == "downloaded":
+        if entry.get("status") == "downloaded" and not options.force:
             cached = Path(entry["audio_file"])
             if cached.exists():
                 audio_file = cached
@@ -962,7 +964,7 @@ def _acquire_single_workflow_inputs(
     cache_key = f"yt_{yt_id}" if yt_id else None
     cached_path = (
         _existing_cached_audio(cache_key)
-        if not audio_files and not local_input
+        if not audio_files and not local_input and not options.force
         else None
     )
     if cached_path:
@@ -970,7 +972,7 @@ def _acquire_single_workflow_inputs(
 
     cached_entry = (
         cache_mod.get(cache_key)
-        if cache_key and not audio_files and not local_input
+        if cache_key and not audio_files and not local_input and not options.force
         else None
     )
     if cached_entry:
@@ -984,7 +986,7 @@ def _acquire_single_workflow_inputs(
     if local_input:
         return audio_files, pre_split_dirs
 
-    if not audio_files and yt_id and request.output.exists():
+    if not audio_files and yt_id and request.output.exists() and not options.force:
         audio_files = find_audio_by_id(request.output, yt_id)
     if audio_files:
         if cache_key:

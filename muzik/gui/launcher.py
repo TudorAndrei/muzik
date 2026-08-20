@@ -17,6 +17,12 @@ from muzik.gui.theme import ACCENT, bind_primary_button
 LAUNCHER_WINDOW = "launcher-window"
 ERROR_TEXT = "launcher-error"
 
+# Hover help for switches whose effect is not obvious from the label.
+SWITCH_HELP = {
+    "force": "Re-download even if the file is already in the output folder; "
+    "ignore cache and reprocess from scratch.",
+}
+
 FIELD_TAGS = {
     "raw": "launcher-raw",
     "output": "launcher-output",
@@ -154,6 +160,9 @@ class LauncherView:
                             default_value=default,
                             tag=FIELD_TAGS[name],
                         )
+                        if name in SWITCH_HELP:
+                            with dpg.tooltip(dpg.last_item()):
+                                dpg.add_text(SWITCH_HELP[name])
 
             dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
             with dpg.group(horizontal=True):

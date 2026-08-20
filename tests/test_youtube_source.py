@@ -31,7 +31,17 @@ def test_build_download_command_includes_expected_flags() -> None:
     assert "--extract-audio" in cmd
     assert "--write-info-json" in cmd
     assert "--download-archive" in cmd
+    assert "--force-overwrites" not in cmd
     assert cmd[-1] == "https://youtube.com/watch?v=abcdefghijk"
+
+
+def test_build_download_command_force_adds_force_overwrites() -> None:
+    cmd = youtube.build_download_command(
+        "https://youtube.com/watch?v=abcdefghijk",
+        force=True,
+    )
+
+    assert "--force-overwrites" in cmd
 
 
 def test_get_playlist_video_ids_uses_yt_dlp_flat_playlist(monkeypatch) -> None:

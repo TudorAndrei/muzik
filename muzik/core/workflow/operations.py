@@ -77,7 +77,9 @@ def build_workflow_operations(
             source.download(
                 candidate,
                 output,
-                archive_file=archive_file,
+                # Under force, ignore the archive so a known id is re-fetched.
+                archive_file=None if options.force else archive_file,
+                force=options.force,
                 cancellation=cancellation,
             )
         except RuntimeError:

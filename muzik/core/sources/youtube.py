@@ -51,8 +51,14 @@ def build_download_command(
     quality: str = "0",
     no_chapters: bool = False,
     archive_file: Optional[Path] = None,
+    force: bool = False,
 ) -> list[str]:
-    """Build the yt-dlp audio download command."""
+    """Build the yt-dlp audio download command.
+
+    When *force* is set, add ``--force-overwrites`` so an already-downloaded
+    file is fetched again instead of skipped. The caller also drops the download
+    archive under force, so the skip cannot come from either side.
+    """
     cmd = [
         "yt-dlp",
         "--format",
@@ -67,6 +73,8 @@ def build_download_command(
     ]
     if not no_chapters:
         cmd += ["--write-info-json", "--embed-chapters"]
+    if force:
+        cmd.append("--force-overwrites")
     if archive_file:
         cmd += ["--download-archive", str(archive_file)]
     cmd.append(url)
@@ -213,6 +221,7 @@ class YouTubeSource:
         quality: str = "0",
         no_chapters: bool = False,
         archive_file: Optional[Path] = None,
+        force: bool = False,
         cancellation: CancellationToken | None = None,
     ) -> DownloadResult:
         output.mkdir(parents=True, exist_ok=True)
@@ -224,6 +233,7 @@ class YouTubeSource:
             quality=quality,
             no_chapters=no_chapters,
             archive_file=archive_file,
+            force=force,
         )
         if cancellation is None:
             rc = run_streaming(command, cwd=output, label="yt-dlp")

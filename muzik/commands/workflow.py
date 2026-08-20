@@ -540,7 +540,7 @@ def workflow_cmd(
         False,
         "--force",
         "-f",
-        help="Ignore download/split cache and reprocess from scratch.",
+        help="Re-download even if present, ignore cache, reprocess from scratch.",
     ),
     metadata_source: str = typer.Option(
         MetadataSource.AUTO.value,
@@ -626,7 +626,9 @@ def workflow_cmd(
                 format="bestaudio",
                 quality="0",
                 no_chapters=False,
-                archive_file=archive_file,
+                # Under force, ignore the archive so a known id is re-fetched.
+                archive_file=None if force else archive_file,
+                force=force,
                 cancellation=cancellation,
             )
         except (SystemExit, typer.Exit) as exc:
