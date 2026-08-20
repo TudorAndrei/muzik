@@ -288,7 +288,7 @@ def _cli_chooser(
     log: Logger,
     runner: Callable[[list[str], str | None], str | None] | None = None,
 ) -> Chooser:
-    run = runner or _run_cli
+    run = runner or (lambda cmd, stdin: _run_cli(cmd, stdin, log))
 
     def choose(task: BeetsTaskView) -> MatchDecision | None:
         prompt = cli_prompt(task)
@@ -304,7 +304,7 @@ def _cli_chooser(
     return choose
 
 
-def _run_cli(cmd: list[str], stdin_text: str | None) -> str | None:
+def _run_cli(cmd: list[str], stdin_text: str | None, log: Logger) -> str | None:
     try:
         proc = subprocess.run(
             cmd,
@@ -314,11 +314,34 @@ def _run_cli(cmd: list[str], stdin_text: str | None) -> str | None:
             timeout=_CLI_TIMEOUT,
         )
     except FileNotFoundError:
+        log(f"{cmd[0]} not found on PATH")
         return None
     except subprocess.TimeoutExpired:
+        log(f"{cmd[0]} timed out after {_CLI_TIMEOUT}s")
         return None
-    # Return stdout even on a non-zero exit; the reply may still be there.
-    return proc.stdout or proc.stderr or None
+    # The reply is on stdout. An empty stdout means the CLI failed; surface the
+    # real reason from stderr (e.g. usage-limit, auth) instead of its banner.
+    if proc.stdout.strip():
+        return proc.stdout
+    reason = _last_error_line(proc.stderr)
+    detail = f": {reason}" if reason else ""
+    log(f"{cmd[0]} produced no output (exit {proc.returncode}){detail}")
+    return None
+
+
+def _last_error_line(stderr: str) -> str | None:
+    clean = _ANSI.sub("", stderr)
+    keys = ("ERROR:", "error.message=", "usage limit", "unauthorized", "forbidden")
+    hit: str | None = None
+    for line in clean.splitlines():
+        low = line.lower()
+        if any(key.lower() in low for key in keys):
+            hit = line.strip()
+    if hit is None:
+        return None
+    if "error.message=" in hit:
+        hit = hit.split("error.message=", 1)[1]
+    return hit[:200]
 
 
 def cli_prompt(task: BeetsTaskView) -> str:
