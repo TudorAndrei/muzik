@@ -10,6 +10,7 @@ import dearpygui.dearpygui as dpg
 from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate
+from muzik.gui.theme import ACCENT
 
 
 PIPELINE_WINDOW = "pipeline-window"
@@ -189,7 +190,7 @@ class PipelineView:
     @staticmethod
     def _add_table(label: str, tag: str, columns: tuple[str, ...]) -> None:
         with dpg.child_window(width=400, height=260):
-            dpg.add_text(label, color=(100, 180, 255))
+            dpg.add_text(label, color=ACCENT)
             with dpg.table(
                 tag=tag,
                 header_row=True,

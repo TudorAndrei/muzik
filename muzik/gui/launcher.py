@@ -11,6 +11,7 @@ import dearpygui.dearpygui as dpg
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
 from muzik.core.workflow.launch import WorkflowLaunchConfig
 from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
+from muzik.gui.theme import ACCENT, bind_primary_button
 
 
 LAUNCHER_WINDOW = "launcher-window"
@@ -79,7 +80,7 @@ class LauncherView:
 
     def build(self) -> None:
         with dpg.window(tag=LAUNCHER_WINDOW, label="muzik workflow"):
-            dpg.add_text("Workflow", color=(100, 180, 255))
+            dpg.add_text("Workflow", color=ACCENT)
             dpg.add_separator()
             self._path_row("URL or path", "raw", "raw-file-dialog", False, "")
             self._path_row(
@@ -154,9 +155,10 @@ class LauncherView:
 
             dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
             with dpg.group(horizontal=True):
-                dpg.add_button(label="Run", callback=self._run, width=100)
+                run_button = dpg.add_button(label="Run", callback=self._run, width=100)
                 dpg.add_button(label="Settings", callback=self._on_settings, width=100)
                 dpg.add_button(label="Quit", callback=self._quit, width=100)
+            bind_primary_button(run_button)
 
     def read_config(self) -> WorkflowLaunchConfig:
         values = {name: dpg.get_value(tag) for name, tag in FIELD_TAGS.items()}

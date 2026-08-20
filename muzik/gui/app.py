@@ -33,6 +33,7 @@ from muzik.gui.bridge import GuiBridge
 from muzik.gui.launcher import LAUNCHER_WINDOW, LauncherView
 from muzik.gui.pipeline import PipelineView
 from muzik.gui.settings import SETTINGS_WINDOW, SettingsView
+from muzik.gui.theme import apply_global_theme
 
 
 WorkflowOperationsFactory = Callable[..., WorkflowRunOperations]
@@ -62,6 +63,7 @@ class MuzikGuiApp:
         dpg.create_context()
         try:
             dpg.configure_app(manual_callback_management=True)
+            apply_global_theme()
             self.launcher.build()
             dpg.create_viewport(title="muzik", width=1280, height=800)
             dpg.setup_dearpygui()
