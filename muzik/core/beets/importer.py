@@ -86,6 +86,9 @@ class ImportOptions:
     quiet: bool = False
     dry_run: bool = False
     incremental: bool = True
+    # When set, override the config's duplicate_action (e.g. "remove" so a
+    # re-download replaces the existing library album instead of being skipped).
+    duplicate_action: str | None = None
 
     def normalized(self) -> "ImportOptions":
         copy = self.copy
@@ -104,6 +107,7 @@ class ImportOptions:
             quiet=self.quiet,
             dry_run=self.dry_run,
             incremental=self.incremental,
+            duplicate_action=self.duplicate_action,
         )
 
 
@@ -118,6 +122,8 @@ def apply_import_options(options: ImportOptions) -> None:
     import_config["quiet"] = options.quiet
     import_config["pretend"] = options.dry_run
     import_config["incremental"] = options.incremental
+    if options.duplicate_action is not None:
+        import_config["duplicate_action"] = options.duplicate_action
 
 
 class MuzikImportSession(importer.ImportSession):

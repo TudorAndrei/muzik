@@ -380,6 +380,8 @@ def _process_audio_files(
                         move=True,
                         dry_run=dry_run,
                         incremental=True,
+                        # --force replaces an existing library album.
+                        duplicate_action="remove" if force else None,
                     ),
                     decisions=beets_decisions,
                     events=beets_events,

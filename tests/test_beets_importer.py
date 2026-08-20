@@ -92,6 +92,17 @@ def test_apply_import_options_maps_flags_to_beets_config() -> None:
     assert import_config["incremental"].get(bool) is False
 
 
+def test_apply_import_options_sets_duplicate_action_when_given() -> None:
+    beets_config["import"]["duplicate_action"] = "skip"
+    apply_import_options(ImportOptions(paths=[Path("Album")]))
+    assert beets_config["import"]["duplicate_action"].get(str) == "skip"
+
+    apply_import_options(
+        ImportOptions(paths=[Path("Album")], duplicate_action="remove")
+    )
+    assert beets_config["import"]["duplicate_action"].get(str) == "remove"
+
+
 def test_muzik_import_session_delegates_decisions_and_emits_events() -> None:
     decisions = FakeDecisions()
     events = RecordingBeetsEventEmitter()
