@@ -180,10 +180,27 @@ muzik import --agent --library "mb_albumid::^$"  # re-tag unmatched albums
 muzik import ~/Music --agent --dry-run           # preview (beets shows nothing to apply)
 ```
 
-The LLM needs `OPENROUTER_API_KEY`. Without it, only the strong-match fast path
-runs and uncertain albums are skipped. The model defaults to
-`z-ai/glm-5.2:free` and is overridable with `MUZIK_TAG_MODEL`. Files are moved
-and retagged, so keep a backup.
+Files are moved and retagged, so keep a backup.
+
+### Agent backends
+
+Choose the backend with `MUZIK_TAG_BACKEND` and the model with `MUZIK_TAG_MODEL`:
+
+| Backend | How | Setup |
+|---------|-----|-------|
+| `openrouter` (default) | pydantic-ai over OpenRouter | `OPENROUTER_API_KEY`; model defaults to `z-ai/glm-5.2:free` |
+| `codex` | shells out to `codex exec` | Codex CLI on `PATH`, signed in; uses your ChatGPT subscription |
+| `opencode` | shells out to `opencode run` | OpenCode CLI on `PATH`; set `MUZIK_TAG_MODEL=provider/model` to a free "zen" model you are authorized for |
+
+```sh
+MUZIK_TAG_BACKEND=codex uv run muzik import --agent --library "mb_albumid::^$"
+MUZIK_TAG_BACKEND=opencode MUZIK_TAG_MODEL=opencode/<free-model> \
+  uv run muzik import ~/Music --agent
+```
+
+Without a usable backend, only the strong-match fast path runs and uncertain
+albums are skipped. When a CLI backend errors (missing model, not signed in),
+the reason is printed as an `agent:` line and the album is skipped.
 
 ## Spotify playlist exports
 

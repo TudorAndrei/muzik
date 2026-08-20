@@ -5,18 +5,32 @@ It never invents tags: it only chooses a listed candidate, keeps the files
 as-is, or skips them. Strong matches are auto-applied without any LLM call.
 
 Policy: auto-apply confident matches, skip the uncertain ones for manual
-review. Requires ``OPENROUTER_API_KEY``; without it, only the strong-match
-fast path applies and everything else is skipped.
+review.
+
+Backends (``MUZIK_TAG_BACKEND``):
+- ``openrouter`` (default): pydantic-ai over OpenRouter; needs
+  ``OPENROUTER_API_KEY``. Model defaults to ``z-ai/glm-5.2:free``.
+- ``codex``: shells out to the Codex CLI (``codex exec``), using your ChatGPT
+  subscription.
+- ``opencode``: shells out to the OpenCode CLI (``opencode run``), which offers
+  free "zen" models.
+
+The model is overridable with ``MUZIK_TAG_MODEL`` for every backend. Without a
+usable backend, only the strong-match fast path applies and the rest are
+skipped.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import os
 from pathlib import Path
+import re
+import subprocess
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from muzik.core.beets.decisions import (
     BeetsDuplicateDecision,
@@ -25,7 +39,10 @@ from muzik.core.beets.decisions import (
 from muzik.core.beets.views import BeetsDuplicateView, BeetsMatchView, BeetsTaskView
 
 
-DEFAULT_MODEL = "z-ai/glm-5.2:free"
+DEFAULT_BACKEND = "openrouter"
+DEFAULT_OPENROUTER_MODEL = "z-ai/glm-5.2:free"
+_CLI_TIMEOUT = 120
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 # Distance is 0 (perfect) .. 1 (poor). At or below this, apply without the LLM.
 STRONG_DISTANCE = 0.10
@@ -69,6 +86,7 @@ class AgentBeetsDecisions:
     def __init__(
         self,
         *,
+        backend: str | None = None,
         model_name: str | None = None,
         strong_distance: float = STRONG_DISTANCE,
         min_confidence: float = MIN_CONFIDENCE,
@@ -76,7 +94,8 @@ class AgentBeetsDecisions:
         log: Logger | None = None,
         duplicate_decision: BeetsDuplicateDecision = BeetsDuplicateDecision.SKIP,
     ) -> None:
-        self.model_name = model_name or os.environ.get("MUZIK_TAG_MODEL", DEFAULT_MODEL)
+        self.backend = backend or os.environ.get("MUZIK_TAG_BACKEND", DEFAULT_BACKEND)
+        self.model_name = model_name or os.environ.get("MUZIK_TAG_MODEL")
         self.strong_distance = strong_distance
         self.min_confidence = min_confidence
         self._chooser = chooser
@@ -156,7 +175,7 @@ class AgentBeetsDecisions:
 
     def _choose(self, task: BeetsTaskView) -> MatchDecision | None:
         if self._chooser is None:
-            self._chooser = _build_chooser(self.model_name, self._log)
+            self._chooser = _build_chooser(self.backend, self.model_name, self._log)
         try:
             return self._chooser(task)
         except Exception as exc:  # noqa: BLE001 - fall back to a safe skip
@@ -195,7 +214,19 @@ def build_prompt(task: BeetsTaskView) -> str:
     return "\n".join(lines)
 
 
-def _build_chooser(model_name: str, log: Logger) -> Chooser:
+def _build_chooser(backend: str, model_name: str | None, log: Logger) -> Chooser:
+    """Return a chooser for the configured backend."""
+    model = model_name or os.environ.get("MUZIK_TAG_MODEL")
+    if backend == "codex":
+        return _codex_chooser(model, log)
+    if backend == "opencode":
+        return _opencode_chooser(model, log)
+    if backend != "openrouter":
+        log(f"unknown MUZIK_TAG_BACKEND={backend!r}; using openrouter")
+    return _openrouter_chooser(model or DEFAULT_OPENROUTER_MODEL, log)
+
+
+def _openrouter_chooser(model_name: str, log: Logger) -> Chooser:
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         log("agent disabled: OPENROUTER_API_KEY is not set")
@@ -227,3 +258,130 @@ def _build_chooser(model_name: str, log: Logger) -> Chooser:
             return None
 
     return choose
+
+
+def _codex_chooser(model: str | None, log: Logger) -> Chooser:
+    def build_cmd() -> list[str]:
+        cmd = ["codex", "exec", "--skip-git-repo-check"]
+        if model:
+            cmd += ["--model", model]
+        return cmd
+
+    return _cli_chooser(build_cmd, pass_prompt_via_stdin=True, log=log)
+
+
+def _opencode_chooser(model: str | None, log: Logger) -> Chooser:
+    def build_cmd() -> list[str]:
+        cmd = ["opencode", "run"]
+        if model:
+            cmd += ["--model", model]
+        return cmd
+
+    return _cli_chooser(build_cmd, pass_prompt_via_stdin=False, log=log)
+
+
+def _cli_chooser(
+    build_cmd: Callable[[], list[str]],
+    *,
+    pass_prompt_via_stdin: bool,
+    log: Logger,
+    runner: Callable[[list[str], str | None], str | None] | None = None,
+) -> Chooser:
+    run = runner or _run_cli
+
+    def choose(task: BeetsTaskView) -> MatchDecision | None:
+        prompt = cli_prompt(task)
+        cmd = build_cmd()
+        stdin_text = prompt if pass_prompt_via_stdin else None
+        if not pass_prompt_via_stdin:
+            cmd = [*cmd, prompt]
+        output = run(cmd, stdin_text)
+        if not output:
+            return None
+        return decision_from_text(output, log)
+
+    return choose
+
+
+def _run_cli(cmd: list[str], stdin_text: str | None) -> str | None:
+    try:
+        proc = subprocess.run(
+            cmd,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=_CLI_TIMEOUT,
+        )
+    except FileNotFoundError:
+        return None
+    except subprocess.TimeoutExpired:
+        return None
+    # Return stdout even on a non-zero exit; the reply may still be there.
+    return proc.stdout or proc.stderr or None
+
+
+def cli_prompt(task: BeetsTaskView) -> str:
+    """Build a single prompt for a CLI backend, demanding JSON-only output."""
+    return (
+        _SYSTEM_PROMPT
+        + "\n\n"
+        + build_prompt(task)
+        + "\n\nRespond with ONLY a JSON object, no prose and no code fences:\n"
+        + '{"action": "pick|as_is|skip", "candidate_index": <int or null>, '
+        + '"confidence": <0.0-1.0>, "reason": "<short>"}'
+    )
+
+
+def decision_from_text(text: str, log: Logger) -> MatchDecision | None:
+    """Parse a MatchDecision from arbitrary CLI output."""
+    obj = extract_action_json(text)
+    if obj is None:
+        snippet = _ANSI.sub("", text).strip().replace("\n", " ")[:200]
+        log(f"no JSON decision in CLI output: {snippet}")
+        return None
+    try:
+        return MatchDecision.model_validate(obj)
+    except ValidationError as exc:
+        log(f"invalid decision JSON: {exc}")
+        return None
+
+
+def extract_action_json(text: str) -> dict[str, Any] | None:
+    """Return the last balanced JSON object containing an ``action`` key."""
+    clean = _ANSI.sub("", text)
+    found: dict[str, Any] | None = None
+    for index, char in enumerate(clean):
+        if char != "{":
+            continue
+        obj = _parse_object_at(clean, index)
+        if isinstance(obj, dict) and "action" in obj:
+            found = obj
+    return found
+
+
+def _parse_object_at(text: str, start: int) -> Any:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+    return None
