@@ -4,11 +4,37 @@ Used as a fallback when an audio file has no chapter markers but appears to be
 an album (long duration, artist/album identifiable from filename or info.json).
 """
 
+import re
 from typing import Optional
 
 import musicbrainzngs
 
 from muzik.core.chapters import Chapter
+
+
+_YEAR_BRACKET = re.compile(r"\s*[\(\[](?:19|20)\d{2}[\)\]]")
+_ALBUM_NOISE = re.compile(
+    r"\s*[\(\[]\s*(?:full\s+album|complete\s+album|full\s+lp|official\s+album"
+    r"|remaster(?:ed)?|deluxe(?:\s+edition)?|bonus\s+tracks?)\s*[\)\]]",
+    re.IGNORECASE,
+)
+_TRAILING_YEAR = re.compile(r"\s+(?:19|20)\d{2}$")
+
+
+def clean_album_variants(album: str) -> list[str]:
+    """Return album-name variants to try against MusicBrainz, best first.
+
+    Strips a bracketed year and 'full album'-style suffixes, and adds a variant
+    with a bare trailing year removed ('Seeker 2023' -> 'Seeker') so an album
+    that YouTube titled with a year still matches.
+    """
+    clean = _ALBUM_NOISE.sub("", _YEAR_BRACKET.sub("", album)).strip()
+    variants = [clean]
+    stripped = _TRAILING_YEAR.sub("", clean).strip()
+    if stripped and stripped != clean:
+        variants.append(stripped)
+    return variants
+
 
 musicbrainzngs.set_useragent(
     "music-tools", "0.1.0", "https://github.com/local/music-tools"
@@ -43,7 +69,12 @@ def search_releases(
         query=" AND ".join(query_parts),
         limit=limit,
     )
-    return result.get("release-list", [])
+    releases = result.get("release-list", [])
+    # musicbrainzngs puts the match score under "ext:score"; expose it as an int
+    # "score" so callers can threshold on it.
+    for release in releases:
+        release["score"] = int(release.get("ext:score", 0) or 0)
+    return releases
 
 
 def get_tracklist(release_id: str) -> list[dict]:
@@ -110,17 +141,7 @@ def lookup_chapters(
         if artist.lower().endswith(suffix.lower()):
             artist_variants.append(artist[: -len(suffix)].strip())
 
-    # Clean up album name — strip parenthetical years and common YouTube suffixes
-    import re as _re
-
-    clean_album = _re.sub(r"\s*[\(\[](?:19|20)\d{2}[\)\]]", "", album).strip()
-    clean_album = _re.sub(
-        r"\s*[\(\[]\s*(?:full\s+album|complete\s+album|full\s+lp|official\s+album"
-        r"|remaster(?:ed)?|deluxe(?:\s+edition)?|bonus\s+tracks?)\s*[\)\]]",
-        "",
-        clean_album,
-        flags=_re.IGNORECASE,
-    ).strip()
+    album_variants = clean_album_variants(album)
 
     # Don't filter by year if it looks like an upload year (user uploaded 2019, album from 1998)
     # Just skip year to broaden the search
@@ -130,21 +151,22 @@ def lookup_chapters(
     queries.append(("", None))  # album-only fallback
 
     try:
-        for q_artist, q_year in queries:
-            releases = search_releases(q_artist, clean_album, q_year, limit=5)
-            if releases:
-                best = releases[0]
-                score = int(best.get("score", 0))
-                if score < 80:
-                    continue
-                rid = best.get("id", "")
-                release_title = best.get("title", album)
-                if not rid:
-                    continue
-                tracks = get_tracklist(rid)
-                chapters = tracks_to_chapters(tracks)
-                if chapters:
-                    return chapters, release_title
+        for clean_album in album_variants:
+            for q_artist, q_year in queries:
+                releases = search_releases(q_artist, clean_album, q_year, limit=5)
+                if releases:
+                    best = releases[0]
+                    score = int(best.get("score", 0))
+                    if score < 80:
+                        continue
+                    rid = best.get("id", "")
+                    release_title = best.get("title", album)
+                    if not rid:
+                        continue
+                    tracks = get_tracklist(rid)
+                    chapters = tracks_to_chapters(tracks)
+                    if chapters:
+                        return chapters, release_title
         return [], ""
     except Exception as exc:
         return [], f"error: {exc}"
@@ -156,58 +178,52 @@ def lookup_chapters_verbose(
     year: Optional[str] = None,
 ) -> tuple[list["Chapter"], str, str]:
     """Like ``lookup_chapters`` but also returns a diagnostic message."""
-    import re as _re
-
     artist_variants = [artist]
     for suffix in (" Project", " Band", " Trio", " Quartet", " Orchestra", " Ensemble"):
         if artist.lower().endswith(suffix.lower()):
             artist_variants.append(artist[: -len(suffix)].strip())
 
-    clean_album = _re.sub(r"\s*[\(\[](?:19|20)\d{2}[\)\]]", "", album).strip()
-    clean_album = _re.sub(
-        r"\s*[\(\[]\s*(?:full\s+album|complete\s+album|full\s+lp|official\s+album"
-        r"|remaster(?:ed)?|deluxe(?:\s+edition)?|bonus\s+tracks?)\s*[\)\]]",
-        "",
-        clean_album,
-        flags=_re.IGNORECASE,
-    ).strip()
+    album_variants = clean_album_variants(album)
 
     queries: list[tuple[str, Optional[str]]] = []
     for av in artist_variants:
         queries.append((av, None))
     queries.append(("", None))
 
-    diag_lines: list[str] = [f"cleaned album: {clean_album!r}"]
+    diag_lines: list[str] = [f"cleaned album: {album_variants!r}"]
 
     try:
-        for q_artist, q_year in queries:
-            releases = search_releases(q_artist, clean_album, q_year, limit=5)
-            if not releases:
+        for clean_album in album_variants:
+            for q_artist, q_year in queries:
+                releases = search_releases(q_artist, clean_album, q_year, limit=5)
+                if not releases:
+                    diag_lines.append(
+                        f"  query ({q_artist!r}, {clean_album!r}): no results"
+                    )
+                    continue
+                scores = [
+                    (r.get("title", "?"), int(r.get("score", 0))) for r in releases
+                ]
                 diag_lines.append(
-                    f"  query ({q_artist!r}, {clean_album!r}): no results"
+                    f"  query ({q_artist!r}, {clean_album!r}): "
+                    + ", ".join(f"{t!r}={s}" for t, s in scores)
                 )
-                continue
-            scores = [(r.get("title", "?"), int(r.get("score", 0))) for r in releases]
-            diag_lines.append(
-                f"  query ({q_artist!r}, {clean_album!r}): "
-                + ", ".join(f"{t!r}={s}" for t, s in scores)
-            )
-            best = releases[0]
-            score = int(best.get("score", 0))
-            if score < 80:
-                continue
-            rid = best.get("id", "")
-            release_title = best.get("title", album)
-            if not rid:
-                continue
-            tracks = get_tracklist(rid)
-            chapters = tracks_to_chapters(tracks)
-            if not chapters:
-                diag_lines.append(
-                    f"  {release_title!r}: tracks found but lengths missing"
-                )
-                continue
-            return chapters, release_title, "\n".join(diag_lines)
+                best = releases[0]
+                score = int(best.get("score", 0))
+                if score < 80:
+                    continue
+                rid = best.get("id", "")
+                release_title = best.get("title", album)
+                if not rid:
+                    continue
+                tracks = get_tracklist(rid)
+                chapters = tracks_to_chapters(tracks)
+                if not chapters:
+                    diag_lines.append(
+                        f"  {release_title!r}: tracks found but lengths missing"
+                    )
+                    continue
+                return chapters, release_title, "\n".join(diag_lines)
         return [], "", "\n".join(diag_lines)
     except Exception as exc:
         return [], "", "\n".join(diag_lines) + f"\n  exception: {exc}"
