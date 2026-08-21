@@ -11,8 +11,13 @@ from pathlib import Path
 
 from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
-from muzik.core.chapters import Chapter, safe_filename
+from muzik.core.chapters import Chapter, parse_artist_title, safe_filename
 from muzik.core.workflow.cancellation import CancellationToken
+
+
+# beets files an album under "Various Artists" and sets its comp flag when the
+# album artist is this name; used for compilations of per-track artists.
+VARIOUS_ARTISTS = "Various Artists"
 
 
 # Called once per finished track with (title, ok) so a UI can show progress.
@@ -31,10 +36,16 @@ def split_audio(
     jobs: int = 0,
     keep_source: bool = False,
     force: bool = False,
+    compilation: bool = False,
     cancellation: CancellationToken | None = None,
     on_progress: ProgressCallback | None = None,
 ) -> Path:
-    """Split *path* by supplied chapters and return its output directory."""
+    """Split *path* by supplied chapters and return its output directory.
+
+    When *compilation* is set, each track title is parsed as "Artist - Song";
+    the per-track artist is kept, the album artist becomes "Various Artists",
+    and the track is marked a compilation so beets files it correctly.
+    """
     cancellation = cancellation or CancellationToken()
     cancellation.raise_if_cancelled()
     if not path.exists():
@@ -70,7 +81,13 @@ def split_audio(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {
             pool.submit(
-                _split_track, path, output, chapter, metadata, len(chapters)
+                _split_track,
+                path,
+                output,
+                chapter,
+                metadata,
+                len(chapters),
+                compilation,
             ): chapter
             for chapter in chapters
         }
@@ -129,9 +146,21 @@ def _split_track(
     chapter: Chapter,
     metadata: dict,
     track_count: int,
+    compilation: bool = False,
 ) -> tuple[bool, str]:
+    # For a compilation, identify each song's own artist from its
+    # "Artist - Song" title; the album artist becomes "Various Artists".
+    if compilation:
+        parsed_artist, title = parse_artist_title(chapter.title)
+        artist = parsed_artist or metadata["artist"]
+        albumartist = VARIOUS_ARTISTS
+    else:
+        title = chapter.title
+        artist = metadata["artist"]
+        albumartist = metadata["artist"]
+
     output_path = output_dir / (
-        f"{chapter.index:02d}-{safe_filename(chapter.title)}{audio_path.suffix}"
+        f"{chapter.index:02d}-{safe_filename(title)}{audio_path.suffix}"
     )
     command = [
         "ffmpeg",
@@ -155,17 +184,21 @@ def _split_track(
             "-map_metadata",
             "-1",
             "-metadata",
-            f"title={chapter.title}",
+            f"title={title}",
             "-metadata",
-            f"artist={metadata['artist']}",
+            f"artist={artist}",
             "-metadata",
-            f"albumartist={metadata['artist']}",
+            f"albumartist={albumartist}",
             "-metadata",
             f"album={metadata['album']}",
             "-metadata",
             f"date={metadata['year']}",
             "-metadata",
             f"track={chapter.index}/{track_count}",
+            # Mark a compilation so beets sets its comp flag and groups the
+            # album under Various Artists despite the differing track artists.
+            "-metadata",
+            f"compilation={1 if compilation else 0}",
             str(output_path),
         ]
     )

@@ -321,6 +321,7 @@ def _process_audio_files(
     config: Optional[Path],
     keep_source: bool,
     force: bool,
+    compilation: bool = False,
     metadata_source: MetadataSource = MetadataSource.AUTO,
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
@@ -366,6 +367,7 @@ def _process_audio_files(
                 output=task.output,
                 keep_source=keep_source,
                 force=force,
+                compilation=compilation,
                 cancellation=cancellation,
             )
         except (SystemExit, typer.Exit) as exc:
@@ -545,6 +547,15 @@ def workflow_cmd(
         "-f",
         help="Re-download even if present, ignore cache, reprocess from scratch.",
     ),
+    compilation: bool = typer.Option(
+        False,
+        "--compilation",
+        help=(
+            "Treat the download as a compilation (a set of songs, not one album). "
+            "Each track title is read as 'Artist - Song'; the per-track artist is "
+            "kept and the album is filed under Various Artists."
+        ),
+    ),
     metadata_source: str = typer.Option(
         MetadataSource.AUTO.value,
         "--metadata-source",
@@ -658,6 +669,7 @@ def workflow_cmd(
             config=config,
             keep_source=keep_source,
             force=force,
+            compilation=compilation,
             metadata_source=metadata_source,
             decisions=decisions,
             events=events,

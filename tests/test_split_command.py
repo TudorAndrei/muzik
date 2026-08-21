@@ -96,7 +96,9 @@ def test_split_force_replaces_output_and_empty_output_is_allowed(
     output.mkdir()
     old_file.write_bytes(b"old")
 
-    def split_track(audio_path, output_dir, chapter, metadata, track_count):
+    def split_track(
+        audio_path, output_dir, chapter, metadata, track_count, compilation=False
+    ):
         (output_dir / "01-Track.flac").write_bytes(b"new")
         return True, chapter.title
 

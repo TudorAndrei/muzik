@@ -33,6 +33,7 @@ def _split_audio(
     output: Optional[Path] = None,
     keep_source: bool = False,
     force: bool = False,
+    compilation: bool = False,
     cancellation: CancellationToken | None = None,
 ) -> None:
     """Split an audio file into tracks by chapter, with CLI review and progress.
@@ -108,6 +109,7 @@ def _split_audio(
                 jobs=jobs,
                 keep_source=keep_source,
                 force=force,
+                compilation=compilation,
                 cancellation=cancellation,
                 on_progress=lambda _title, _ok: progress.advance(task_id),
             )

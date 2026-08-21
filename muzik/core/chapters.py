@@ -231,6 +231,25 @@ def clean_track_title(title: str) -> str:
     return cleaned or title
 
 
+# A compilation track title is usually "Artist - Song". Split on a hyphen or
+# dash that has whitespace around it, so hyphenated names (Jean-Luc) survive.
+_ARTIST_TITLE_SEP = re.compile(r"\s+[-–—]\s+")
+
+
+def parse_artist_title(title: str) -> tuple[Optional[str], str]:
+    """Split "Artist - Song" into (artist, song).
+
+    Returns ``(None, title)`` when no separator is present, so the caller can
+    fall back to the album artist.
+    """
+    parts = _ARTIST_TITLE_SEP.split(title, maxsplit=1)
+    if len(parts) == 2:
+        artist, song = parts[0].strip(), parts[1].strip()
+        if artist and song:
+            return artist, song
+    return None, title.strip()
+
+
 def _normalized(chapters: list[Chapter]) -> list[Chapter]:
     for chapter in chapters:
         chapter.title = clean_track_title(chapter.title)
