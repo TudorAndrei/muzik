@@ -12,8 +12,10 @@ Two stages, cheapest first:
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 import os
 import re
+import subprocess
 from typing import cast
 
 from pydantic import BaseModel, ValidationError
@@ -72,6 +74,75 @@ def chapters_from_description(
     if chapters:
         return chapters
     return _agent_tracklist(description, logger)
+
+
+_TIMESTAMP_LINE = re.compile(rf"(?m)^\s*.*?{_TS}.*$")
+_COMMENT_TIMEOUT = 120
+
+
+def chapters_from_comments(
+    video_id: str, *, log: Logger | None = None
+) -> list[Chapter] | None:
+    """Return a tracklist from the video's pinned/uploader comment, if any.
+
+    Many album uploads leave the description empty and put the tracklist in a
+    pinned comment. Fetch the top comments, pick the pinned or uploader one that
+    has timestamps, and parse it like a description.
+    """
+    logger = log or (lambda _message: None)
+    text = _fetch_tracklist_comment(video_id, logger)
+    if not text:
+        return None
+    logger("found a timestamped tracklist in a comment")
+    return chapters_from_description(text, log=logger)
+
+
+def _fetch_tracklist_comment(video_id: str, log: Logger) -> str | None:
+    from muzik.core.sources.youtube import cookie_args, js_runtime_args
+
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    cmd = [
+        "yt-dlp",
+        *cookie_args(),
+        *js_runtime_args(),
+        "--dump-json",
+        "--skip-download",
+        "--write-comments",
+        # Only the top ~50 top-level comments, no replies, so it stays quick.
+        "--extractor-args",
+        "youtube:max_comments=50,all,0,0;comment_sort=top",
+        url,
+    ]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_COMMENT_TIMEOUT
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        log(f"comment fetch failed: {exc}")
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    return _best_tracklist_comment(data.get("comments") or [])
+
+
+def _best_tracklist_comment(comments: list[dict]) -> str | None:
+    best: str | None = None
+    best_rank = -1
+    for comment in comments:
+        text = comment.get("text") or ""
+        if len(_TIMESTAMP_LINE.findall(text)) < 2:
+            continue
+        rank = (2 if comment.get("is_pinned") else 0) + (
+            1 if comment.get("author_is_uploader") else 0
+        )
+        if rank > best_rank:
+            best = text
+            best_rank = rank
+    return best
 
 
 # -- regex stage ----------------------------------------------------------

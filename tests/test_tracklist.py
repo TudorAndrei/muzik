@@ -3,8 +3,10 @@
 from muzik.core import tracklist
 from muzik.core.tracklist import (
     TrackList,
+    _best_tracklist_comment,
     _regex_tracklist,
     _tracklist_to_chapters,
+    chapters_from_comments,
     chapters_from_description,
 )
 
@@ -88,3 +90,38 @@ def test_agent_stage_parses_cli_json(monkeypatch) -> None:
     chapters = chapters_from_description("no timestamps here that parse")
     assert chapters is not None
     assert [c.title for c in chapters] == ["X", "Y"]
+
+
+def test_best_tracklist_comment_prefers_pinned_with_timestamps() -> None:
+    comments = [
+        {"text": "great album!", "is_pinned": False},
+        {"text": "0:00 One\n2:00 Two", "author_is_uploader": True},
+        {"text": "0:00 A\n2:00 B\n4:00 C", "is_pinned": True},
+    ]
+    # Pinned (rank 2) beats uploader (rank 1); non-timestamped is ignored.
+    assert _best_tracklist_comment(comments) == "0:00 A\n2:00 B\n4:00 C"
+
+
+def test_best_tracklist_comment_none_without_timestamps() -> None:
+    assert (
+        _best_tracklist_comment([{"text": "nice"}, {"text": "one time 0:00"}]) is None
+    )
+
+
+def test_chapters_from_comments_parses_fetched_comment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tracklist,
+        "_fetch_tracklist_comment",
+        lambda video_id, log: "Blue Waters - 0:00\nEchoes - 5:54\nAvenue - 10:28",
+    )
+    chapters = chapters_from_comments("WVhVguxPyTk")
+    assert chapters is not None
+    assert [c.title for c in chapters] == ["Blue Waters", "Echoes", "Avenue"]
+    assert chapters[0].end == 354  # 5:54
+
+
+def test_chapters_from_comments_none_when_no_comment(monkeypatch) -> None:
+    monkeypatch.setattr(
+        tracklist, "_fetch_tracklist_comment", lambda video_id, log: None
+    )
+    assert chapters_from_comments("abc") is None

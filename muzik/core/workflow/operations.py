@@ -15,7 +15,8 @@ from muzik.core.description_chapters import (
     description_has_timestamps,
     get_description_from_info_json,
 )
-from muzik.core.tracklist import chapters_from_description
+from muzik.core.tracklist import chapters_from_comments, chapters_from_description
+from muzik.core.sources.youtube import video_id_from_path
 from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters_verbose
 from muzik.core.sources.base import Candidate
 from muzik.core.sources.soulseek import SoulseekSource
@@ -239,13 +240,16 @@ def _description_chapters(
     info_path = path.with_suffix("").with_suffix(".info.json")
     if not info_path.exists():
         return None
+    log = lambda message: events.emit(MessageEvent(message, severity="debug"))  # noqa: E731
     description = get_description_from_info_json(info_path)
-    if not description or not description_has_timestamps(description):
-        return None
-    chapters = chapters_from_description(
-        description,
-        log=lambda message: events.emit(MessageEvent(message, severity="debug")),
-    )
+    chapters: list[Chapter] | None = None
+    if description and description_has_timestamps(description):
+        chapters = chapters_from_description(description, log=log)
+    if not chapters:
+        # No tracklist in the description; try the pinned/uploader comment.
+        video_id = video_id_from_path(path)
+        if video_id:
+            chapters = chapters_from_comments(video_id, log=log)
     if not chapters:
         return None
     events.emit(

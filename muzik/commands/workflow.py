@@ -32,11 +32,12 @@ from muzik.core.description_chapters import (
     description_has_timestamps,
     get_description_from_info_json,
 )
-from muzik.core.tracklist import chapters_from_description
+from muzik.core.tracklist import chapters_from_comments, chapters_from_description
 from muzik.core.sources.soulseek import SoulseekSource
 from muzik.core.sources.youtube import (
     get_playlist_video_ids,
     prepopulate_archive,
+    video_id_from_path,
     youtube_id as parse_youtube_id,
 )
 from muzik.core.workflow.decisions import (
@@ -126,9 +127,13 @@ def _description_chapters(
     if not info_path.exists():
         return None
     description = get_description_from_info_json(info_path)
-    if not description or not description_has_timestamps(description):
-        return None
-    llm_chapters = chapters_from_description(description)
+    llm_chapters = None
+    if description and description_has_timestamps(description):
+        llm_chapters = chapters_from_description(description)
+    if not llm_chapters:
+        video_id = video_id_from_path(af)
+        if video_id:
+            llm_chapters = chapters_from_comments(video_id)
     if not llm_chapters:
         return None
     events.emit(
