@@ -37,6 +37,25 @@ def test_build_download_command_includes_expected_flags() -> None:
     assert cmd[-1] == "https://youtube.com/watch?v=abcdefghijk"
 
 
+def test_cookie_args_from_env(monkeypatch) -> None:
+    monkeypatch.delenv("MUZIK_YTDLP_COOKIES", raising=False)
+    monkeypatch.delenv("MUZIK_YTDLP_COOKIES_FROM_BROWSER", raising=False)
+    assert youtube.cookie_args() == []
+
+    monkeypatch.setenv("MUZIK_YTDLP_COOKIES_FROM_BROWSER", "chrome")
+    assert youtube.cookie_args() == ["--cookies-from-browser", "chrome"]
+
+    monkeypatch.delenv("MUZIK_YTDLP_COOKIES_FROM_BROWSER", raising=False)
+    monkeypatch.setenv("MUZIK_YTDLP_COOKIES", "/tmp/cookies.txt")
+    assert youtube.cookie_args() == ["--cookies", "/tmp/cookies.txt"]
+
+
+def test_build_download_command_includes_cookies_when_set(monkeypatch) -> None:
+    monkeypatch.setenv("MUZIK_YTDLP_COOKIES_FROM_BROWSER", "firefox")
+    cmd = youtube.build_download_command("https://youtube.com/watch?v=abcdefghijk")
+    assert cmd[1:3] == ["--cookies-from-browser", "firefox"]
+
+
 def test_build_download_command_force_adds_force_overwrites() -> None:
     cmd = youtube.build_download_command(
         "https://youtube.com/watch?v=abcdefghijk",

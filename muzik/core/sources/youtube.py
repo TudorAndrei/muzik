@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,23 @@ from muzik.core.sources.base import (
 
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})")
 YOUTUBE_PLAYLIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
+
+
+def cookie_args() -> list[str]:
+    """Return yt-dlp cookie flags from the environment, if configured.
+
+    YouTube may demand a signed-in session ("confirm you're not a bot"),
+    especially after heavy use. Set ``MUZIK_YTDLP_COOKIES_FROM_BROWSER`` to a
+    browser name (e.g. ``chrome``, ``firefox``, ``safari``) or
+    ``MUZIK_YTDLP_COOKIES`` to a cookies.txt path to pass one through.
+    """
+    browser = os.environ.get("MUZIK_YTDLP_COOKIES_FROM_BROWSER", "").strip()
+    if browser:
+        return ["--cookies-from-browser", browser]
+    cookiefile = os.environ.get("MUZIK_YTDLP_COOKIES", "").strip()
+    if cookiefile:
+        return ["--cookies", cookiefile]
+    return []
 
 
 def youtube_id(url: str) -> Optional[str]:
@@ -61,6 +79,7 @@ def build_download_command(
     """
     cmd = [
         "yt-dlp",
+        *cookie_args(),
         "--format",
         format,
         "--extract-audio",
@@ -120,7 +139,9 @@ def find_audio_by_id(directory: Path, yt_id: str) -> list[Path]:
 
 def get_playlist_video_ids(url: str) -> list[str]:
     """Return ordered video IDs in a YouTube playlist via yt-dlp."""
-    result = run_silent(["yt-dlp", "--flat-playlist", "--print", "%(id)s", url])
+    result = run_silent(
+        ["yt-dlp", *cookie_args(), "--flat-playlist", "--print", "%(id)s", url]
+    )
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -149,7 +170,7 @@ def prepopulate_archive(archive_file: Path) -> None:
 
 def dump_json(url: str, *, flat_playlist: bool = False) -> Optional[dict]:
     """Return `yt-dlp --dump-json` metadata for *url*."""
-    cmd = ["yt-dlp", "--dump-json"]
+    cmd = ["yt-dlp", *cookie_args(), "--dump-json"]
     if flat_playlist:
         cmd.append("--flat-playlist")
     cmd.append(url)
