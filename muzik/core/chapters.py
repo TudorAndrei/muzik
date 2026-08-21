@@ -219,6 +219,24 @@ def parse_cue(path: Path) -> list[Chapter]:
 # ---------------------------------------------------------------------------
 
 
+# A leading track-number prefix like "04. ", "4) ", or "04 - " that an uploader
+# put on a chapter title, so we do not repeat the number in the filename. A bare
+# "27 Deserts" is kept, because the number is not followed by a separator.
+_TRACK_NUM_PREFIX = re.compile(r"^\s*\d{1,3}\s*[.):\-]\s+")
+
+
+def clean_track_title(title: str) -> str:
+    """Strip a leading ``NN.``/``NN)``/``NN -`` track-number prefix from a title."""
+    cleaned = _TRACK_NUM_PREFIX.sub("", title, count=1).strip()
+    return cleaned or title
+
+
+def _normalized(chapters: list[Chapter]) -> list[Chapter]:
+    for chapter in chapters:
+        chapter.title = clean_track_title(chapter.title)
+    return chapters
+
+
 def find_chapters(audio_path: Path) -> list[Chapter]:
     """Locate and parse chapters for *audio_path*.
 
@@ -232,13 +250,13 @@ def find_chapters(audio_path: Path) -> list[Chapter]:
 
     txt = base.with_suffix(".chapters.txt")
     if txt.exists() and txt.stat().st_size > 0:
-        return parse_chapters_txt(txt)
+        return _normalized(parse_chapters_txt(txt))
 
     jsn = base.with_suffix(".info.json")
     if jsn.exists():
         chapters = parse_chapters_json(jsn)
         if chapters:
-            return chapters
+            return _normalized(chapters)
 
     cue = base.with_suffix(".cue")
     cue_candidates = [cue] if cue.exists() else []
@@ -249,7 +267,7 @@ def find_chapters(audio_path: Path) -> list[Chapter]:
     for cue_path in cue_candidates:
         chapters = parse_cue(cue_path)
         if chapters:
-            return chapters
+            return _normalized(chapters)
 
     return []
 

@@ -125,3 +125,16 @@ def test_chapters_from_comments_none_when_no_comment(monkeypatch) -> None:
         tracklist, "_fetch_tracklist_comment", lambda video_id, log: None
     )
     assert chapters_from_comments("abc") is None
+
+
+def test_clean_track_title_strips_number_prefix() -> None:
+    from muzik.core.chapters import clean_track_title
+
+    assert clean_track_title("04. sporty like a Supra") == "sporty like a Supra"
+    assert clean_track_title("4) Intro") == "Intro"
+    assert clean_track_title("01 - Blue Waters") == "Blue Waters"
+    # A number that is part of the title is kept.
+    assert clean_track_title("27 Deserts") == "27 Deserts"
+    assert clean_track_title("Avenue '98") == "Avenue '98"
+    # Never returns empty.
+    assert clean_track_title("07.") == "07."

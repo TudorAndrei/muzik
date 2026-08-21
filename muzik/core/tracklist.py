@@ -28,7 +28,7 @@ from muzik.core.beets.agent_decisions import (
     _run_cli,
     extract_json_object,
 )
-from muzik.core.chapters import Chapter, _ts_to_secs
+from muzik.core.chapters import Chapter, _ts_to_secs, clean_track_title
 
 
 Logger = Callable[[str], None]
@@ -192,7 +192,11 @@ def _to_chapters(entries: list[tuple[int, str]]) -> list[Chapter] | None:
     chapters: list[Chapter] = []
     for index, (secs, title) in enumerate(unique):
         end = unique[index + 1][0] if index + 1 < len(unique) else None
-        chapters.append(Chapter(index=index + 1, start=secs, end=end, title=title))
+        chapters.append(
+            Chapter(
+                index=index + 1, start=secs, end=end, title=clean_track_title(title)
+            )
+        )
     return chapters
 
 
