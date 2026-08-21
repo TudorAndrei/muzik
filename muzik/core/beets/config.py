@@ -4,8 +4,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import beetsplug
 from beets import config, plugins
 from beets.library import Library
+
+
+# muzik ships its own beets plugins (e.g. ftclean) in this directory. Adding it
+# to beets' pluginpath makes them importable as ``beetsplug.<name>``.
+_PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "beets_plugins"
+_MUZIK_PLUGINS = ["ftclean"]
 
 
 def load_config(config_path: Path | None = None) -> None:
@@ -13,11 +20,24 @@ def load_config(config_path: Path | None = None) -> None:
 
     Beets configuration is process-global. Loading it before applying muzik's
     runtime options ensures a selected YAML file cannot override CLI choices.
+    Also registers muzik's own beets plugins on top of the user's list.
     """
     config.clear()
     config.read(user=config_path is None)
     if config_path is not None:
         config.set_file(str(config_path))
+
+    # muzik calls plugins.load_plugins() directly, bypassing beets' UI setup
+    # that wires pluginpath into the beetsplug namespace, so extend it here.
+    if str(_PLUGIN_DIR) not in beetsplug.__path__:
+        beetsplug.__path__.append(str(_PLUGIN_DIR))
+    existing_plugins = (
+        list(config["plugins"].as_str_seq()) if config["plugins"].exists() else []
+    )
+    config["plugins"] = [
+        *existing_plugins,
+        *(p for p in _MUZIK_PLUGINS if p not in existing_plugins),
+    ]
 
 
 # Track the config already loaded in this process. Reloading clears the config,
