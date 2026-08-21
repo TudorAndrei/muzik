@@ -250,6 +250,34 @@ def parse_artist_title(title: str) -> tuple[Optional[str], str]:
     return None, title.strip()
 
 
+# A featured credit, either "(feat. X)" / "[ft. X & Y]" or a trailing
+# "feat. X". Kept out of the title so only the song name remains.
+_FEATURED = re.compile(
+    r"""\s*
+    (?:
+        [\(\[]\s*(?:feat|ft|featuring)\.?\s+(?P<bracketed>[^\)\]]+?)\s*[\)\]]
+      | (?:feat|ft|featuring)\.?\s+(?P<trailing>.+)$
+    )""",
+    re.IGNORECASE | re.VERBOSE,
+)
+_FEATURED_SPLIT = re.compile(r"\s*(?:,|&|/|\bx\b|\band\b)\s*", re.IGNORECASE)
+
+
+def strip_featured(title: str) -> tuple[str, list[str]]:
+    """Remove a "feat."/"ft." credit from *title*; return (clean, featured).
+
+    ``strip_featured("Song (feat. A & B)")`` -> ``("Song", ["A", "B"])``.
+    Returns the title unchanged with an empty list when there is no credit.
+    """
+    match = _FEATURED.search(title)
+    if not match:
+        return title.strip(), []
+    who = match.group("bracketed") or match.group("trailing") or ""
+    featured = [p.strip() for p in _FEATURED_SPLIT.split(who) if p.strip()]
+    clean = (title[: match.start()] + title[match.end() :]).strip()
+    return clean or title.strip(), featured
+
+
 def _normalized(chapters: list[Chapter]) -> list[Chapter]:
     for chapter in chapters:
         chapter.title = clean_track_title(chapter.title)

@@ -11,7 +11,12 @@ from pathlib import Path
 
 from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
-from muzik.core.chapters import Chapter, parse_artist_title, safe_filename
+from muzik.core.chapters import (
+    Chapter,
+    parse_artist_title,
+    safe_filename,
+    strip_featured,
+)
 from muzik.core.workflow.cancellation import CancellationToken
 
 
@@ -158,6 +163,12 @@ def _split_track(
         title = chapter.title
         artist = metadata["artist"]
         albumartist = metadata["artist"]
+
+    # Keep only the song name in the title; move a "feat." credit into the
+    # artist field as "Main feat. X", the form beets and MusicBrainz use.
+    title, featured = strip_featured(title)
+    if featured:
+        artist = f"{artist} feat. {', '.join(featured)}"
 
     output_path = output_dir / (
         f"{chapter.index:02d}-{safe_filename(title)}{audio_path.suffix}"
