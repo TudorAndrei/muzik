@@ -1,53 +1,29 @@
+"""Beets config/plugin loading behaviour."""
+
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from muzik.core.beets import config as beets_service
+from muzik.core.beets import config as cfg_mod
 
 
-def test_open_library_uses_beets_212_library_constructor(monkeypatch) -> None:
-    calls: list[object] = []
-
-    class FakeValue:
-        def __init__(self, value: str) -> None:
-            self.value = value
-
-        def as_filename(self) -> str:
-            return self.value
-
-    class FakeConfig:
-        def clear(self) -> None:
-            calls.append("clear")
-
-        def read(self, *, user: bool) -> None:
-            calls.append(("read", user))
-
-        def set_file(self, value: str) -> None:
-            calls.append(("set_file", value))
-
-        def __getitem__(self, key: str) -> FakeValue:
-            return FakeValue({"library": "library.blb", "directory": "music"}[key])
-
-    class FakeLibrary:
-        def __init__(self, path: str, directory: str) -> None:
-            calls.append(("library", path, directory))
-
-    monkeypatch.setattr(beets_service, "config", FakeConfig())
-    monkeypatch.setattr(beets_service, "Library", FakeLibrary)
+def test_open_library_loads_config_and_plugins_once_per_path(monkeypatch) -> None:
+    # Reloading clears the config and drops plugin-registered defaults (they are
+    # not re-added), so config+plugins must load once per path, not every call.
+    monkeypatch.setattr(cfg_mod, "_LOADED_CONFIG_KEY", None)
+    loads: list = []
+    plugin_loads: list = []
+    monkeypatch.setattr(cfg_mod, "load_config", lambda p=None: loads.append(p))
     monkeypatch.setattr(
-        beets_service.plugins, "load_plugins", lambda: calls.append("load")
+        cfg_mod.plugins, "load_plugins", lambda *a, **k: plugin_loads.append(1)
     )
-    monkeypatch.setattr(
-        beets_service.plugins,
-        "send",
-        lambda event, **kwargs: calls.append((event, kwargs["lib"])),
-    )
+    monkeypatch.setattr(cfg_mod.plugins, "send", lambda *a, **k: None)
+    monkeypatch.setattr(cfg_mod, "Library", lambda *a, **k: "lib")
+    monkeypatch.setattr(cfg_mod, "config", MagicMock())
 
-    library = beets_service.open_library(Path("beets.yaml"))
+    first = Path("/tmp/one.yaml")
+    cfg_mod.open_library(first)
+    cfg_mod.open_library(first)  # same path -> no reload
+    cfg_mod.open_library(Path("/tmp/two.yaml"))  # new path -> reload
 
-    assert calls == [
-        "clear",
-        ("read", False),
-        ("set_file", "beets.yaml"),
-        "load",
-        ("library", "library.blb", "music"),
-        ("library_opened", library),
-    ]
+    assert loads == [first, Path("/tmp/two.yaml")]
+    assert len(plugin_loads) == 2

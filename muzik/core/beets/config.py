@@ -20,10 +20,21 @@ def load_config(config_path: Path | None = None) -> None:
         config.set_file(str(config_path))
 
 
+# Track the config already loaded in this process. Reloading clears the config,
+# which drops the default options plugins register in their __init__ (they are
+# not re-added on a second load_plugins), so a second open_library would crash
+# on e.g. musicbrainz.search_query_ascii. Load once per config path instead.
+_LOADED_CONFIG_KEY: str | None = None
+
+
 def open_library(config_path: Path | None = None) -> Library:
-    """Load beets config/plugins and open the configured library."""
-    load_config(config_path)
-    plugins.load_plugins()
+    """Load beets config/plugins (once per process) and open the library."""
+    global _LOADED_CONFIG_KEY
+    key = str(config_path) if config_path is not None else "__user__"
+    if _LOADED_CONFIG_KEY != key:
+        load_config(config_path)
+        plugins.load_plugins()
+        _LOADED_CONFIG_KEY = key
 
     lib = Library(
         config["library"].as_filename(),
