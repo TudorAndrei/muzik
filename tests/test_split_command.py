@@ -5,6 +5,7 @@ import typer
 
 from muzik.commands import split
 from muzik.core import cache as cache_mod
+from muzik.core import splitter
 from muzik.core.chapters import Chapter
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
@@ -15,11 +16,10 @@ def _configure_split(monkeypatch: pytest.MonkeyPatch) -> None:
         "find_chapters",
         lambda _: [Chapter(index=1, start=0, end=None, title="Track")],
     )
-    monkeypatch.setattr(
-        split,
-        "extract_metadata",
-        lambda _: {"artist": "Artist", "album": "Album", "year": "2026"},
-    )
+    metadata = {"artist": "Artist", "album": "Album", "year": "2026"}
+    # The CLI reads metadata for the header; the engine reads it for the tags.
+    monkeypatch.setattr(split, "extract_metadata", lambda _: metadata)
+    monkeypatch.setattr(splitter, "extract_metadata", lambda _: metadata)
     monkeypatch.setattr(split, "display_chapter_table", lambda *args, **kwargs: None)
 
 
@@ -100,7 +100,7 @@ def test_split_force_replaces_output_and_empty_output_is_allowed(
         (output_dir / "01-Track.flac").write_bytes(b"new")
         return True, chapter.title
 
-    monkeypatch.setattr(split, "_split_track", split_track)
+    monkeypatch.setattr(splitter, "_split_track", split_track)
 
     split.split_cmd(
         path=audio, output=output, force=True, keep_source=True, jobs=1, review=False
@@ -132,7 +132,7 @@ def test_split_failure_preserves_source_and_does_not_cache(
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     audio, chapters = _audio_with_chapters(tmp_path)
     output = tmp_path / "output"
-    monkeypatch.setattr(split, "_split_track", lambda *args: (False, "Track"))
+    monkeypatch.setattr(splitter, "_split_track", lambda *args: (False, "Track"))
 
     with pytest.raises(typer.Exit) as result:
         split.split_cmd(path=audio, output=output, jobs=1, review=False)

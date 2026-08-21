@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import os
 import shutil
 import subprocess
@@ -12,6 +13,10 @@ from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
 from muzik.core.chapters import Chapter, safe_filename
 from muzik.core.workflow.cancellation import CancellationToken
+
+
+# Called once per finished track with (title, ok) so a UI can show progress.
+ProgressCallback = Callable[[str, bool], None]
 
 
 class SplitError(RuntimeError):
@@ -27,6 +32,7 @@ def split_audio(
     keep_source: bool = False,
     force: bool = False,
     cancellation: CancellationToken | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> Path:
     """Split *path* by supplied chapters and return its output directory."""
     cancellation = cancellation or CancellationToken()
@@ -72,6 +78,8 @@ def split_audio(
             ok, title = future.result()
             if not ok:
                 failures.append(title)
+            if on_progress is not None:
+                on_progress(title, ok)
             cancellation.raise_if_cancelled()
     if failures:
         raise SplitError(
