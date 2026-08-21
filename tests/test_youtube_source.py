@@ -37,6 +37,20 @@ def test_build_download_command_includes_expected_flags() -> None:
     assert cmd[-1] == "https://youtube.com/watch?v=abcdefghijk"
 
 
+def test_js_runtime_args_prefers_available_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(youtube.shutil, "which", lambda name: name == "node")
+    assert youtube.js_runtime_args() == ["--js-runtimes", "node"]
+
+    monkeypatch.setattr(youtube.shutil, "which", lambda name: False)
+    assert youtube.js_runtime_args() == []
+
+
+def test_build_download_command_enables_js_runtime(monkeypatch) -> None:
+    monkeypatch.setattr(youtube.shutil, "which", lambda name: name == "deno")
+    cmd = youtube.build_download_command("https://youtube.com/watch?v=abcdefghijk")
+    assert cmd[cmd.index("--js-runtimes") + 1] == "deno"
+
+
 def test_cookie_args_from_env(monkeypatch) -> None:
     monkeypatch.delenv("MUZIK_YTDLP_COOKIES", raising=False)
     monkeypatch.delenv("MUZIK_YTDLP_COOKIES_FROM_BROWSER", raising=False)
@@ -78,7 +92,10 @@ def test_get_playlist_video_ids_uses_yt_dlp_flat_playlist(monkeypatch) -> None:
         "one",
         "two",
     ]
-    assert seen["cmd"][:3] == ["yt-dlp", "--flat-playlist", "--print"]
+    cmd = seen["cmd"]
+    assert cmd[0] == "yt-dlp"
+    assert "--flat-playlist" in cmd and "--print" in cmd
+    assert cmd[-1] == "https://youtube.com/playlist?list=PL"
 
 
 def test_youtube_source_resolves_single_video_metadata(monkeypatch) -> None:

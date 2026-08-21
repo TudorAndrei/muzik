@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -25,6 +26,19 @@ from muzik.core.sources.base import (
 
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})")
 YOUTUBE_PLAYLIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
+
+
+def js_runtime_args() -> list[str]:
+    """Enable a JavaScript runtime for yt-dlp if one is on PATH.
+
+    Recent YouTube extraction needs a JS runtime to solve player challenges;
+    without one yt-dlp finds no formats and downloads nothing. yt-dlp auto-uses
+    deno, but node and bun must be enabled explicitly.
+    """
+    for runtime in ("deno", "node", "bun"):
+        if shutil.which(runtime):
+            return ["--js-runtimes", runtime]
+    return []
 
 
 def cookie_args() -> list[str]:
@@ -80,6 +94,7 @@ def build_download_command(
     cmd = [
         "yt-dlp",
         *cookie_args(),
+        *js_runtime_args(),
         "--format",
         format,
         "--extract-audio",
@@ -140,7 +155,15 @@ def find_audio_by_id(directory: Path, yt_id: str) -> list[Path]:
 def get_playlist_video_ids(url: str) -> list[str]:
     """Return ordered video IDs in a YouTube playlist via yt-dlp."""
     result = run_silent(
-        ["yt-dlp", *cookie_args(), "--flat-playlist", "--print", "%(id)s", url]
+        [
+            "yt-dlp",
+            *cookie_args(),
+            *js_runtime_args(),
+            "--flat-playlist",
+            "--print",
+            "%(id)s",
+            url,
+        ]
     )
     if result.returncode != 0:
         return []
@@ -170,7 +193,7 @@ def prepopulate_archive(archive_file: Path) -> None:
 
 def dump_json(url: str, *, flat_playlist: bool = False) -> Optional[dict]:
     """Return `yt-dlp --dump-json` metadata for *url*."""
-    cmd = ["yt-dlp", *cookie_args(), "--dump-json"]
+    cmd = ["yt-dlp", *cookie_args(), *js_runtime_args(), "--dump-json"]
     if flat_playlist:
         cmd.append("--flat-playlist")
     cmd.append(url)
