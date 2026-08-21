@@ -225,6 +225,17 @@ def parse_cue(path: Path) -> list[Chapter]:
 _TRACK_NUM_PREFIX = re.compile(r"^\s*\d{1,3}\s*[.):\-]\s+")
 
 
+def sidecar_path(audio_path: Path, ext: str) -> Path:
+    """Return a sibling file with the audio's name plus *ext* (e.g. ``.chapters.txt``).
+
+    Built from the filename stem, so a dot inside the name (e.g. ``Vol. 1``) is
+    not mistaken for the extension. ``Path.with_suffix`` would mangle such names:
+    stripping ``.opus`` leaves ``Vol. 1 [id]`` whose apparent suffix is
+    ``. 1 [id]``, so a later ``with_suffix`` rewrites the wrong part.
+    """
+    return audio_path.with_name(audio_path.stem + ext)
+
+
 def clean_track_title(title: str) -> str:
     """Strip a leading ``NN.``/``NN)``/``NN -`` track-number prefix from a title."""
     cleaned = _TRACK_NUM_PREFIX.sub("", title, count=1).strip()
@@ -293,19 +304,17 @@ def find_chapters(audio_path: Path) -> list[Chapter]:
     3. ``<stem>.cue`` sidecar, then a single ``*.cue`` in the same directory
     Returns an empty list when nothing is found.
     """
-    base = audio_path.with_suffix("")
-
-    txt = base.with_suffix(".chapters.txt")
+    txt = sidecar_path(audio_path, ".chapters.txt")
     if txt.exists() and txt.stat().st_size > 0:
         return _normalized(parse_chapters_txt(txt))
 
-    jsn = base.with_suffix(".info.json")
+    jsn = sidecar_path(audio_path, ".info.json")
     if jsn.exists():
         chapters = parse_chapters_json(jsn)
         if chapters:
             return _normalized(chapters)
 
-    cue = base.with_suffix(".cue")
+    cue = sidecar_path(audio_path, ".cue")
     cue_candidates = [cue] if cue.exists() else []
     if not cue_candidates and audio_path.parent.exists():
         cue_candidates = sorted(audio_path.parent.glob("*.cue"))

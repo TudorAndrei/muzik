@@ -23,7 +23,12 @@ from muzik.config import (
     DEFAULT_SPLITS_DIR,
 )
 from muzik.core.audio import extract_metadata, get_duration
-from muzik.core.chapters import Chapter, find_chapters, serialize_chapters
+from muzik.core.chapters import (
+    Chapter,
+    find_chapters,
+    serialize_chapters,
+    sidecar_path,
+)
 from muzik.core.musicbrainz import (
     MIN_ALBUM_DURATION,
     lookup_chapters_verbose as lookup_chapters,
@@ -122,7 +127,7 @@ def _description_chapters(
     events: WorkflowEventEmitter,
 ) -> Optional[list[Chapter]]:
     """Extract and review timestamped chapters from a YouTube info sidecar."""
-    info_path = af.with_suffix("").with_suffix(".info.json")
+    info_path = sidecar_path(af, ".info.json")
     if not info_path.exists():
         return None
     description = get_description_from_info_json(info_path)
@@ -147,7 +152,7 @@ def _description_chapters(
         decision = ChapterDecision.ACCEPT if edited else ChapterDecision.REJECT
     if decision != ChapterDecision.ACCEPT:
         return None
-    af.with_suffix(".chapters.txt").write_text(
+    sidecar_path(af, ".chapters.txt").write_text(
         serialize_chapters(llm_chapters), encoding="utf-8"
     )
     return llm_chapters
@@ -218,7 +223,7 @@ def _get_chapters_for(
     if chapter_decision != ChapterDecision.ACCEPT:
         console.print("  [dim]Skipping MusicBrainz chapters.[/dim]")
         return None
-    sidecar = af.with_suffix(".chapters.txt")
+    sidecar = sidecar_path(af, ".chapters.txt")
     sidecar.write_text(serialize_chapters(mb_chapters), encoding="utf-8")
     console.print(f"  [green]Saved:[/green] {sidecar.name}")
     return mb_chapters

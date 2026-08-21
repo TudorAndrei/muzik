@@ -10,7 +10,12 @@ from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisi
 from muzik.core.beets.events import BeetsEventEmitter, NullBeetsEventEmitter
 from muzik.core.beets.importer import ImportOptions
 from muzik.core.beets.service import organize_paths, tag_only_with_beet
-from muzik.core.chapters import Chapter, find_chapters, serialize_chapters
+from muzik.core.chapters import (
+    Chapter,
+    find_chapters,
+    serialize_chapters,
+    sidecar_path,
+)
 from muzik.core.description_chapters import (
     description_has_timestamps,
     get_description_from_info_json,
@@ -226,7 +231,7 @@ def _chapters_for(
         chapters = decisions.edit_chapters(chapters) or []
     if not chapters:
         return None
-    path.with_suffix(".chapters.txt").write_text(
+    sidecar_path(path, ".chapters.txt").write_text(
         serialize_chapters(chapters), encoding="utf-8"
     )
     return chapters
@@ -237,7 +242,7 @@ def _description_chapters(
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter,
 ) -> list[Chapter] | None:
-    info_path = path.with_suffix("").with_suffix(".info.json")
+    info_path = sidecar_path(path, ".info.json")
     if not info_path.exists():
         return None
     log = lambda message: events.emit(MessageEvent(message, severity="debug"))  # noqa: E731
@@ -262,7 +267,7 @@ def _description_chapters(
         chapters = decisions.edit_chapters(chapters) or []
     if not chapters:
         return None
-    path.with_suffix(".chapters.txt").write_text(
+    sidecar_path(path, ".chapters.txt").write_text(
         serialize_chapters(chapters), encoding="utf-8"
     )
     return chapters

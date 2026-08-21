@@ -15,6 +15,7 @@ from muzik.core.chapters import (
     Chapter,
     parse_artist_title,
     safe_filename,
+    sidecar_path,
     strip_featured,
 )
 from muzik.core.workflow.cancellation import CancellationToken
@@ -59,8 +60,7 @@ def split_audio(
         raise SplitError("No chapters found.")
 
     metadata = extract_metadata(path)
-    base = path.with_suffix("")
-    chapter_path = base.with_suffix(".chapters.txt")
+    chapter_path = sidecar_path(path, ".chapters.txt")
     cache_key: str | None = None
     if chapter_path.exists():
         cache_key = cache_mod.split_cache_key(path, chapter_path)
@@ -109,7 +109,7 @@ def split_audio(
         )
 
     cancellation.raise_if_cancelled()
-    _place_cover(base, output)
+    _place_cover(path, output)
     if cache_key:
         cache_mod.set(cache_key, str(output))
     if not keep_source:
@@ -121,7 +121,7 @@ def split_audio(
             ".metadata.txt",
             *_THUMB_EXTS,
         ):
-            base.with_suffix(extension).unlink(missing_ok=True)
+            sidecar_path(path, extension).unlink(missing_ok=True)
     return output
 
 
@@ -129,14 +129,14 @@ def split_audio(
 _THUMB_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 
 
-def _place_cover(base: Path, output: Path) -> None:
+def _place_cover(audio_path: Path, output: Path) -> None:
     """Copy a downloaded thumbnail into the album folder as cover art.
 
     Beets' fetchart picks up a ``cover.*`` image on import, so the album gets a
     cover even when MusicBrainz has none.
     """
     for extension in _THUMB_EXTS:
-        thumb = base.with_suffix(extension)
+        thumb = sidecar_path(audio_path, extension)
         if thumb.exists():
             try:
                 shutil.copyfile(thumb, output / f"cover{extension}")

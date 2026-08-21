@@ -20,6 +20,16 @@ _ALBUM_NOISE = re.compile(
 )
 _TRAILING_YEAR = re.compile(r"\s+(?:19|20)\d{2}$")
 
+# Placeholder names extract_metadata returns when a file has no usable tags.
+# Searching MusicBrainz for these matches junk releases literally titled
+# "Unknown Album", so skip the query entirely.
+_PLACEHOLDER_NAMES = {"", "unknown", "unknown album", "unknown artist"}
+
+
+def is_searchable_album(album: str) -> bool:
+    """Return whether *album* is a real name worth querying MusicBrainz for."""
+    return album.strip().lower() not in _PLACEHOLDER_NAMES
+
 
 def clean_album_variants(album: str) -> list[str]:
     """Return album-name variants to try against MusicBrainz, best first.
@@ -134,6 +144,8 @@ def lookup_chapters(
 
     Returns ``([], "")`` on any failure (network, not found, missing lengths).
     """
+    if not is_searchable_album(album):
+        return [], ""
     # Build a list of (artist, year) variants to try
     artist_variants = [artist]
     # Strip common YouTube channel suffixes
@@ -178,6 +190,8 @@ def lookup_chapters_verbose(
     year: Optional[str] = None,
 ) -> tuple[list["Chapter"], str, str]:
     """Like ``lookup_chapters`` but also returns a diagnostic message."""
+    if not is_searchable_album(album):
+        return [], "", "no album metadata (Unknown); skipped MusicBrainz"
     artist_variants = [artist]
     for suffix in (" Project", " Band", " Trio", " Quartet", " Orchestra", " Ensemble"):
         if artist.lower().endswith(suffix.lower()):

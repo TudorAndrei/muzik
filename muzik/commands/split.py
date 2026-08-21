@@ -14,7 +14,7 @@ from rich.progress import (
 
 from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
-from muzik.core.chapters import find_chapters, safe_filename
+from muzik.core.chapters import find_chapters, safe_filename, sidecar_path
 from muzik.core.splitter import SplitError, split_audio
 from muzik.core.workflow.cancellation import CancellationToken
 from muzik.ui.chapter_editor import display_chapter_table, edit_chapters
@@ -68,8 +68,7 @@ def _split_audio(
     metadata = extract_metadata(path)
 
     # Report a cache hit nicely before delegating; the engine also honours it.
-    base = path.with_suffix("")
-    txt_path = base.with_suffix(".chapters.txt")
+    txt_path = sidecar_path(path, ".chapters.txt")
     if not force and txt_path.exists():
         cache_key = cache_mod.split_cache_key(path, txt_path)
         cached = cache_mod.get(cache_key)

@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from muzik.core.chapters import sidecar_path
 from muzik.core.metadata import find_muzik_metadata
 from muzik.core.runner import run_silent
 
@@ -108,8 +109,7 @@ def extract_metadata(path: Path) -> dict:
             "year": year[:4] if year != "Unknown" else year,
         }
 
-    base = path.with_suffix("")
-    info_path = base.with_suffix(".info.json")
+    info_path = sidecar_path(path, ".info.json")
 
     if info_path.exists():
         try:
