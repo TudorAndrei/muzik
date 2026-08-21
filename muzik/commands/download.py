@@ -23,6 +23,14 @@ def _youtube_id(url: str) -> Optional[str]:
     return youtube_id(url)
 
 
+def _short_path(path: Path) -> str:
+    """Shorten a path under the home directory to a ``~``-prefixed string."""
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
 def _scenario_label(chapters_count: int) -> str:
     if chapters_count:
         return f"[cyan]album[/cyan] [dim]({chapters_count} chapters)[/dim]"
@@ -98,20 +106,25 @@ def _download_audio(
         border_style="dim",
     )
     table.add_column("File", overflow="fold")
-    table.add_column("Scenario", width=28)
-    table.add_column("Next step", overflow="fold")
+    table.add_column("Scenario", no_wrap=True)
 
+    steps: list[str] = []
     for af in new_audio:
         chapters = find_chapters(af)
         n = len(chapters)
-        scenario = _scenario_label(n)
+        table.add_row(af.name, _scenario_label(n))
         if n:
-            next_step = f"music split {af.name!r} [--review]"
+            steps.append(
+                f"muzik split {af.name!r} [dim]# add --review to confirm[/dim]"
+            )
         else:
-            next_step = f"music organize {output}"
-        table.add_row(af.name, scenario, f"[dim]{next_step}[/dim]")
+            steps.append(f"muzik organize {_short_path(output)}")
 
     console.print(table)
+    # Commands go on their own full-width lines so the path never folds mid-word.
+    console.print("[bold]Next step:[/bold]")
+    for step in dict.fromkeys(steps):  # de-duplicate the shared organize command
+        console.print(f"  [dim]$[/dim] {step}")
 
 
 def download_cmd(
