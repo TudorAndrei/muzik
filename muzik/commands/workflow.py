@@ -75,7 +75,6 @@ from muzik.core.workflow.service import (
 from muzik.core.sources.youtube import YouTubeSource
 from muzik.ui.cli.decisions import CliWorkflowDecisions
 from muzik.ui.cli.events import RichWorkflowEventRenderer
-from muzik.ui.chapter_editor import display_chapter_table
 from muzik.ui.console import console, err
 
 
@@ -141,7 +140,6 @@ def _description_chapters(
             source=af, chapters=llm_chapters, title="YouTube — description"
         )
     )
-    display_chapter_table(llm_chapters, title="YouTube — description")
     decision = decisions.confirm_chapters(af, llm_chapters)
     if decision == ChapterDecision.EDIT:
         edited = decisions.edit_chapters(llm_chapters)
@@ -209,7 +207,6 @@ def _get_chapters_for(
             title=f"MusicBrainz — {mb_title}",
         )
     )
-    display_chapter_table(mb_chapters, title=f"MusicBrainz — {mb_title}")
     chapter_decision = decisions.confirm_chapters(af, mb_chapters)
     if chapter_decision == ChapterDecision.EDIT:
         edited = decisions.edit_chapters(mb_chapters)
