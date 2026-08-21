@@ -19,6 +19,7 @@ from rich.progress import (
 from muzik.core import cache as cache_mod
 from muzik.core.audio import extract_metadata
 from muzik.core.chapters import Chapter, find_chapters, safe_filename
+from muzik.core.splitter import _THUMB_EXTS, _place_cover
 from muzik.core.workflow.cancellation import CancellationToken
 from muzik.ui.chapter_editor import display_chapter_table, edit_chapters
 from muzik.ui.console import console, err
@@ -61,10 +62,17 @@ def _split_track(
         "-vn",
         "-c:a",
         "copy",
+        # Drop the source's embedded tags first; for Opus/Vorbis a bare
+        # -metadata does not override them, so the track would otherwise keep
+        # the whole-video title and uploader.
+        "-map_metadata",
+        "-1",
         "-metadata",
         f"title={chapter.title}",
         "-metadata",
         f"artist={metadata['artist']}",
+        "-metadata",
+        f"albumartist={metadata['artist']}",
         "-metadata",
         f"album={metadata['album']}",
         "-metadata",
@@ -205,6 +213,9 @@ def _split_audio(
 
     console.print(f"[green]✓ {len(chapters)} tracks → {out_dir}[/green]")
 
+    # Copy the downloaded thumbnail into the album folder as cover art.
+    _place_cover(base, out_dir)
+
     # Update split cache
     cancellation.raise_if_cancelled()
     if cache_key:
@@ -214,7 +225,7 @@ def _split_audio(
     if not keep_source:
         cancellation.raise_if_cancelled()
         path.unlink(missing_ok=True)
-        for ext in (".chapters.txt", ".info.json", ".metadata.txt"):
+        for ext in (".chapters.txt", ".info.json", ".metadata.txt", *_THUMB_EXTS):
             sidecar = base.with_suffix(ext)
             sidecar.unlink(missing_ok=True)
         console.print("[dim]Source files removed.[/dim]")
