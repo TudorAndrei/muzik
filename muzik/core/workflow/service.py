@@ -8,7 +8,7 @@ from enum import Enum
 import hashlib
 import os
 import inspect
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -657,6 +657,31 @@ def run_workflow(
     cancellation.raise_if_cancelled()
 
 
+@dataclass
+class _PlaylistProgress:
+    """Track playlist-wide state so per-video work can adapt and be summarised."""
+
+    # After this many videos in a row where Soulseek finds nothing, stop trying
+    # it for the rest of the playlist and go straight to YouTube. This also
+    # avoids the extra yt-dlp metadata call Soulseek makes per video.
+    soulseek_dry_threshold: int = 3
+    soulseek_dry_streak: int = 0
+    soulseek_disabled: bool = False
+    disabled_announced: bool = False
+    failed: list[str] = field(default_factory=list)
+
+    def note_soulseek_dry(self) -> None:
+        self.soulseek_dry_streak += 1
+        if self.soulseek_dry_streak >= self.soulseek_dry_threshold:
+            self.soulseek_disabled = True
+
+    def note_soulseek_hit(self) -> None:
+        self.soulseek_dry_streak = 0
+
+    def note_failed(self, video_id: str) -> None:
+        self.failed.append(video_id)
+
+
 def _run_playlist_workflow(
     request: WorkflowRequest,
     options: WorkflowOptions,
@@ -684,6 +709,7 @@ def _run_playlist_workflow(
         raise WorkflowServiceError(
             "Could not fetch playlist video IDs — check the URL and yt-dlp."
         )
+    progress = _PlaylistProgress()
     for video_id in video_ids:
         cancellation.raise_if_cancelled()
         _process_playlist_video(
@@ -696,6 +722,18 @@ def _run_playlist_workflow(
             operations=operations,
             events=events,
             cancellation=cancellation,
+            progress=progress,
+        )
+
+    if progress.failed:
+        events.emit(
+            MessageEvent(
+                message=(
+                    f"{len(progress.failed)} of {len(video_ids)} video(s) failed to "
+                    f"download: {', '.join(progress.failed)}"
+                ),
+                severity="warning",
+            )
         )
 
 
@@ -795,7 +833,9 @@ def _process_playlist_video(
     operations: WorkflowRunOperations,
     events: WorkflowEventEmitter,
     cancellation: CancellationToken,
+    progress: _PlaylistProgress | None = None,
 ) -> None:
+    progress = progress or _PlaylistProgress()
     cancellation.raise_if_cancelled()
     entry = playlist_state["videos"].get(video_id, {})
     if options.force and entry.get("status") in ("split", "organized"):
@@ -812,9 +852,28 @@ def _process_playlist_video(
         return
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    use_soulseek = options.audio_source == AudioSource.SOULSEEK or (
-        options.audio_source == AudioSource.AUTO and operations.soulseek_ready()
+    # Skip Soulseek once it has proven dry for the playlist: it makes an extra
+    # yt-dlp metadata call per video, so this halves the YouTube requests.
+    use_soulseek = not progress.soulseek_disabled and (
+        options.audio_source == AudioSource.SOULSEEK
+        or (options.audio_source == AudioSource.AUTO and operations.soulseek_ready())
     )
+
+    def _mark_soulseek_dry() -> None:
+        progress.note_soulseek_dry()
+        if progress.soulseek_disabled and not progress.disabled_announced:
+            progress.disabled_announced = True
+            events.emit(
+                MessageEvent(
+                    message=(
+                        f"Soulseek found nothing for "
+                        f"{progress.soulseek_dry_threshold} videos in a row; "
+                        "using YouTube for the rest of the playlist."
+                    ),
+                    severity="info",
+                )
+            )
+
     if use_soulseek:
         files_for_video = [] if options.force else _cached_playlist_files(entry)
         if not files_for_video:
@@ -831,12 +890,15 @@ def _process_playlist_video(
                 if options.fallback != AudioFallback.YOUTUBE:
                     raise
                 use_soulseek = False
+                _mark_soulseek_dry()
         if use_soulseek:
             if not files_for_video:
                 if options.fallback != AudioFallback.YOUTUBE:
                     raise WorkflowServiceError("No Soulseek audio files were acquired.")
                 use_soulseek = False
+                _mark_soulseek_dry()
             else:
+                progress.note_soulseek_hit()
                 cancellation.raise_if_cancelled()
                 playlist_state["videos"][video_id] = {
                     "status": "downloaded",
@@ -884,6 +946,7 @@ def _process_playlist_video(
                 ),
             )
             if not downloaded:
+                progress.note_failed(video_id)
                 return
             cancellation.raise_if_cancelled()
             after = set(request.output.glob("*")) if request.output.exists() else set()
@@ -891,6 +954,7 @@ def _process_playlist_video(
             if not new_files:
                 new_files = find_audio_by_id(request.output, video_id)
             if not new_files:
+                progress.note_failed(video_id)
                 return
             audio_file = new_files[0]
             playlist_state["videos"][video_id] = {
