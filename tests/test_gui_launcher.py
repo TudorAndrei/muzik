@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import cast
 
 import dearpygui.dearpygui as dpg
 
@@ -98,5 +99,38 @@ def test_run_rejects_empty_input() -> None:
 
         assert runs == []
         assert dpg.get_value(ERROR_TEXT) == "Enter a URL or local path."
+    finally:
+        dpg.destroy_context()
+
+
+def test_watchlist_button_opens_watchlist() -> None:
+    opened: list[bool] = []
+    dpg.create_context()
+    launcher = LauncherView(
+        lambda config: None,
+        lambda: None,
+        lambda: None,
+        lambda: None,
+        lambda: opened.append(True),
+    )
+    try:
+        launcher.build()
+        root_children = cast(
+            dict[int, list[int]], dpg.get_item_children("launcher-window")
+        )
+        buttons = [item for slot in root_children.values() for item in slot]
+        pending = list(buttons)
+        while pending:
+            item = pending.pop()
+            if dpg.get_item_label(item) == "Watchlist":
+                callback = dpg.get_item_callback(item)
+                assert callback is not None
+                callback()
+                break
+            children = cast(dict[int, list[int]], dpg.get_item_children(item))
+            for slot in children.values():
+                pending.extend(slot)
+
+        assert opened == [True]
     finally:
         dpg.destroy_context()

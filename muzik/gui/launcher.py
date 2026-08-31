@@ -80,11 +80,13 @@ class LauncherView:
         on_quit: Callable[[], None],
         on_settings: Callable[..., None],
         on_library: Callable[..., None],
+        on_watchlist: Callable[..., None] | None = None,
     ) -> None:
         self._on_run = on_run
         self._on_quit = on_quit
         self._on_settings = on_settings
         self._on_library = on_library
+        self._on_watchlist = on_watchlist or (lambda: None)
 
     def build(self) -> None:
         with dpg.window(tag=LAUNCHER_WINDOW, label="muzik workflow"):
@@ -167,6 +169,9 @@ class LauncherView:
             dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
             with dpg.group(horizontal=True):
                 run_button = dpg.add_button(label="Run", callback=self._run, width=100)
+                dpg.add_button(
+                    label="Watchlist", callback=self._on_watchlist, width=100
+                )
                 dpg.add_button(label="Library", callback=self._on_library, width=100)
                 dpg.add_button(label="Settings", callback=self._on_settings, width=100)
                 dpg.add_button(label="Quit", callback=self._quit, width=100)

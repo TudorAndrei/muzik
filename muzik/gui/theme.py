@@ -25,6 +25,15 @@ OK_COLOR: tuple[int, int, int] = (120, 200, 120)
 FAIL_COLOR: tuple[int, int, int] = (230, 120, 120)
 NA_COLOR: tuple[int, int, int] = (198, 198, 128)
 
+# Watchlist card and stage tokens. Status text is always shown with these colors.
+CARD_BG: tuple[int, int, int] = (30, 33, 38)
+STAGE_NOT_STARTED: tuple[int, int, int] = (148, 152, 160)
+STAGE_RUNNING: tuple[int, int, int] = ACCENT
+STAGE_COMPLETE: tuple[int, int, int] = OK_COLOR
+STAGE_FAILED: tuple[int, int, int] = FAIL_COLOR
+STAGE_SKIPPED: tuple[int, int, int] = (198, 198, 128)
+STAGE_STALE: tuple[int, int, int] = (222, 164, 92)
+
 # Neutral elevation ramp, dark to light.
 _WINDOW_BG = (24, 26, 30)
 _CHILD_BG = (30, 33, 38)

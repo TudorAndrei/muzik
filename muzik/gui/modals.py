@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from queue import Full, Queue
+from collections.abc import Callable
 from typing import Any
 
 import dearpygui.dearpygui as dpg
@@ -16,6 +17,58 @@ from muzik.core.workflow.decisions import ChapterDecision
 
 
 _OPEN_MODALS: set[Any] = set()
+
+
+def confirm_item_action_modal(
+    *,
+    item_title: str,
+    action_label: str,
+    on_confirm: Callable[[], None],
+) -> None:
+    """Ask before an item command can replace local files."""
+    tag = dpg.generate_uuid()
+    _OPEN_MODALS.add(tag)
+
+    def confirm(
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
+        _OPEN_MODALS.discard(tag)
+        on_confirm()
+
+    def cancel(
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        if dpg.does_item_exist(tag):
+            dpg.delete_item(tag)
+        _OPEN_MODALS.discard(tag)
+
+    with dpg.window(
+        label=f"Confirm {action_label.lower()}",
+        tag=tag,
+        modal=True,
+        width=520,
+        height=190,
+        on_close=cancel,
+    ):
+        dpg.add_text(item_title, wrap=480)
+        dpg.add_text(
+            "This command can replace local files and make later stages stale.",
+            wrap=480,
+        )
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label=action_label,
+                callback=confirm,
+                width=150,
+                height=40,
+            )
+            dpg.add_button(label="Cancel", callback=cancel, width=100, height=40)
 
 
 def candidate_modal(

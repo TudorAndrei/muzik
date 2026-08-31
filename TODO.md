@@ -63,27 +63,27 @@
 
 ## Phase 4: Build the desktop watchlist viewer
 
-- [ ] Add the Watchlist callback and button in `muzik/gui/launcher.py`.
-- [ ] Add the playlist rail, toolbar, paged thumbnail grid, and card controls in
+- [x] Add the Watchlist callback and button in `muzik/gui/launcher.py`.
+- [x] Add the playlist rail, toolbar, paged thumbnail grid, and card controls in
   `muzik/gui/watchlist.py`.
-- [ ] Show a four-part Download, Parse, Split, and Organize rail on each card.
-- [ ] Show each item's position, title, YouTube ID, summary state, primary action,
+- [x] Show a four-part Download, Parse, Split, and Organize rail on each card.
+- [x] Show each item's position, title, YouTube ID, summary state, primary action,
   and Actions menu.
-- [ ] Add confirmation dialogs for force and overwrite actions in
+- [x] Add confirmation dialogs for force and overwrite actions in
   `muzik/gui/modals.py`.
-- [ ] Add card and stage tokens to `muzik/gui/theme.py`.
-- [ ] Load cached thumbnails and create DearPyGui textures through `GuiBridge`.
-- [ ] Release watchlist textures when the view closes.
-- [ ] Connect add, remove, refresh, filters, paging, item actions, and Back in
+- [x] Add card and stage tokens to `muzik/gui/theme.py`.
+- [x] Load cached thumbnails and create DearPyGui textures through `GuiBridge`.
+- [x] Release watchlist textures when the view closes.
+- [x] Connect add, remove, refresh, filters, paging, item actions, and Back in
   `muzik/gui/app.py`.
-- [ ] Use current launcher paths and options for refresh and item commands.
-- [ ] Reuse `PipelineView` and return to a reloaded watchlist after completion or
+- [x] Use current launcher paths and options for refresh and item commands.
+- [x] Reuse `PipelineView` and return to a reloaded watchlist after completion or
   cancellation.
-- [ ] Add `tests/test_gui_watchlist.py` for card layout, item data, stage rails,
+- [x] Add `tests/test_gui_watchlist.py` for card layout, item data, stage rails,
   paging, filtering, placeholders, actions, and disabled reasons.
-- [ ] Extend GUI app, launcher, and bridge tests for navigation, textures, worker
+- [x] Extend GUI app, launcher, and bridge tests for navigation, textures, worker
   lifecycle, and cancellation.
-- [ ] Commit: `feat(gui): add the YouTube-style watchlist viewer`
+- [x] Commit: `feat(gui): add the YouTube-style watchlist viewer`
 
 ## Phase 5: Document and verify the feature
 
