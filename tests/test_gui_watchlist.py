@@ -21,8 +21,8 @@ from muzik.gui.watchlist import (
     PLAYLIST_RAIL,
     TEXTURE_REGISTRY,
     WatchlistView,
-    columns_for_width,
     page_for_items,
+    thumbnail_width_for_width,
 )
 
 
@@ -80,11 +80,10 @@ def _text_values(parent) -> list[str]:
     return values
 
 
-def test_columns_follow_available_width() -> None:
-    assert columns_for_width(200) == 1
-    assert columns_for_width(700) == 2
-    assert columns_for_width(1000) == 3
-    assert columns_for_width(1800) == 4
+def test_thumbnail_width_follows_available_width() -> None:
+    assert thumbnail_width_for_width(500) == 180
+    assert thumbnail_width_for_width(900) == 240
+    assert thumbnail_width_for_width(1200) == 300
 
 
 def test_page_filters_summary_state_and_clamps_page() -> None:
@@ -144,14 +143,46 @@ def test_cards_show_item_data_stage_rail_and_placeholder(tmp_path: Path) -> None
         assert "1. Video 1" in text
         assert "YouTube ID: video000001" in text
         assert "State: Failed" in text
-        assert "Download" in text
-        assert "Failed" in text
-        assert "Parse" in text
-        assert "Stale" in text
-        assert "Split" in text
-        assert "Organize" in text
+        assert "Download: Failed" in text
+        assert "Parse: Stale" in text
+        assert "Split: Not started" in text
+        assert "Organize: Not started" in text
         assert "No cached thumbnail" in text
         assert "The download failed." in text
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
+def test_items_render_as_vertical_rows_with_controls(tmp_path: Path) -> None:
+    playlist = WatchlistPlaylist(
+        "PL123",
+        "https://example.test",
+        items=[_item(1), _item(2)],
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([playlist]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+
+        for position in (1, 2):
+            row = f"watchlist-row-{position}"
+            assert dpg.does_item_exist(row)
+            assert dpg.get_item_parent(row) == GRID
+            labels = {dpg.get_item_label(item) for item in _descendants(row)}
+            assert {
+                "Run",
+                "Download again",
+                "Parse again",
+                "Split again",
+                "Organize again",
+                "Run all again",
+            } <= labels
     finally:
         view.destroy()
         dpg.destroy_context()

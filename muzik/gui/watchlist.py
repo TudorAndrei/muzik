@@ -65,6 +65,13 @@ ACTION_LABELS = {
     ItemAction.ORGANIZE_AGAIN: "Organize again",
     ItemAction.RUN_ALL_AGAIN: "Run all again",
 }
+_REPEAT_ACTIONS = (
+    ItemAction.DOWNLOAD_AGAIN,
+    ItemAction.PARSE_AGAIN,
+    ItemAction.SPLIT_AGAIN,
+    ItemAction.ORGANIZE_AGAIN,
+    ItemAction.RUN_ALL_AGAIN,
+)
 
 _STAGE_LABELS = {
     "download": "Download",
@@ -97,9 +104,13 @@ class WatchlistPage:
     page_count: int
 
 
-def columns_for_width(width: int) -> int:
-    """Return a compact card column count for the available main width."""
-    return max(1, min(4, width // 310))
+def thumbnail_width_for_width(width: int) -> int:
+    """Return a readable thumbnail width for the available list width."""
+    if width < 750:
+        return 180
+    if width < 1050:
+        return 240
+    return 300
 
 
 def page_for_items(
@@ -149,7 +160,7 @@ class WatchlistView:
         self._selected_playlist_id: str | None = None
         self._filter = "All"
         self._page = 0
-        self._columns = 3
+        self._thumbnail_width = 300
         self._textures: dict[str, Any] = {}
         self._thumbnail_requests: set[str] = set()
 
@@ -244,9 +255,9 @@ class WatchlistView:
             dpg.enable_item(REFRESH_BUTTON)
 
     def set_available_width(self, width: int) -> None:
-        columns = columns_for_width(width)
-        if columns != self._columns:
-            self._columns = columns
+        thumbnail_width = thumbnail_width_for_width(width)
+        if thumbnail_width != self._thumbnail_width:
+            self._thumbnail_width = thumbnail_width
             self._render_cards()
 
     def load_cached_thumbnail(self, video_id: str, path: Path) -> bool:
@@ -384,89 +395,133 @@ class WatchlistView:
             dpg.set_value(EMPTY_TEXT, message)
             return
         dpg.set_value(EMPTY_TEXT, "")
-        with dpg.table(
-            parent=GRID,
-            header_row=False,
-            borders_innerV=False,
-            policy=dpg.mvTable_SizingStretchSame,
-        ):
-            for _ in range(self._columns):
-                dpg.add_table_column()
-            for start in range(0, len(page.items), self._columns):
-                with dpg.table_row():
-                    row = page.items[start : start + self._columns]
-                    for item in row:
-                        self._add_card(playlist.playlist_id, item)
-                    for _ in range(self._columns - len(row)):
-                        dpg.add_text("")
+        for item in page.items:
+            self._add_row(playlist.playlist_id, item)
 
-    def _add_card(self, playlist_id: str, item: WatchlistItem) -> None:
-        with dpg.table_cell():
-            with dpg.child_window(height=390, border=True):
-                texture = self._textures.get(item.video_id or "")
-                if texture is not None:
-                    dpg.add_image(texture, width=-1, height=150)
-                else:
-                    with dpg.child_window(height=150, border=False):
-                        dpg.add_spacer(height=50)
-                        dpg.add_text("No cached thumbnail", color=STAGE_NOT_STARTED)
-                    if (
-                        item.video_id
-                        and self._on_thumbnail_needed is not None
-                        and item.video_id not in self._thumbnail_requests
-                    ):
-                        self._thumbnail_requests.add(item.video_id)
-                        self._on_thumbnail_needed(item.video_id)
-                dpg.add_text(f"{item.position}. {item.title}", wrap=-1)
-                dpg.add_text(
-                    f"YouTube ID: {item.video_id or 'Unavailable'}",
-                    color=STAGE_NOT_STARTED,
+    def _add_row(self, playlist_id: str, item: WatchlistItem) -> None:
+        thumbnail_height = round(self._thumbnail_width * 9 / 16)
+        with dpg.child_window(
+            tag=f"watchlist-row-{item.position}",
+            parent=GRID,
+            height=235,
+            border=False,
+            no_scrollbar=True,
+        ):
+            with dpg.table(
+                header_row=False,
+                policy=dpg.mvTable_SizingStretchProp,
+                borders_innerV=False,
+                no_pad_outerX=True,
+            ):
+                dpg.add_table_column(
+                    width_fixed=True,
+                    init_width_or_weight=self._thumbnail_width,
                 )
-                summary = item_summary_state(item)
-                summary_color = {
-                    "Processed": OK_COLOR,
-                    "Failed": FAIL_COLOR,
-                    "Processing": ACCENT,
-                }.get(summary, STAGE_NOT_STARTED)
-                dpg.add_text(f"State: {summary}", color=summary_color)
-                self._add_stage_rail(item)
-                with dpg.group(horizontal=True):
-                    action, label = primary_item_action(item)
-                    primary = dpg.add_button(
-                        label=label,
-                        callback=lambda s=None, a=None, u=None, selected=action: (
-                            None
-                            if selected is None
-                            else self._on_action(playlist_id, item, selected)
-                        ),
-                        width=110,
-                        height=40,
-                        enabled=action is not None,
-                    )
-                    if action is not None:
-                        bind_primary_button(primary)
-                    dpg.add_button(
-                        label="Actions...",
-                        callback=lambda s=None, a=None, u=None: self._open_actions(
-                            playlist_id, item
-                        ),
-                        width=110,
-                        height=40,
-                        enabled=item.video_id is not None,
-                    )
-                if item.last_error:
-                    dpg.add_text(item.last_error, color=FAIL_COLOR, wrap=-1)
+                dpg.add_table_column(width_stretch=True)
+                with dpg.table_row():
+                    with dpg.table_cell():
+                        self._add_thumbnail(item, thumbnail_height)
+                    with dpg.table_cell():
+                        self._add_item_details(playlist_id, item)
+
+    def _add_thumbnail(self, item: WatchlistItem, height: int) -> None:
+        texture = self._textures.get(item.video_id or "")
+        if texture is not None:
+            dpg.add_image(texture, width=self._thumbnail_width, height=height)
+            return
+        with dpg.child_window(
+            width=self._thumbnail_width,
+            height=height,
+            border=False,
+            no_scrollbar=True,
+        ):
+            dpg.add_spacer(height=max(24, height // 3))
+            dpg.add_text("No cached thumbnail", color=STAGE_NOT_STARTED)
+        if (
+            item.video_id
+            and self._on_thumbnail_needed is not None
+            and item.video_id not in self._thumbnail_requests
+        ):
+            self._thumbnail_requests.add(item.video_id)
+            self._on_thumbnail_needed(item.video_id)
+
+    def _add_item_details(self, playlist_id: str, item: WatchlistItem) -> None:
+        dpg.add_text(f"{item.position}. {item.title}", wrap=-1)
+        summary = item_summary_state(item)
+        summary_color = {
+            "Processed": OK_COLOR,
+            "Failed": FAIL_COLOR,
+            "Processing": ACCENT,
+        }.get(summary, STAGE_NOT_STARTED)
+        with dpg.group(horizontal=True):
+            dpg.add_text(
+                f"YouTube ID: {item.video_id or 'Unavailable'}",
+                color=STAGE_NOT_STARTED,
+            )
+            dpg.add_text(f"State: {summary}", color=summary_color)
+        self._add_stage_rail(item)
+        if item.last_error:
+            dpg.add_text(item.last_error, color=FAIL_COLOR, wrap=-1)
+        self._add_action_buttons(playlist_id, item)
+
+    def _add_action_buttons(self, playlist_id: str, item: WatchlistItem) -> None:
+        primary_action, primary_label = primary_item_action(item)
+        actions = ((primary_action, primary_label),) + tuple(
+            (action, ACTION_LABELS[action]) for action in _REPEAT_ACTIONS
+        )
+        with dpg.table(
+            header_row=False,
+            policy=dpg.mvTable_SizingStretchSame,
+            borders_innerV=False,
+            no_pad_outerX=True,
+        ):
+            for _ in range(3):
+                dpg.add_table_column()
+            for start in range(0, len(actions), 3):
+                with dpg.table_row():
+                    for index, (action, label) in enumerate(
+                        actions[start : start + 3],
+                        start=start,
+                    ):
+                        with dpg.table_cell():
+                            if index == 0:
+                                enabled = action is not None
+                            else:
+                                enabled = (
+                                    action is not None
+                                    and self._request is not None
+                                    and item_action_availability(
+                                        item,
+                                        action,
+                                        request=self._request,
+                                    ).enabled
+                                )
+                            button = dpg.add_button(
+                                label=label,
+                                callback=lambda s=None, a=None, u=None, selected=action: (
+                                    None
+                                    if selected is None
+                                    else self._choose_action(
+                                        playlist_id,
+                                        item,
+                                        selected,
+                                    )
+                                ),
+                                width=-1,
+                                height=36,
+                                enabled=enabled,
+                            )
+                            if index == 0 and action is not None:
+                                bind_primary_button(button)
 
     def _add_stage_rail(self, item: WatchlistItem) -> None:
         with dpg.group(horizontal=True):
             for name in STAGE_NAMES:
                 record = item.stages[name]
-                with dpg.child_window(width=72, height=57, border=True):
-                    dpg.add_text(_STAGE_LABELS[name])
-                    dpg.add_text(
-                        _STATUS_LABELS[record.status],
-                        color=_STATUS_COLORS[record.status],
-                    )
+                dpg.add_text(
+                    f"{_STAGE_LABELS[name]}: {_STATUS_LABELS[record.status]}",
+                    color=_STATUS_COLORS[record.status],
+                )
 
     def _open_actions(self, playlist_id: str, item: WatchlistItem) -> None:
         if dpg.does_item_exist(ACTIONS_WINDOW):
