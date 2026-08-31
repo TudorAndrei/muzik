@@ -223,6 +223,7 @@ def parse_cue(path: Path) -> list[Chapter]:
 # put on a chapter title, so we do not repeat the number in the filename. A bare
 # "27 Deserts" is kept, because the number is not followed by a separator.
 _TRACK_NUM_PREFIX = re.compile(r"^\s*\d{1,3}\s*[.):\-]\s+")
+_YTDLP_RANGE_SUFFIX = re.compile(r"\.\)\s*$")
 
 
 def sidecar_path(audio_path: Path, ext: str) -> Path:
@@ -239,6 +240,9 @@ def sidecar_path(audio_path: Path, ext: str) -> Path:
 def clean_track_title(title: str) -> str:
     """Strip a leading ``NN.``/``NN)``/``NN -`` track-number prefix from a title."""
     cleaned = _TRACK_NUM_PREFIX.sub("", title, count=1).strip()
+    # yt-dlp can leave this suffix when it derives chapters from a description
+    # line such as ``Song (00:00 - 04:10)``.
+    cleaned = _YTDLP_RANGE_SUFFIX.sub("", cleaned).strip()
     return cleaned or title
 
 

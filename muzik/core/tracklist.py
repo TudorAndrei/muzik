@@ -40,6 +40,13 @@ _LINE_START = re.compile(
 _LINE_END = re.compile(
     rf"^\s*(?:\d{{1,3}}[.)\-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?({_TS})[\])]?\s*$"
 )
+# A range in brackets after the title: ``1. Song (00:00 - 04:10)``.
+# The first timestamp is the chapter start; the second timestamp is only an
+# explicit end marker.
+_TIME_RANGE = re.compile(
+    rf"^\s*(?:\d{{1,3}}[.)\-]\s*)?(.+?)\s*[\[(]\s*({_TS})\s*"
+    rf"[-–—]\s*{_TS}\s*[\])]\s*$"
+)
 _ONLY_TS = re.compile(rf"^\s*[\[(]?{_TS}[\])]?\s*$")
 
 
@@ -164,6 +171,11 @@ def _regex_tracklist(description: str) -> list[Chapter] | None:
 
 
 def _parse_line(line: str) -> tuple[int, str] | None:
+    match = _TIME_RANGE.match(line)
+    if match:
+        title = _clean_title(match.group(1))
+        if title:
+            return _ts_to_secs(match.group(2)), title
     match = _LINE_START.match(line)
     if match:
         title = _clean_title(match.group(2))

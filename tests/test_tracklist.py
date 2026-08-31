@@ -41,6 +41,21 @@ def test_regex_parses_title_first_with_index() -> None:
     ]
 
 
+def test_regex_parses_parenthesized_time_ranges() -> None:
+    chapters = _regex_tracklist(
+        "1. High-Flying (00:00 - 04:10)\n"
+        "2. Screwdriver (04:10 - 10:50)\n"
+        "3. Scramble (10:53 - 18:33)"
+    )
+
+    assert chapters is not None
+    assert [(chapter.title, chapter.start) for chapter in chapters] == [
+        ("High-Flying", 0),
+        ("Screwdriver", 250),
+        ("Scramble", 653),
+    ]
+
+
 def test_regex_parses_bracketed_timestamps() -> None:
     chapters = _regex_tracklist("[0:00] One\n[1:30] Two")
     assert chapters is not None
@@ -133,6 +148,7 @@ def test_clean_track_title_strips_number_prefix() -> None:
     assert clean_track_title("04. sporty like a Supra") == "sporty like a Supra"
     assert clean_track_title("4) Intro") == "Intro"
     assert clean_track_title("01 - Blue Waters") == "Blue Waters"
+    assert clean_track_title("High-Flying.)") == "High-Flying"
     # A number that is part of the title is kept.
     assert clean_track_title("27 Deserts") == "27 Deserts"
     assert clean_track_title("Avenue '98") == "Avenue '98"

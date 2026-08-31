@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any, cast
 
 from beets import config as beets_config
 from beets import importer as beets_importer
@@ -157,6 +158,7 @@ def test_apply_duplicate_decision_sets_task_flags() -> None:
 
 def test_importer_adapter_exposes_only_opaque_view_ids() -> None:
     task = FakeTask()
+    task.paths = cast(Any, [b"/tmp/High-Flying/01 Track.opus"])
     candidate = object()
     task.candidates = [candidate]
     adapter = BeetsImporterAdapter()
@@ -164,6 +166,7 @@ def test_importer_adapter_exposes_only_opaque_view_ids() -> None:
     view = adapter.view_for(task)
 
     assert view.task_id == "task-0"
+    assert view.paths == [Path("/tmp/High-Flying/01 Track.opus")]
     assert view.matches[0].candidate_id == "task-0:match:0"
     assert not hasattr(view, "raw")
     assert adapter.resolve_choice(task, view.matches[0].candidate_id) is candidate

@@ -63,3 +63,59 @@ def test_extract_metadata_prefers_muzik_sidecar_over_info_json(tmp_path: Path) -
         "album": "Sidecar Album",
         "year": "2001",
     }
+
+
+def test_extract_metadata_uses_info_json_when_muzik_metadata_is_empty(
+    tmp_path: Path,
+) -> None:
+    audio = tmp_path / "Hiromasa Suzuki - High-Flying [video].opus"
+    audio.write_bytes(b"")
+    audio.with_suffix(".info.json").write_text(
+        '{"title": "Hiromasa Suzuki - High-Flying (1976) (Full Album)", '
+        '"uploader": "CanuDigit", "upload_date": "20180102"}',
+        encoding="utf-8",
+    )
+    write_muzik_metadata(
+        audio,
+        {
+            "source": "youtube",
+            "resolved": {},
+            "candidate": {"metadata": {}},
+        },
+    )
+
+    assert extract_metadata(audio) == {
+        "title": "Hiromasa Suzuki - High-Flying (1976) (Full Album)",
+        "artist": "Hiromasa Suzuki",
+        "album": "High-Flying",
+        "year": "1976",
+    }
+
+
+def test_extract_metadata_reads_opus_stream_tags(tmp_path: Path, monkeypatch) -> None:
+    audio = tmp_path / "track.opus"
+    audio.write_bytes(b"")
+    monkeypatch.setattr(
+        "muzik.core.audio.probe",
+        lambda path: {
+            "format": {"tags": {}},
+            "streams": [
+                {
+                    "codec_type": "audio",
+                    "tags": {
+                        "TITLE": "High-Flying",
+                        "ARTIST": "Hiromasa Suzuki",
+                        "ALBUM": "High-Flying",
+                        "DATE": "1976",
+                    },
+                }
+            ],
+        },
+    )
+
+    assert extract_metadata(audio) == {
+        "title": "High-Flying",
+        "artist": "Hiromasa Suzuki",
+        "album": "High-Flying",
+        "year": "1976",
+    }

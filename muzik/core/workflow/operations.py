@@ -9,7 +9,11 @@ from typing import cast
 
 from muzik.core.audio import extract_metadata, get_duration
 from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
-from muzik.core.beets.events import BeetsEventEmitter, NullBeetsEventEmitter
+from muzik.core.beets.events import (
+    BeetsErrorEvent,
+    BeetsEventEmitter,
+    NullBeetsEventEmitter,
+)
 from muzik.core.beets.importer import ImportOptions
 from muzik.core.beets.service import organize_paths, tag_only_with_beet
 from muzik.core.chapters import (
@@ -35,7 +39,7 @@ from muzik.core.sources.youtube import (
     prepopulate_archive,
 )
 from muzik.core.splitter import SplitError, split_audio
-from muzik.core.workflow.cancellation import CancellationToken
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.decisions import WorkflowDecisions
 from muzik.core.workflow.events import (
     ChapterReviewRequestedEvent,
@@ -154,8 +158,16 @@ def build_workflow_operations(
                     events=beets_events,
                     tag_only_runner=tag_only_with_beet if options.tag_only else None,
                 )
-            except Exception:
-                return False
+            except WorkflowCancelled:
+                raise
+            except Exception as exc:
+                message = str(exc) or type(exc).__name__
+                beets_events.emit(
+                    BeetsErrorEvent(message, context={"path": str(target)})
+                )
+                raise WorkflowServiceError(
+                    f"Beets could not organize {target.name}: {message}"
+                ) from exc
             return True
 
         process_audio_plan(

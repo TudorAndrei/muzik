@@ -48,9 +48,15 @@ def test_js_runtime_args_prefers_available_runtime(monkeypatch) -> None:
 
 
 def test_build_download_command_enables_js_runtime(monkeypatch) -> None:
-    monkeypatch.setattr(youtube.shutil, "which", lambda name: name == "deno")
+    monkeypatch.setattr(youtube.shutil, "which", lambda name: name == "bun")
     cmd = youtube.build_download_command("https://youtube.com/watch?v=abcdefghijk")
-    assert cmd[cmd.index("--js-runtimes") + 1] == "deno"
+    assert cmd[cmd.index("--js-runtimes") + 1] == "bun"
+
+
+def test_js_runtime_args_does_not_use_deno(monkeypatch) -> None:
+    monkeypatch.setattr(youtube.shutil, "which", lambda name: name == "deno")
+
+    assert youtube.js_runtime_args() == []
 
 
 def test_cookie_args_from_env(monkeypatch) -> None:

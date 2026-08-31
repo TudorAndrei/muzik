@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import os
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +37,7 @@ def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
     paths = []
     for path in getattr(task, "paths", []) or []:
         try:
-            paths.append(Path(path))
+            paths.append(Path(os.fsdecode(path)))
         except TypeError:
             paths.append(Path(str(path)))
 

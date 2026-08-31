@@ -80,34 +80,43 @@ def extract_metadata(path: Path) -> dict:
         candidate = muzik_meta.get("candidate") or {}
         if not isinstance(candidate, dict):
             candidate = {}
-
-        title = (
-            resolved.get("title")
-            or resolved.get("track")
-            or muzik_meta.get("title")
-            or path.stem
-        )
-        artist = (
-            resolved.get("artist")
-            or muzik_meta.get("artist")
-            or candidate.get("artist")
-            or "Unknown Artist"
-        )
-        album = (
-            resolved.get("album")
-            or muzik_meta.get("album")
-            or candidate.get("album")
-            or resolved.get("title")
-            or "Unknown Album"
-        )
-        year_raw = resolved.get("year") or muzik_meta.get("year")
-        year = str(year_raw) if year_raw else "Unknown"
-        return {
-            "title": str(title),
-            "artist": str(artist),
-            "album": str(album),
-            "year": year[:4] if year != "Unknown" else year,
-        }
+        candidate_metadata = candidate.get("metadata") or {}
+        if not isinstance(candidate_metadata, dict):
+            candidate_metadata = {}
+        sources = (resolved, candidate_metadata, muzik_meta, candidate)
+        if any(
+            source.get(field)
+            for source in sources
+            for field in ("title", "track", "artist", "album", "year")
+        ):
+            title = next(
+                (
+                    value
+                    for source in sources
+                    for key in ("title", "track")
+                    if (value := source.get(key))
+                ),
+                path.stem,
+            )
+            artist = next(
+                (source["artist"] for source in sources if source.get("artist")),
+                "Unknown Artist",
+            )
+            album = next(
+                (source["album"] for source in sources if source.get("album")),
+                resolved.get("title") or "Unknown Album",
+            )
+            year_raw = next(
+                (source["year"] for source in sources if source.get("year")),
+                None,
+            )
+            year = str(year_raw) if year_raw else "Unknown"
+            return {
+                "title": str(title),
+                "artist": str(artist),
+                "album": str(album),
+                "year": year[:4] if year != "Unknown" else year,
+            }
 
     info_path = sidecar_path(path, ".info.json")
 
@@ -128,7 +137,7 @@ def extract_metadata(path: Path) -> dict:
                 # Only use parsed album if no explicit album tag
                 if not data.get("album"):
                     album = parsed_album or title
-                if parsed_year and year == "Unknown":
+                if parsed_year:
                     year = parsed_year
 
             return {
@@ -143,7 +152,12 @@ def extract_metadata(path: Path) -> dict:
     # Fallback: ffprobe embedded tags
     try:
         data = probe(path)
-        tags: dict = data.get("format", {}).get("tags", {})
+        tags: dict = {}
+        for stream in data.get("streams", []):
+            if stream.get("codec_type") == "audio" or stream.get("tags"):
+                tags.update(stream.get("tags", {}))
+                break
+        tags.update(data.get("format", {}).get("tags", {}))
         # ffprobe tags are case-insensitive in practice; normalise to lower
         tags = {k.lower(): v for k, v in tags.items()}
         date_raw = tags.get("date", "")

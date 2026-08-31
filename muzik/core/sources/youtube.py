@@ -49,10 +49,10 @@ def js_runtime_args() -> list[str]:
     """Enable a JavaScript runtime for yt-dlp if one is on PATH.
 
     Recent YouTube extraction needs a JS runtime to solve player challenges;
-    without one yt-dlp finds no formats and downloads nothing. yt-dlp auto-uses
-    deno, but node and bun must be enabled explicitly.
+    without one yt-dlp finds no formats and downloads nothing. Muzik enables an
+    installed Node.js or Bun runtime explicitly.
     """
-    for runtime in ("deno", "node", "bun"):
+    for runtime in ("node", "bun"):
         if shutil.which(runtime):
             return ["--js-runtimes", runtime]
     return []
