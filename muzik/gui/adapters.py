@@ -105,6 +105,7 @@ class GuiWorkflowEventEmitter:
             elif isinstance(event, ErrorEvent):
                 prefix = "Fatal" if event.fatal else "Error"
                 self.pipeline.log(f"{prefix}: {event.message}")
+                self.pipeline.show_error(event.message)
 
         self.bridge.submit(update)
 

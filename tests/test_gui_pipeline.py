@@ -1,3 +1,4 @@
+from pathlib import Path
 from queue import Queue
 from typing import cast
 
@@ -7,8 +8,12 @@ from muzik.core.beets.decisions import BeetsMatchDecision
 from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
 from muzik.gui.pipeline import (
     BEETS_DECISIONS,
+    BEETS_MATCHES,
+    BEETS_SOURCE,
+    PIPELINE_OVERVIEW,
     PIPELINE_BUSY,
     PIPELINE_BUSY_TEXT,
+    PIPELINE_ERROR,
     PIPELINE_WINDOW,
     STATUS,
     PipelineView,
@@ -40,6 +45,14 @@ def test_pipeline_shows_text_and_spinner_while_work_runs() -> None:
         view.set_busy(False)
 
         assert not dpg.is_item_shown(PIPELINE_BUSY)
+
+        view.show_error("Beets could not write to the library.")
+
+        assert dpg.is_item_shown(PIPELINE_ERROR)
+        assert dpg.get_value(PIPELINE_ERROR) == (
+            "Beets could not write to the library."
+        )
+        assert dpg.get_value(STATUS) == "Workflow stopped."
     finally:
         view.destroy()
         dpg.destroy_context()
@@ -51,9 +64,21 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
     result: Queue[str | BeetsMatchDecision | None] = Queue()
     task = BeetsTaskView(
         task_id="album",
+        paths=[Path("/music/Hiromasa Suzuki - High-Flying/01 High-Flying.opus")],
+        is_album=True,
         matches=[
-            BeetsMatchView(candidate_id="first", artist="Artist One"),
-            BeetsMatchView(candidate_id="second", artist="Artist Two"),
+            BeetsMatchView(
+                candidate_id="first",
+                artist="Hiromasa Suzuki",
+                album="High-Flying",
+                distance=0.08,
+            ),
+            BeetsMatchView(
+                candidate_id="second",
+                artist="Artist Two",
+                album="Other Album",
+                distance=0.54,
+            ),
         ],
     )
     try:
@@ -62,14 +87,27 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
 
         descendants = _descendants(PIPELINE_WINDOW)
         labels = [dpg.get_item_label(item) for item in descendants]
-        assert labels.count("Use") == 2
-        assert "Import as is" in labels
-        assert "Skip" in labels
+        assert labels.count("Use this match") == 2
+        assert "Keep current tags" in labels
+        assert "Skip this album" in labels
         assert dpg.is_item_shown(BEETS_DECISIONS)
-        assert dpg.get_value(STATUS) == "Choose a Beets match."
+        assert not dpg.is_item_shown(PIPELINE_OVERVIEW)
+        assert dpg.is_item_shown(BEETS_MATCHES)
+        assert dpg.get_value(BEETS_SOURCE).endswith(
+            "Hiromasa Suzuki - High-Flying · 1 track"
+        )
+        assert dpg.get_value(STATUS) == "Choose an album match."
+
+        text_values = [
+            dpg.get_value(item)
+            for item in descendants
+            if dpg.get_item_type(item) == "mvAppItemType::mvText"
+        ]
+        assert "Hiromasa Suzuki — High-Flying" in text_values
+        assert "Difference: 0.080 (lower is better)" in text_values
 
         use_button = next(
-            item for item in descendants if dpg.get_item_label(item) == "Use"
+            item for item in descendants if dpg.get_item_label(item) == "Use this match"
         )
         callback = dpg.get_item_callback(use_button)
         assert callback is not None
@@ -77,6 +115,7 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
 
         assert result.get_nowait() in {"first", "second"}
         assert not dpg.is_item_shown(BEETS_DECISIONS)
+        assert dpg.is_item_shown(PIPELINE_OVERVIEW)
     finally:
         view.destroy()
         dpg.destroy_context()
