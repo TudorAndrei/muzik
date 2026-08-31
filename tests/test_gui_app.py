@@ -1,9 +1,11 @@
 from threading import Event
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import dearpygui.dearpygui as dpg
 
+from muzik.core.thumbnails import ThumbnailRequest, ThumbnailResult
 from muzik.core.watchlist import (
     Watchlist,
     WatchlistItem,
@@ -273,6 +275,42 @@ def test_cached_texture_load_is_sent_through_bridge(
     finally:
         app.bridge.shutdown()
         dpg.destroy_context()
+
+
+def test_missing_thumbnail_is_cached_when_item_becomes_visible(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repository = _repository(tmp_path, with_item=True)
+    thumbnail = tmp_path / "thumb.jpg"
+    thumbnail.write_bytes(b"cached")
+    requests: list[ThumbnailRequest] = []
+    loaded: list[tuple[str, Path]] = []
+
+    async def fake_cache(values, **kwargs):
+        requests.extend(values)
+        return [ThumbnailResult("video000001", thumbnail)]
+
+    class FakeView:
+        def load_cached_thumbnail(self, video_id: str, path: Path) -> None:
+            loaded.append((video_id, path))
+
+    monkeypatch.setattr("muzik.gui.app.cached_thumbnail_path", lambda video_id: None)
+    monkeypatch.setattr("muzik.gui.app.cache_thumbnails", fake_cache)
+    app = MuzikGuiApp(watchlist_repository=repository)
+    app.watchlist = cast(Any, FakeView())
+    try:
+        app._queue_cached_thumbnail("video000001")
+        app._thumbnail_workers["video000001"].join(timeout=1)
+        app.bridge.drain()
+
+        assert requests == [
+            ThumbnailRequest("video000001", "https://example.test/thumb.jpg")
+        ]
+        assert loaded == [("video000001", thumbnail)]
+    finally:
+        app._thumbnail_cancellation.cancel()
+        app.bridge.shutdown()
 
 
 def test_overwrite_item_action_starts_only_after_confirmation(

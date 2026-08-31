@@ -49,6 +49,7 @@ from muzik.gui.settings import SETTINGS_WINDOW, SettingsView
 from muzik.gui.theme import apply_global_theme
 from muzik.core.thumbnails import (
     ThumbnailRequest,
+    ThumbnailResult,
     cache_thumbnails,
     cached_thumbnail_path,
 )
@@ -91,6 +92,8 @@ class MuzikGuiApp:
         self._worker: Thread | None = None
         self._settings_worker: Thread | None = None
         self._library_worker: Thread | None = None
+        self._thumbnail_workers: dict[str, Thread] = {}
+        self._thumbnail_cancellation = CancellationToken()
         self._cancellation: CancellationToken | None = None
         self._worker_return_target = "launcher"
         self._return_after_worker = False
@@ -128,6 +131,7 @@ class MuzikGuiApp:
                 dpg.render_dearpygui_frame()
         finally:
             self._cancel_worker()
+            self._thumbnail_cancellation.cancel()
             self.bridge.shutdown()
             if self._worker is not None:
                 self._worker.join(timeout=5)
@@ -135,6 +139,8 @@ class MuzikGuiApp:
                 self._settings_worker.join(timeout=5)
             if self._library_worker is not None:
                 self._library_worker.join(timeout=5)
+            for worker in tuple(self._thumbnail_workers.values()):
+                worker.join(timeout=1)
             dpg.destroy_context()
 
     def open_pipeline(self, config: WorkflowLaunchConfig) -> None:
@@ -777,7 +783,10 @@ class MuzikGuiApp:
     def _queue_cached_thumbnail(self, video_id: str) -> None:
         view = self.watchlist
         path = cached_thumbnail_path(video_id)
-        if view is None or path is None:
+        if view is None:
+            return
+        if path is None:
+            self._start_thumbnail_download(view, video_id)
             return
 
         def load_thumbnail() -> None:
@@ -785,6 +794,57 @@ class MuzikGuiApp:
                 view.load_cached_thumbnail(video_id, path)
 
         self.bridge.submit(load_thumbnail)
+
+    def _start_thumbnail_download(
+        self,
+        view: WatchlistView,
+        video_id: str,
+    ) -> None:
+        worker = self._thumbnail_workers.get(video_id)
+        if worker is not None and worker.is_alive():
+            return
+        try:
+            watchlist = self.watchlist_repository.load()
+        except WatchlistError:
+            return
+        thumbnail_url = next(
+            (
+                item.thumbnail_url
+                for playlist in watchlist.playlists
+                for item in playlist.items
+                if item.video_id == video_id and item.thumbnail_url
+            ),
+            None,
+        )
+        if thumbnail_url is None:
+            return
+
+        def download() -> None:
+            try:
+                results = asyncio.run(
+                    cache_thumbnails(
+                        [ThumbnailRequest(video_id, thumbnail_url)],
+                        cancellation=self._thumbnail_cancellation,
+                    )
+                )
+            except WorkflowCancelled:
+                return
+            result = results[0] if results else ThumbnailResult(video_id, None)
+
+            def finished() -> None:
+                self._thumbnail_workers.pop(video_id, None)
+                if self.watchlist is view and result.path is not None:
+                    view.load_cached_thumbnail(video_id, result.path)
+
+            self.bridge.submit(finished)
+
+        worker = Thread(
+            target=download,
+            name=f"muzik-thumbnail-{video_id}",
+            daemon=True,
+        )
+        self._thumbnail_workers[video_id] = worker
+        worker.start()
 
     def _show_launcher(self) -> None:
         if self.pipeline is not None:
