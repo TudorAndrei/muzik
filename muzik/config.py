@@ -30,6 +30,7 @@ BEETS_CONFIG = Path(beets_config.user_config_path())
 # muzik config dir — stores per-service credentials (e.g. Bandcamp cookies)
 MUZIK_CONFIG_DIR = _APP_DIRS.user_config_path
 MUZIK_CONFIG_FILE = MUZIK_CONFIG_DIR / "config.yaml"
+MUZIK_WATCHLIST_FILE = MUZIK_CONFIG_DIR / "watchlist.json"
 
 # Default directories for downloaded audio and chapter-split tracks.
 # These live under the platform-specific user data directory so they are:

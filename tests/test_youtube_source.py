@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from muzik.core.sources import youtube
 from muzik.core.sources.base import DownloadRequest, ResolvedPlaylist, ResolvedTrack
 from muzik.core.sources.youtube import YouTubeSource
@@ -96,6 +98,96 @@ def test_get_playlist_video_ids_uses_yt_dlp_flat_playlist(monkeypatch) -> None:
     assert cmd[0] == "yt-dlp"
     assert "--flat-playlist" in cmd and "--print" in cmd
     assert cmd[-1] == "https://youtube.com/playlist?list=PL"
+
+
+def test_get_playlist_items_returns_ordered_metadata(monkeypatch) -> None:
+    seen = {}
+
+    def fake_run_silent(cmd):
+        seen["cmd"] = cmd
+        return Result(
+            0,
+            """{
+              "entries": [
+                {
+                  "playlist_index": 4,
+                  "id": "abcdefghijk",
+                  "title": "A long mix",
+                  "thumbnail": "https://img.test/a.jpg"
+                },
+                {
+                  "id": "lmnopqrstuv",
+                  "title": "Second mix",
+                  "webpage_url": "https://youtube.test/watch?v=lmnopqrstuv",
+                  "thumbnails": [{"url": "https://img.test/b.jpg"}]
+                }
+              ]
+            }""",
+        )
+
+    monkeypatch.setattr(youtube, "run_silent", fake_run_silent)
+
+    items = youtube.get_playlist_items("https://youtube.com/playlist?list=PL")
+
+    assert items == [
+        youtube.YouTubePlaylistItem(
+            position=4,
+            title="A long mix",
+            video_id="abcdefghijk",
+            video_url="https://www.youtube.com/watch?v=abcdefghijk",
+            thumbnail_url="https://img.test/a.jpg",
+        ),
+        youtube.YouTubePlaylistItem(
+            position=2,
+            title="Second mix",
+            video_id="lmnopqrstuv",
+            video_url="https://youtube.test/watch?v=lmnopqrstuv",
+            thumbnail_url="https://img.test/b.jpg",
+        ),
+    ]
+    assert "--flat-playlist" in seen["cmd"]
+    assert "--dump-single-json" in seen["cmd"]
+
+
+def test_get_playlist_items_keeps_unavailable_entries(monkeypatch) -> None:
+    monkeypatch.setattr(
+        youtube,
+        "run_silent",
+        lambda cmd: Result(
+            0,
+            '{"entries": [{"playlist_index": 9}, null, '
+            '{"id": "short", "title": "Private video"}]}',
+        ),
+    )
+
+    items = youtube.get_playlist_items("https://youtube.com/playlist?list=PL")
+
+    assert [item.position for item in items] == [9, 2, 3]
+    assert [item.title for item in items] == [
+        "Unavailable video",
+        "Unavailable video",
+        "Private video",
+    ]
+    assert all(item.video_id is None for item in items)
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        (Result(1, stderr="playlist unavailable"), "playlist unavailable"),
+        (Result(0, "not-json"), "invalid playlist JSON"),
+        (Result(0, "{}"), "no playlist entries"),
+    ],
+)
+def test_get_playlist_items_reports_lookup_errors(
+    monkeypatch,
+    result: Result,
+    message: str,
+) -> None:
+    monkeypatch.setattr(youtube, "run_silent", lambda cmd: result)
+
+    with pytest.raises(youtube.PlaylistLookupError, match=message):
+        youtube.get_playlist_items("https://youtube.com/playlist?list=PL")
 
 
 def test_youtube_source_resolves_single_video_metadata(monkeypatch) -> None:

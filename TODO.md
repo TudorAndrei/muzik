@@ -1,100 +1,139 @@
-# TODO: Replace the Textual TUI with a DearPyGui desktop front end
+# TODO: Add a YouTube playlist watchlist viewer
 
-## Phase 1: Relocate shared pieces out of the TUI (no behavior change)
+## Phase 1: Add durable playlist items and state
 
-- [x] Create `muzik/core/workflow/launch.py` with `WorkflowLaunchConfig` (fields and defaults unchanged)
-- [x] Move `_parse_chapter_text`/`_CHAPTER_RE` into `muzik/core/chapters.py` as public `parse_chapters(text)`
-- [x] Preserve the shared parsing behavior through the final cutover
-- [x] Run the chapter and full test suites — pass
-- [x] Include the phase in the atomic cutover commit
+- [x] Add `MUZIK_WATCHLIST_FILE` in `muzik/config.py`.
+- [x] Add versioned watchlist data types and repository operations in
+  `muzik/core/watchlist.py`.
+- [x] Add structured flat-playlist lookup in
+  `muzik/core/sources/youtube.py` without changing current ID-list behavior.
+- [x] Store position, title, video ID, video URL, thumbnail URL, stage results,
+  local paths, and errors for each item.
+- [x] Validate and normalize YouTube playlist URLs. Reject duplicate playlist
+  IDs.
+- [x] Reject malformed JSON and unsupported schema versions without data loss.
+- [x] Save watchlist changes with same-directory temporary-file replacement.
+- [x] Add persistence and validation tests in `tests/test_watchlist.py`.
+- [x] Extend `tests/test_youtube_source.py` for structured and unavailable items.
+- [x] Commit: `feat(watchlist): store YouTube playlist items and state`
 
-## Phase 2: GUI dependency and entry point skeleton
+## Phase 2: Process only pending playlist videos
 
-- [x] Add `dearpygui>=2.3.1` to `dependencies` in `pyproject.toml`
-- [x] Confirm the install resolves with `uv sync`
-- [x] Create `muzik/gui/__init__.py` and `muzik/gui/app.py` with `gui_cmd()` and a manual render loop
-- [x] Register `app.command("gui", ...)(gui_cmd)` in `muzik/app.py`
-- [x] Smoke test: `uv run muzik gui` opens a viewport titled "muzik"
-- [x] Include the phase in the atomic cutover commit
+- [ ] Extract an explicit playlist-video runner from
+  `muzik/core/workflow/service.py` and return per-ID results.
+- [ ] Keep the current `run_workflow()` playlist behavior for CLI users.
+- [ ] Add sequential watchlist refresh and local-state reconciliation in
+  `muzik/core/watchlist.py`.
+- [ ] Reuse playlist state, yt-dlp archives, legacy YouTube cache, and configured
+  download and split folders.
+- [ ] Keep unavailable items visible and exclude them from workflow work.
+- [ ] Save each completed ID and leave failed IDs pending.
+- [ ] Continue after one playlist error.
+- [ ] Emit playlist check, pending, error, progress, and summary events.
+- [ ] Extend `tests/test_workflow_service.py` for explicit IDs, CLI compatibility,
+  result reporting, and cancellation.
+- [ ] Extend `tests/test_watchlist.py` for pending-only work, incremental saves,
+  retry, error isolation, removed IDs, no-change refreshes, and local state.
+- [ ] Commit: `feat(watchlist): process only pending playlist videos`
 
-## Phase 3: Threading bridge
+## Phase 3: Add thumbnails and per-video actions
 
-- [x] Implement `GuiBridge.submit` / `drain` in `muzik/gui/bridge.py`
-- [x] Implement `GuiBridge.request` (blocking decision with result queue + `CancellationToken`)
-- [x] Late submissions after shutdown are ignored
-- [x] `request` raises `WorkflowCancelled` when the token cancels while waiting
-- [x] Include the phase in the atomic cutover commit
+- [ ] Add thumbnail download and cache operations in
+  `muzik/core/thumbnails.py`.
+- [ ] Validate JPEG or PNG responses, limit concurrency, save atomically, and
+  retry failed images on a later refresh.
+- [ ] Keep thumbnail files directly under `CACHE_DIR` so current cache commands
+  manage them.
+- [ ] Add the stage-state and item-action API in
+  `muzik/core/workflow/item_actions.py`.
+- [ ] Share concrete download, parse, split, and organize operations with
+  `build_workflow_operations()`.
+- [ ] Implement Run, Resume, Retry, Download again, Parse again, Split again,
+  Organize again, and Run all again.
+- [ ] Preserve the old chapter sidecar until a new parse succeeds.
+- [ ] Mark later stages stale after an earlier stage runs again.
+- [ ] Return a reason for every disabled action.
+- [ ] Add `tests/test_thumbnails.py` for cache, validation, failure, atomic writes,
+  and retry.
+- [ ] Add `tests/test_item_actions.py` for command routing, state changes, paths,
+  force behavior, errors, persistence, and cancellation.
+- [ ] Prove that normal single-video and playlist workflows have no behavior
+  change after the operation refactor.
+- [ ] Commit: `feat(watchlist): add cached thumbnails and item actions`
 
-## Phase 4: Launcher form
+## Phase 4: Build the desktop watchlist viewer
 
-- [x] Build launcher fields matching the current launcher (inputs, combos, checkboxes)
-- [x] Add a "Browse…" file dialog next to each path field (raw → file, downloads → dir, splits → dir, beets config → file) that writes the chosen path back into the input; text stays editable
-- [x] `read_config()` returns a `WorkflowLaunchConfig` with the same parsing rules (path expansion, enum coercion, `jobs` default 0)
-- [x] "Run" rejects an empty `raw`; "Quit" stops the viewport
-- [x] Include the phase in the atomic cutover commit
+- [ ] Add the Watchlist callback and button in `muzik/gui/launcher.py`.
+- [ ] Add the playlist rail, toolbar, paged thumbnail grid, and card controls in
+  `muzik/gui/watchlist.py`.
+- [ ] Show a four-part Download, Parse, Split, and Organize rail on each card.
+- [ ] Show each item's position, title, YouTube ID, summary state, primary action,
+  and Actions menu.
+- [ ] Add confirmation dialogs for force and overwrite actions in
+  `muzik/gui/modals.py`.
+- [ ] Add card and stage tokens to `muzik/gui/theme.py`.
+- [ ] Load cached thumbnails and create DearPyGui textures through `GuiBridge`.
+- [ ] Release watchlist textures when the view closes.
+- [ ] Connect add, remove, refresh, filters, paging, item actions, and Back in
+  `muzik/gui/app.py`.
+- [ ] Use current launcher paths and options for refresh and item commands.
+- [ ] Reuse `PipelineView` and return to a reloaded watchlist after completion or
+  cancellation.
+- [ ] Add `tests/test_gui_watchlist.py` for card layout, item data, stage rails,
+  paging, filtering, placeholders, actions, and disabled reasons.
+- [ ] Extend GUI app, launcher, and bridge tests for navigation, textures, worker
+  lifecycle, and cancellation.
+- [ ] Commit: `feat(gui): add the YouTube-style watchlist viewer`
 
-## Phase 5: Pipeline view and event adapters
+## Phase 5: Document and verify the feature
 
-- [x] Build pipeline view: status label, progress bar, log, and candidate/chapter/beets tables with the prior columns
-- [x] Implement `GuiWorkflowEventEmitter.emit` for every workflow event type
-- [x] Implement `GuiBeetsEventEmitter.emit` for every Beets event type
-- [x] Both emitters check cancellation/shutdown and mutate the interface only through `GuiBridge.submit`
-- [x] Include the phase in the atomic cutover commit
-
-## Phase 6: Decision modals and adapters
-
-- [x] Implement candidate, chapter-review, chapter-edit, beets-match, and duplicate modals
-- [x] Chapter editor uses `parse_chapters` (shared core helper, no duplicate logic)
-- [x] Implement `GuiWorkflowDecisions` (candidate/chapters/edit) via `GuiBridge.request`
-- [x] Implement `GuiBeetsDecisions` (match/duplicate) via `GuiBridge.request`
-- [x] Non-interactive mode returns deterministic defaults (candidate 0, `ChapterDecision.ACCEPT`, `BeetsDuplicateDecision.SKIP`)
-- [x] Include the phase in the atomic cutover commit
-
-## Phase 7: Wire the run and cancellation
-
-- [x] Build `WorkflowRequest`/`WorkflowOptions` from config and call `build_workflow_operations` with GUI adapters
-- [x] Run `run_workflow` on a background thread with a fresh `CancellationToken`
-- [x] Pipeline close/Back cancels the token, unblocks pending decisions, joins the worker, returns to the launcher
-- [x] Include the phase in the atomic cutover commit
-
-## Phase 8: Cutover — remove the Textual TUI, add GUI tests, update docs
-
-- [x] `muzik/app.py`: remove the old interactive command and its import; keep only `gui`
-- [x] Delete the old interactive package and its test
-- [x] `pyproject.toml`: remove the old interface dependency
-- [x] `mise.toml`: replace the old interface task with `[tasks.gui]`
-- [x] `README.md`: document `muzik gui` and remove the superseded interface note
-- [x] `muzik/core/workflow/operations.py`: use interface-neutral wording
-- [x] Rewrite `GUI.md` for DearPyGui and the `GuiBridge` contract; state that the CLI stays active
-- [x] Add `tests/test_gui_bridge.py`, `tests/test_gui_adapters.py`, `tests/test_gui_launcher.py`, and `tests/test_gui_app.py`
-- [x] Commit: `feat(gui): remove old interface, add DearPyGui desktop app`
+- [ ] Document playlist setup, card states, Refresh, first-refresh behavior,
+  retries, item actions, thumbnails, and launcher options in `README.md`.
+- [ ] Document viewer layout, stage invalidation, texture lifecycle, and
+  `GuiBridge` use in `GUI.md`.
+- [ ] Run `mise run check`.
+- [ ] Run a DearPyGui render-context smoke test with two playlists, thumbnails,
+  multiple card states, one item action, and Back navigation.
+- [ ] Commit: `docs(watchlist): explain playlist viewer and item actions`
 
 ## Verification
 
-- [x] `uv run pytest` — 175 tests pass; no superseded interface import remains
-- [x] Repository search for the old interface names returns nothing in code, tests, and user documentation
-- [x] New tests written: `test_gui_bridge.py`, `test_gui_adapters.py`, `test_gui_launcher.py`, `test_gui_app.py`
-- [x] Bridge tested: `submit`/`drain` order, request result, cancellation, shutdown, and late submit
-- [x] Adapters tested: non-interactive defaults and result routing through a fake bridge
-- [x] Launcher tested: `read_config()` maps fields and coerces enums
-- [x] Refactor check: launch defaults are unchanged and `parse_chapters` output matches the prior parser
-- [x] CLI unaffected: root help and `muzik split --help` work without a viewport
-- [x] Smoke checks: viewport opens, all dialog types build, and the shared workflow completes with a small YouTube input
-- [x] Edge cases: cancel returns to the launcher after worker teardown, blocking requests cancel, and empty `raw` is rejected
-- [x] `dearpygui` imports and builds widgets without a display or viewport
-
-## Phase 9: Review findings (hardening)
-
-- [x] `GuiBridge.drain()`: wrap each callback in `try`/`except Exception`, log the failure, and keep draining the rest of the queue
-- [x] Confirm which exceptions to swallow (do not eat `WorkflowCancelled` or deliberate control-flow exceptions)
-- [x] Add `test_gui_bridge.py` case: a raising callback neither stops a following callback nor propagates out of `drain()`
-- [x] Run `uv run pytest`, `uv run ruff check`, `uv run ty check` — all pass
-- [x] Commit: `fix(gui): isolate render-loop callback failures in the bridge`
+- [ ] `mise run check` passes with the locked dependencies.
+- [ ] `tests/test_watchlist.py` proves that save and load keep item metadata, stage
+  state, paths, and errors, and that an invalid file is not overwritten.
+- [ ] `tests/test_youtube_source.py` proves that one flat lookup returns every
+  ordered playlist item and keeps unavailable items visible.
+- [ ] `tests/test_workflow_service.py` proves that a normal playlist CLI run still
+  fetches and processes its complete ordered ID list.
+- [ ] A second watchlist refresh sends no workflow work for processed IDs.
+- [ ] A playlist with one added video sends only that video to the workflow.
+- [ ] A failed video stays pending and runs again on the next refresh.
+- [ ] One bad playlist does not stop checks for later playlists.
+- [ ] Cancellation stops before the next video and does not mark the active stage
+  as complete.
+- [ ] A selected playlist shows every current item with position, title, ID,
+  thumbnail, and local stage state.
+- [ ] Work from an earlier GUI or CLI run appears as local work.
+- [ ] A private or deleted item shows as Unavailable and does not run.
+- [ ] Cached thumbnails load without a network request on the next app start.
+- [ ] A failed thumbnail uses a placeholder and retries on a later refresh.
+- [ ] Download again marks Parse, Split, and Organize stale.
+- [ ] Parse again preserves the old chapter sidecar on failure and marks Split and
+  Organize stale on success.
+- [ ] Split again requires audio and chapters, then marks Organize stale.
+- [ ] Organize again requires an existing audio file or split directory.
+- [ ] Force and overwrite actions require confirmation.
+- [ ] Disabled card commands show the missing input reason.
+- [ ] Manual smoke test: add two playlists, refresh, page through all cards, filter
+  by status, run one item command, go Back, and see the updated stage rail.
+- [ ] Manual smoke test: cancel an active refresh or item command and return after
+  the worker stops.
+- [ ] The launcher, Library page, Settings window, CLI playlist command, split
+  flow, organize flow, and cache commands still work.
 
 ## Review
 
-- [x] Code reviewed
-- [x] PLAN.md records the atomic cutover approach
-- [x] The atomic cutover leaves the build working
-- [x] TODO.md items all checked off
-- [x] Phase 9 review finding resolved
+- [ ] Review the code.
+- [ ] Update `PLAN.md` and `TODO.md` before implementation if the approach changes.
+- [ ] Make each phase commit with its exact planned message.
+- [ ] Check each completed TODO item after its phase commit succeeds.

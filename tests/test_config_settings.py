@@ -38,6 +38,10 @@ def test_paths_use_platformdirs_and_beets_config_helper(
         assert reloaded.BANDCAMP_CACHE_FILE == reloaded.CACHE_DIR / "bandcamp.cache"
         assert reloaded.MUZIK_CONFIG_DIR == tmp_path / "config" / "muzik"
         assert reloaded.MUZIK_CONFIG_FILE == reloaded.MUZIK_CONFIG_DIR / "config.yaml"
+        assert (
+            reloaded.MUZIK_WATCHLIST_FILE
+            == reloaded.MUZIK_CONFIG_DIR / "watchlist.json"
+        )
         assert reloaded.BEETS_CONFIG == tmp_path / "beets" / "config.yaml"
         assert (
             reloaded.DEFAULT_DOWNLOAD_DIR == tmp_path / "data" / "muzik" / "downloads"

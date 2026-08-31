@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -26,6 +27,22 @@ from muzik.core.sources.base import (
 
 YOUTUBE_ID_RE = re.compile(r"(?:v=|youtu\.be/|/v/|/embed/)([A-Za-z0-9_-]{11})")
 YOUTUBE_PLAYLIST_RE = re.compile(r"[?&]list=([A-Za-z0-9_-]+)")
+_YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+
+
+class PlaylistLookupError(RuntimeError):
+    """Raised when yt-dlp cannot return a usable playlist document."""
+
+
+@dataclass(frozen=True, slots=True)
+class YouTubePlaylistItem:
+    """One item returned by a flat YouTube playlist lookup."""
+
+    position: int
+    title: str
+    video_id: str | None
+    video_url: str | None
+    thumbnail_url: str | None
 
 
 def js_runtime_args() -> list[str]:
@@ -168,6 +185,99 @@ def get_playlist_video_ids(url: str) -> list[str]:
     if result.returncode != 0:
         return []
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def get_playlist_items(url: str) -> list[YouTubePlaylistItem]:
+    """Return ordered item metadata from one flat YouTube playlist lookup."""
+    result = run_silent(
+        [
+            "yt-dlp",
+            *cookie_args(),
+            *js_runtime_args(),
+            "--flat-playlist",
+            "--dump-single-json",
+            url,
+        ]
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or f"yt-dlp exited with code {result.returncode}"
+        raise PlaylistLookupError(f"Unable to read YouTube playlist: {detail}")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise PlaylistLookupError("yt-dlp returned invalid playlist JSON.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("entries"), list):
+        raise PlaylistLookupError("yt-dlp returned no playlist entries.")
+
+    items: list[YouTubePlaylistItem] = []
+    for fallback_position, raw in enumerate(payload["entries"], start=1):
+        if not isinstance(raw, dict):
+            items.append(
+                YouTubePlaylistItem(
+                    position=fallback_position,
+                    title="Unavailable video",
+                    video_id=None,
+                    video_url=None,
+                    thumbnail_url=None,
+                )
+            )
+            continue
+        position = _positive_int(raw.get("playlist_index"), fallback_position)
+        raw_id = raw.get("id")
+        video_id = (
+            str(raw_id)
+            if raw_id is not None and _YOUTUBE_VIDEO_ID_RE.fullmatch(str(raw_id))
+            else None
+        )
+        title = str(raw.get("title") or "").strip() or "Unavailable video"
+        video_url = _playlist_item_url(raw, video_id)
+        items.append(
+            YouTubePlaylistItem(
+                position=position,
+                title=title,
+                video_id=video_id,
+                video_url=video_url,
+                thumbnail_url=_playlist_thumbnail_url(raw),
+            )
+        )
+    return items
+
+
+def _positive_int(value: object, fallback: int) -> int:
+    if not isinstance(value, (int, str)) or isinstance(value, bool):
+        return fallback
+    try:
+        parsed = int(value)
+    except TypeError, ValueError:
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def _playlist_item_url(raw: dict, video_id: str | None) -> str | None:
+    webpage_url = raw.get("webpage_url")
+    if isinstance(webpage_url, str) and webpage_url.startswith(("http://", "https://")):
+        return webpage_url
+    if video_id:
+        return f"https://www.youtube.com/watch?v={video_id}"
+    return None
+
+
+def _playlist_thumbnail_url(raw: dict) -> str | None:
+    thumbnail = raw.get("thumbnail")
+    if isinstance(thumbnail, str) and thumbnail.startswith(("http://", "https://")):
+        return thumbnail
+    thumbnails = raw.get("thumbnails")
+    if not isinstance(thumbnails, list):
+        return None
+    for candidate in reversed(thumbnails):
+        if not isinstance(candidate, dict):
+            continue
+        candidate_url = candidate.get("url")
+        if isinstance(candidate_url, str) and candidate_url.startswith(
+            ("http://", "https://")
+        ):
+            return candidate_url
+    return None
 
 
 def prepopulate_archive(archive_file: Path) -> None:

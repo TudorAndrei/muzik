@@ -1,279 +1,321 @@
-# Plan: Replace the Textual TUI with a DearPyGui desktop front end
+# Plan: Add a YouTube playlist watchlist viewer
 
 ## Goal
 
-Replace the Textual TUI with a native desktop front end built on DearPyGui,
-exposed as `muzik gui`. The DearPyGui app becomes the only interactive interface.
-The Typer CLI (`muzik download`, `split`, `organize`, and the rest) stays fully
-active and unchanged. The Textual layer (`muzik/tui/`), its test, and the
-`textual` dependency are removed. All download, split, and organization behavior
-stays in the shared UI-neutral core; none of it is copied or changed.
+Add a watchlist to the DearPyGui app. A user can save multiple YouTube playlists,
+view all videos as thumbnail cards, and see which muzik stages ran on this
+computer. Refresh checks for playlist changes and processes only pending videos.
+Each video has controls to run, retry, download again, parse chapters again, split
+again, organize again, or run the full workflow again.
 
 ## Approach
 
-The muzik core is already isolated behind protocols in
-`muzik.core.workflow.decisions`, `muzik.core.workflow.events`,
-`muzik.core.workflow.service`, and the Beets adapters in `muzik.core.beets`. The
-Textual layer in `muzik/tui/` is only a set of adapter classes
-(`TuiWorkflowEventEmitter`, `TuiWorkflowDecisions`, `TuiBeetsDecisions`,
-`TuiBeetsEventEmitter`) plus screens and `DataTable` widgets. The DearPyGui front
-end recreates that presentation layer in a new `muzik/gui/` package, then the old
-`muzik/tui/` package is deleted.
+### Playlist discovery and saved state
 
-The build stays working at every phase: the new `muzik gui` command lands and is
-proven before the `muzik tui` command, the `muzik/tui/` package, and `textual`
-are removed in the final cutover phase.
+The current playlist workflow already has most of the processing logic.
+`get_playlist_video_ids()` in `muzik/core/sources/youtube.py` gets ordered IDs.
+`load_playlist_state()`, `save_playlist_state()`, and
+`_process_playlist_video()` in `muzik/core/workflow/service.py` keep resume state
+and process one playlist video. The implementation will make the per-video runner
+a supported core function. The existing `run_workflow()` playlist path will call
+the same function, so CLI behavior stays the same.
 
-### Verified facts (web check, Aug 2026)
+The viewer also needs titles, positions, and thumbnail URLs. A new structured
+playlist lookup in `muzik/core/sources/youtube.py` will read yt-dlp flat-playlist
+JSON and return those fields for every item. The existing ID-only function will
+stay compatible with current callers. Private and deleted entries will remain in
+the result when yt-dlp provides a playlist position but no usable video ID.
 
-- **Python 3.14 wheels exist.** DearPyGui 2.3.1 (2026-05-01) ships `cp314` wheels
-  for macOS 13.0+ arm64, Windows x86-64, and Linux x86-64/aarch64. Issue
-  [#2567](https://github.com/hoffstadt/DearPyGui/issues/2567) closed as completed
-  on 2025-11-16. Pin `dearpygui>=2.3.1`.
-- **Threaded-backend pattern.** DearPyGui runs callbacks on an internal worker
-  thread for a steady framerate; long work runs on a separate Python thread with a
-  killswitch flag. `configure_app(manual_callback_management=True)` lets the app
-  drain `get_callback_queue()` inside its own render loop — the same place
-  `GuiBridge.drain()` runs. The manual-render-loop design below matches this.
+The watchlist needs durable storage. Cache files are not suitable because
+`muzik cache clean` can remove them. A new `MUZIK_WATCHLIST_FILE` path in
+`muzik/config.py` will point to `watchlist.json` in `MUZIK_CONFIG_DIR`. A new
+`muzik/core/watchlist.py` module will own a versioned JSON format and the add,
+remove, load, save, status, and refresh operations. Each playlist record will
+contain its normalized URL, playlist ID, latest item snapshot, processed IDs,
+check time, and errors. Each item will contain its position, title, video ID,
+video URL, thumbnail URL, action state, paths, and errors.
 
-### Key design decisions
+The repository will write a temporary file in the same directory and then call
+`Path.replace()`. An interrupted write cannot leave partial JSON. A malformed file
+or an unsupported schema version will produce an error. The app will not replace
+such a file with an empty watchlist.
 
-- **Reuse, do not fork.** The GUI imports `run_workflow`, `WorkflowRequest`,
-  `WorkflowOptions`, `WorkflowRunOperations`, and `build_workflow_operations`
-  unchanged, supplying new adapter objects that satisfy the same protocols.
-- **Relocate shared, non-Textual pieces before deleting the package.** Two items
-  in `muzik/tui/screens.py` are UI-neutral and must survive:
-  - `WorkflowLaunchConfig` → new `muzik/core/workflow/launch.py`.
-  - `_parse_chapter_text` / `_CHAPTER_RE` → `muzik/core/chapters.py` as a public
-    `parse_chapters(text)` beside the existing `serialize_chapters`.
-- **`dearpygui` is a base dependency**, replacing `textual`. It is now the primary
-  interface. Importing DearPyGui does not require a display; a window opens only at
-  `create_viewport`/`show_viewport`, so headless CLI use is unaffected.
-- **Threading bridge is the core problem.** DearPyGui owns a single render loop on
-  the main thread. The workflow runs on a background thread and makes **blocking**
-  decision calls (for example `choose_soulseek_candidate`) that must wait for a
-  modal result. DearPyGui has no equivalent of Textual's `call_from_thread` +
-  `push_screen_wait`. A `GuiBridge` solves both needs:
-  - A thread-safe `queue.Queue` of zero-argument callables. Worker threads push UI
-    mutations; the main thread drains and runs them once per frame.
-  - A blocking request primitive: the worker pushes a "show modal" callable
-    carrying a result `queue.Queue`, then blocks on that queue. Modal button
-    callbacks put the chosen value on it, unblocking the worker. A
-    `CancellationToken` also unblocks it.
-- **Manual render loop.** `create_context`/`create_viewport`/`setup_dearpygui`,
-  then `while is_dearpygui_running():` draining the bridge queue and calling
-  `render_dearpygui_frame`.
-- **Cancellation matches the current contract.** Reuse `CancellationToken`.
-  Closing the pipeline window or pressing Back cancels the token, unblocks any
-  pending decision queue with a sentinel, and waits for the worker to finish
-  before returning to the launcher — the discipline from `GUI.md` ("Cancellation")
-  and `PipelineScreen._request_return_to_launcher`.
+### Local processing state
 
-### New files
+Each usable video will have four stage records:
 
-- `muzik/core/workflow/launch.py` — relocated `WorkflowLaunchConfig`.
-- `muzik/gui/__init__.py`
-- `muzik/gui/bridge.py` — `GuiBridge` (frame queue + blocking decision requests).
-- `muzik/gui/adapters.py` — `GuiWorkflowEventEmitter`, `GuiWorkflowDecisions`,
-  `GuiBeetsDecisions`, `GuiBeetsEventEmitter`.
-- `muzik/gui/launcher.py` — launcher form → `WorkflowLaunchConfig`.
-- `muzik/gui/pipeline.py` — status, progress bar, log, candidate/chapter/beets
-  tables.
-- `muzik/gui/modals.py` — candidate, chapter-review, chapter-edit, beets-match,
-  duplicate modal windows.
-- `muzik/gui/app.py` — `MuzikGuiApp` and `gui_cmd()`.
-- `tests/test_gui_bridge.py`, `tests/test_gui_adapters.py`,
-  `tests/test_gui_launcher.py`.
+- Download
+- Parse
+- Split
+- Organize
 
-### Removed
+A stage can be `Not started`, `Running`, `Complete`, `Failed`, `Skipped`, or
+`Stale`. The card summary will be `Pending`, `Processing`, `Processed`, `Failed`,
+or `Unavailable`. The current launcher options decide which stages are required.
+For example, `No split` makes Split a skipped stage instead of a missing stage.
 
-- `muzik/tui/` (all files), `tests/test_tui_app.py`, the `textual` dependency, the
-  `muzik tui` command, and the `[tasks.tui]` mise task.
+`muzik/core/watchlist.py` will reconcile new watchlist records with
+`load_playlist_state()`, `backfill_playlist_entry_from_legacy_cache()`, and files
+with matching YouTube IDs in the configured download and split folders. Thus, work
+from a prior GUI run, CLI playlist run, or direct YouTube download can appear in
+the viewer. The watchlist record remains useful after Beets moves a completed file
+out of the download folder.
 
-### Out of scope
+When an earlier stage runs again, later stage results can no longer prove that the
+new output is processed. The action runner will apply these rules:
 
-- Any change to download, split, metadata, or Beets behavior.
-- Any change to the Typer CLI commands other than swapping `tui` for `gui`.
-- Packaging a standalone desktop binary (PyInstaller, app bundles).
-- New workflow features not already reachable from the current launcher.
+- Download again marks Parse, Split, and Organize as stale.
+- Parse again marks Split and Organize as stale.
+- Split again marks Organize as stale.
+- Organize again changes only Organize.
 
-## Implementation Phases
+The runner will not delete stale files. A confirmation dialog will identify files
+that a force action can replace. The state file will save after every completed or
+failed stage, so a crash does not hide completed work.
 
-### Phase 1: Relocate shared pieces out of the TUI (no behavior change)
+### Per-video commands
 
-- Create `muzik/core/workflow/launch.py` and move `WorkflowLaunchConfig` there,
-  unchanged (same fields, same defaults from `muzik.config`).
-- Move `_parse_chapter_text`/`_CHAPTER_RE` into `muzik/core/chapters.py` as a
-  public `parse_chapters(text) -> list[Chapter]`.
-- Update `muzik/tui/screens.py` to import both from their new homes so the TUI and
-  `tests/test_tui_app.py` keep working during the transition.
-  **Commit:** `refactor(workflow): relocate launch config and chapter parsing out of the TUI`
+A new `muzik/core/workflow/item_actions.py` module will provide one UI-neutral
+entry point for card commands. It will use the current workflow services and
+operations instead of calling Typer command functions.
 
-### Phase 2: GUI dependency and entry point skeleton
+The commands will work as follows:
 
-- In `pyproject.toml`, add `dearpygui>=2.3.1` to `dependencies` (leave `textual`
-  for now; it is removed in the cutover). Confirm the install resolves.
-- Create `muzik/gui/__init__.py` and `muzik/gui/app.py` with `gui_cmd()` that
-  creates a context, a viewport titled "muzik", shows an empty window, and runs
-  the manual render loop.
-- Register the command in `muzik/app.py` alongside the existing `tui` command:
-  `app.command("gui", help="Open the DearPyGui workflow UI.")(gui_cmd)`.
-- Manual smoke test: `uv run muzik gui` opens a window.
-  **Commit:** `feat(gui): add dearpygui entry point and muzik gui command`
+- `Run` or `Resume` starts at the first required stage that is incomplete or
+  stale.
+- `Retry` repeats the failed stage and continues with later required stages.
+- `Download again` uses the current force-download behavior and stops after the
+  download stage.
+- `Parse again` refreshes the yt-dlp info metadata, rebuilds chapters from the
+  embedded data, description, or pinned comment, and opens the current chapter
+  review dialog. It replaces the chapter sidecar only after a successful result.
+- `Split again` uses the current chapters and force-splits the available source
+  audio.
+- `Organize again` force-imports the available audio or split directory through
+  the current Beets service.
+- `Run all again` runs all required stages with force enabled.
 
-### Phase 3: Threading bridge
+The app will disable a command when its input does not exist. For example, Split
+again needs source audio and accepted chapters. The command menu will show the
+reason. All actions will use the current launcher output paths, source policy,
+metadata policy, Beets config, and interactive setting.
 
-- Implement `GuiBridge` in `muzik/gui/bridge.py`:
-  - `submit(callable)` — enqueue a UI mutation for the main thread.
-  - `drain()` — run all queued callables; called once per frame.
-  - `request(show_modal, cancellation)` — push a modal-builder that receives a
-    result `queue.Queue`, block the caller, and return the result; raise
-    `WorkflowCancelled` when the token cancels while waiting.
-  - Ignore submissions after shutdown so late events cannot mutate a torn-down UI
-    (mirrors the TUI "events after unmount are ignored" rule).
-  **Commit:** `feat(gui): add thread-safe render-loop bridge for worker decisions`
+### Thumbnail cache
 
-### Phase 4: Launcher form
+A new `muzik/core/thumbnails.py` module will cache JPEG or PNG data under
+`CACHE_DIR` with the video ID in the filename. The structured playlist result will
+supply the thumbnail URL. The refresh worker will download missing thumbnails
+with a small fixed concurrency limit through the existing `aiohttp` dependency.
+It will validate the response type and use same-directory temporary-file
+replacement. A failed image request will keep a local placeholder and can retry on
+the next refresh.
 
-- Implement `muzik/gui/launcher.py` with the same fields as the current launcher
-  (URL/path, downloads, splits, beets config, audio source, metadata, prefer,
-  fallback, jobs, and the boolean switches).
-- `read_config()` returns a `WorkflowLaunchConfig`, reusing the parsing rules from
-  `WorkflowLauncherScreen.read_config` (path expansion, enum coercion for
-  `MetadataSource`/`AudioSource`/`AudioFallback`, `jobs` default 0).
-- Each path field (URL/path `raw`, downloads, splits, beets config) is a text
-  input **plus** a "Browse…" button that opens a DearPyGui file dialog
-  (`add_file_dialog`) and writes the chosen path back into the input. The `raw`
-  field browses for a file (local audio / export); downloads and splits browse for
-  a directory; beets config browses for a file. Text stays editable so a URL can
-  still be typed or pasted.
-- "Run" rejects an empty `raw`; "Quit" stops the viewport.
-  **Commit:** `feat(gui): add workflow launcher form with file pickers`
+The file names will stay directly under `CACHE_DIR`, so the current cache listing,
+size, and age-clean operations can manage them. The GUI worker will read cached
+files. It will use `GuiBridge.submit()` to create or replace DearPyGui textures on
+the render thread. The view will release texture objects when it closes.
 
-### Phase 5: Pipeline view and event adapters
+### Viewer design
 
-- Implement `muzik/gui/pipeline.py`: status label, progress bar, scrolling log, and
-  three tables (candidates, chapters, beets matches) with the same columns as
-  `muzik/tui/widgets.py`.
-- Implement `GuiWorkflowEventEmitter` and `GuiBeetsEventEmitter` in
-  `muzik/gui/adapters.py`, mapping every `WorkflowEvent`/`BeetsEvent` subclass
-  handled in `PipelineScreen.handle_workflow_event` and `handle_beets_event`, each
-  `emit` checking cancellation/shutdown and mutating only via `GuiBridge.submit`.
-  **Commit:** `feat(gui): add pipeline view and workflow event adapters`
+The page will look like a compact video browser, but the main information is the
+muzik pipeline. It will keep the current app palette:
 
-### Phase 6: Decision modals and adapters
+- Canvas: `#181A1E`
+- Raised panel: `#1E2126`
+- Card control: `#262A30`
+- Selection and active work: `#7AB2FF`
+- Complete: `#78C878`
+- Failed: `#E67878`
 
-- Implement `muzik/gui/modals.py`: candidate selection, chapter review
-  (accept/edit/reject → `ChapterDecision`), chapter edit (text area →
-  `parse_chapters`), beets match (`candidate_id` / `BeetsMatchDecision.AS_IS` /
-  `None`), and duplicate resolution (`BeetsDuplicateDecision`).
-- Implement `GuiWorkflowDecisions` and `GuiBeetsDecisions` in
-  `muzik/gui/adapters.py`, each blocking method calling `GuiBridge.request`, with
-  the same non-interactive deterministic defaults the Textual adapters use
-  (candidate 0, `ChapterDecision.ACCEPT`, `BeetsDuplicateDecision.SKIP`).
-  **Commit:** `feat(gui): add decision modals and workflow/beets decision adapters`
+The left rail will list playlists and their pending counts. The main area will
+have Refresh, status filter, and page controls above a card grid. Each 16:9 card
+will show a cached thumbnail, playlist position, title, YouTube ID, summary state,
+a primary Run, Resume, or Retry button, and an Actions button. Actions opens a
+menu for the stage-specific commands.
 
-### Phase 7: Wire the run and cancellation
+The distinctive element will be a four-part pipeline rail below each thumbnail.
+It will show Download, Parse, Split, and Organize in order. Color and a short text
+label will both show state. The rail makes this a muzik viewer instead of a copy of
+the YouTube site.
 
-- In `muzik/gui/app.py`, build `WorkflowRequest`/`WorkflowOptions` from the config
-  (same mapping as `PipelineScreen._run_workflow` and `_default_operations`), call
-  `build_workflow_operations` with the GUI adapters, and run `run_workflow` on a
-  background thread with a fresh `CancellationToken`.
-- On pipeline close/Back: cancel the token, unblock any pending decision request,
-  join the worker, and return to the launcher.
-  **Commit:** `feat(gui): wire workflow run and cancellation`
+```text
++ Playlists --------+  Refresh   Status: All                 Page 1 / 4
+| Late-night sets 3 |  +----------------------+  +----------------------+
+| DJ archives     0 |  |      thumbnail       |  |      thumbnail       |
+| Radio shows     1 |  +----------------------+  +----------------------+
+|                  |  | 12  Video title       |  | 13  Video title       |
+| + Add playlist   |  | DL  PA  SP  OR        |  | DL  PA  SP  OR        |
+|                  |  | Resume   Actions...   |  | Process  Actions...  |
++------------------+  +----------------------+  +----------------------+
+```
 
-### Phase 8: Cutover — remove the Textual TUI, add GUI tests, update docs
+The grid will calculate its column count from the available width. It will page
+items instead of creating all DearPyGui textures and widgets at once. Every item
+will remain reachable. Cached thumbnails and the item snapshot let the page open
+without a network request.
 
-- `muzik/app.py`: remove the `tui` command and its import; keep only `gui`.
-- Delete `muzik/tui/` and `tests/test_tui_app.py`.
-- `pyproject.toml`: remove `textual`.
-- `mise.toml`: replace `[tasks.tui]` with `[tasks.gui]` (`uv run muzik gui`).
-- `README.md`: replace the "Textual TUI" section and the `muzik tui` command-table
-  row with `muzik gui`; drop the "Textual is the first GUI target… PySide6" note.
-- `muzik/core/workflow/operations.py`: reword the docstring that names Textual.
-- Rewrite `GUI.md` for the DearPyGui front end and the `GuiBridge` threading
-  contract; state that the CLI stays active over the same core.
-- Add tests: `test_gui_bridge.py` (submit/drain order, request result,
-  request-cancel raises, late submit ignored), `test_gui_adapters.py`
-  (non-interactive defaults and result routing via a fake bridge, no real
-  viewport), `test_gui_launcher.py` (`read_config()` field mapping and enum
-  coercion). Guard viewport-dependent tests with a skip when no display is
-  available.
-  **Commit:** `feat(gui): remove Textual TUI, add GUI tests and docs`
+The launcher in `muzik/gui/launcher.py` will get a Watchlist button. A new
+`WatchlistView` in `muzik/gui/watchlist.py` will own the rail, toolbar, card grid,
+and action menus. Refresh and per-item commands will open the existing
+`PipelineView`. The current event adapters, decision dialogs, progress display,
+worker thread, and cancellation rules will remain in use. Back will return to the
+watchlist and reload saved card state.
 
-## Risks & Tradeoffs
+### Refresh behavior
 
-- **Python 3.14 wheel — RESOLVED.** DearPyGui 2.3.1 ships `cp314` macOS-arm64
-  wheels; not a risk. Pin `dearpygui>=2.3.1`.
-- **No built-in blocking modal.** Worker-thread decisions must block on a queue fed
-  by the render loop. A wrong bridge can deadlock (worker waits for a result the
-  main thread never delivers) or race. Mitigation: `GuiBridge` is isolated and
-  unit-tested without a viewport (Phases 3 and 8).
-- **Thread-safe UI mutation.** All item updates go through `GuiBridge.submit` and
-  run on the main thread only. A direct `dearpygui` call from a worker is a defect.
-- **Losing the terminal interface.** Removing Textual means no in-terminal / over-SSH
-  interactive UI; a windowing system is now required for interactive runs. The CLI
-  remains for headless use. This is the user's stated intent.
-- **Headless CI for GUI tests.** Viewport-level tests need a display. Keep the
-  render-loop-free logic (bridge, adapters, launcher config) testable without a
-  viewport, and skip the rest when no display is present.
-- **Immediate-mode UX.** DearPyGui's look is a tool aesthetic, not a polished
-  consumer app. Acceptable for a power-user music tool.
+Refresh will run playlists in list order. For each playlist, it will:
 
-## Decisions (resolved)
+1. Fetch the structured flat-playlist result one time.
+2. Save the current item list and queue missing thumbnails.
+3. Reconcile each item with local muzik state.
+4. Pass only pending or failed usable IDs to the extracted playlist runner.
+5. Save each stage and item result at once.
+6. Save the check time and playlist error, then continue to the next playlist.
 
-- **Path fields use both** a text input and a "Browse…" file dialog. Applies to
-  the URL/path, downloads, splits, and beets config fields.
-- **No `muzik tui` command and no mention of it anywhere.** The command is dropped
-  outright — no compatibility hint, no alias. After Phase 8, a repository-wide grep
-  for `tui`, tui-related `muzik.tui`, and `textual` (code, tests, docs, `mise.toml`,
-  `pyproject.toml`) must return nothing.
+On the first refresh, all usable current videos are pending unless existing muzik
+state shows prior work. Removed videos will leave the current card grid, but their
+processed IDs will remain in the watchlist record. If YouTube adds them again, the
+app will not repeat completed work.
 
-## Implementation record (2026-08-12)
+One playlist error will appear in the pipeline and the playlist rail. The refresh
+will continue with the next playlist. Cancellation will stop the full refresh and
+will not mark the active stage as complete.
 
-The implementation used one atomic cutover commit instead of eight intermediate
-phase commits. This kept the dependency change, command cutover, package removal,
-tests, and documentation in one reviewable state.
+This feature does not add a timer, background polling, YouTube API credentials,
+video playback, playlist editing on YouTube, or CLI watchlist commands. It does
+not remove local music when a video leaves a playlist. It does not store separate
+workflow options for each playlist.
 
-Verification used three layers:
+## Implementation phases
 
-- Render-context checks created the launcher, pipeline, and all decision dialogs
-  without a viewport.
-- A viewport smoke check opened `muzik gui` and kept its render loop active.
-- The shared workflow completed with a 19-second YouTube input. An automated GUI
-  worker test verified that the desktop adapter starts this same workflow and
-  waits for cancellation before it returns to the launcher.
+### Phase 1: Add durable playlist items and state
 
-## Phase 9: Review findings (hardening)
+- Add `MUZIK_WATCHLIST_FILE` beside `MUZIK_CONFIG_FILE` in `muzik/config.py`.
+- Add the versioned watchlist data types and repository operations in the new
+  `muzik/core/watchlist.py` file.
+- Add a structured flat-playlist lookup in `muzik/core/sources/youtube.py` that
+  returns position, title, video ID, video URL, and thumbnail URL. Keep
+  `get_playlist_video_ids()` compatible with current callers.
+- Accept only YouTube playlist URLs that `playlist_id()` can parse. Normalize
+  stored URLs and reject duplicate playlist IDs.
+- Store current item snapshots, per-stage results, paths, errors, processed IDs,
+  and playlist check results.
+- Make load failures explicit and save with same-directory temporary-file
+  replacement.
+- Add `tests/test_watchlist.py` for missing files, save and load, duplicates,
+  invalid URLs, malformed JSON, unsupported versions, and atomic replacement.
+- Extend `tests/test_youtube_source.py` for ordered item metadata, missing titles,
+  private or deleted items, invalid JSON, and yt-dlp errors.
 
-A post-implementation review confirmed the threading bridge, adapters, decisions,
-modals, cancellation, and the shared-core relocation are correct. One robustness
-gap remains.
+Commit: `feat(watchlist): store YouTube playlist items and state`
 
-### Finding 1 — `GuiBridge.drain()` has no per-callback exception isolation
+### Phase 2: Process only pending playlist videos
 
-`drain()` (`muzik/gui/bridge.py`) runs each queued callback with no guard. If one
-UI-update callback raises, the exception leaves the render loop; the `run()` loop
-in `muzik/gui/app.py` unwinds to its `finally`, shuts the bridge down, and exits
-the app. The old Textual message loop isolated each handler, so a single bad event
-could not stop the interface. The update closures in `muzik/gui/adapters.py` are
-defensive (type checks, guarded field access), so the current risk is low, but the
-regression is real.
+- Refactor `_run_playlist_workflow()` and `_process_playlist_video()` in
+  `muzik/core/workflow/service.py` so a core function can process an explicit,
+  ordered list of video IDs and return per-ID results.
+- Keep `run_workflow()` as the owner of normal URL detection. A CLI playlist run
+  will still fetch and process the complete ordered ID list.
+- Add watchlist refresh and local-state reconciliation in
+  `muzik/core/watchlist.py`.
+- Reuse `load_playlist_state()`, the per-playlist yt-dlp archive,
+  `backfill_playlist_entry_from_legacy_cache()`, and
+  `seed_archive_from_downloads()`.
+- Keep unavailable items visible and exclude them from workflow work.
+- Save each completed ID, leave failed IDs pending, and continue after one
+  playlist error.
+- Emit workflow messages and progress for checks, pending counts, failures, and
+  the final summary.
+- Extend `tests/test_workflow_service.py` for explicit IDs, CLI compatibility,
+  result reporting, and cancellation.
+- Extend `tests/test_watchlist.py` for pending-only work, incremental saves,
+  retries, error isolation, removed IDs, no-change refreshes, and local-state
+  reconciliation.
 
-- Wrap each callback call in `drain()` in a `try`/`except Exception`, log the
-  failure through the pipeline log (or a bridge error hook), and continue draining
-  the rest of the queue.
-- Keep `WorkflowCancelled` and any deliberate control-flow exceptions out of the
-  swallow set, or none are raised inside UI callbacks by design — confirm before
-  choosing the exception type to catch.
-- Add a `test_gui_bridge.py` case: a callback that raises does not stop a following
-  callback and does not propagate out of `drain()`.
-  **Commit:** `fix(gui): isolate render-loop callback failures in the bridge`
+Commit: `feat(watchlist): process only pending playlist videos`
 
-### Resolution
+### Phase 3: Add thumbnails and per-video actions
 
-`GuiBridge` now accepts an error hook. It catches ordinary `Exception` values,
-reports them to the hook, and continues with the next queued callback.
-`WorkflowCancelled`, `KeyboardInterrupt`, and `SystemExit` still propagate.
-`MuzikGuiApp` uses the hook to write the error to the pipeline log.
+- Add the thumbnail cache in `muzik/core/thumbnails.py`, with response validation,
+  bounded downloads, atomic writes, retry behavior, and cache-compatible names.
+- Add the item action and stage-state API in
+  `muzik/core/workflow/item_actions.py`.
+- Refactor the concrete functions inside `build_workflow_operations()` in
+  `muzik/core/workflow/operations.py` only as needed so the normal workflow and
+  targeted actions call the same download, parse, split, and organize code.
+- Implement Run, Resume, Retry, Download again, Parse again, Split again,
+  Organize again, and Run all again.
+- Preserve the old chapter sidecar until Parse again has a successful accepted
+  result. Mark later stages stale after an earlier stage runs again.
+- Return disabled-action reasons when required audio, chapters, or split outputs
+  do not exist.
+- Add `tests/test_thumbnails.py` for cache hits, valid images, invalid responses,
+  failed requests, atomic writes, and retry.
+- Add `tests/test_item_actions.py` for stage selection, force options, path checks,
+  stale-state rules, failure state, incremental saves, and cancellation.
+- Extend current workflow tests to prove that the operation refactor does not
+  change a normal single-video or playlist run.
+
+Commit: `feat(watchlist): add cached thumbnails and item actions`
+
+### Phase 4: Build the desktop watchlist viewer
+
+- Add the Watchlist button and callback to `LauncherView` in
+  `muzik/gui/launcher.py`.
+- Add `WatchlistView` in `muzik/gui/watchlist.py` with the playlist rail, toolbar,
+  paged thumbnail grid, pipeline rails, primary action, and per-card action menu.
+- Add confirmation dialogs in `muzik/gui/modals.py` for commands that overwrite or
+  force-process local results.
+- Update `muzik/gui/theme.py` with card, image-outline, stage, selection, disabled,
+  and error tokens derived from the current palette.
+- Update `MuzikGuiApp` in `muzik/gui/app.py` to load playlists, refresh them, cache
+  thumbnails, create textures through `GuiBridge`, and run item actions on the
+  existing worker thread.
+- Reuse `PipelineView` for refresh and item-action events. Track the prior page so
+  Back returns to a reloaded watchlist after completion or cancellation.
+- Disable only the active card and conflicting global controls during one item
+  action. Keep status visible until the pipeline page opens.
+- Add `tests/test_gui_watchlist.py` for playlist selection, pagination, card data,
+  pipeline rails, status filters, placeholders, action availability, and action
+  callbacks.
+- Extend `tests/test_gui_launcher.py`, `tests/test_gui_app.py`, and
+  `tests/test_gui_bridge.py` for navigation, texture updates, worker completion,
+  return destination, and cancellation.
+
+Commit: `feat(gui): add the YouTube-style watchlist viewer`
+
+### Phase 5: Document and verify the feature
+
+- Add a watchlist section to `README.md` with card states, first refresh behavior,
+  retries, item commands, launcher option use, thumbnails, and manual refresh.
+- Update `GUI.md` with the viewer layout, stage invalidation rules, shared pipeline
+  view, thumbnail texture lifecycle, and `GuiBridge` boundary.
+- Run `mise run check` and a render-context smoke test with two playlists, cached
+  thumbnails, pending and complete cards, one item action, and Back navigation.
+
+Commit: `docs(watchlist): explain playlist viewer and item actions`
+
+## Risks and tradeoffs
+
+- `yt-dlp --flat-playlist` must still list all items during each check. The feature
+  avoids old processing work, but discovery time still grows with playlist size.
+- Thumbnail requests add network and disk work. A fixed concurrency limit,
+  permanent cache hits, paging, and placeholders will keep the interface usable.
+- Old muzik state does not have four explicit stage records. Reconciliation must
+  infer stages from playlist state, legacy cache, and file paths. The viewer will
+  show `Pending` when the evidence is not sufficient.
+- Re-running one stage can make later output stale. The explicit stage model and
+  confirmation dialogs prevent the UI from reporting stale output as processed.
+- Parse again needs current metadata and a local audio file. Private videos,
+  missing source files, and removed comments can make the action unavailable or
+  fail without changing the old chapter sidecar.
+- Interactive chapter or Beets decisions can make a batch refresh wait for user
+  input. The existing modals will show which card is waiting.
+- The watchlist uses one option set for one refresh or action. Users cannot set a
+  different source, output path, or Beets config for each playlist.
+
+## Open questions
+
+- None. The planned item command set is Run or Resume, Retry, Download again,
+  Parse again, Split again, Organize again, and Run all again. These names and
+  stage rules can change before implementation starts.
