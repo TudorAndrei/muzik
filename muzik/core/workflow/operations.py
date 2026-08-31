@@ -30,6 +30,7 @@ from muzik.core.description_chapters import (
 from muzik.core.tracklist import chapters_from_comments, chapters_from_description
 from muzik.core.sources.youtube import video_id_from_path
 from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters_verbose
+from muzik.core.metadata_repair import repair_placeholder_album_tags
 from muzik.core.sources.base import Candidate
 from muzik.core.sources.soulseek import SoulseekSource
 from muzik.core.sources.youtube import (
@@ -140,6 +141,15 @@ def build_workflow_operations(
 
         def organize_operation(target: Path) -> bool:
             try:
+                repair = repair_placeholder_album_tags(target)
+                if repair.updated_files:
+                    events.emit(
+                        MessageEvent(
+                            "Repaired placeholder tags for "
+                            f"{repair.updated_files} track(s): "
+                            f"{repair.artist} - {repair.album} ({repair.year})."
+                        )
+                    )
                 organize_paths(
                     ImportOptions(
                         paths=[target],
