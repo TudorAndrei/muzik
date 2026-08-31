@@ -1,5 +1,6 @@
 [tools]
 hk = "1.55.0"
+node = "latest"
 pkl = "latest"
 uv = "latest"
 rumdl = "latest"
