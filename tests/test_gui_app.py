@@ -19,6 +19,31 @@ from muzik.gui.app import MuzikGuiApp
 from muzik.gui.watchlist import WATCHLIST_WINDOW
 
 
+def test_direct_gui_launch_sets_viewport_icons(monkeypatch) -> None:
+    viewport: dict[str, object] = {}
+    app = MuzikGuiApp()
+    monkeypatch.setattr(dpg, "create_context", lambda: None)
+    monkeypatch.setattr(dpg, "configure_app", lambda **kwargs: None)
+    monkeypatch.setattr(
+        dpg, "create_viewport", lambda **kwargs: viewport.update(kwargs)
+    )
+    monkeypatch.setattr(dpg, "setup_dearpygui", lambda: None)
+    monkeypatch.setattr(dpg, "show_viewport", lambda: None)
+    monkeypatch.setattr(dpg, "set_primary_window", lambda *args: None)
+    monkeypatch.setattr(dpg, "is_dearpygui_running", lambda: False)
+    monkeypatch.setattr(dpg, "destroy_context", lambda: None)
+    monkeypatch.setattr("muzik.gui.app.apply_global_theme", lambda: None)
+    monkeypatch.setattr(app.launcher, "build", lambda: None)
+
+    app.run()
+
+    small_icon = Path(str(viewport["small_icon"]))
+    large_icon = Path(str(viewport["large_icon"]))
+    assert small_icon.name == "muzik-logo-v2.png"
+    assert large_icon == small_icon
+    assert small_icon.is_file()
+
+
 def test_back_waits_for_worker_then_returns_to_launcher() -> None:
     started = Event()
     stopped = Event()

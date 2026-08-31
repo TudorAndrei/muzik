@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import inspect
+from pathlib import Path
+import sys
 from threading import Thread
 from typing import Any
 
 import dearpygui.dearpygui as dpg
 
+from muzik.branding import logo_path
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.decisions import WorkflowDecisions
 from muzik.core.workflow.events import ErrorEvent, MessageEvent, WorkflowEventEmitter
@@ -102,7 +105,15 @@ class MuzikGuiApp:
             dpg.configure_app(manual_callback_management=True)
             apply_global_theme()
             self.launcher.build()
-            dpg.create_viewport(title="muzik", width=1280, height=800)
+            icon = _viewport_icon_path()
+            icon_value = str(icon) if icon is not None else ""
+            dpg.create_viewport(
+                title="muzik",
+                small_icon=icon_value,
+                large_icon=icon_value,
+                width=1280,
+                height=800,
+            )
             dpg.setup_dearpygui()
             dpg.show_viewport()
             dpg.set_primary_window(LAUNCHER_WINDOW, True)
@@ -828,3 +839,10 @@ def _default_operations(
 def gui_cmd() -> None:
     """Open the DearPyGui workflow interface."""
     MuzikGuiApp().run()
+
+
+def _viewport_icon_path() -> Path | None:
+    """Return a DearPyGui-compatible logo for direct GUI launches."""
+    if sys.platform == "win32":
+        return None
+    return logo_path()

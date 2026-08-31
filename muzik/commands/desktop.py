@@ -7,7 +7,7 @@ absolute path to the ``muzik`` executable is baked into the launcher script.
 
 from __future__ import annotations
 
-from importlib import metadata, resources
+from importlib import metadata
 from pathlib import Path
 import os
 import plistlib
@@ -18,6 +18,7 @@ import tempfile
 
 import typer
 
+from muzik.branding import logo_path
 from muzik.ui.console import console
 
 
@@ -157,11 +158,4 @@ def _prepare_icon() -> Path | None:
 
 
 def _source_icon() -> Path | None:
-    try:
-        packaged = resources.files("muzik").joinpath("assets/muzik-logo-v2.png")
-        if packaged.is_file():
-            return Path(str(packaged))
-    except ModuleNotFoundError, FileNotFoundError, TypeError:
-        pass
-    repo = Path(__file__).resolve().parents[2] / "assets" / "muzik-logo-v2.png"
-    return repo if repo.exists() else None
+    return logo_path()
