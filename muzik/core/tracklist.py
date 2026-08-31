@@ -16,8 +16,6 @@ import json
 import os
 import re
 import subprocess
-from typing import cast
-
 from pydantic import BaseModel, ValidationError
 
 from muzik.core.beets.agent_decisions import (
@@ -293,4 +291,4 @@ def _openrouter_tracklist(model_name: str, description: str) -> TrackList | None
     result = agent.run_sync(
         f"Extract the tracklist from this description:\n\n{description}"
     )
-    return cast(TrackList, result.output)
+    return result.output

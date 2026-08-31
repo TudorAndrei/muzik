@@ -4,6 +4,7 @@ from muzik.core import services
 from muzik.core.services import (
     ServiceStatus,
     _check_binary,
+    _check_chromium,
     _check_slskd,
     check_services,
 )
@@ -46,6 +47,24 @@ def test_check_binary_handles_run_failure(monkeypatch) -> None:
 
     assert status.available is False
     assert "failed to run" in status.detail
+
+
+def test_check_chromium_uses_playwright_install_list(monkeypatch) -> None:
+    monkeypatch.setattr(
+        services.subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(
+            a,
+            0,
+            "Browsers:\n  /cache/ms-playwright/chromium-1234\n",
+            "",
+        ),
+    )
+
+    status = _check_chromium()
+
+    assert status.available is True
+    assert status.detail == "/cache/ms-playwright/chromium-1234"
 
 
 def test_check_slskd_reports_not_configured(monkeypatch) -> None:

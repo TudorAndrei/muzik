@@ -28,7 +28,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -252,7 +252,7 @@ def _openrouter_chooser(model_name: str, log: Logger) -> Chooser:
 
     @stamina.retry(on=_transient, attempts=4, wait_initial=5.0, wait_max=30.0)
     def _ask(task: BeetsTaskView) -> MatchDecision:
-        return cast(MatchDecision, agent.run_sync(build_prompt(task)).output)
+        return agent.run_sync(build_prompt(task)).output
 
     def choose(task: BeetsTaskView) -> MatchDecision | None:
         try:

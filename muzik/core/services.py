@@ -8,9 +8,9 @@ isolated: one failure never stops the others.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 from muzik.config import get_slskd_settings
 
@@ -61,18 +61,32 @@ def _check_binary(name: str, executable: str, version_args: list[str]) -> Servic
 def _check_chromium() -> ServiceStatus:
     name = "Playwright Chromium"
     try:
-        from playwright.sync_api import sync_playwright
+        import playwright  # noqa: F401
     except ImportError:
         return ServiceStatus(name, False, "playwright is not installed.", optional=True)
     try:
-        with sync_playwright() as playwright:
-            executable = playwright.chromium.executable_path
-    except Exception as exc:  # noqa: BLE001 - report any driver failure as unavailable
+        result = subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "--list"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
         return ServiceStatus(
             name, False, f"Playwright driver error: {exc}", optional=True
         )
-    if executable and Path(executable).exists():
-        return ServiceStatus(name, True, executable, optional=True)
+    chromium = next(
+        (
+            line.strip()
+            for line in result.stdout.splitlines()
+            if "ms-playwright/chromium-" in line
+            and "chromium_headless_shell" not in line
+        ),
+        None,
+    )
+    if result.returncode == 0 and chromium:
+        return ServiceStatus(name, True, chromium, optional=True)
     return ServiceStatus(
         name,
         False,
