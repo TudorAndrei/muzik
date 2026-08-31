@@ -18,6 +18,7 @@ from muzik.core.workflow.events import (
     StepFinishedEvent,
     StepStartedEvent,
 )
+from muzik.core.workflow.service import WorkflowServiceError
 from muzik.ui.chapter_editor import edit_chapters
 from muzik.ui.cli.decisions import CliWorkflowDecisions
 
@@ -241,4 +242,48 @@ def test_process_audio_files_emits_organize_steps(
     assert events.events == [
         StepStartedEvent(name="organize"),
         StepFinishedEvent(name="organize"),
+    ]
+
+
+def test_process_audio_files_rejects_beets_skip_as_organize_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    split_dir = tmp_path / "splits" / "Terrace Brothers + Asa [1997]"
+    split_dir.mkdir(parents=True)
+    audio = split_dir / "01-opening.opus"
+    audio.write_bytes(b"audio")
+    events = RecordingWorkflowEventEmitter()
+
+    # A Beets Skip choice finishes the import session without an exception,
+    # but move mode leaves the source audio in place.
+    monkeypatch.setattr(workflow, "organize_paths", lambda options, **kwargs: None)
+
+    with pytest.raises(WorkflowServiceError, match="Organization failed"):
+        workflow._process_audio_files(
+            audio_inputs=[],
+            pre_split_dirs=[split_dir],
+            splits=tmp_path / "splits",
+            review=False,
+            no_split=False,
+            no_organize=False,
+            import_=False,
+            tag_only=False,
+            dry_run=False,
+            jobs=0,
+            config=None,
+            keep_source=False,
+            force=False,
+            decisions=NonInteractiveWorkflowDecisions(),
+            events=events,
+        )
+
+    assert audio.exists()
+    assert events.events == [
+        StepStartedEvent(name="organize"),
+        StepFinishedEvent(
+            name="organize",
+            detail=f"failed: {split_dir}",
+            success=False,
+        ),
     ]

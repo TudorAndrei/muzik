@@ -396,7 +396,10 @@ def _process_audio_files(
                     decisions=beets_decisions,
                     events=beets_events,
                 )
-                return True
+                # Beets treats Skip as a clean session result. In move mode,
+                # imported audio leaves the source path. Remaining audio means
+                # that Beets did not import this target.
+                return not _find_audio_inputs([target])
             organize_cmd(
                 directory=target,
                 import_=import_,

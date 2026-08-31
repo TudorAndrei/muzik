@@ -327,6 +327,10 @@ def test_workflow_local_folder_organizes_directory_once(
 
     def fake_organize_paths(options, **kwargs):
         organized.extend(options.paths)
+        library = tmp_path / "library"
+        library.mkdir()
+        for source in options.paths[0].glob("*.flac"):
+            source.rename(library / source.name)
 
     monkeypatch.setattr(workflow, "organize_paths", fake_organize_paths)
 
