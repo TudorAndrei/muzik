@@ -122,6 +122,32 @@ def test_failed_thumbnail_retries_on_later_call(tmp_path: Path) -> None:
     assert attempts == 2
 
 
+def test_youtube_thumbnail_query_is_removed_to_request_jpeg(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    async def fetch(url: str) -> tuple[bytes, str]:
+        calls.append(url)
+        if "?" in url:
+            return b"RIFFwebp", "image/webp"
+        return JPEG, "image/jpeg"
+
+    result = asyncio.run(
+        cache_thumbnails(
+            [
+                ThumbnailRequest(
+                    "abcdefghijk",
+                    "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg?sqp=webp",
+                )
+            ],
+            cache_dir=tmp_path,
+            fetcher=fetch,
+        )
+    )[0]
+
+    assert result.path == tmp_path / "yt_thumbnail_abcdefghijk.jpg"
+    assert calls == ["https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg"]
+
+
 def test_thumbnail_concurrency_is_bounded(tmp_path: Path) -> None:
     active = 0
     maximum = 0

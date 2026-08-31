@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import tempfile
+from urllib.parse import urlsplit
 
 import aiohttp
 
@@ -124,7 +125,7 @@ async def _cache_with_fetcher(
         try:
             async with semaphore:
                 cancellation.raise_if_cancelled()
-                data, content_type = await fetcher(request.url)
+                data, content_type = await fetcher(_download_url(request))
                 cancellation.raise_if_cancelled()
             extension = _validated_extension(data, content_type)
             path = root / f"yt_thumbnail_{request.video_id}.{extension}"
@@ -140,6 +141,13 @@ async def _cache_with_fetcher(
             )
 
     return list(await asyncio.gather(*(cache_one(request) for request in requests)))
+
+
+def _download_url(request: ThumbnailRequest) -> str:
+    hostname = urlsplit(request.url).hostname
+    if hostname in {"i.ytimg.com", "img.youtube.com"}:
+        return f"https://i.ytimg.com/vi/{request.video_id}/hqdefault.jpg"
+    return request.url
 
 
 def _validated_extension(data: bytes, content_type: str) -> str:
