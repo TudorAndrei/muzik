@@ -423,3 +423,50 @@ def test_reconcile_watchlist_reads_playlist_state_and_download_folder(
     assert split.stages["split"].status is StageStatus.COMPLETE
     assert split.stages["split"].path == str(tmp_path / "splits" / "Mix")
     assert downloaded.stages["download"].path == str(local.resolve())
+
+
+def test_reconcile_watchlist_repairs_false_processed_beets_skip(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    video_id = "-ON_sl7ZGdk"
+    audio = tmp_path / "downloads" / f"Terrace Brothers + Asa [1997] [{video_id}].opus"
+    split_dir = tmp_path / "splits" / audio.stem
+    split_dir.mkdir(parents=True)
+    (split_dir / "01-opening.opus").write_bytes(b"audio")
+    cache_mod.set_json(
+        "playlist_PL_ONE",
+        {
+            "playlist_id": "PL_ONE",
+            "videos": {
+                video_id: {
+                    "status": "organized",
+                    "audio_file": str(audio),
+                }
+            },
+        },
+    )
+    item = WatchlistItem(1, "Terrace Brothers + Asa [1997]", video_id)
+    watchlist = Watchlist(
+        playlists=[
+            WatchlistPlaylist(
+                playlist_id="PL_ONE",
+                url="https://youtube.com/playlist?list=PL_ONE",
+                items=[item],
+                processed_video_ids=[video_id],
+            )
+        ]
+    )
+
+    reconcile_watchlist(
+        watchlist,
+        request=_refresh_request(tmp_path),
+        options=WorkflowOptions(),
+    )
+
+    assert watchlist.playlists[0].processed_video_ids == []
+    assert item.stages["split"].status is StageStatus.COMPLETE
+    assert item.stages["split"].path == str(split_dir)
+    assert item.stages["organize"].status is StageStatus.FAILED
+    assert item.last_error == "Beets did not import this item. Select Retry."

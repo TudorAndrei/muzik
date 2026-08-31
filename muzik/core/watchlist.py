@@ -35,6 +35,7 @@ from muzik.core.workflow.service import (
     WorkflowRequest,
     WorkflowRunOperations,
     backfill_playlist_entry_from_legacy_cache,
+    find_audio_inputs,
     load_playlist_state,
     run_youtube_playlist_videos,
 )
@@ -431,10 +432,20 @@ def _reconcile_playlist(
         video_id = item.video_id
         if not video_id:
             continue
+        entry = playlist_state["videos"].get(video_id, {})
+        remaining_target = (
+            None
+            if options.no_organize
+            else _remaining_organize_target(entry, request=request)
+        )
+        if remaining_target is not None:
+            if video_id in playlist.processed_video_ids:
+                playlist.processed_video_ids.remove(video_id)
+            _mark_organize_failed(item, remaining_target, entry=entry)
+            continue
         if video_id in playlist.processed_video_ids:
             _mark_workflow_completed(item, options=options)
             continue
-        entry = playlist_state["videos"].get(video_id, {})
         if not entry:
             entry = backfill_playlist_entry_from_legacy_cache(
                 video_id, splits=request.splits
@@ -467,6 +478,65 @@ def _reconcile_playlist(
             item.stages["organize"].status = StageStatus.COMPLETE
             if video_id not in playlist.processed_video_ids:
                 playlist.processed_video_ids.append(video_id)
+
+
+def _remaining_organize_target(
+    entry: dict[str, Any],
+    *,
+    request: WorkflowRequest,
+) -> Path | None:
+    if entry.get("status") != "organized":
+        return None
+    audio_value = entry.get("audio_file")
+    audio = Path(audio_value) if isinstance(audio_value, str) else None
+    split_value = entry.get("split_dir")
+    split = Path(split_value) if isinstance(split_value, str) else None
+    if split is None and audio is not None:
+        expected = request.splits / audio.stem
+        if expected.is_dir():
+            split = expected
+    if split is not None and split.is_dir():
+        return split if find_audio_inputs([split]) else None
+    if audio is not None and audio.is_file():
+        return audio
+    files = entry.get("files")
+    if isinstance(files, list):
+        for value in files:
+            if isinstance(value, str) and Path(value).is_file():
+                return Path(value)
+    return None
+
+
+def _mark_organize_failed(
+    item: WatchlistItem,
+    target: Path,
+    *,
+    entry: dict[str, Any],
+) -> None:
+    updated_at = _now()
+    message = "Beets did not import this item. Select Retry."
+    audio_value = entry.get("audio_file")
+    item.last_action = "refresh"
+    item.last_error = message
+    item.stages["download"] = StageRecord(
+        status=StageStatus.COMPLETE,
+        updated_at=updated_at,
+        path=audio_value if isinstance(audio_value, str) else None,
+    )
+    item.stages["parse"] = StageRecord(
+        status=StageStatus.COMPLETE,
+        updated_at=updated_at,
+    )
+    item.stages["split"] = StageRecord(
+        status=StageStatus.COMPLETE if target.is_dir() else StageStatus.SKIPPED,
+        updated_at=updated_at,
+        path=str(target) if target.is_dir() else None,
+    )
+    item.stages["organize"] = StageRecord(
+        status=StageStatus.FAILED,
+        updated_at=updated_at,
+        error=message,
+    )
 
 
 def _mark_workflow_completed(
