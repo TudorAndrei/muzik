@@ -158,10 +158,10 @@ def _prepare_icon() -> Path | None:
 
 def _source_icon() -> Path | None:
     try:
-        packaged = resources.files("muzik").joinpath("assets/muzik-logo.png")
+        packaged = resources.files("muzik").joinpath("assets/muzik-logo-v2.png")
         if packaged.is_file():
             return Path(str(packaged))
     except ModuleNotFoundError, FileNotFoundError, TypeError:
         pass
-    repo = Path(__file__).resolve().parents[2] / "assets" / "muzik-logo.png"
+    repo = Path(__file__).resolve().parents[2] / "assets" / "muzik-logo-v2.png"
     return repo if repo.exists() else None

@@ -42,4 +42,4 @@ def test_desktop_icon_uses_new_logo_asset() -> None:
     source = _source_icon()
 
     assert source is not None
-    assert source.name == "muzik-logo.png"
+    assert source.name == "muzik-logo-v2.png"
