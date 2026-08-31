@@ -38,28 +38,28 @@
 
 ## Phase 3: Add thumbnails and per-video actions
 
-- [ ] Add thumbnail download and cache operations in
+- [x] Add thumbnail download and cache operations in
   `muzik/core/thumbnails.py`.
-- [ ] Validate JPEG or PNG responses, limit concurrency, save atomically, and
+- [x] Validate JPEG or PNG responses, limit concurrency, save atomically, and
   retry failed images on a later refresh.
-- [ ] Keep thumbnail files directly under `CACHE_DIR` so current cache commands
+- [x] Keep thumbnail files directly under `CACHE_DIR` so current cache commands
   manage them.
-- [ ] Add the stage-state and item-action API in
+- [x] Add the stage-state and item-action API in
   `muzik/core/workflow/item_actions.py`.
-- [ ] Share concrete download, parse, split, and organize operations with
+- [x] Share concrete download, parse, split, and organize operations with
   `build_workflow_operations()`.
-- [ ] Implement Run, Resume, Retry, Download again, Parse again, Split again,
+- [x] Implement Run, Resume, Retry, Download again, Parse again, Split again,
   Organize again, and Run all again.
-- [ ] Preserve the old chapter sidecar until a new parse succeeds.
-- [ ] Mark later stages stale after an earlier stage runs again.
-- [ ] Return a reason for every disabled action.
-- [ ] Add `tests/test_thumbnails.py` for cache, validation, failure, atomic writes,
+- [x] Preserve the old chapter sidecar until a new parse succeeds.
+- [x] Mark later stages stale after an earlier stage runs again.
+- [x] Return a reason for every disabled action.
+- [x] Add `tests/test_thumbnails.py` for cache, validation, failure, atomic writes,
   and retry.
-- [ ] Add `tests/test_item_actions.py` for command routing, state changes, paths,
+- [x] Add `tests/test_item_actions.py` for command routing, state changes, paths,
   force behavior, errors, persistence, and cancellation.
-- [ ] Prove that normal single-video and playlist workflows have no behavior
+- [x] Prove that normal single-video and playlist workflows have no behavior
   change after the operation refactor.
-- [ ] Commit: `feat(watchlist): add cached thumbnails and item actions`
+- [x] Commit: `feat(watchlist): add cached thumbnails and item actions`
 
 ## Phase 4: Build the desktop watchlist viewer
 

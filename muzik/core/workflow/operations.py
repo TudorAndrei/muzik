@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import tempfile
 from typing import cast
 
 from muzik.core.audio import extract_metadata, get_duration
@@ -13,6 +15,7 @@ from muzik.core.beets.service import organize_paths, tag_only_with_beet
 from muzik.core.chapters import (
     Chapter,
     find_chapters,
+    parse_chapters_json,
     serialize_chapters,
     sidecar_path,
 )
@@ -27,6 +30,7 @@ from muzik.core.sources.base import Candidate
 from muzik.core.sources.soulseek import SoulseekSource
 from muzik.core.sources.youtube import (
     YouTubeSource,
+    dump_json,
     get_playlist_video_ids,
     prepopulate_archive,
 )
@@ -40,10 +44,12 @@ from muzik.core.workflow.events import (
     WorkflowEventEmitter,
 )
 from muzik.core.workflow.decisions import ChapterDecision
+from muzik.core.workflow.item_actions import ItemActionOperations
 from muzik.core.workflow.service import (
     AudioFallback,
     SplitTask,
     WorkflowOptions,
+    WorkflowRequest,
     WorkflowRunOperations,
     WorkflowServiceError,
     MetadataWorkflowSource,
@@ -51,6 +57,7 @@ from muzik.core.workflow.service import (
     acquire_from_soulseek,
     find_audio_inputs,
     process_audio_plan,
+    run_workflow,
     validated_audio_files,
 )
 
@@ -186,6 +193,96 @@ def build_workflow_operations(
     )
 
 
+def build_item_action_operations(
+    *,
+    decisions: WorkflowDecisions,
+    events: WorkflowEventEmitter | None = None,
+    beets_decisions: BeetsDecisions | None = None,
+    beets_events: BeetsEventEmitter | None = None,
+) -> ItemActionOperations:
+    """Build targeted item actions from the normal workflow operations."""
+    events = events or NullWorkflowEventEmitter()
+
+    def run_action(
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+        cancellation: CancellationToken,
+    ) -> None:
+        operations = build_workflow_operations(
+            splits=request.splits,
+            options=options,
+            decisions=decisions,
+            events=events,
+            beets_decisions=beets_decisions,
+            beets_events=beets_events,
+        )
+        run_workflow(
+            request,
+            options,
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+        )
+
+    return ItemActionOperations(
+        run_workflow=run_action,
+        parse_chapters=lambda audio, video_url, cancellation: refresh_youtube_chapters(
+            audio,
+            video_url,
+            decisions=decisions,
+            events=events,
+            cancellation=cancellation,
+        ),
+    )
+
+
+def refresh_youtube_chapters(
+    path: Path,
+    video_url: str,
+    *,
+    decisions: WorkflowDecisions,
+    events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
+) -> Path:
+    """Refresh YouTube metadata and replace chapters only after acceptance."""
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
+    metadata = dump_json(video_url)
+    if metadata is None:
+        raise WorkflowServiceError("Unable to refresh YouTube video metadata.")
+    info_path = sidecar_path(path, ".info.json")
+    _atomic_write_text(
+        info_path,
+        json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
+    )
+    cancellation.raise_if_cancelled()
+
+    chapters = parse_chapters_json(info_path)
+    if chapters:
+        events.emit(
+            ChapterReviewRequestedEvent(
+                source=path,
+                chapters=chapters,
+                title="YouTube chapters",
+            )
+        )
+        choice = decisions.confirm_chapters(path, chapters)
+        if choice == ChapterDecision.EDIT:
+            chapters = decisions.edit_chapters(chapters) or []
+        if not chapters or choice == ChapterDecision.REJECT:
+            raise WorkflowServiceError("YouTube chapters were not accepted.")
+        chapter_path = sidecar_path(path, ".chapters.txt")
+        _atomic_write_text(chapter_path, serialize_chapters(chapters))
+        return chapter_path
+
+    chapters = _description_chapters(path, decisions, events)
+    if not chapters:
+        raise WorkflowServiceError("No YouTube chapters were found.")
+    cancellation.raise_if_cancelled()
+    return sidecar_path(path, ".chapters.txt")
+
+
 def _chapters_for(
     path: Path,
     options: WorkflowOptions,
@@ -229,10 +326,10 @@ def _chapters_for(
     choice = decisions.confirm_chapters(path, chapters)
     if choice == ChapterDecision.EDIT:
         chapters = decisions.edit_chapters(chapters) or []
-    if not chapters:
+    if choice == ChapterDecision.REJECT or not chapters:
         return None
-    sidecar_path(path, ".chapters.txt").write_text(
-        serialize_chapters(chapters), encoding="utf-8"
+    _atomic_write_text(
+        sidecar_path(path, ".chapters.txt"), serialize_chapters(chapters)
     )
     return chapters
 
@@ -265,12 +362,33 @@ def _description_chapters(
     choice = decisions.confirm_chapters(path, chapters)
     if choice == ChapterDecision.EDIT:
         chapters = decisions.edit_chapters(chapters) or []
-    if not chapters:
+    if choice == ChapterDecision.REJECT or not chapters:
         return None
-    sidecar_path(path, ".chapters.txt").write_text(
-        serialize_chapters(chapters), encoding="utf-8"
+    _atomic_write_text(
+        sidecar_path(path, ".chapters.txt"), serialize_chapters(chapters)
     )
     return chapters
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+        temporary.replace(path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def _soulseek_ready() -> bool:
