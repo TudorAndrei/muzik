@@ -38,6 +38,56 @@ thread. `GuiBridge` is the only path from a workflow worker to the interface.
 All DearPyGui item changes occur on the render thread. Core services and worker
 adapters do not call DearPyGui directly.
 
+Watchlist thumbnail downloads also run outside the render thread. The worker
+writes validated JPEG or PNG files to the normal cache. The app then submits
+texture creation through `GuiBridge`. `WatchlistView` owns the texture IDs. It
+keeps textures only for the current page. It deletes old page textures at a page
+change. It deletes all remaining textures when the page closes, before it
+deletes the texture registry.
+
+## Watchlist viewer
+
+`muzik.core.watchlist` owns the versioned playlist snapshot and stage state.
+The GUI reads this file when the Watchlist page opens. It reconciles the saved
+state with the current launcher download and split paths. Opening the page does
+not read YouTube.
+
+The page has two main areas:
+
+- The left rail lists saved playlists, item counts, last check times, and
+  playlist errors.
+- The main area has status filtering, paging, and a responsive thumbnail card
+  grid. Paging limits the active card widgets and textures.
+
+Each card has a four-part Download, Parse, Split, and Organize rail. Every part
+shows a text state and a status color. The summary is Pending, Processing,
+Failed, Processed, or Unavailable. The primary button is Run, Resume, or Retry.
+The Actions window shows all focused commands and a reason under each disabled
+command.
+
+`refresh_watchlist` performs one flat playlist lookup for each saved playlist.
+It merges the ordered snapshot, keeps unavailable items, reconciles local work,
+and sends only pending IDs to `run_youtube_playlist_videos`. It saves each item
+result before it starts the next ID. Thumbnail cache work starts after playlist
+processing.
+
+`run_item_action` owns focused item state changes. An earlier stage can make
+later stages stale:
+
+| Command | Completed stage | Stale stages |
+|---------|-----------------|--------------|
+| Download again | Download | Parse, Split, Organize |
+| Parse again | Parse | Split, Organize |
+| Split again | Split | Organize |
+| Organize again | Organize | None |
+| Run all again | Full workflow | None |
+
+The app uses the current launcher paths and options for refresh and item work.
+It shows the existing `PipelineView` while a worker runs. Completion or
+cancellation returns to a new watchlist load. Back first cancels an active token
+and waits for the worker to stop. It does not let an old worker update the new
+page.
+
 ## Beets interaction
 
 `muzik.core.beets.service.organize_paths` owns organization requests. The Beets

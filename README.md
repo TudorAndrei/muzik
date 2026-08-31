@@ -246,6 +246,48 @@ waits for the worker to stop before it returns to the launcher.
 The launcher **Library** button lists the audio already in the output folder,
 so you can see what is downloaded before you start a run.
 
+### Playlist watchlist
+
+Use **Watchlist** when you follow YouTube playlists and only want to ingest new
+videos.
+
+1. Set the Downloads and Splits paths in the launcher. Set the source, split,
+   organization, and review options that you want to use.
+2. Select **Watchlist**.
+3. Paste a YouTube playlist URL and select **Add playlist**. You can add more
+   than one playlist.
+4. Select **Refresh new videos**.
+
+The first refresh reads every playlist item. It compares the item IDs with the
+saved watchlist, yt-dlp archive, muzik playlist state, download folder, and split
+folder. It sends only pending IDs to the workflow. A later refresh reads the
+playlist again and sends only new or failed IDs. An error in one playlist does
+not stop the other playlists.
+
+Select a playlist in the left rail. The page shows all current items in a paged
+thumbnail grid. Each card shows the playlist position, title, YouTube ID, and
+the local Download, Parse, Split, and Organize state. **Processed** means that
+this computer has the required local workflow state. A private or deleted video
+stays in the list as **Unavailable** and does not run.
+
+Use **Run**, **Resume**, or **Retry** for the normal next command. Use
+**Actions...** for these focused commands:
+
+- **Download again** replaces the download and makes later stages stale.
+- **Parse again** replaces accepted chapter data only after the new parse
+  succeeds.
+- **Split again** requires downloaded audio and accepted chapters.
+- **Organize again** requires downloaded audio or an existing split directory.
+- **Run all again** runs the complete item workflow again.
+
+The interface asks for confirmation before a command can replace local files.
+If a command is not available, the Actions window shows the missing input.
+
+Refresh also stores valid JPEG or PNG thumbnails in the normal muzik cache. The
+viewer uses cached images when it starts and does not request them from the
+network. A failed image uses a placeholder and is tried again on the next
+refresh. The current `muzik cache` commands list and clean these files.
+
 ## Avoiding re-downloads
 
 Each YouTube download keeps the video id in the filename (for example

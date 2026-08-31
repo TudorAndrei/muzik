@@ -87,53 +87,53 @@
 
 ## Phase 5: Document and verify the feature
 
-- [ ] Document playlist setup, card states, Refresh, first-refresh behavior,
+- [x] Document playlist setup, card states, Refresh, first-refresh behavior,
   retries, item actions, thumbnails, and launcher options in `README.md`.
-- [ ] Document viewer layout, stage invalidation, texture lifecycle, and
+- [x] Document viewer layout, stage invalidation, texture lifecycle, and
   `GuiBridge` use in `GUI.md`.
-- [ ] Run `mise run check`.
-- [ ] Run a DearPyGui render-context smoke test with two playlists, thumbnails,
+- [x] Run `mise run check`.
+- [x] Run a DearPyGui render-context smoke test with two playlists, thumbnails,
   multiple card states, one item action, and Back navigation.
-- [ ] Commit: `docs(watchlist): explain playlist viewer and item actions`
+- [x] Commit: `docs(watchlist): explain playlist viewer and item actions`
 
 ## Verification
 
-- [ ] `mise run check` passes with the locked dependencies.
-- [ ] `tests/test_watchlist.py` proves that save and load keep item metadata, stage
+- [x] `mise run check` passes with the locked dependencies.
+- [x] `tests/test_watchlist.py` proves that save and load keep item metadata, stage
   state, paths, and errors, and that an invalid file is not overwritten.
-- [ ] `tests/test_youtube_source.py` proves that one flat lookup returns every
+- [x] `tests/test_youtube_source.py` proves that one flat lookup returns every
   ordered playlist item and keeps unavailable items visible.
-- [ ] `tests/test_workflow_service.py` proves that a normal playlist CLI run still
+- [x] `tests/test_workflow_service.py` proves that a normal playlist CLI run still
   fetches and processes its complete ordered ID list.
-- [ ] A second watchlist refresh sends no workflow work for processed IDs.
-- [ ] A playlist with one added video sends only that video to the workflow.
-- [ ] A failed video stays pending and runs again on the next refresh.
-- [ ] One bad playlist does not stop checks for later playlists.
-- [ ] Cancellation stops before the next video and does not mark the active stage
+- [x] A second watchlist refresh sends no workflow work for processed IDs.
+- [x] A playlist with one added video sends only that video to the workflow.
+- [x] A failed video stays pending and runs again on the next refresh.
+- [x] One bad playlist does not stop checks for later playlists.
+- [x] Cancellation stops before the next video and does not mark the active stage
   as complete.
-- [ ] A selected playlist shows every current item with position, title, ID,
+- [x] A selected playlist shows every current item with position, title, ID,
   thumbnail, and local stage state.
-- [ ] Work from an earlier GUI or CLI run appears as local work.
-- [ ] A private or deleted item shows as Unavailable and does not run.
-- [ ] Cached thumbnails load without a network request on the next app start.
-- [ ] A failed thumbnail uses a placeholder and retries on a later refresh.
-- [ ] Download again marks Parse, Split, and Organize stale.
-- [ ] Parse again preserves the old chapter sidecar on failure and marks Split and
+- [x] Work from an earlier GUI or CLI run appears as local work.
+- [x] A private or deleted item shows as Unavailable and does not run.
+- [x] Cached thumbnails load without a network request on the next app start.
+- [x] A failed thumbnail uses a placeholder and retries on a later refresh.
+- [x] Download again marks Parse, Split, and Organize stale.
+- [x] Parse again preserves the old chapter sidecar on failure and marks Split and
   Organize stale on success.
-- [ ] Split again requires audio and chapters, then marks Organize stale.
-- [ ] Organize again requires an existing audio file or split directory.
-- [ ] Force and overwrite actions require confirmation.
-- [ ] Disabled card commands show the missing input reason.
-- [ ] Manual smoke test: add two playlists, refresh, page through all cards, filter
+- [x] Split again requires audio and chapters, then marks Organize stale.
+- [x] Organize again requires an existing audio file or split directory.
+- [x] Force and overwrite actions require confirmation.
+- [x] Disabled card commands show the missing input reason.
+- [x] Manual smoke test: add two playlists, refresh, page through all cards, filter
   by status, run one item command, go Back, and see the updated stage rail.
-- [ ] Manual smoke test: cancel an active refresh or item command and return after
+- [x] Manual smoke test: cancel an active refresh or item command and return after
   the worker stops.
-- [ ] The launcher, Library page, Settings window, CLI playlist command, split
+- [x] The launcher, Library page, Settings window, CLI playlist command, split
   flow, organize flow, and cache commands still work.
 
 ## Review
 
-- [ ] Review the code.
-- [ ] Update `PLAN.md` and `TODO.md` before implementation if the approach changes.
-- [ ] Make each phase commit with its exact planned message.
-- [ ] Check each completed TODO item after its phase commit succeeds.
+- [x] Review the code.
+- [x] Update `PLAN.md` and `TODO.md` before implementation if the approach changes.
+- [x] Make each phase commit with its exact planned message.
+- [x] Check each completed TODO item after its phase commit succeeds.
