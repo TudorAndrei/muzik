@@ -1,7 +1,7 @@
 import plistlib
 import stat
 
-from muzik.commands.desktop import build_app_bundle
+from muzik.commands.desktop import _source_icon, build_app_bundle
 
 
 def test_build_app_bundle_creates_launcher_and_plist(tmp_path) -> None:
@@ -36,3 +36,10 @@ def test_build_app_bundle_replaces_existing(tmp_path) -> None:
 
     launcher = app / "Contents" / "MacOS" / "muzik-launcher"
     assert '"/second/muzik"' in launcher.read_text()
+
+
+def test_desktop_icon_uses_new_logo_asset() -> None:
+    source = _source_icon()
+
+    assert source is not None
+    assert source.name == "muzik-logo.png"

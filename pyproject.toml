@@ -54,7 +54,7 @@ source = "vcs"
 packages = ["muzik"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"assets/logo.jpeg" = "muzik/assets/logo.jpeg"
+"assets/muzik-logo.png" = "muzik/assets/muzik-logo.png"
 
 [dependency-groups]
 dev = [

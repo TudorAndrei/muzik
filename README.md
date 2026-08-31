@@ -1,6 +1,6 @@
 # muzik
 
-![muzik](assets/logo.jpeg)
+![muzik](assets/muzik-logo.png)
 
 Music organizer CLI — download, split, and organize music from Soulseek, YouTube,
 and Bandcamp.
