@@ -12,7 +12,7 @@ from muzik.core.beets.decisions import BeetsMatchDecision
 from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate
-from muzik.gui.theme import ACCENT, FAIL_COLOR
+from muzik.gui.theme import ACCENT, FAIL_COLOR, bind_primary_button
 
 
 PIPELINE_WINDOW = "pipeline-window"
@@ -27,6 +27,7 @@ PIPELINE_OVERVIEW = "pipeline-overview"
 BEETS_DECISIONS = "pipeline-beets-decisions"
 BEETS_MATCHES = "pipeline-beets-matches"
 BEETS_SOURCE = "pipeline-beets-source"
+BEETS_CURRENT_TAGS = "pipeline-beets-current-tags"
 BEETS_IMPORT_AS_IS = "pipeline-beets-import-as-is"
 BEETS_SKIP = "pipeline-beets-skip"
 BACK_BUTTON = "pipeline-back"
@@ -101,13 +102,10 @@ class PipelineView:
                     wrap=1100,
                 )
                 dpg.add_separator()
-                with dpg.group(tag=BEETS_MATCHES):
-                    pass
-                dpg.add_separator()
-                dpg.add_text("Other choices", color=ACCENT)
+                dpg.add_text("Current tags", color=ACCENT)
+                dpg.add_text("", tag=BEETS_CURRENT_TAGS, wrap=1100)
                 dpg.add_text(
-                    "Keep the current artist, album, and track names, or leave "
-                    "this album out of the music library.",
+                    "Keep these tags when the Beets matches are not the same album.",
                     wrap=1100,
                 )
                 with dpg.group(horizontal=True):
@@ -123,6 +121,11 @@ class PipelineView:
                         width=220,
                         height=40,
                     )
+                dpg.add_separator()
+                dpg.add_text("Possible Beets matches", color=ACCENT)
+                with dpg.group(tag=BEETS_MATCHES):
+                    pass
+            bind_primary_button(BEETS_IMPORT_AS_IS)
             dpg.add_input_text(
                 tag=LOG,
                 multiline=True,
@@ -255,6 +258,7 @@ class PipelineView:
         """Show Beets choices in the pipeline and return the selected value."""
         dpg.delete_item(BEETS_MATCHES, children_only=True, slot=1)
         dpg.set_value(BEETS_SOURCE, self._beets_source_text(task))
+        dpg.set_value(BEETS_CURRENT_TAGS, self._beets_current_tags(task))
         for match in task.matches:
             with dpg.group(parent=BEETS_MATCHES, horizontal=True):
                 with dpg.group():
@@ -322,7 +326,7 @@ class PipelineView:
             return "Current workflow album"
         first = task.paths[0]
         album = first.parent.name if first.suffix else first.name
-        count = len(task.paths)
+        count = task.item_count or len(task.paths)
         unit = "track" if count == 1 else "tracks"
         return f"{album} · {count} {unit}"
 
@@ -336,7 +340,15 @@ class PipelineView:
     def _beets_match_detail(match: BeetsMatchView) -> str:
         if match.distance is None:
             return "Difference: not available"
-        return f"Difference: {match.distance:.3f} (lower is better)"
+        quality = "Good match" if match.distance <= 0.2 else "Low confidence"
+        return f"{quality} · Difference {match.distance:.3f}"
+
+    @staticmethod
+    def _beets_current_tags(task: BeetsTaskView) -> str:
+        artist = task.current_artist or "Unknown artist"
+        album = task.current_album or "Unknown album"
+        year = f" · {task.current_year}" if task.current_year else ""
+        return f"{artist} — {album}{year}"
 
     def disable_back(self) -> None:
         dpg.disable_item(BACK_BUTTON)

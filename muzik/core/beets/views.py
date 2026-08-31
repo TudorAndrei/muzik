@@ -22,6 +22,10 @@ class BeetsTaskView:
     task_id: str
     paths: list[Path] = field(default_factory=list)
     is_album: bool = False
+    item_count: int = 0
+    current_artist: str | None = None
+    current_album: str | None = None
+    current_year: str | None = None
     matches: list[BeetsMatchView] = field(default_factory=list)
 
 
@@ -41,6 +45,10 @@ def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
         except TypeError:
             paths.append(Path(str(path)))
 
+    items = list(getattr(task, "items", []) or [])
+    item_count = len(items)
+    first_item = items[0] if item_count else None
+
     candidates = []
     for index, candidate in enumerate(getattr(task, "candidates", []) or []):
         candidates.append(
@@ -51,6 +59,10 @@ def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
         task_id=task_id,
         paths=paths,
         is_album=bool(getattr(task, "is_album", False)),
+        item_count=item_count,
+        current_artist=_field(first_item, "artist"),
+        current_album=_field(first_item, "album"),
+        current_year=_field(first_item, "year"),
         matches=candidates,
     )
 

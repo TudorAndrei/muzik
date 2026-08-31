@@ -9,6 +9,7 @@ from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
 from muzik.gui.pipeline import (
     BEETS_DECISIONS,
     BEETS_MATCHES,
+    BEETS_CURRENT_TAGS,
     BEETS_SOURCE,
     PIPELINE_OVERVIEW,
     PIPELINE_BUSY,
@@ -66,6 +67,10 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
         task_id="album",
         paths=[Path("/music/Hiromasa Suzuki - High-Flying/01 High-Flying.opus")],
         is_album=True,
+        item_count=4,
+        current_artist="Hiromasa Suzuki",
+        current_album="High-Flying",
+        current_year="1976",
         matches=[
             BeetsMatchView(
                 candidate_id="first",
@@ -94,7 +99,10 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
         assert not dpg.is_item_shown(PIPELINE_OVERVIEW)
         assert dpg.is_item_shown(BEETS_MATCHES)
         assert dpg.get_value(BEETS_SOURCE).endswith(
-            "Hiromasa Suzuki - High-Flying · 1 track"
+            "Hiromasa Suzuki - High-Flying · 4 tracks"
+        )
+        assert dpg.get_value(BEETS_CURRENT_TAGS) == (
+            "Hiromasa Suzuki — High-Flying · 1976"
         )
         assert dpg.get_value(STATUS) == "Choose an album match."
 
@@ -104,7 +112,8 @@ def test_pipeline_shows_beets_choices_and_returns_selection() -> None:
             if dpg.get_item_type(item) == "mvAppItemType::mvText"
         ]
         assert "Hiromasa Suzuki — High-Flying" in text_values
-        assert "Difference: 0.080 (lower is better)" in text_values
+        assert "Good match · Difference 0.080" in text_values
+        assert "Low confidence · Difference 0.540" in text_values
 
         use_button = next(
             item for item in descendants if dpg.get_item_label(item) == "Use this match"

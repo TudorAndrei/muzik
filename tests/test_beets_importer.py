@@ -51,6 +51,12 @@ class FakeTask:
     candidates = []
 
     def __init__(self) -> None:
+        self.items = [
+            {"artist": "Kohsuke Mine", "album": "Sunshower", "year": 1976},
+            object(),
+            object(),
+            object(),
+        ]
         self.choice = None
         self.should_remove_duplicates = False
         self.should_merge_duplicates = False
@@ -167,6 +173,10 @@ def test_importer_adapter_exposes_only_opaque_view_ids() -> None:
 
     assert view.task_id == "task-0"
     assert view.paths == [Path("/tmp/High-Flying/01 Track.opus")]
+    assert view.item_count == 4
+    assert view.current_artist == "Kohsuke Mine"
+    assert view.current_album == "Sunshower"
+    assert view.current_year == "1976"
     assert view.matches[0].candidate_id == "task-0:match:0"
     assert not hasattr(view, "raw")
     assert adapter.resolve_choice(task, view.matches[0].candidate_id) is candidate
