@@ -210,10 +210,16 @@ class GuiBeetsDecisions:
         *,
         interactive: bool = True,
         cancellation: CancellationToken | None = None,
+        match_presenter: Callable[
+            [BeetsTaskView, Queue[str | BeetsMatchDecision | None]],
+            None,
+        ]
+        | None = None,
     ) -> None:
         self.bridge = bridge
         self.interactive = interactive
         self.cancellation = cancellation or CancellationToken()
+        self.match_presenter = match_presenter
 
     def should_resume_beets_import(self, path: Path) -> bool:
         return False
@@ -241,7 +247,10 @@ class GuiBeetsDecisions:
         def show(
             result: Queue[str | BeetsMatchDecision | None],
         ) -> None:
-            modals.beets_match_modal(task, result)
+            if self.match_presenter is not None:
+                self.match_presenter(task, result)
+            else:
+                modals.beets_match_modal(task, result)
 
         return self.bridge.request(show, self.cancellation)
 

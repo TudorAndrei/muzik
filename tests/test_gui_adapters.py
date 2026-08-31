@@ -1,4 +1,5 @@
 from pathlib import Path
+from queue import Queue
 
 import pytest
 
@@ -19,6 +20,17 @@ class FakeBridge:
     def request(self, show_modal, cancellation):
         self.requests += 1
         return self.value
+
+
+class PresentingBridge:
+    def __init__(self) -> None:
+        self.requests = 0
+
+    def request(self, show_modal, cancellation):
+        self.requests += 1
+        result = Queue()
+        show_modal(result)
+        return result.get_nowait()
 
 
 def test_workflow_non_interactive_defaults() -> None:
@@ -96,6 +108,25 @@ def test_beets_results_route_through_bridge() -> None:
     )
     assert match_bridge.requests == 1
     assert duplicate_bridge.requests == 1
+
+
+def test_beets_match_uses_inline_presenter_when_available() -> None:
+    bridge = PresentingBridge()
+    presented: list[str] = []
+    task = BeetsTaskView(task_id="task")
+
+    def present(task_view, result) -> None:
+        presented.append(task_view.task_id)
+        result.put_nowait(BeetsMatchDecision.AS_IS)
+
+    decision = GuiBeetsDecisions(
+        bridge,
+        match_presenter=present,
+    ).choose_beets_album_match(task)
+
+    assert decision is BeetsMatchDecision.AS_IS
+    assert presented == ["task"]
+    assert bridge.requests == 1
 
 
 def test_cancelled_decision_does_not_request_modal() -> None:

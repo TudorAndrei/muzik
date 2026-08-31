@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from queue import Full, Queue
 from typing import Any
 
 import dearpygui.dearpygui as dpg
 
+from muzik.core.beets.decisions import BeetsMatchDecision
 from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate
@@ -20,6 +22,9 @@ LOG = "pipeline-log"
 CANDIDATE_TABLE = "pipeline-candidates"
 CHAPTER_TABLE = "pipeline-chapters"
 BEETS_TABLE = "pipeline-beets"
+BEETS_DECISIONS = "pipeline-beets-decisions"
+BEETS_IMPORT_AS_IS = "pipeline-beets-import-as-is"
+BEETS_SKIP = "pipeline-beets-skip"
 BACK_BUTTON = "pipeline-back"
 PIPELINE_BUSY = "pipeline-busy"
 PIPELINE_BUSY_TEXT = "pipeline-busy-text"
@@ -74,8 +79,23 @@ class PipelineView:
                 self._add_table(
                     "Beets matches",
                     BEETS_TABLE,
-                    ("ID", "Artist", "Album", "Title", "Distance"),
+                    ("Action", "ID", "Artist", "Album", "Title", "Distance"),
                 )
+            with dpg.group(tag=BEETS_DECISIONS, show=False):
+                dpg.add_text("Choose a Beets match to continue.", color=ACCENT)
+                with dpg.group(horizontal=True):
+                    dpg.add_button(
+                        tag=BEETS_IMPORT_AS_IS,
+                        label="Import as is",
+                        width=180,
+                        height=40,
+                    )
+                    dpg.add_button(
+                        tag=BEETS_SKIP,
+                        label="Skip",
+                        width=120,
+                        height=40,
+                    )
             dpg.add_input_text(
                 tag=LOG,
                 multiline=True,
@@ -183,6 +203,7 @@ class PipelineView:
             BEETS_TABLE,
             [
                 (
+                    "",
                     match.candidate_id,
                     match.artist or "",
                     match.album or "",
@@ -192,6 +213,70 @@ class PipelineView:
                 for match in matches
             ],
         )
+
+    def request_beets_match(
+        self,
+        task: BeetsTaskView,
+        result: Queue[str | BeetsMatchDecision | None],
+    ) -> None:
+        """Show Beets choices in the pipeline and return the selected value."""
+        dpg.delete_item(BEETS_TABLE, children_only=True, slot=1)
+        for match in task.matches:
+            with dpg.table_row(parent=BEETS_TABLE):
+                dpg.add_button(
+                    label="Use",
+                    width=80,
+                    height=40,
+                    callback=self._beets_choice_callback(
+                        task,
+                        result,
+                        match.candidate_id,
+                    ),
+                )
+                for value in (
+                    match.candidate_id,
+                    match.artist or "",
+                    match.album or "",
+                    match.title or "",
+                    "" if match.distance is None else f"{match.distance:.3f}",
+                ):
+                    dpg.add_text(value)
+
+        dpg.configure_item(
+            BEETS_IMPORT_AS_IS,
+            callback=self._beets_choice_callback(
+                task,
+                result,
+                BeetsMatchDecision.AS_IS,
+            ),
+        )
+        dpg.configure_item(
+            BEETS_SKIP,
+            callback=self._beets_choice_callback(task, result, None),
+        )
+        self.set_status("Choose a Beets match.")
+        dpg.show_item(BEETS_DECISIONS)
+
+    def _beets_choice_callback(
+        self,
+        task: BeetsTaskView,
+        result: Queue[str | BeetsMatchDecision | None],
+        value: str | BeetsMatchDecision | None,
+    ) -> Callable[..., None]:
+        def select(
+            sender: Any = None,
+            app_data: Any = None,
+            user_data: Any = None,
+        ) -> None:
+            try:
+                result.put_nowait(value)
+            except Full:
+                return
+            self.load_beets_matches(task.matches)
+            dpg.hide_item(BEETS_DECISIONS)
+            self.set_status("Applying Beets choice...")
+
+        return select
 
     def disable_back(self) -> None:
         dpg.disable_item(BACK_BUTTON)

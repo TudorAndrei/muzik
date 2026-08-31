@@ -505,6 +505,7 @@ class MuzikGuiApp:
             self.bridge,
             interactive=config.interactive,
             cancellation=cancellation,
+            match_presenter=pipeline.request_beets_match,
         )
         decisions = GuiWorkflowDecisions(
             self.bridge,
@@ -548,6 +549,7 @@ class MuzikGuiApp:
             self.bridge,
             interactive=config.interactive,
             cancellation=cancellation,
+            match_presenter=pipeline.request_beets_match,
         )
         decisions = GuiWorkflowDecisions(
             self.bridge,
@@ -597,6 +599,7 @@ class MuzikGuiApp:
             self.bridge,
             interactive=config.interactive,
             cancellation=cancellation,
+            match_presenter=pipeline.request_beets_match,
         )
         decisions = GuiWorkflowDecisions(
             self.bridge,
