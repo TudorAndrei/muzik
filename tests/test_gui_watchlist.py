@@ -188,6 +188,35 @@ def test_items_render_as_vertical_rows_with_controls(tmp_path: Path) -> None:
         dpg.destroy_context()
 
 
+def test_item_action_callback_runs_from_dearpygui_queue(tmp_path: Path) -> None:
+    actions: list[ItemAction] = []
+    item = _item(1)
+    playlist = WatchlistPlaylist("PL123", "https://example.test", items=[item])
+
+    dpg.create_context()
+    view = _view(on_action=lambda playlist_id, selected, action: actions.append(action))
+    try:
+        view.build()
+        view.load(
+            Watchlist([playlist]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        run_button = next(
+            child
+            for child in _descendants("watchlist-row-1")
+            if dpg.get_item_label(child) == "Run"
+        )
+        callback = dpg.get_item_callback(run_button)
+        assert callback is not None
+
+        dpg.run_callbacks([[callback, run_button, None, None]])
+
+        assert actions == [ItemAction.RUN]
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
 def test_paging_and_status_filter_replace_visible_cards(tmp_path: Path) -> None:
     items = [_item(index) for index in range(1, 8)]
     items[0].stages["download"].status = StageStatus.FAILED

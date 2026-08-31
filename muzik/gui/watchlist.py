@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from math import ceil
 from pathlib import Path
 from typing import Any
@@ -95,6 +96,10 @@ _STATUS_COLORS = {
     StageStatus.SKIPPED: STAGE_SKIPPED,
     StageStatus.STALE: STAGE_STALE,
 }
+
+
+def _do_nothing() -> None:
+    """Provide a safe callback for a disabled DearPyGui control."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -498,13 +503,14 @@ class WatchlistView:
                                 )
                             button = dpg.add_button(
                                 label=label,
-                                callback=lambda s=None, a=None, u=None, selected=action: (
-                                    None
-                                    if selected is None
-                                    else self._choose_action(
+                                callback=(
+                                    _do_nothing
+                                    if action is None
+                                    else partial(
+                                        self._choose_action,
                                         playlist_id,
                                         item,
-                                        selected,
+                                        action,
                                     )
                                 ),
                                 width=-1,
@@ -550,8 +556,11 @@ class WatchlistView:
                     width=180,
                     height=36,
                     enabled=available.enabled,
-                    callback=lambda s=None, a=None, u=None, selected=action: (
-                        self._choose_action(playlist_id, item, selected)
+                    callback=partial(
+                        self._choose_action,
+                        playlist_id,
+                        item,
+                        action,
                     ),
                 )
                 if not available.enabled and available.reason:
