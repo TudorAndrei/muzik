@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 import json
 import os
@@ -11,7 +13,31 @@ import tempfile
 from typing import Any, cast
 
 from muzik.config import MUZIK_WATCHLIST_FILE
-from muzik.core.sources.youtube import YouTubePlaylistItem, playlist_id
+from muzik.core.sources.youtube import (
+    PlaylistLookupError,
+    YouTubePlaylistItem,
+    find_audio_by_id,
+    get_playlist_items,
+    playlist_id,
+)
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
+from muzik.core.workflow.events import (
+    MessageEvent,
+    NullWorkflowEventEmitter,
+    ProgressAdvancedEvent,
+    ProgressFinishedEvent,
+    ProgressStartedEvent,
+    WorkflowEventEmitter,
+)
+from muzik.core.workflow.service import (
+    PlaylistVideoResult,
+    WorkflowOptions,
+    WorkflowRequest,
+    WorkflowRunOperations,
+    backfill_playlist_entry_from_legacy_cache,
+    load_playlist_state,
+    run_youtube_playlist_videos,
+)
 
 
 WATCHLIST_VERSION = 1
@@ -133,6 +159,15 @@ class Watchlist:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class WatchlistRefreshSummary:
+    playlists_checked: int = 0
+    pending_videos: int = 0
+    completed_videos: int = 0
+    failed_videos: int = 0
+    playlist_errors: int = 0
+
+
 class WatchlistRepository:
     """Load and save one versioned watchlist JSON document."""
 
@@ -205,6 +240,262 @@ class WatchlistRepository:
         watchlist.playlists = remaining
         self.save(watchlist)
         return True
+
+
+def refresh_watchlist(
+    repository: WatchlistRepository,
+    request: WorkflowRequest,
+    options: WorkflowOptions,
+    *,
+    operations: WorkflowRunOperations,
+    item_loader: Callable[[str], list[YouTubePlaylistItem]] = get_playlist_items,
+    events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
+) -> WatchlistRefreshSummary:
+    """Refresh every saved playlist and process only its pending videos."""
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    watchlist = repository.load()
+    task_id = "watchlist-refresh"
+    events.emit(
+        ProgressStartedEvent(
+            task_id=task_id,
+            description="Checking watchlist playlists.",
+            total=len(watchlist.playlists),
+        )
+    )
+    pending_total = 0
+    completed_total = 0
+    failed_total = 0
+    playlist_errors = 0
+
+    for playlist in watchlist.playlists:
+        cancellation.raise_if_cancelled()
+        events.emit(MessageEvent(f"Checking playlist {playlist.playlist_id}."))
+        try:
+            discovered = item_loader(playlist.url)
+        except PlaylistLookupError as exc:
+            playlist.last_checked_at = _now()
+            playlist.last_error = str(exc)
+            repository.save(watchlist)
+            playlist_errors += 1
+            events.emit(MessageEvent(str(exc), severity="error"))
+            events.emit(ProgressAdvancedEvent(task_id=task_id))
+            continue
+
+        playlist.items = _merge_playlist_items(playlist.items, discovered)
+        playlist.last_checked_at = _now()
+        playlist.last_error = None
+        _reconcile_playlist(playlist, request=request, options=options)
+        repository.save(watchlist)
+
+        pending = [
+            item.video_id
+            for item in playlist.items
+            if item.video_id and item.video_id not in playlist.processed_video_ids
+        ]
+        pending = list(dict.fromkeys(pending))
+        pending_total += len(pending)
+        events.emit(
+            MessageEvent(
+                f"Playlist {playlist.playlist_id} has {len(pending)} pending video(s)."
+            )
+        )
+
+        def save_result(result: PlaylistVideoResult) -> None:
+            nonlocal completed_total, failed_total
+            matches = [
+                item for item in playlist.items if item.video_id == result.video_id
+            ]
+            if result.completed:
+                if result.video_id not in playlist.processed_video_ids:
+                    playlist.processed_video_ids.append(result.video_id)
+                completed_total += 1
+                for item in matches:
+                    _mark_workflow_completed(item, options=options)
+            else:
+                failed_total += 1
+                for item in matches:
+                    item.last_error = "Download failed. Select Retry to try again."
+                    item.last_action = "refresh"
+                    item.stages["download"] = StageRecord(
+                        status=StageStatus.FAILED,
+                        updated_at=_now(),
+                        error=item.last_error,
+                    )
+            repository.save(watchlist)
+
+        try:
+            run_youtube_playlist_videos(
+                WorkflowRequest(
+                    raw=playlist.url,
+                    output=request.output,
+                    splits=request.splits,
+                ),
+                options,
+                playlist_id=playlist.playlist_id,
+                video_ids=pending,
+                operations=operations,
+                events=events,
+                cancellation=cancellation,
+                on_result=save_result,
+            )
+        except WorkflowCancelled:
+            raise
+        except Exception as exc:
+            playlist.last_error = str(exc)
+            repository.save(watchlist)
+            playlist_errors += 1
+            events.emit(
+                MessageEvent(
+                    f"Playlist {playlist.playlist_id} stopped: {exc}",
+                    severity="error",
+                )
+            )
+        events.emit(ProgressAdvancedEvent(task_id=task_id))
+
+    events.emit(
+        ProgressFinishedEvent(
+            task_id=task_id,
+            success=failed_total == 0 and playlist_errors == 0,
+        )
+    )
+    events.emit(
+        MessageEvent(
+            f"Watchlist refresh complete: {completed_total} processed, "
+            f"{failed_total} failed, {playlist_errors} playlist error(s)."
+        )
+    )
+    return WatchlistRefreshSummary(
+        playlists_checked=len(watchlist.playlists),
+        pending_videos=pending_total,
+        completed_videos=completed_total,
+        failed_videos=failed_total,
+        playlist_errors=playlist_errors,
+    )
+
+
+def reconcile_watchlist(
+    watchlist: Watchlist,
+    *,
+    request: WorkflowRequest,
+    options: WorkflowOptions,
+) -> None:
+    """Update item stages from existing muzik records and local files."""
+    for playlist in watchlist.playlists:
+        _reconcile_playlist(playlist, request=request, options=options)
+
+
+def _merge_playlist_items(
+    existing: list[WatchlistItem],
+    discovered: list[YouTubePlaylistItem],
+) -> list[WatchlistItem]:
+    old_by_key: dict[tuple[str, int], WatchlistItem] = {}
+    old_occurrences: dict[str, int] = {}
+    for item in existing:
+        base = item.video_id or f"unavailable:{item.position}"
+        occurrence = old_occurrences.get(base, 0)
+        old_occurrences[base] = occurrence + 1
+        old_by_key[(base, occurrence)] = item
+
+    merged: list[WatchlistItem] = []
+    new_occurrences: dict[str, int] = {}
+    for discovered_item in discovered:
+        base = discovered_item.video_id or f"unavailable:{discovered_item.position}"
+        occurrence = new_occurrences.get(base, 0)
+        new_occurrences[base] = occurrence + 1
+        item = old_by_key.get((base, occurrence))
+        if item is None:
+            item = WatchlistItem.from_youtube(discovered_item)
+        else:
+            item.position = discovered_item.position
+            item.title = discovered_item.title
+            item.video_id = discovered_item.video_id
+            item.video_url = discovered_item.video_url
+            item.thumbnail_url = discovered_item.thumbnail_url
+        merged.append(item)
+    return merged
+
+
+def _reconcile_playlist(
+    playlist: WatchlistPlaylist,
+    *,
+    request: WorkflowRequest,
+    options: WorkflowOptions,
+) -> None:
+    playlist_state = load_playlist_state(playlist.playlist_id)
+    for item in playlist.items:
+        for stage in item.stages.values():
+            if stage.status == StageStatus.RUNNING:
+                stage.status = StageStatus.NOT_STARTED
+        video_id = item.video_id
+        if not video_id:
+            continue
+        if video_id in playlist.processed_video_ids:
+            _mark_workflow_completed(item, options=options)
+            continue
+        entry = playlist_state["videos"].get(video_id, {})
+        if not entry:
+            entry = backfill_playlist_entry_from_legacy_cache(
+                video_id, splits=request.splits
+            )
+        status = entry.get("status")
+        if status in {"downloaded", "split", "organized"}:
+            download_path = entry.get("audio_file")
+            files = entry.get("files") or []
+            if not download_path and files:
+                download_path = files[0]
+            item.stages["download"] = StageRecord(
+                status=StageStatus.COMPLETE,
+                path=str(download_path) if download_path else None,
+            )
+        else:
+            local_files = find_audio_by_id(request.output, video_id)
+            if local_files:
+                item.stages["download"] = StageRecord(
+                    status=StageStatus.COMPLETE,
+                    path=str(local_files[0].resolve()),
+                )
+        if status in {"split", "organized"}:
+            item.stages["parse"].status = StageStatus.COMPLETE
+            split_dir = entry.get("split_dir")
+            item.stages["split"] = StageRecord(
+                status=StageStatus.COMPLETE if split_dir else StageStatus.SKIPPED,
+                path=str(split_dir) if split_dir else None,
+            )
+        if status == "organized":
+            item.stages["organize"].status = StageStatus.COMPLETE
+            if video_id not in playlist.processed_video_ids:
+                playlist.processed_video_ids.append(video_id)
+
+
+def _mark_workflow_completed(
+    item: WatchlistItem,
+    *,
+    options: WorkflowOptions,
+) -> None:
+    updated_at = _now()
+    item.last_action = "refresh"
+    item.last_error = None
+    item.stages["download"].status = StageStatus.COMPLETE
+    item.stages["download"].updated_at = updated_at
+    item.stages["parse"].status = (
+        StageStatus.SKIPPED if options.no_split else StageStatus.COMPLETE
+    )
+    item.stages["parse"].updated_at = updated_at
+    if options.no_split:
+        item.stages["split"].status = StageStatus.SKIPPED
+    elif item.stages["split"].status != StageStatus.COMPLETE:
+        item.stages["split"].status = StageStatus.SKIPPED
+    item.stages["split"].updated_at = updated_at
+    item.stages["organize"].status = (
+        StageStatus.SKIPPED if options.no_organize else StageStatus.COMPLETE
+    )
+    item.stages["organize"].updated_at = updated_at
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def _watchlist_from_data(raw: object) -> Watchlist:

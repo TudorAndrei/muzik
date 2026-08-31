@@ -682,6 +682,29 @@ class _PlaylistProgress:
         self.failed.append(video_id)
 
 
+@dataclass(frozen=True, slots=True)
+class PlaylistVideoResult:
+    """Result of one video in an explicit YouTube playlist run."""
+
+    video_id: str
+    completed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PlaylistRunResult:
+    """Ordered results from an explicit YouTube playlist run."""
+
+    videos: list[PlaylistVideoResult]
+
+    @property
+    def completed_ids(self) -> list[str]:
+        return [video.video_id for video in self.videos if video.completed]
+
+    @property
+    def failed_ids(self) -> list[str]:
+        return [video.video_id for video in self.videos if not video.completed]
+
+
 def _run_playlist_workflow(
     request: WorkflowRequest,
     options: WorkflowOptions,
@@ -691,16 +714,16 @@ def _run_playlist_workflow(
     events: WorkflowEventEmitter,
     cancellation: CancellationToken,
 ) -> None:
-    archive_file = cache_mod.CACHE_DIR / f"ytdlp_archive_{playlist_id}.txt"
-    operations.prepopulate_archive(archive_file)
-    # Skip ids already in the output folder, even from other playlists.
-    # --force overrides this, so a known id is downloaded again.
-    if not options.force:
-        seed_archive_from_downloads(archive_file, request.output)
-    cancellation.raise_if_cancelled()
-    playlist_state = load_playlist_state(playlist_id)
-
     if options.dry_run:
+        run_youtube_playlist_videos(
+            request,
+            options,
+            playlist_id=playlist_id,
+            video_ids=[],
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+        )
         return
 
     video_ids = operations.get_playlist_video_ids(request.raw)
@@ -709,10 +732,56 @@ def _run_playlist_workflow(
         raise WorkflowServiceError(
             "Could not fetch playlist video IDs — check the URL and yt-dlp."
         )
+    result = run_youtube_playlist_videos(
+        request,
+        options,
+        playlist_id=playlist_id,
+        video_ids=video_ids,
+        operations=operations,
+        events=events,
+        cancellation=cancellation,
+    )
+
+    if result.failed_ids:
+        events.emit(
+            MessageEvent(
+                message=(
+                    f"{len(result.failed_ids)} of {len(video_ids)} video(s) failed to "
+                    f"download: {', '.join(result.failed_ids)}"
+                ),
+                severity="warning",
+            )
+        )
+
+
+def run_youtube_playlist_videos(
+    request: WorkflowRequest,
+    options: WorkflowOptions,
+    *,
+    playlist_id: str,
+    video_ids: list[str],
+    operations: WorkflowRunOperations,
+    events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
+    on_result: Callable[[PlaylistVideoResult], None] | None = None,
+) -> PlaylistRunResult:
+    """Process an explicit ordered set of videos under one playlist state."""
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    archive_file = cache_mod.CACHE_DIR / f"ytdlp_archive_{playlist_id}.txt"
+    operations.prepopulate_archive(archive_file)
+    if not options.force:
+        seed_archive_from_downloads(archive_file, request.output)
+    cancellation.raise_if_cancelled()
+    playlist_state = load_playlist_state(playlist_id)
+    if options.dry_run:
+        return PlaylistRunResult(videos=[])
+
     progress = _PlaylistProgress()
+    results: list[PlaylistVideoResult] = []
     for video_id in video_ids:
         cancellation.raise_if_cancelled()
-        _process_playlist_video(
+        completed = _process_playlist_video(
             video_id,
             playlist_id=playlist_id,
             playlist_state=playlist_state,
@@ -724,17 +793,11 @@ def _run_playlist_workflow(
             cancellation=cancellation,
             progress=progress,
         )
-
-    if progress.failed:
-        events.emit(
-            MessageEvent(
-                message=(
-                    f"{len(progress.failed)} of {len(video_ids)} video(s) failed to "
-                    f"download: {', '.join(progress.failed)}"
-                ),
-                severity="warning",
-            )
-        )
+        result = PlaylistVideoResult(video_id=video_id, completed=completed)
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
+    return PlaylistRunResult(videos=results)
 
 
 def _load_spotify_playlist(path: Path) -> ResolvedPlaylist | None:
@@ -834,7 +897,7 @@ def _process_playlist_video(
     events: WorkflowEventEmitter,
     cancellation: CancellationToken,
     progress: _PlaylistProgress | None = None,
-) -> None:
+) -> bool:
     progress = progress or _PlaylistProgress()
     cancellation.raise_if_cancelled()
     entry = playlist_state["videos"].get(video_id, {})
@@ -849,7 +912,7 @@ def _process_playlist_video(
         )
 
     if entry.get("status") == "organized":
-        return
+        return True
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
     # Skip Soulseek once it has proven dry for the playlist: it makes an extra
@@ -917,7 +980,7 @@ def _process_playlist_video(
                 if not options.no_organize:
                     playlist_state["videos"][video_id]["status"] = "organized"
                     save_playlist_state(playlist_id, playlist_state)
-                return
+                return True
 
     split_dir_for_video: Path | None = None
     audio_file: Path | None = None
@@ -947,7 +1010,7 @@ def _process_playlist_video(
             )
             if not downloaded:
                 progress.note_failed(video_id)
-                return
+                return False
             cancellation.raise_if_cancelled()
             after = set(request.output.glob("*")) if request.output.exists() else set()
             new_files = _new_audio_files(before, after)
@@ -955,7 +1018,7 @@ def _process_playlist_video(
                 new_files = find_audio_by_id(request.output, video_id)
             if not new_files:
                 progress.note_failed(video_id)
-                return
+                return False
             audio_file = new_files[0]
             playlist_state["videos"][video_id] = {
                 "status": "downloaded",
@@ -976,7 +1039,7 @@ def _process_playlist_video(
         if not options.no_organize:
             playlist_state["videos"][video_id]["status"] = "organized"
             save_playlist_state(playlist_id, playlist_state)
-        return
+        return True
 
     if split_dir_for_video is not None and not options.no_organize:
         cancellation.raise_if_cancelled()
@@ -989,6 +1052,7 @@ def _process_playlist_video(
         cancellation.raise_if_cancelled()
         playlist_state["videos"][video_id]["status"] = "organized"
         save_playlist_state(playlist_id, playlist_state)
+    return True
 
 
 def _cached_playlist_files(entry: dict) -> list[Path]:

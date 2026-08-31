@@ -789,3 +789,90 @@ def test_run_workflow_skips_organized_playlist_entries(
     state = cache_mod.get_json("playlist_PL123")
     assert state is not None
     assert state["videos"]["abcdefghijk"]["status"] == "organized"
+
+
+def test_explicit_playlist_runner_processes_only_given_ids(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    downloads: list[str] = []
+    processed: list[Path] = []
+
+    def download_audio(url: str, output: Path, archive_file: Path | None) -> bool:
+        downloads.append(url)
+        if url.endswith("lmnopqrstuv"):
+            return False
+        output.mkdir(parents=True, exist_ok=True)
+        audio = output / "New [abcdefghijk].m4a"
+        audio.write_bytes(b"audio")
+        return True
+
+    operations = service.WorkflowRunOperations(
+        download_audio=download_audio,
+        process_audio=lambda files, split_dirs: processed.extend(files),
+        acquire_soulseek=lambda raw: [],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda raw: (_ for _ in ()).throw(
+            AssertionError("explicit runner must not discover the playlist")
+        ),
+    )
+
+    result = service.run_youtube_playlist_videos(
+        service.WorkflowRequest(
+            raw="https://youtube.com/playlist?list=PL123",
+            output=tmp_path / "downloads",
+            splits=tmp_path / "splits",
+        ),
+        service.WorkflowOptions(no_organize=True),
+        playlist_id="PL123",
+        video_ids=["abcdefghijk", "lmnopqrstuv"],
+        operations=operations,
+    )
+
+    assert downloads == [
+        "https://www.youtube.com/watch?v=abcdefghijk",
+        "https://www.youtube.com/watch?v=lmnopqrstuv",
+    ]
+    assert processed == [tmp_path / "downloads" / "New [abcdefghijk].m4a"]
+    assert result.completed_ids == ["abcdefghijk"]
+    assert result.failed_ids == ["lmnopqrstuv"]
+
+
+def test_explicit_playlist_runner_reports_existing_organized_video(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    cache_mod.set_json(
+        "playlist_PL123",
+        {
+            "playlist_id": "PL123",
+            "videos": {"abcdefghijk": {"status": "organized"}},
+        },
+    )
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(
+            AssertionError("organized video must not download")
+        ),
+        process_audio=lambda *args: (_ for _ in ()).throw(
+            AssertionError("organized video must not process")
+        ),
+        acquire_soulseek=lambda raw: [],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda raw: [],
+    )
+
+    result = service.run_youtube_playlist_videos(
+        service.WorkflowRequest(
+            raw="https://youtube.com/playlist?list=PL123",
+            output=tmp_path / "downloads",
+            splits=tmp_path / "splits",
+        ),
+        service.WorkflowOptions(),
+        playlist_id="PL123",
+        video_ids=["abcdefghijk"],
+        operations=operations,
+    )
+
+    assert result.completed_ids == ["abcdefghijk"]

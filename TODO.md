@@ -19,22 +19,22 @@
 
 ## Phase 2: Process only pending playlist videos
 
-- [ ] Extract an explicit playlist-video runner from
+- [x] Extract an explicit playlist-video runner from
   `muzik/core/workflow/service.py` and return per-ID results.
-- [ ] Keep the current `run_workflow()` playlist behavior for CLI users.
-- [ ] Add sequential watchlist refresh and local-state reconciliation in
+- [x] Keep the current `run_workflow()` playlist behavior for CLI users.
+- [x] Add sequential watchlist refresh and local-state reconciliation in
   `muzik/core/watchlist.py`.
-- [ ] Reuse playlist state, yt-dlp archives, legacy YouTube cache, and configured
+- [x] Reuse playlist state, yt-dlp archives, legacy YouTube cache, and configured
   download and split folders.
-- [ ] Keep unavailable items visible and exclude them from workflow work.
-- [ ] Save each completed ID and leave failed IDs pending.
-- [ ] Continue after one playlist error.
-- [ ] Emit playlist check, pending, error, progress, and summary events.
-- [ ] Extend `tests/test_workflow_service.py` for explicit IDs, CLI compatibility,
+- [x] Keep unavailable items visible and exclude them from workflow work.
+- [x] Save each completed ID and leave failed IDs pending.
+- [x] Continue after one playlist error.
+- [x] Emit playlist check, pending, error, progress, and summary events.
+- [x] Extend `tests/test_workflow_service.py` for explicit IDs, CLI compatibility,
   result reporting, and cancellation.
-- [ ] Extend `tests/test_watchlist.py` for pending-only work, incremental saves,
+- [x] Extend `tests/test_watchlist.py` for pending-only work, incremental saves,
   retry, error isolation, removed IDs, no-change refreshes, and local state.
-- [ ] Commit: `feat(watchlist): process only pending playlist videos`
+- [x] Commit: `feat(watchlist): process only pending playlist videos`
 
 ## Phase 3: Add thumbnails and per-video actions
 
