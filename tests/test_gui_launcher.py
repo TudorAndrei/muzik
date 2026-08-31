@@ -7,6 +7,27 @@ from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSour
 from muzik.gui.launcher import FIELD_TAGS, ERROR_TEXT, LauncherView, config_from_values
 
 
+def _find_item_by_label(root: int | str, label: str) -> int | str | None:
+    pending: list[int | str] = [root]
+    while pending:
+        item = pending.pop()
+        if dpg.get_item_label(item) == label:
+            return item
+        children = cast(dict[int, list[int]], dpg.get_item_children(item))
+        for slot in children.values():
+            pending.extend(slot)
+    return None
+
+
+def _has_ancestor(item: int | str, ancestor: int | str) -> bool:
+    parent = dpg.get_item_parent(item)
+    while parent:
+        if parent == ancestor:
+            return True
+        parent = dpg.get_item_parent(parent)
+    return False
+
+
 def test_launcher_maps_every_field_and_coerces_enums() -> None:
     config = config_from_values(
         {
@@ -115,22 +136,34 @@ def test_watchlist_button_opens_watchlist() -> None:
     )
     try:
         launcher.build()
-        root_children = cast(
-            dict[int, list[int]], dpg.get_item_children("launcher-window")
-        )
-        buttons = [item for slot in root_children.values() for item in slot]
-        pending = list(buttons)
-        while pending:
-            item = pending.pop()
-            if dpg.get_item_label(item) == "Watchlist":
-                callback = dpg.get_item_callback(item)
-                assert callback is not None
-                callback()
-                break
-            children = cast(dict[int, list[int]], dpg.get_item_children(item))
-            for slot in children.values():
-                pending.extend(slot)
+        watchlist = _find_item_by_label("launcher-window", "Watchlist")
+        assert watchlist is not None
+        callback = dpg.get_item_callback(watchlist)
+        assert callback is not None
+        callback()
 
         assert opened == [True]
+    finally:
+        dpg.destroy_context()
+
+
+def test_launcher_has_visible_brand_and_top_page_navigation() -> None:
+    dpg.create_context()
+    launcher = LauncherView(
+        lambda config: None, lambda: None, lambda: None, lambda: None
+    )
+    try:
+        launcher.build()
+
+        assert dpg.does_item_exist("launcher-logo-texture")
+        assert dpg.does_item_exist("launcher-logo")
+        assert dpg.does_item_exist("launcher-nav-tabs")
+        assert dpg.get_item_parent("launcher-logo") == dpg.get_item_parent(
+            "launcher-nav-tabs"
+        )
+        for label in ("Workflow", "Watchlist", "Library", "Settings"):
+            item = _find_item_by_label("launcher-window", label)
+            assert item is not None
+            assert _has_ancestor(item, "launcher-nav-tabs")
     finally:
         dpg.destroy_context()

@@ -8,14 +8,19 @@ from typing import Any
 
 import dearpygui.dearpygui as dpg
 
+from muzik.branding import logo_path
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
 from muzik.core.workflow.launch import WorkflowLaunchConfig
 from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
-from muzik.gui.theme import ACCENT, bind_primary_button
+from muzik.gui.theme import bind_primary_button
 
 
 LAUNCHER_WINDOW = "launcher-window"
 ERROR_TEXT = "launcher-error"
+NAV_TABS = "launcher-nav-tabs"
+LOGO_TEXTURE_REGISTRY = "launcher-logo-texture-registry"
+LOGO_TEXTURE = "launcher-logo-texture"
+LOGO_IMAGE = "launcher-logo"
 
 # Hover help for switches whose effect is not obvious from the label.
 SWITCH_HELP = {
@@ -89,93 +94,124 @@ class LauncherView:
         self._on_watchlist = on_watchlist or (lambda: None)
 
     def build(self) -> None:
+        has_logo = self._build_logo_texture()
         with dpg.window(tag=LAUNCHER_WINDOW, label="muzik workflow"):
-            dpg.add_text("Workflow", color=ACCENT)
-            dpg.add_separator()
-            self._path_row("URL or path", "raw", "raw-file-dialog", False, "")
-            self._path_row(
-                "Downloads",
-                "output",
-                "output-file-dialog",
-                True,
-                str(DEFAULT_DOWNLOAD_DIR),
+            with dpg.group(horizontal=True):
+                if has_logo:
+                    dpg.add_image(
+                        LOGO_TEXTURE,
+                        tag=LOGO_IMAGE,
+                        width=32,
+                        height=32,
+                    )
+                with dpg.tab_bar(tag=NAV_TABS):
+                    with dpg.tab(label="Workflow"):
+                        pass
+                    dpg.add_tab_button(label="Watchlist", callback=self._on_watchlist)
+                    dpg.add_tab_button(label="Library", callback=self._on_library)
+                    dpg.add_tab_button(label="Settings", callback=self._on_settings)
+            self._build_workflow_form()
+
+    def _build_workflow_form(self) -> None:
+        self._path_row("URL or path", "raw", "raw-file-dialog", False, "")
+        self._path_row(
+            "Downloads",
+            "output",
+            "output-file-dialog",
+            True,
+            str(DEFAULT_DOWNLOAD_DIR),
+        )
+        self._path_row(
+            "Splits",
+            "splits",
+            "splits-file-dialog",
+            True,
+            str(DEFAULT_SPLITS_DIR),
+        )
+        self._path_row("Beets config", "config", "config-file-dialog", False, "")
+
+        dpg.add_separator()
+        with dpg.group(horizontal=True):
+            dpg.add_combo(
+                ["youtube", "soulseek", "auto"],
+                default_value="youtube",
+                label="Audio source",
+                tag=FIELD_TAGS["audio_source"],
+                width=180,
             )
-            self._path_row(
-                "Splits",
-                "splits",
-                "splits-file-dialog",
-                True,
-                str(DEFAULT_SPLITS_DIR),
+            dpg.add_combo(
+                ["auto", "youtube", "musicbrainz", "none"],
+                default_value="auto",
+                label="Metadata",
+                tag=FIELD_TAGS["metadata_source"],
+                width=180,
             )
-            self._path_row("Beets config", "config", "config-file-dialog", False, "")
+        with dpg.group(horizontal=True):
+            dpg.add_combo(
+                ["lossless", "best", "mp3", "flac"],
+                default_value="lossless",
+                label="Prefer",
+                tag=FIELD_TAGS["prefer"],
+                width=180,
+            )
+            dpg.add_combo(
+                ["youtube", "none"],
+                default_value="youtube",
+                label="Fallback",
+                tag=FIELD_TAGS["fallback"],
+                width=180,
+            )
+            dpg.add_input_int(label="Jobs", tag=FIELD_TAGS["jobs"], width=90)
 
-            dpg.add_separator()
+        dpg.add_separator()
+        switches = [
+            ("Review chapters", "review", False),
+            ("No split", "no_split", False),
+            ("No organize", "no_organize", False),
+            ("Import", "import_", False),
+            ("Tag only", "tag_only", False),
+            ("Dry run", "dry_run", False),
+            ("Keep source", "keep_source", False),
+            ("Force", "force", False),
+            ("Interactive", "interactive", True),
+        ]
+        for start in range(0, len(switches), 3):
             with dpg.group(horizontal=True):
-                dpg.add_combo(
-                    ["youtube", "soulseek", "auto"],
-                    default_value="youtube",
-                    label="Audio source",
-                    tag=FIELD_TAGS["audio_source"],
-                    width=180,
-                )
-                dpg.add_combo(
-                    ["auto", "youtube", "musicbrainz", "none"],
-                    default_value="auto",
-                    label="Metadata",
-                    tag=FIELD_TAGS["metadata_source"],
-                    width=180,
-                )
-            with dpg.group(horizontal=True):
-                dpg.add_combo(
-                    ["lossless", "best", "mp3", "flac"],
-                    default_value="lossless",
-                    label="Prefer",
-                    tag=FIELD_TAGS["prefer"],
-                    width=180,
-                )
-                dpg.add_combo(
-                    ["youtube", "none"],
-                    default_value="youtube",
-                    label="Fallback",
-                    tag=FIELD_TAGS["fallback"],
-                    width=180,
-                )
-                dpg.add_input_int(label="Jobs", tag=FIELD_TAGS["jobs"], width=90)
+                for label, name, default in switches[start : start + 3]:
+                    dpg.add_checkbox(
+                        label=label,
+                        default_value=default,
+                        tag=FIELD_TAGS[name],
+                    )
+                    if name in SWITCH_HELP:
+                        with dpg.tooltip(dpg.last_item()):
+                            dpg.add_text(SWITCH_HELP[name])
 
-            dpg.add_separator()
-            switches = [
-                ("Review chapters", "review", False),
-                ("No split", "no_split", False),
-                ("No organize", "no_organize", False),
-                ("Import", "import_", False),
-                ("Tag only", "tag_only", False),
-                ("Dry run", "dry_run", False),
-                ("Keep source", "keep_source", False),
-                ("Force", "force", False),
-                ("Interactive", "interactive", True),
-            ]
-            for start in range(0, len(switches), 3):
-                with dpg.group(horizontal=True):
-                    for label, name, default in switches[start : start + 3]:
-                        dpg.add_checkbox(
-                            label=label,
-                            default_value=default,
-                            tag=FIELD_TAGS[name],
-                        )
-                        if name in SWITCH_HELP:
-                            with dpg.tooltip(dpg.last_item()):
-                                dpg.add_text(SWITCH_HELP[name])
+        dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
+        with dpg.group(horizontal=True):
+            run_button = dpg.add_button(label="Run", callback=self._run, width=100)
+            dpg.add_button(label="Quit", callback=self._quit, width=100)
+        bind_primary_button(run_button)
 
-            dpg.add_text("", tag=ERROR_TEXT, color=(255, 100, 100))
-            with dpg.group(horizontal=True):
-                run_button = dpg.add_button(label="Run", callback=self._run, width=100)
-                dpg.add_button(
-                    label="Watchlist", callback=self._on_watchlist, width=100
-                )
-                dpg.add_button(label="Library", callback=self._on_library, width=100)
-                dpg.add_button(label="Settings", callback=self._on_settings, width=100)
-                dpg.add_button(label="Quit", callback=self._quit, width=100)
-            bind_primary_button(run_button)
+    @staticmethod
+    def _build_logo_texture() -> bool:
+        if dpg.does_item_exist(LOGO_TEXTURE):
+            return True
+        path = logo_path()
+        if path is None:
+            return False
+        try:
+            width, height, _channels, data = dpg.load_image(str(path))
+        except OSError, RuntimeError, SystemError, ValueError:
+            return False
+        with dpg.texture_registry(tag=LOGO_TEXTURE_REGISTRY):
+            dpg.add_static_texture(
+                width,
+                height,
+                data,
+                tag=LOGO_TEXTURE,
+            )
+        return True
 
     def read_config(self) -> WorkflowLaunchConfig:
         values = {name: dpg.get_value(tag) for name, tag in FIELD_TAGS.items()}
