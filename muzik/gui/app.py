@@ -180,6 +180,7 @@ class MuzikGuiApp:
                 on_remove=self.remove_watchlist_playlist,
                 on_refresh=self.refresh_watchlist,
                 on_action=self.request_item_action,
+                on_thumbnail_needed=self._queue_cached_thumbnail,
                 on_back=self.close_watchlist,
                 on_quit=self.quit,
             )
@@ -760,23 +761,18 @@ class MuzikGuiApp:
             view.show_error(str(exc))
             return
         view.load(watchlist, request)
-        for playlist in watchlist.playlists:
-            for item in playlist.items:
-                if not item.video_id:
-                    continue
-                path = cached_thumbnail_path(item.video_id)
-                if path is None:
-                    continue
 
-                def load_thumbnail(
-                    selected_view: WatchlistView = view,
-                    video_id: str = item.video_id,
-                    thumbnail_path=path,
-                ) -> None:
-                    if self.watchlist is selected_view:
-                        selected_view.load_cached_thumbnail(video_id, thumbnail_path)
+    def _queue_cached_thumbnail(self, video_id: str) -> None:
+        view = self.watchlist
+        path = cached_thumbnail_path(video_id)
+        if view is None or path is None:
+            return
 
-                self.bridge.submit(load_thumbnail)
+        def load_thumbnail() -> None:
+            if self.watchlist is view:
+                view.load_cached_thumbnail(video_id, path)
+
+        self.bridge.submit(load_thumbnail)
 
     def _show_launcher(self) -> None:
         if self.pipeline is not None:

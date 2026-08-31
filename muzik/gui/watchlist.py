@@ -132,6 +132,7 @@ class WatchlistView:
         on_remove: Callable[[str], None],
         on_refresh: Callable[..., None],
         on_action: Callable[[str, WatchlistItem, ItemAction], None],
+        on_thumbnail_needed: Callable[[str], None] | None = None,
         on_back: Callable[..., None],
         on_quit: Callable[..., None],
     ) -> None:
@@ -139,6 +140,7 @@ class WatchlistView:
         self._on_remove = on_remove
         self._on_refresh = on_refresh
         self._on_action = on_action
+        self._on_thumbnail_needed = on_thumbnail_needed
         self._on_back = on_back
         self._on_quit = on_quit
         self._watchlist = Watchlist()
@@ -148,6 +150,7 @@ class WatchlistView:
         self._page = 0
         self._columns = 3
         self._textures: dict[str, Any] = {}
+        self._thumbnail_requests: set[str] = set()
 
     def build(self) -> None:
         with dpg.window(
@@ -217,6 +220,7 @@ class WatchlistView:
     def load(self, watchlist: Watchlist, request: WorkflowRequest) -> None:
         self._watchlist = watchlist
         self._request = request
+        self._thumbnail_requests.clear()
         playlist_ids = {playlist.playlist_id for playlist in watchlist.playlists}
         if self._selected_playlist_id not in playlist_ids:
             self._selected_playlist_id = (
@@ -246,6 +250,7 @@ class WatchlistView:
     def load_cached_thumbnail(self, video_id: str, path: Path) -> bool:
         """Create one texture. Call this method only on the render thread."""
         if video_id in self._textures or not path.is_file():
+            self._thumbnail_requests.discard(video_id)
             return video_id in self._textures
         width, height, _channels, data = dpg.load_image(str(path))
         tag = dpg.generate_uuid()
@@ -257,6 +262,7 @@ class WatchlistView:
             parent=TEXTURE_REGISTRY,
         )
         self._textures[video_id] = tag
+        self._thumbnail_requests.discard(video_id)
         self._render_cards()
         return True
 
@@ -265,6 +271,7 @@ class WatchlistView:
             if dpg.does_item_exist(tag):
                 dpg.delete_item(tag)
         self._textures.clear()
+        self._thumbnail_requests.clear()
 
     def show(self) -> None:
         dpg.show_item(WATCHLIST_WINDOW)
@@ -350,6 +357,9 @@ class WatchlistView:
             page=self._page,
         )
         self._page = page.page
+        visible_ids = {item.video_id for item in page.items if item.video_id}
+        self._release_inactive_textures(visible_ids)
+        self._thumbnail_requests.intersection_update(visible_ids)
         self._set_page_controls(page.page, page.page_count)
         if not page.items:
             dpg.set_value(EMPTY_TEXT, "No videos match this status.")
@@ -381,6 +391,13 @@ class WatchlistView:
                     with dpg.child_window(height=150, border=False):
                         dpg.add_spacer(height=50)
                         dpg.add_text("No cached thumbnail", color=STAGE_NOT_STARTED)
+                    if (
+                        item.video_id
+                        and self._on_thumbnail_needed is not None
+                        and item.video_id not in self._thumbnail_requests
+                    ):
+                        self._thumbnail_requests.add(item.video_id)
+                        self._on_thumbnail_needed(item.video_id)
                 dpg.add_text(f"{item.position}. {item.title}", wrap=-1)
                 dpg.add_text(
                     f"YouTube ID: {item.video_id or 'Unavailable'}",
@@ -531,6 +548,14 @@ class WatchlistView:
         dpg.set_value(PAGE_TEXT, f"Page {page + 1} of {page_count}")
         dpg.configure_item(PREVIOUS_BUTTON, enabled=page > 0)
         dpg.configure_item(NEXT_BUTTON, enabled=page + 1 < page_count)
+
+    def _release_inactive_textures(self, visible_ids: set[str]) -> None:
+        for video_id, tag in tuple(self._textures.items()):
+            if video_id in visible_ids:
+                continue
+            if dpg.does_item_exist(tag):
+                dpg.delete_item(tag)
+            del self._textures[video_id]
 
     def _add(
         self,

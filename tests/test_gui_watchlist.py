@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import dearpygui.dearpygui as dpg
 
@@ -45,8 +45,8 @@ def _item(
     return item
 
 
-def _view(**callbacks) -> WatchlistView:
-    defaults = {
+def _view(**callbacks: Any) -> WatchlistView:
+    defaults: dict[str, Any] = {
         "on_add": lambda value: None,
         "on_remove": lambda value: None,
         "on_refresh": lambda: None,
@@ -239,4 +239,40 @@ def test_texture_is_released_when_view_is_destroyed(
         assert not dpg.does_item_exist(texture)
         assert not dpg.does_item_exist(TEXTURE_REGISTRY)
     finally:
+        dpg.destroy_context()
+
+
+def test_page_requests_only_visible_textures_and_releases_old_page(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    requests: list[str] = []
+    playlist = WatchlistPlaylist(
+        "PL123",
+        "https://example.test",
+        items=[_item(index) for index in range(1, 8)],
+    )
+    image = tmp_path / "thumbnail.png"
+    image.write_bytes(b"image bytes")
+    monkeypatch.setattr(dpg, "load_image", lambda path: (1, 1, 4, [1.0] * 4))
+
+    dpg.create_context()
+    view = _view(on_thumbnail_needed=requests.append)
+    try:
+        view.build()
+        view.load(
+            Watchlist([playlist]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        assert requests == [f"video{index:06d}" for index in range(1, 7)]
+        view.load_cached_thumbnail("video000001", image)
+        old_texture = view._textures["video000001"]
+
+        view._next_page()
+
+        assert requests[-1] == "video000007"
+        assert "video000001" not in view._textures
+        assert not dpg.does_item_exist(old_texture)
+    finally:
+        view.destroy()
         dpg.destroy_context()
