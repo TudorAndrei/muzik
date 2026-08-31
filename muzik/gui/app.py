@@ -714,6 +714,7 @@ class MuzikGuiApp:
             self._show_worker_return_target()
             return
         if self.pipeline is not None:
+            self.pipeline.set_busy(False)
             if self._worker_error is None:
                 self.pipeline.set_status("Complete")
                 self.pipeline.log(f"{self._worker_label} complete.")

@@ -21,6 +21,8 @@ CANDIDATE_TABLE = "pipeline-candidates"
 CHAPTER_TABLE = "pipeline-chapters"
 BEETS_TABLE = "pipeline-beets"
 BACK_BUTTON = "pipeline-back"
+PIPELINE_BUSY = "pipeline-busy"
+PIPELINE_BUSY_TEXT = "pipeline-busy-text"
 
 
 class PipelineView:
@@ -40,6 +42,17 @@ class PipelineView:
             on_close=self._on_back,
         ):
             with dpg.group(horizontal=True):
+                dpg.add_loading_indicator(
+                    tag=PIPELINE_BUSY,
+                    style=1,
+                    circle_count=8,
+                    speed=1.0,
+                    radius=3,
+                    thickness=2,
+                    color=ACCENT,
+                    secondary_color=(64, 70, 80),
+                )
+                dpg.add_text("Working...", tag=PIPELINE_BUSY_TEXT)
                 dpg.add_text("Ready", tag=STATUS)
                 dpg.add_progress_bar(
                     default_value=0.0,
@@ -87,6 +100,15 @@ class PipelineView:
 
     def set_status(self, value: str) -> None:
         dpg.set_value(STATUS, value)
+
+    def set_busy(self, busy: bool) -> None:
+        """Show motion and text while the worker is active."""
+        if busy:
+            dpg.show_item(PIPELINE_BUSY)
+            dpg.show_item(PIPELINE_BUSY_TEXT)
+        else:
+            dpg.hide_item(PIPELINE_BUSY)
+            dpg.hide_item(PIPELINE_BUSY_TEXT)
 
     def log(self, line: str) -> None:
         self._log_lines.append(line)

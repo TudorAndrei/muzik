@@ -18,6 +18,7 @@ from muzik.gui.watchlist import (
     FILTER,
     GRID,
     PAGE_TEXT,
+    PLAYLIST_RAIL,
     TEXTURE_REGISTRY,
     WatchlistView,
     columns_for_width,
@@ -98,6 +99,30 @@ def test_page_filters_summary_state_and_clamps_page() -> None:
     assert [item.position for item in failed.items] == [2]
     assert last_page.page == 1
     assert [item.position for item in last_page.items] == [7]
+
+
+def test_unchecked_playlist_explains_how_to_load_videos(tmp_path: Path) -> None:
+    playlist = WatchlistPlaylist(
+        "PL_NOT_CHECKED",
+        "https://www.youtube.com/playlist?list=PL_NOT_CHECKED",
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([playlist]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+
+        assert dpg.get_value("watchlist-empty") == (
+            "This playlist has not been checked yet. Select Refresh new videos."
+        )
+        assert "Not checked yet" in _text_values(PLAYLIST_RAIL)
+    finally:
+        view.destroy()
+        dpg.destroy_context()
 
 
 def test_cards_show_item_data_stage_rail_and_placeholder(tmp_path: Path) -> None:

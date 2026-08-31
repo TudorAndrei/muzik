@@ -27,6 +27,7 @@ from muzik.core.workflow.service import WorkflowRequest
 from muzik.gui.theme import (
     ACCENT,
     FAIL_COLOR,
+    NA_COLOR,
     OK_COLOR,
     STAGE_COMPLETE,
     STAGE_FAILED,
@@ -158,6 +159,7 @@ class WatchlistView:
             label="Playlist watchlist",
             on_close=self._on_back,
         ):
+            dpg.add_text("Add a YouTube playlist")
             with dpg.group(horizontal=True):
                 dpg.add_input_text(
                     tag=ADD_URL,
@@ -319,7 +321,7 @@ class WatchlistView:
                 callback=self._select_playlist,
                 user_data=playlist.playlist_id,
                 parent=PLAYLIST_RAIL,
-                width=-1,
+                width=210,
             )
             dpg.add_text(
                 f"{len(playlist.items)} video(s)",
@@ -330,6 +332,12 @@ class WatchlistView:
                 dpg.add_text(
                     f"Checked: {playlist.last_checked_at}",
                     wrap=220,
+                    parent=PLAYLIST_RAIL,
+                )
+            elif not playlist.last_error:
+                dpg.add_text(
+                    "Not checked yet",
+                    color=NA_COLOR,
                     parent=PLAYLIST_RAIL,
                 )
             if playlist.last_error:
@@ -362,7 +370,18 @@ class WatchlistView:
         self._thumbnail_requests.intersection_update(visible_ids)
         self._set_page_controls(page.page, page.page_count)
         if not page.items:
-            dpg.set_value(EMPTY_TEXT, "No videos match this status.")
+            if not playlist.items and playlist.last_checked_at is None:
+                message = (
+                    "This playlist has not been checked yet. Select Refresh new videos."
+                )
+            elif not playlist.items:
+                message = "This playlist has no videos. Refresh it to check again."
+            else:
+                message = (
+                    f"No videos have the {self._filter} status. "
+                    "Select All to see every video."
+                )
+            dpg.set_value(EMPTY_TEXT, message)
             return
         dpg.set_value(EMPTY_TEXT, "")
         with dpg.table(
