@@ -4,12 +4,14 @@ from typing import Any, cast
 from beets import config as beets_config
 from beets import importer as beets_importer
 import pytest
+from requests.exceptions import RetryError
 
 from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
 from muzik.core.beets.events import (
     BeetsDuplicateEvent,
     BeetsImportFinishedEvent,
     BeetsImportStartedEvent,
+    BeetsLogEvent,
     BeetsTaskEvent,
     RecordingBeetsEventEmitter,
 )
@@ -66,13 +68,14 @@ class FakeTask:
 
 
 def test_import_options_normalizes_move_copy_link() -> None:
-    options = ImportOptions(paths=[Path("Album")], copy=True, move=True)
+    options = ImportOptions(paths=[Path("Album")], copy=True, move=True, autotag=False)
 
     normalized = options.normalized()
 
     assert normalized.copy is True
     assert normalized.link is False
     assert normalized.move is False
+    assert normalized.autotag is False
 
 
 def test_apply_import_options_maps_flags_to_beets_config() -> None:
@@ -97,6 +100,7 @@ def test_apply_import_options_maps_flags_to_beets_config() -> None:
     assert import_config["quiet"].get(bool) is True
     assert import_config["pretend"].get(bool) is True
     assert import_config["incremental"].get(bool) is False
+    assert import_config["autotag"].get(bool) is True
 
 
 def test_apply_import_options_sets_duplicate_action_when_given() -> None:
@@ -221,6 +225,42 @@ def test_import_paths_applies_options_runs_session_and_emits_events(
     ]
     assert isinstance(events.events[-1], BeetsImportFinishedEvent)
     assert events.events[-1].success is True
+
+
+def test_import_paths_keeps_current_tags_when_musicbrainz_is_unavailable(
+    monkeypatch,
+) -> None:
+    autotag_values: list[bool] = []
+
+    class FakeSession:
+        def __init__(self, *args):
+            return None
+
+        def run(self) -> None:
+            autotag_values.append(beets_config["import"]["autotag"].get(bool))
+            if len(autotag_values) == 1:
+                raise RetryError("too many 503 error responses")
+
+    monkeypatch.setattr("muzik.core.beets.importer.open_library", lambda path: "lib")
+    monkeypatch.setattr("muzik.core.beets.importer.MuzikImportSession", FakeSession)
+    events = RecordingBeetsEventEmitter()
+
+    import_paths(
+        ImportOptions(paths=[Path("Album")]),
+        decisions=FakeDecisions(),
+        events=events,
+    )
+
+    assert autotag_values == [True, False]
+    assert beets_config["import"]["autotag"].get(bool) is True
+    assert events.events == [
+        BeetsImportStartedEvent([Path("Album")], dry_run=False),
+        BeetsLogEvent(
+            "MusicBrainz is unavailable. Importing with the current tags.",
+            severity="warning",
+        ),
+        BeetsImportFinishedEvent([Path("Album")]),
+    ]
 
 
 def test_import_paths_applies_runtime_options_after_loading_config(monkeypatch) -> None:

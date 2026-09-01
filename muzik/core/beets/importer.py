@@ -10,6 +10,7 @@ from typing import Any
 
 from beets import config as beets_config
 from beets import importer
+from requests.exceptions import RequestException
 
 from muzik.core.beets.config import open_library
 from muzik.core.beets.decisions import (
@@ -22,6 +23,7 @@ from muzik.core.beets.events import (
     BeetsDuplicateEvent,
     BeetsEventEmitter,
     BeetsImportFinishedEvent,
+    BeetsLogEvent,
     BeetsImportStartedEvent,
     BeetsTaskEvent,
     NullBeetsEventEmitter,
@@ -86,6 +88,7 @@ class ImportOptions:
     quiet: bool = False
     dry_run: bool = False
     incremental: bool = True
+    autotag: bool = True
     # When set, override the config's duplicate_action (e.g. "remove" so a
     # re-download replaces the existing library album instead of being skipped).
     duplicate_action: str | None = None
@@ -107,6 +110,7 @@ class ImportOptions:
             quiet=self.quiet,
             dry_run=self.dry_run,
             incremental=self.incremental,
+            autotag=self.autotag,
             duplicate_action=self.duplicate_action,
         )
 
@@ -122,6 +126,7 @@ def apply_import_options(options: ImportOptions) -> None:
     import_config["quiet"] = options.quiet
     import_config["pretend"] = options.dry_run
     import_config["incremental"] = options.incremental
+    import_config["autotag"] = options.autotag
     if options.duplicate_action is not None:
         import_config["duplicate_action"] = options.duplicate_action
 
@@ -233,17 +238,34 @@ def import_paths(
     with _IMPORT_LOCK:
         lib = open_library(options.config_path)
         apply_import_options(options)
-        session = MuzikImportSession(
-            lib,
-            None,
-            options.paths,
-            options.query,
-            decisions,
-            events,
-        )
+
+        def make_session() -> MuzikImportSession:
+            return MuzikImportSession(
+                lib,
+                None,
+                options.paths,
+                options.query,
+                decisions,
+                events,
+            )
+
+        session = make_session()
         events.emit(BeetsImportStartedEvent(options.paths, dry_run=options.dry_run))
         try:
-            session.run()
+            try:
+                session.run()
+            except RequestException:
+                events.emit(
+                    BeetsLogEvent(
+                        "MusicBrainz is unavailable. Importing with the current tags.",
+                        severity="warning",
+                    )
+                )
+                beets_config["import"]["autotag"] = False
+                try:
+                    make_session().run()
+                finally:
+                    beets_config["import"]["autotag"] = options.autotag
         except Exception:
             events.emit(BeetsImportFinishedEvent(options.paths, success=False))
             raise
