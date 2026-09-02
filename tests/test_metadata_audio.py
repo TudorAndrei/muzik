@@ -65,6 +65,27 @@ def test_extract_metadata_prefers_muzik_sidecar_over_info_json(tmp_path: Path) -
     }
 
 
+def test_extract_metadata_removes_youtube_noise_from_album_name(
+    tmp_path: Path,
+) -> None:
+    audio = tmp_path / "Forestal Tape.opus"
+    audio.write_bytes(b"")
+    write_muzik_metadata(
+        audio,
+        {
+            "source": "youtube",
+            "resolved": {
+                "title": "Forestal Tape",
+                "artist": "Las Luces Primeras",
+                "album": "Forestal Tape (FULL ALBUM)",
+                "year": "2018",
+            },
+        },
+    )
+
+    assert extract_metadata(audio)["album"] == "Forestal Tape"
+
+
 def test_extract_metadata_uses_info_json_when_muzik_metadata_is_empty(
     tmp_path: Path,
 ) -> None:

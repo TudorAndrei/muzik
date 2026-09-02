@@ -31,6 +31,11 @@ def is_searchable_album(album: str) -> bool:
     return album.strip().lower() not in _PLACEHOLDER_NAMES
 
 
+def clean_album_name(album: str) -> str:
+    """Remove YouTube title noise from an album name."""
+    return _ALBUM_NOISE.sub("", _YEAR_BRACKET.sub("", album)).strip()
+
+
 def clean_album_variants(album: str) -> list[str]:
     """Return album-name variants to try against MusicBrainz, best first.
 
@@ -38,7 +43,7 @@ def clean_album_variants(album: str) -> list[str]:
     with a bare trailing year removed ('Seeker 2023' -> 'Seeker') so an album
     that YouTube titled with a year still matches.
     """
-    clean = _ALBUM_NOISE.sub("", _YEAR_BRACKET.sub("", album)).strip()
+    clean = clean_album_name(album)
     variants = [clean]
     stripped = _TRAILING_YEAR.sub("", clean).strip()
     if stripped and stripped != clean:

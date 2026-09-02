@@ -7,6 +7,7 @@ from typing import Optional
 
 from muzik.core.chapters import sidecar_path
 from muzik.core.metadata import find_muzik_metadata
+from muzik.core.musicbrainz import clean_album_name
 from muzik.core.runner import run_silent
 
 
@@ -28,7 +29,7 @@ def _parse_title(title: str) -> tuple[str, str, str]:
         album = parts[1].strip()
     else:
         album = title.strip()
-    return artist, album, year
+    return artist, clean_album_name(album), year
 
 
 def probe(path: Path) -> dict:
@@ -114,7 +115,7 @@ def extract_metadata(path: Path) -> dict:
             return {
                 "title": str(title),
                 "artist": str(artist),
-                "album": str(album),
+                "album": clean_album_name(str(album)),
                 "year": year[:4] if year != "Unknown" else year,
             }
 
@@ -143,7 +144,7 @@ def extract_metadata(path: Path) -> dict:
             return {
                 "title": title,
                 "artist": artist,
-                "album": album,
+                "album": clean_album_name(album),
                 "year": year,
             }
         except Exception:
@@ -164,7 +165,7 @@ def extract_metadata(path: Path) -> dict:
         return {
             "title": tags.get("title", path.stem),
             "artist": tags.get("artist", "Unknown Artist"),
-            "album": tags.get("album", "Unknown Album"),
+            "album": clean_album_name(tags.get("album", "Unknown Album")),
             "year": date_raw[:4] if date_raw else "Unknown",
         }
     except Exception:
