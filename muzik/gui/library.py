@@ -12,7 +12,7 @@ from muzik.core.library import DownloadedItem, human_size
 from muzik.gui.theme import ACCENT
 
 
-LIBRARY_WINDOW = "library-window"
+LIBRARY_ROOT = "library-root"
 LIBRARY_STATUS = "library-status"
 LIBRARY_TABLE = "library-table"
 LIBRARY_REFRESH = "library-refresh"
@@ -31,48 +31,61 @@ class LibraryView:
         self._on_refresh = on_refresh
         self._on_close = on_close
 
-    def build(self) -> None:
-        with dpg.window(
-            tag=LIBRARY_WINDOW,
-            label="Library - downloaded audio",
-            on_close=self._on_close,
-        ):
-            dpg.add_text("Downloaded audio", color=ACCENT)
-            dpg.add_text(str(self._output), color=(150, 150, 158))
-            dpg.add_text("Scanning...", tag=LIBRARY_STATUS)
-            with dpg.table(
-                tag=LIBRARY_TABLE,
-                header_row=True,
-                resizable=True,
-                policy=dpg.mvTable_SizingStretchProp,
-                scrollY=True,
-                height=-40,
+    def build(self, *, parent: int | str | None = None) -> None:
+        """Build the library content.
+
+        With no *parent*, the content owns its own top-level window (used by
+        standalone/test callers). With *parent* given, it's added directly
+        into that container instead (used by the shell's tab bar).
+        """
+        if parent is None:
+            with dpg.window(
+                tag=LIBRARY_ROOT,
+                label="Library - downloaded audio",
+                on_close=self._on_close,
             ):
-                dpg.add_table_column(label="Title")
-                dpg.add_table_column(
-                    label="YouTube ID", width_fixed=True, init_width_or_weight=110
-                )
-                dpg.add_table_column(
-                    label="Format", width_fixed=True, init_width_or_weight=70
-                )
-                dpg.add_table_column(
-                    label="Size", width_fixed=True, init_width_or_weight=80
-                )
-                dpg.add_table_column(
-                    label="Modified", width_fixed=True, init_width_or_weight=130
-                )
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="Refresh",
-                    tag=LIBRARY_REFRESH,
-                    callback=self._on_refresh,
-                    width=100,
-                )
-                dpg.add_button(label="Back", callback=self._on_close, width=100)
+                self._build_content()
+        else:
+            with dpg.group(tag=LIBRARY_ROOT, parent=parent):
+                self._build_content()
+
+    def _build_content(self) -> None:
+        dpg.add_text("Downloaded audio", color=ACCENT)
+        dpg.add_text(str(self._output), color=(150, 150, 158))
+        dpg.add_text("Scanning...", tag=LIBRARY_STATUS)
+        with dpg.table(
+            tag=LIBRARY_TABLE,
+            header_row=True,
+            resizable=True,
+            policy=dpg.mvTable_SizingStretchProp,
+            scrollY=True,
+            height=-40,
+        ):
+            dpg.add_table_column(label="Title")
+            dpg.add_table_column(
+                label="YouTube ID", width_fixed=True, init_width_or_weight=110
+            )
+            dpg.add_table_column(
+                label="Format", width_fixed=True, init_width_or_weight=70
+            )
+            dpg.add_table_column(
+                label="Size", width_fixed=True, init_width_or_weight=80
+            )
+            dpg.add_table_column(
+                label="Modified", width_fixed=True, init_width_or_weight=130
+            )
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Refresh",
+                tag=LIBRARY_REFRESH,
+                callback=self._on_refresh,
+                width=100,
+            )
+            dpg.add_button(label="Back", callback=self._on_close, width=100)
 
     def destroy(self) -> None:
-        if dpg.does_item_exist(LIBRARY_WINDOW):
-            dpg.delete_item(LIBRARY_WINDOW)
+        if dpg.does_item_exist(LIBRARY_ROOT):
+            dpg.delete_item(LIBRARY_ROOT)
 
     def set_scanning(self) -> None:
         if not dpg.does_item_exist(LIBRARY_TABLE):

@@ -42,10 +42,11 @@ from muzik.core.services import check_services
 from muzik.config import DEFAULT_DOWNLOAD_DIR
 from muzik.core.library import scan_downloads
 from muzik.gui.bridge import GuiBridge
-from muzik.gui.launcher import LAUNCHER_WINDOW, LauncherView
-from muzik.gui.library import LIBRARY_WINDOW, LibraryView
+from muzik.gui import shell
+from muzik.gui.launcher import LauncherView
+from muzik.gui.library import LibraryView
 from muzik.gui.pipeline import PipelineView
-from muzik.gui.settings import SETTINGS_WINDOW, SettingsView
+from muzik.gui.settings import SettingsView
 from muzik.gui.theme import apply_global_theme
 from muzik.core.thumbnails import (
     ThumbnailRequest,
@@ -60,7 +61,7 @@ from muzik.core.watchlist import (
     reconcile_watchlist,
     refresh_watchlist as run_watchlist_refresh,
 )
-from muzik.gui.watchlist import WATCHLIST_WINDOW, WatchlistView
+from muzik.gui.watchlist import WATCHLIST_ROOT, WatchlistView
 
 
 WorkflowOperationsFactory = Callable[..., WorkflowRunOperations]
@@ -78,26 +79,31 @@ class MuzikGuiApp:
         self.operations_factory = operations_factory or _default_operations
         self.watchlist_repository = watchlist_repository or WatchlistRepository()
         self.bridge = GuiBridge(on_error=self._handle_bridge_error)
-        self.launcher = LauncherView(
-            self.open_pipeline,
-            self.quit,
-            self.open_settings,
-            self.open_library,
-            self.open_watchlist,
+        self.launcher = LauncherView(self.open_pipeline, self.quit)
+        self.watchlist = WatchlistView(
+            on_add=self.add_watchlist_playlist,
+            on_remove=self.remove_watchlist_playlist,
+            on_refresh=self.refresh_watchlist,
+            on_action=self.request_item_action,
+            on_thumbnail_needed=self._queue_cached_thumbnail,
+            on_back=self._go_to_workflow_tab,
+            on_quit=self.quit,
         )
+        self.library = LibraryView(
+            DEFAULT_DOWNLOAD_DIR,
+            self.refresh_library,
+            self._go_to_workflow_tab,
+        )
+        self.settings = SettingsView(self.recheck_services, self._go_to_workflow_tab)
         self.pipeline: PipelineView | None = None
-        self.settings: SettingsView | None = None
-        self.library: LibraryView | None = None
-        self.watchlist: WatchlistView | None = None
         self._worker: Thread | None = None
         self._settings_worker: Thread | None = None
         self._library_worker: Thread | None = None
         self._thumbnail_workers: dict[str, Thread] = {}
         self._thumbnail_cancellation = CancellationToken()
         self._cancellation: CancellationToken | None = None
-        self._worker_return_target = "launcher"
+        self._worker_is_watchlist_job = False
         self._return_after_worker = False
-        self._auto_return_after_worker = False
         self._worker_label = "Workflow"
         self._worker_error: Exception | None = None
 
@@ -107,7 +113,14 @@ class MuzikGuiApp:
         try:
             dpg.configure_app(manual_callback_management=True)
             apply_global_theme()
-            self.launcher.build()
+            shell.build(
+                launcher=self.launcher,
+                watchlist=self.watchlist,
+                library=self.library,
+                settings=self.settings,
+                on_tab_changed=self._on_tab_changed,
+                on_quit=self.quit,
+            )
             icon = _viewport_icon_path()
             icon_value = str(icon) if icon is not None else ""
             dpg.create_viewport(
@@ -119,12 +132,11 @@ class MuzikGuiApp:
             )
             dpg.setup_dearpygui()
             dpg.show_viewport()
-            dpg.set_primary_window(LAUNCHER_WINDOW, True)
             while dpg.is_dearpygui_running():
                 dpg.run_callbacks(dpg.get_callback_queue())
                 self.bridge.drain()
                 self._poll_worker()
-                if self.watchlist is not None and dpg.does_item_exist(WATCHLIST_WINDOW):
+                if dpg.does_item_exist(WATCHLIST_ROOT):
                     self.watchlist.set_available_width(
                         max(300, dpg.get_viewport_client_width() - 290)
                     )
@@ -144,13 +156,11 @@ class MuzikGuiApp:
             dpg.destroy_context()
 
     def open_pipeline(self, config: WorkflowLaunchConfig) -> None:
-        """Build the pipeline view and start its workflow worker."""
+        """Build the pipeline modal and start its workflow worker."""
         if self._worker is not None and self._worker.is_alive():
             return
-        self.launcher.hide()
-        self._worker_return_target = "launcher"
+        self._worker_is_watchlist_job = False
         self._return_after_worker = False
-        self._auto_return_after_worker = False
         self._worker_label = "Workflow"
         self._worker_error = None
         self._cancellation = CancellationToken()
@@ -170,7 +180,7 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Cancel an active run and return after its worker has stopped."""
+        """Cancel an active run, or dismiss a finished pipeline modal."""
         if self._worker is not None and self._worker.is_alive():
             self._return_after_worker = True
             self._cancel_worker()
@@ -179,7 +189,25 @@ class MuzikGuiApp:
                 self.pipeline.set_status("Cancelling...")
                 self.pipeline.disable_back()
             return
-        self._show_worker_return_target()
+        self._close_pipeline()
+
+    def _go_to_workflow_tab(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        if dpg.does_item_exist(shell.NAV_TABS):
+            dpg.set_value(shell.NAV_TABS, shell.TAB_WORKFLOW)
+
+    def _on_tab_changed(self, tab: str) -> None:
+        """Load the newly selected tab's data (mirrors what opening it did)."""
+        if tab == shell.TAB_WATCHLIST:
+            self._reload_watchlist()
+        elif tab == shell.TAB_LIBRARY:
+            self._start_library_scan()
+        elif tab == shell.TAB_SETTINGS:
+            self._start_service_checks()
 
     def open_watchlist(
         self,
@@ -187,36 +215,12 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Open the saved playlist watchlist without network work."""
+        """Select the Watchlist tab and reload its saved data."""
         if self._worker is not None and self._worker.is_alive():
             return
-        self.launcher.hide()
-        if self.watchlist is None:
-            self.watchlist = WatchlistView(
-                on_add=self.add_watchlist_playlist,
-                on_remove=self.remove_watchlist_playlist,
-                on_refresh=self.refresh_watchlist,
-                on_action=self.request_item_action,
-                on_thumbnail_needed=self._queue_cached_thumbnail,
-                on_back=self.close_watchlist,
-                on_quit=self.quit,
-            )
-            self.watchlist.build()
-        else:
-            self.watchlist.show()
+        if dpg.does_item_exist(shell.NAV_TABS):
+            dpg.set_value(shell.NAV_TABS, shell.TAB_WATCHLIST)
         self._reload_watchlist()
-
-    def close_watchlist(
-        self,
-        sender: Any = None,
-        app_data: Any = None,
-        user_data: Any = None,
-    ) -> None:
-        """Close the watchlist and release its image textures."""
-        if self.watchlist is not None:
-            self.watchlist.destroy()
-        self.watchlist = None
-        self.launcher.show()
 
     def add_watchlist_playlist(self, url: str) -> None:
         """Add one normalized YouTube playlist and reload the rail."""
@@ -338,11 +342,8 @@ class MuzikGuiApp:
         label: str,
         raw: str,
     ) -> None:
-        if self.watchlist is not None:
-            self.watchlist.hide()
-        self._worker_return_target = "watchlist"
+        self._worker_is_watchlist_job = True
         self._return_after_worker = False
-        self._auto_return_after_worker = True
         self._worker_label = label
         self._worker_error = None
         self._cancellation = CancellationToken()
@@ -375,12 +376,9 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Open the settings window and start the service checks."""
-        if dpg.does_item_exist(SETTINGS_WINDOW):
-            return
-        if self.settings is None:
-            self.settings = SettingsView(self.recheck_services, self.close_settings)
-        self.settings.build()
+        """Select the Settings tab and start the service checks."""
+        if dpg.does_item_exist(shell.NAV_TABS):
+            dpg.set_value(shell.NAV_TABS, shell.TAB_SETTINGS)
         self._start_service_checks()
 
     def recheck_services(
@@ -389,18 +387,8 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Re-run the service checks for the open settings window."""
+        """Re-run the service checks for the Settings tab."""
         self._start_service_checks()
-
-    def close_settings(
-        self,
-        sender: Any = None,
-        app_data: Any = None,
-        user_data: Any = None,
-    ) -> None:
-        """Close the settings window."""
-        if self.settings is not None:
-            self.settings.destroy()
 
     def _start_service_checks(self) -> None:
         if self._settings_worker is not None and self._settings_worker.is_alive():
@@ -431,18 +419,11 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Open the library window and scan the output folder."""
-        if dpg.does_item_exist(LIBRARY_WINDOW):
+        """Select the Library tab and scan the output folder."""
+        if self._worker is not None and self._worker.is_alive():
             return
-        if self.library is None:
-            self.library = LibraryView(
-                DEFAULT_DOWNLOAD_DIR,
-                self.refresh_library,
-                self.close_library,
-            )
-        self.launcher.hide()
-        self.library.build()
-        dpg.set_primary_window(LIBRARY_WINDOW, True)
+        if dpg.does_item_exist(shell.NAV_TABS):
+            dpg.set_value(shell.NAV_TABS, shell.TAB_LIBRARY)
         self._start_library_scan()
 
     def refresh_library(
@@ -451,19 +432,8 @@ class MuzikGuiApp:
         app_data: Any = None,
         user_data: Any = None,
     ) -> None:
-        """Re-scan the output folder for the open library window."""
+        """Re-scan the output folder for the Library tab."""
         self._start_library_scan()
-
-    def close_library(
-        self,
-        sender: Any = None,
-        app_data: Any = None,
-        user_data: Any = None,
-    ) -> None:
-        """Close the library page and return to the launcher."""
-        if self.library is not None:
-            self.library.destroy()
-        self.launcher.show()
 
     def _start_library_scan(self) -> None:
         if self._library_worker is not None and self._library_worker.is_alive():
@@ -730,8 +700,8 @@ class MuzikGuiApp:
         if self._worker is None or self._worker.is_alive():
             return
         self._worker.join()
-        if self._return_after_worker or self._auto_return_after_worker:
-            self._show_worker_return_target()
+        if self._return_after_worker or self._worker_is_watchlist_job:
+            self._close_pipeline()
             return
         if self.pipeline is not None:
             self.pipeline.set_busy(False)
@@ -743,13 +713,13 @@ class MuzikGuiApp:
                 self.pipeline.log(f"{self._worker_label} failed: {self._worker_error}")
         self._worker = None
 
-    def _show_worker_return_target(self) -> None:
-        if self._worker_return_target == "watchlist":
-            self._show_watchlist()
-        else:
-            self._show_launcher()
+    def _close_pipeline(self) -> None:
+        """Dismiss the pipeline modal; reload the watchlist if it ran the job.
 
-    def _show_watchlist(self) -> None:
+        The tab bar is never touched here — unlike the old window-swapping
+        design, the tab the user was on (Workflow or Watchlist) never left
+        the screen while the pipeline modal was open on top of it.
+        """
         error = self._worker_error
         if self.pipeline is not None:
             self.pipeline.destroy()
@@ -757,15 +727,13 @@ class MuzikGuiApp:
         self._worker = None
         self._cancellation = None
         self._return_after_worker = False
-        self._auto_return_after_worker = False
-        if self.watchlist is None:
-            self.open_watchlist()
-        else:
-            self.watchlist.show()
-            self._reload_watchlist()
-        if error is not None and self.watchlist is not None:
-            self.watchlist.show_error(str(error))
+        was_watchlist_job = self._worker_is_watchlist_job
+        self._worker_is_watchlist_job = False
         self._worker_error = None
+        if was_watchlist_job:
+            self._reload_watchlist()
+            if error is not None:
+                self.watchlist.show_error(str(error))
 
     def _reload_watchlist(self) -> None:
         view = self.watchlist
@@ -848,18 +816,6 @@ class MuzikGuiApp:
         )
         self._thumbnail_workers[video_id] = worker
         worker.start()
-
-    def _show_launcher(self) -> None:
-        if self.pipeline is not None:
-            self.pipeline.destroy()
-        self.pipeline = None
-        self._worker = None
-        self._cancellation = None
-        self._return_after_worker = False
-        self._auto_return_after_worker = False
-        self._worker_return_target = "launcher"
-        self._worker_error = None
-        self.launcher.show()
 
 
 def _workflow_options(config: WorkflowLaunchConfig) -> WorkflowOptions:

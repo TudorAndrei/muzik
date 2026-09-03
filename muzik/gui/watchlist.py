@@ -40,7 +40,7 @@ from muzik.gui.theme import (
 )
 
 
-WATCHLIST_WINDOW = "watchlist-window"
+WATCHLIST_ROOT = "watchlist-root"
 PLAYLIST_RAIL = "watchlist-playlist-rail"
 GRID = "watchlist-grid"
 ADD_URL = "watchlist-add-url"
@@ -172,71 +172,87 @@ class WatchlistView:
         self._textures: dict[str, Any] = {}
         self._thumbnail_requests: set[str] = set()
 
-    def build(self) -> None:
-        with dpg.window(
-            tag=WATCHLIST_WINDOW,
-            label="Playlist watchlist",
-            on_close=self._on_back,
-        ):
-            dpg.add_text("Add a YouTube playlist")
-            with dpg.group(horizontal=True):
-                dpg.add_input_text(
-                    tag=ADD_URL,
-                    hint="YouTube playlist URL",
-                    width=-510,
-                    on_enter=True,
-                    callback=self._add,
-                )
-                dpg.add_button(label="Add playlist", callback=self._add, width=120)
-                refresh = dpg.add_button(
-                    label="Refresh new videos",
-                    tag=REFRESH_BUTTON,
-                    callback=self._on_refresh,
-                    width=150,
-                )
-                dpg.add_button(label="Back", callback=self._on_back, width=80)
-                dpg.add_button(label="Quit", callback=self._on_quit, width=80)
-                bind_primary_button(refresh)
-            dpg.add_text("", tag=ERROR_TEXT, color=FAIL_COLOR)
-            with dpg.group(horizontal=True):
-                with dpg.child_window(tag=PLAYLIST_RAIL, width=250, border=True):
-                    dpg.add_text("Playlists", color=ACCENT)
-                with dpg.child_window(width=-1, height=-1, border=False):
-                    with dpg.group(horizontal=True):
-                        dpg.add_combo(
-                            FILTERS,
-                            default_value="All",
-                            tag=FILTER,
-                            label="Status",
-                            callback=self._filter_changed,
-                            width=150,
-                        )
-                        dpg.add_button(
-                            label="Previous",
-                            tag=PREVIOUS_BUTTON,
-                            callback=self._previous_page,
-                            width=100,
-                        )
-                        dpg.add_text("Page 1 of 1", tag=PAGE_TEXT)
-                        dpg.add_button(
-                            label="Next",
-                            tag=NEXT_BUTTON,
-                            callback=self._next_page,
-                            width=100,
-                        )
-                        dpg.add_button(
-                            label="Remove playlist",
-                            tag=REMOVE_BUTTON,
-                            callback=self._remove,
-                            width=140,
-                        )
-                    dpg.add_text("", tag=EMPTY_TEXT)
-                    with dpg.child_window(tag=GRID, width=-1, height=-1, border=False):
-                        pass
+    def build(self, *, parent: int | str | None = None) -> None:
+        """Build the watchlist content.
+
+        With no *parent*, the content owns its own top-level window (used by
+        standalone/test callers). With *parent* given, content is added
+        directly into that container instead (used by the shell's tab bar) —
+        DearPyGui containers always need a window ancestor somewhere, so an
+        explicit `parent=` lets this nest inside one that already exists
+        (the shell's primary window) without creating a second one.
+        """
+        if parent is None:
+            with dpg.window(
+                tag=WATCHLIST_ROOT,
+                label="Playlist watchlist",
+                on_close=self._on_back,
+            ):
+                self._build_content()
+            dpg.set_primary_window(WATCHLIST_ROOT, True)
+        else:
+            with dpg.group(tag=WATCHLIST_ROOT, parent=parent):
+                self._build_content()
         with dpg.texture_registry(tag=TEXTURE_REGISTRY):
             pass
-        dpg.set_primary_window(WATCHLIST_WINDOW, True)
         self._render()
+
+    def _build_content(self) -> None:
+        dpg.add_text("Add a YouTube playlist")
+        with dpg.group(horizontal=True):
+            dpg.add_input_text(
+                tag=ADD_URL,
+                hint="YouTube playlist URL",
+                width=-510,
+                on_enter=True,
+                callback=self._add,
+            )
+            dpg.add_button(label="Add playlist", callback=self._add, width=120)
+            refresh = dpg.add_button(
+                label="Refresh new videos",
+                tag=REFRESH_BUTTON,
+                callback=self._on_refresh,
+                width=150,
+            )
+            dpg.add_button(label="Back", callback=self._on_back, width=80)
+            dpg.add_button(label="Quit", callback=self._on_quit, width=80)
+            bind_primary_button(refresh)
+        dpg.add_text("", tag=ERROR_TEXT, color=FAIL_COLOR)
+        with dpg.group(horizontal=True):
+            with dpg.child_window(tag=PLAYLIST_RAIL, width=250, border=True):
+                dpg.add_text("Playlists", color=ACCENT)
+            with dpg.child_window(width=-1, height=-1, border=False):
+                with dpg.group(horizontal=True):
+                    dpg.add_combo(
+                        FILTERS,
+                        default_value="All",
+                        tag=FILTER,
+                        label="Status",
+                        callback=self._filter_changed,
+                        width=150,
+                    )
+                    dpg.add_button(
+                        label="Previous",
+                        tag=PREVIOUS_BUTTON,
+                        callback=self._previous_page,
+                        width=100,
+                    )
+                    dpg.add_text("Page 1 of 1", tag=PAGE_TEXT)
+                    dpg.add_button(
+                        label="Next",
+                        tag=NEXT_BUTTON,
+                        callback=self._next_page,
+                        width=100,
+                    )
+                    dpg.add_button(
+                        label="Remove playlist",
+                        tag=REMOVE_BUTTON,
+                        callback=self._remove,
+                        width=140,
+                    )
+                dpg.add_text("", tag=EMPTY_TEXT)
+                with dpg.child_window(tag=GRID, width=-1, height=-1, border=False):
+                    pass
 
     def load(self, watchlist: Watchlist, request: WorkflowRequest) -> None:
         self._watchlist = watchlist
@@ -294,21 +310,14 @@ class WatchlistView:
         self._textures.clear()
         self._thumbnail_requests.clear()
 
-    def show(self) -> None:
-        dpg.show_item(WATCHLIST_WINDOW)
-        dpg.set_primary_window(WATCHLIST_WINDOW, True)
-
-    def hide(self) -> None:
-        dpg.hide_item(WATCHLIST_WINDOW)
-
     def destroy(self) -> None:
         self.release_textures()
         if dpg.does_item_exist(TEXTURE_REGISTRY):
             dpg.delete_item(TEXTURE_REGISTRY)
         if dpg.does_item_exist(ACTIONS_WINDOW):
             dpg.delete_item(ACTIONS_WINDOW)
-        if dpg.does_item_exist(WATCHLIST_WINDOW):
-            dpg.delete_item(WATCHLIST_WINDOW)
+        if dpg.does_item_exist(WATCHLIST_ROOT):
+            dpg.delete_item(WATCHLIST_ROOT)
 
     def _selected_playlist(self) -> WatchlistPlaylist | None:
         return next(
@@ -321,7 +330,7 @@ class WatchlistView:
         )
 
     def _render(self) -> None:
-        if not dpg.does_item_exist(WATCHLIST_WINDOW):
+        if not dpg.does_item_exist(WATCHLIST_ROOT):
             return
         self._render_playlists()
         self._render_cards()

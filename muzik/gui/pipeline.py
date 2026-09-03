@@ -49,6 +49,9 @@ class PipelineView:
         with dpg.window(
             tag=PIPELINE_WINDOW,
             label="muzik workflow",
+            modal=True,
+            width=1180,
+            height=760,
             on_close=self._on_back,
         ):
             with dpg.group(horizontal=True):
@@ -135,13 +138,12 @@ class PipelineView:
             )
             with dpg.group(horizontal=True):
                 dpg.add_button(
-                    label="Back",
+                    label="Cancel",
                     callback=self._on_back,
                     tag=BACK_BUTTON,
                     width=100,
                 )
                 dpg.add_button(label="Quit", callback=self._on_quit, width=100)
-        dpg.set_primary_window(PIPELINE_WINDOW, True)
         self.log(f"Workflow: {raw}")
 
     def destroy(self) -> None:

@@ -8,7 +8,6 @@ from typing import Any
 
 import dearpygui.dearpygui as dpg
 
-from muzik.branding import logo_path
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
 from muzik.core.quality import QualityPolicy
 from muzik.core.workflow.launch import WorkflowLaunchConfig
@@ -16,12 +15,8 @@ from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSour
 from muzik.gui.theme import bind_primary_button
 
 
-LAUNCHER_WINDOW = "launcher-window"
+LAUNCHER_ROOT = "launcher-root"
 ERROR_TEXT = "launcher-error"
-NAV_TABS = "launcher-nav-tabs"
-LOGO_TEXTURE_REGISTRY = "launcher-logo-texture-registry"
-LOGO_TEXTURE = "launcher-logo-texture"
-LOGO_IMAGE = "launcher-logo"
 
 # Hover help for switches whose effect is not obvious from the label.
 SWITCH_HELP = {
@@ -88,34 +83,23 @@ class LauncherView:
         self,
         on_run: Callable[[WorkflowLaunchConfig], None],
         on_quit: Callable[[], None],
-        on_settings: Callable[..., None],
-        on_library: Callable[..., None],
-        on_watchlist: Callable[..., None] | None = None,
     ) -> None:
         self._on_run = on_run
         self._on_quit = on_quit
-        self._on_settings = on_settings
-        self._on_library = on_library
-        self._on_watchlist = on_watchlist or (lambda: None)
 
-    def build(self) -> None:
-        has_logo = self._build_logo_texture()
-        with dpg.window(tag=LAUNCHER_WINDOW, label="muzik workflow"):
-            with dpg.group(horizontal=True):
-                if has_logo:
-                    dpg.add_image(
-                        LOGO_TEXTURE,
-                        tag=LOGO_IMAGE,
-                        width=32,
-                        height=32,
-                    )
-                with dpg.tab_bar(tag=NAV_TABS):
-                    with dpg.tab(label="Workflow"):
-                        pass
-                    dpg.add_tab_button(label="Watchlist", callback=self._on_watchlist)
-                    dpg.add_tab_button(label="Library", callback=self._on_library)
-                    dpg.add_tab_button(label="Settings", callback=self._on_settings)
-            self._build_workflow_form()
+    def build(self, *, parent: int | str | None = None) -> None:
+        """Build the workflow form.
+
+        With no *parent*, the form owns its own top-level window (used by
+        standalone/test callers). With *parent* given, it's added directly
+        into that container instead (used by the shell's tab bar).
+        """
+        if parent is None:
+            with dpg.window(tag=LAUNCHER_ROOT, label="muzik workflow"):
+                self._build_workflow_form()
+        else:
+            with dpg.group(tag=LAUNCHER_ROOT, parent=parent):
+                self._build_workflow_form()
 
     def _build_workflow_form(self) -> None:
         self._path_row("URL or path", "raw", "raw-file-dialog", False, "")
@@ -212,36 +196,9 @@ class LauncherView:
             dpg.add_button(label="Quit", callback=self._quit, width=100)
         bind_primary_button(run_button)
 
-    @staticmethod
-    def _build_logo_texture() -> bool:
-        if dpg.does_item_exist(LOGO_TEXTURE):
-            return True
-        path = logo_path()
-        if path is None:
-            return False
-        try:
-            width, height, _channels, data = dpg.load_image(str(path))
-        except OSError, RuntimeError, SystemError, ValueError:
-            return False
-        with dpg.texture_registry(tag=LOGO_TEXTURE_REGISTRY):
-            dpg.add_static_texture(
-                width,
-                height,
-                data,
-                tag=LOGO_TEXTURE,
-            )
-        return True
-
     def read_config(self) -> WorkflowLaunchConfig:
         values = {name: dpg.get_value(tag) for name, tag in FIELD_TAGS.items()}
         return config_from_values(values)
-
-    def show(self) -> None:
-        dpg.show_item(LAUNCHER_WINDOW)
-        dpg.set_primary_window(LAUNCHER_WINDOW, True)
-
-    def hide(self) -> None:
-        dpg.hide_item(LAUNCHER_WINDOW)
 
     def _run(
         self,

@@ -19,7 +19,7 @@ from muzik.core.workflow.launch import WorkflowLaunchConfig
 from muzik.core.workflow.service import WorkflowRunOperations
 from muzik.gui.launcher import FIELD_TAGS
 from muzik.gui.app import MuzikGuiApp, _workflow_options
-from muzik.gui.watchlist import WATCHLIST_WINDOW
+from muzik.gui.watchlist import WATCHLIST_ROOT
 
 
 def test_workflow_options_carries_the_launcher_quality_settings() -> None:
@@ -49,7 +49,7 @@ def test_direct_gui_launch_sets_viewport_icons(monkeypatch) -> None:
     monkeypatch.setattr(dpg, "is_dearpygui_running", lambda: False)
     monkeypatch.setattr(dpg, "destroy_context", lambda: None)
     monkeypatch.setattr("muzik.gui.app.apply_global_theme", lambda: None)
-    monkeypatch.setattr(app.launcher, "build", lambda: None)
+    monkeypatch.setattr("muzik.gui.app.shell.build", lambda **kwargs: None)
 
     app.run()
 
@@ -121,20 +121,20 @@ def _repository(tmp_path: Path, *, with_item: bool = False) -> WatchlistReposito
     return repository
 
 
-def test_watchlist_navigation_uses_saved_data_and_releases_view(tmp_path: Path) -> None:
+def test_watchlist_navigation_selects_tab_and_reloads_saved_data(
+    tmp_path: Path,
+) -> None:
     repository = _repository(tmp_path, with_item=True)
     dpg.create_context()
     app = MuzikGuiApp(watchlist_repository=repository)
     try:
         app.launcher.build()
+        app.watchlist.build()
 
         app.open_watchlist()
 
-        assert app.watchlist is not None
-        assert dpg.does_item_exist(WATCHLIST_WINDOW)
-        app.close_watchlist()
-        assert app.watchlist is None
-        assert not dpg.does_item_exist(WATCHLIST_WINDOW)
+        assert dpg.does_item_exist(WATCHLIST_ROOT)
+        assert dpg.does_item_exist("watchlist-row-1")
     finally:
         app.bridge.shutdown()
         dpg.destroy_context()
@@ -158,6 +158,7 @@ def test_refresh_uses_launcher_paths_and_returns_to_reloaded_watchlist(
     app = MuzikGuiApp(watchlist_repository=repository)
     try:
         app.launcher.build()
+        app.watchlist.build()
         downloads = tmp_path / "custom-downloads"
         splits = tmp_path / "custom-splits"
         dpg.set_value(FIELD_TAGS["output"], str(downloads))
@@ -175,8 +176,7 @@ def test_refresh_uses_launcher_paths_and_returns_to_reloaded_watchlist(
         assert captured["request"].splits == splits
         assert captured["options"].no_organize is True
         assert app.pipeline is None
-        assert app.watchlist is not None
-        assert dpg.does_item_exist(WATCHLIST_WINDOW)
+        assert dpg.does_item_exist(WATCHLIST_ROOT)
     finally:
         app.bridge.shutdown()
         dpg.destroy_context()
@@ -243,6 +243,7 @@ def test_back_cancels_refresh_then_returns_to_watchlist(
     app = MuzikGuiApp(watchlist_repository=repository)
     try:
         app.launcher.build()
+        app.watchlist.build()
         app.open_watchlist()
         app.refresh_watchlist()
         assert started.wait(1)
@@ -254,8 +255,7 @@ def test_back_cancels_refresh_then_returns_to_watchlist(
         app._worker.join(timeout=1)
         app._poll_worker()
         assert app.pipeline is None
-        assert app.watchlist is not None
-        assert dpg.does_item_exist(WATCHLIST_WINDOW)
+        assert dpg.does_item_exist(WATCHLIST_ROOT)
     finally:
         app.bridge.shutdown()
         dpg.destroy_context()
@@ -278,8 +278,8 @@ def test_cached_texture_load_is_sent_through_bridge(
     app = MuzikGuiApp(watchlist_repository=repository)
     try:
         app.launcher.build()
+        app.watchlist.build()
         app.open_watchlist()
-        assert app.watchlist is not None
         monkeypatch.setattr(
             app.watchlist,
             "load_cached_thumbnail",

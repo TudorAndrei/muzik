@@ -10,7 +10,7 @@ from muzik.core.services import ServiceStatus
 from muzik.gui.theme import ACCENT, FAIL_COLOR, NA_COLOR, OK_COLOR
 
 
-SETTINGS_WINDOW = "settings-window"
+SETTINGS_ROOT = "settings-root"
 SETTINGS_STATUS = "settings-status"
 SETTINGS_TABLE = "settings-table"
 SETTINGS_RECHECK = "settings-recheck"
@@ -27,40 +27,54 @@ class SettingsView:
         self._on_recheck = on_recheck
         self._on_close = on_close
 
-    def build(self) -> None:
-        with dpg.window(
-            tag=SETTINGS_WINDOW,
-            label="Settings - service availability",
-            modal=True,
-            width=760,
-            height=460,
-            on_close=self._on_close,
-        ):
-            dpg.add_text("Service availability", color=ACCENT)
-            dpg.add_text("Checking...", tag=SETTINGS_STATUS)
-            with dpg.table(
-                tag=SETTINGS_TABLE,
-                header_row=True,
-                resizable=True,
-                policy=dpg.mvTable_SizingStretchProp,
-                scrollY=True,
-                height=330,
+    def build(self, *, parent: int | str | None = None) -> None:
+        """Build the settings content.
+
+        With no *parent*, the content owns its own modal window (used by
+        standalone/test callers). With *parent* given, it's added directly
+        into that container instead (used by the shell's tab bar) — a modal
+        popup no longer makes sense once this is a persistent tab.
+        """
+        if parent is None:
+            with dpg.window(
+                tag=SETTINGS_ROOT,
+                label="Settings - service availability",
+                modal=True,
+                width=760,
+                height=460,
+                on_close=self._on_close,
             ):
-                dpg.add_table_column(label="Service")
-                dpg.add_table_column(label="Status")
-                dpg.add_table_column(label="Detail")
-            with dpg.group(horizontal=True):
-                dpg.add_button(
-                    label="Re-check",
-                    tag=SETTINGS_RECHECK,
-                    callback=self._on_recheck,
-                    width=100,
-                )
-                dpg.add_button(label="Close", callback=self._on_close, width=100)
+                self._build_content()
+        else:
+            with dpg.group(tag=SETTINGS_ROOT, parent=parent):
+                self._build_content()
+
+    def _build_content(self) -> None:
+        dpg.add_text("Service availability", color=ACCENT)
+        dpg.add_text("Checking...", tag=SETTINGS_STATUS)
+        with dpg.table(
+            tag=SETTINGS_TABLE,
+            header_row=True,
+            resizable=True,
+            policy=dpg.mvTable_SizingStretchProp,
+            scrollY=True,
+            height=330,
+        ):
+            dpg.add_table_column(label="Service")
+            dpg.add_table_column(label="Status")
+            dpg.add_table_column(label="Detail")
+        with dpg.group(horizontal=True):
+            dpg.add_button(
+                label="Re-check",
+                tag=SETTINGS_RECHECK,
+                callback=self._on_recheck,
+                width=100,
+            )
+            dpg.add_button(label="Close", callback=self._on_close, width=100)
 
     def destroy(self) -> None:
-        if dpg.does_item_exist(SETTINGS_WINDOW):
-            dpg.delete_item(SETTINGS_WINDOW)
+        if dpg.does_item_exist(SETTINGS_ROOT):
+            dpg.delete_item(SETTINGS_ROOT)
 
     def set_checking(self) -> None:
         if not dpg.does_item_exist(SETTINGS_TABLE):
