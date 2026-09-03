@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
 
 [project]
 name = "muzik"
@@ -46,14 +46,12 @@ muzik = "muzik.app:app"
 Repository = "https://github.com/TudorAndrei/muzik"
 Issues = "https://github.com/TudorAndrei/muzik/issues"
 
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.targets.wheel]
-packages = ["muzik"]
-
-[tool.hatch.build.targets.wheel.force-include]
-"assets/muzik-logo-v2.png" = "muzik/assets/muzik-logo-v2.png"
+[tool.maturin]
+# The Rust crate lives under rust/seakarr_bridge/, not next to this
+# pyproject.toml, so both paths must be given explicitly.
+manifest-path = "rust/seakarr_bridge/Cargo.toml"
+python-source = "."
+module-name = "muzik._seakarr"
 
 [dependency-groups]
 dev = [

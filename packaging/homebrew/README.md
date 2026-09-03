@@ -46,6 +46,10 @@ For each new tag, edit `Formula/muzik.rb` in the tap:
 
 ## Notes and caveats
 
+- **Compiles the native Soulseek module from source.** The formula depends on
+  `rust` (build-only) because the source archive has no prebuilt wheel — `pip`
+  compiles `muzik._seakarr` via Maturin during `brew install`, which also
+  needs network access to fetch the pinned `soulseek-rs-lib` git dependency.
 - **Dependencies come from PyPI at install time.** `pip` resolves the Python
   dependencies (including the `dearpygui` cp314 wheel) while `brew install` runs.
   This reaches the network during the build step, so the formula is not

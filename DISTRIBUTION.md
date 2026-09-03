@@ -132,6 +132,41 @@ smaller audience than PyPI or Homebrew.
     same GitHub Release wheel plus the `ffmpeg`/`yt-dlp` binaries.
   No PyPI upload, frozen bundle, or Docker image in this round.
 
+## Native module (Phase 7): platform-specific wheels
+
+**This section supersedes wording below it that still describes the
+pre-Phase-7 pure-Python build.** `muzik` now embeds a compiled Rust
+extension (`muzik._seakarr`, over `rust/seakarr_bridge/`) for Soulseek
+support (see PLAN.md). Two consequences:
+
+- **The build backend is Maturin, not Hatchling.** `pyproject.toml`'s
+  `[build-system]` is `maturin`; the version is `dynamic`, read from
+  `rust/seakarr_bridge/Cargo.toml`'s `[package].version` at build time
+  (`uv build`/`hatch-vcs`'s git-tag versioning is gone). The release
+  workflow sets that Cargo.toml field to the conventional-commits version
+  before each platform build, so every wheel and the sdist share one
+  version number.
+- **There is no single universal wheel anymore.** A compiled extension
+  means one wheel per (OS, CPU architecture, CPython ABI) — e.g.
+  `muzik-X.Y.Z-cp314-cp314-macosx_11_0_arm64.whl` and
+  `muzik-X.Y.Z-cp314-cp314-manylinux_2_28_x86_64.whl`, built by
+  `.github/workflows/release.yml`'s `build-macos`/`build-linux` jobs via
+  `PyO3/maturin-action`. A `uv tool install` command that names one
+  specific wheel file (as in the release plan below) only works on that
+  wheel's own platform; a user on a different platform needs the matching
+  file from the same GitHub Release, or installs from the source archive
+  (`muzik-X.Y.Z.tar.gz`), which needs a Rust toolchain to compile at
+  install time (this is what the Homebrew formula does, via
+  `depends_on "rust" => :build`).
+- **Supported platforms, this release:** macOS arm64 and Linux x86_64
+  (manylinux). No Windows wheel yet — the plan's open question about
+  macOS x86-64 is also still open. A user outside these platforms must
+  build from the source archive with Rust installed.
+- **License notice.** The source archive must carry
+  `rust/seakarr_bridge/THIRD_PARTY_NOTICES.md` (the `soulseek-rs-lib` MIT
+  notice) — `maturin sdist` includes the whole crate directory by default,
+  so this should already be true; verify it after building a real sdist.
+
 ## Release plan (macOS arm64, GitHub Releases)
 
 The build backend (`hatchling`) and the `muzik` console script are already in
@@ -171,15 +206,16 @@ This track runs after a GitHub Release exists (it installs the release wheel).
    class Muzik < Formula
      desc "Download, split, tag, and organize music from Soulseek, YouTube, and Bandcamp"
      homepage "https://github.com/TudorAndrei/muzik"
-     url "https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0-py3-none-any.whl"
-     sha256 "<wheel-sha256>"   # from the published release asset
+     url "https://github.com/TudorAndrei/muzik/releases/download/v0.1.0/muzik-0.1.0.tar.gz"
+     sha256 "<source-archive-sha256>"   # from the published release asset
+     depends_on "rust" => :build   # compiles muzik._seakarr from the sdist
      depends_on "python@3.14"
      depends_on "ffmpeg"
      depends_on "yt-dlp"
 
      def install
        venv = virtualenv_create(libexec, "python3.14")
-       system libexec/"bin/pip", "install", cached_download
+       system libexec/"bin/pip", "install", "--verbose", buildpath
        bin.install_symlink libexec/"bin/muzik"
      end
 
@@ -189,6 +225,13 @@ This track runs after a GitHub Release exists (it installs the release wheel).
    end
    ```
 
+   This installs from the **source archive** (`.tar.gz`), not a wheel — a
+   compiled Rust extension needs a matching wheel per platform, and Homebrew
+   only builds for the platform it runs on, so building from source through
+   `pip`'s normal PEP 517 flow is simpler than picking the right wheel file
+   per architecture. `pip` fetches `maturin` itself automatically as an
+   isolated build dependency (declared in `pyproject.toml`); `rust` supplies
+   the compiler `maturin` calls out to.
 3. **Pin the hash per release.** Update `url` and `sha256` for each new tag. A
    `brew bump-formula-pr`-style script or a small workflow can automate this.
 4. **Verify.** `brew install --build-from-source ./Formula/muzik.rb`, then

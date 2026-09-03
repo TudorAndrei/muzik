@@ -7,7 +7,10 @@ rumdl = "latest"
 typos = "latest"
 gitleaks = "latest"
 actionlint = "latest"
+shellcheck = "latest"
 zizmor = "latest"
+rust = "latest"
+"pipx:maturin" = "latest"
 
 [env]
 HK_MISE = 1
@@ -19,6 +22,10 @@ postinstall = "hk install --mise"
 description = "Run the DearPyGui desktop interface"
 run = "uv run muzik gui"
 
+[tasks.develop]
+description = "Rebuild the Rust bridge and reinstall muzik editable in the local venv"
+run = "uvx maturin develop --uv --release"
+
 [tasks.check]
 description = "Run the complete locked verification gate"
 run = """
@@ -28,4 +35,8 @@ uv run ruff check .
 uv run ty check . --ignore unresolved-import
 uv run pytest -q
 uv pip check
+cargo fmt --manifest-path rust/seakarr_bridge/Cargo.toml --check
+cargo clippy --manifest-path rust/seakarr_bridge/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/seakarr_bridge/Cargo.toml
+cargo build --manifest-path rust/seakarr_bridge/Cargo.toml --release
 """

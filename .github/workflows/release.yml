@@ -13,14 +13,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Version, tag, and publish
+  version:
+    name: Compute next version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     outputs:
       released: ${{ steps.version.outputs.released }}
       tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -43,29 +42,126 @@ jobs:
             {
               echo "released=true"
               echo "tag=v${next}"
+              echo "version=${next}"
             } >> "$GITHUB_OUTPUT"
             echo "Next version: ${next}"
           else
             echo "released=false" >> "$GITHUB_OUTPUT"
             echo "No conventional commits warrant a release."
           fi
-      - uses: astral-sh/setup-uv@v9.0.0
-        if: steps.version.outputs.released == 'true'
+
+  build-macos:
+    name: Build macOS arm64 wheel
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
         with:
-          enable-cache: false
-      - name: Build and publish the release
-        if: steps.version.outputs.released == 'true'
+          persist-credentials: false
+      - name: Set the shared version in Cargo.toml
+        # Cargo.toml's version is what maturin reads for the wheel's own
+        # version (pyproject.toml declares it "dynamic"), so every build job
+        # sets it to the same conventional-commits-derived version before
+        # building — otherwise each wheel would build against whatever
+        # version happens to be committed in the crate.
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" \
+            rust/seakarr_bridge/Cargo.toml
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: aarch64
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-macos-arm64
+          path: dist
+
+  build-linux:
+    name: Build Linux x86_64 wheel
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set the shared version in Cargo.toml
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" \
+            rust/seakarr_bridge/Cargo.toml
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          manylinux: auto
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-linux-x86_64
+          path: dist
+
+  build-sdist:
+    name: Build source archive
+    needs: version
+    if: needs.version.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set the shared version in Cargo.toml
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" \
+            rust/seakarr_bridge/Cargo.toml
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+  release:
+    name: Publish GitHub release
+    needs: [version, build-macos, build-linux, build-sdist]
+    if: needs.version.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      released: ${{ needs.version.outputs.released }}
+      tag: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.version.outputs.tag }}
           SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git tag "$TAG"          # local only, so hatch-vcs derives the version
-          uv build
           gh release create "$TAG" \
-            dist/muzik-*.whl \
-            dist/muzik-*.tar.gz \
+            dist/*.whl \
+            dist/*.tar.gz \
             --target "$SHA" \
             --title "$TAG" \
             --generate-notes
