@@ -396,13 +396,18 @@ def candidate_matches_track(
     *,
     duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
 ) -> bool:
-    """Identity check for direct Spotify-track acquisition.
+    """Identity check for direct Spotify-track acquisition and YouTube upgrades.
 
-    Rejects a candidate whose best-matching file duration falls outside
-    *duration_tolerance_seconds* of the known track duration, or whose
-    title/path/username text does not plausibly reference the track's
-    artist and title. A quality upgrade with the wrong recording is worse
-    than no upgrade, so this errs toward rejecting weak evidence.
+    Rejects a candidate whose duration does not plausibly correspond to
+    *track*, or whose title/path/username text does not plausibly reference
+    its artist and title. A quality upgrade with the wrong recording is
+    worse than no upgrade, so this errs toward rejecting weak evidence.
+
+    A candidate's duration is judged two ways, and either is accepted: its
+    single closest-matching file (the usual case — one peer response, one
+    matching track), or — when it has several files — their total (a
+    full-album candidate compared against a known album/video duration,
+    where no single file is expected to match on its own).
     """
     track_duration = track.duration
     if track_duration and candidate.files:
@@ -411,7 +416,13 @@ def candidate_matches_track(
             closest = min(
                 durations, key=lambda duration: abs(duration - track_duration)
             )
-            if abs(closest - track_duration) > duration_tolerance_seconds:
+            matches_single_file = (
+                abs(closest - track_duration) <= duration_tolerance_seconds
+            )
+            matches_total = len(durations) > 1 and (
+                abs(sum(durations) - track_duration) <= duration_tolerance_seconds
+            )
+            if not (matches_single_file or matches_total):
                 return False
 
     needed = {

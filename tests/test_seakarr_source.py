@@ -342,3 +342,40 @@ def test_candidate_matches_track_skips_duration_check_when_unknown() -> None:
     track = ResolvedTrack(title="One", artist="Artist", duration=None)
 
     assert candidate_matches_track(_matching_candidate(duration=9999.0), track)
+
+
+def test_candidate_matches_track_accepts_a_multi_file_album_by_total_duration() -> None:
+    # A full-album candidate's individual tracks are each much shorter than
+    # the whole video/album duration being matched against — no single file
+    # is expected to match on its own, only their total.
+    track = ResolvedTrack(title="Album", artist="Artist", duration=180.0)
+    album_candidate = Candidate(
+        source="soulseek",
+        source_id="peer:Artist/Album",
+        title="Album",
+        user="peer",
+        path="Artist/Album",
+        files=[
+            CandidateFile(name="Artist/Album/01 One.flac", size=1, duration=90.0),
+            CandidateFile(name="Artist/Album/02 Two.flac", size=1, duration=90.0),
+        ],
+    )
+
+    assert candidate_matches_track(album_candidate, track)
+
+
+def test_candidate_matches_track_rejects_a_multi_file_mismatch_on_both_checks() -> None:
+    track = ResolvedTrack(title="Album", artist="Artist", duration=180.0)
+    unrelated_files = Candidate(
+        source="soulseek",
+        source_id="peer:Artist/Album",
+        title="Album",
+        user="peer",
+        path="Artist/Album",
+        files=[
+            CandidateFile(name="Artist/Album/01 One.flac", size=1, duration=45.0),
+            CandidateFile(name="Artist/Album/02 Two.flac", size=1, duration=45.0),
+        ],
+    )
+
+    assert not candidate_matches_track(unrelated_files, track)

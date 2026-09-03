@@ -201,6 +201,17 @@ class GuiWorkflowDecisions:
 
         return self.bridge.request(show, self.cancellation)
 
+    def confirm_quality_replacement(
+        self,
+        current: Path,
+        candidate: Candidate,
+    ) -> bool:
+        self.cancellation.raise_if_cancelled()
+        # No dedicated quality-replacement modal yet (Phase 6 adds one);
+        # declining is always safe, so this never silently replaces audio
+        # the user has not reviewed.
+        return False
+
 
 class GuiBeetsDecisions:
     """Provide Beets decisions through render-thread modals."""

@@ -8,6 +8,7 @@ import tempfile
 from typing import cast
 
 from muzik.core.audio import extract_metadata, get_duration
+from muzik.core.quality import QualityPolicy
 from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
 from muzik.core.beets.events import (
     BeetsErrorEvent,
@@ -61,6 +62,7 @@ from muzik.core.workflow.service import (
     SoulseekWorkflowSource,
     acquire_from_soulseek,
     acquire_track_from_soulseek,
+    check_youtube_quality,
     find_audio_inputs,
     process_audio_plan,
     run_workflow,
@@ -222,6 +224,16 @@ def build_workflow_operations(
                 source_factory=lambda: cast(SoulseekWorkflowSource, SeakarrSource()),
                 cancellation=cancellation,
             )
+        ),
+        check_quality=lambda audio_files, *, cancellation=None: check_youtube_quality(
+            audio_files,
+            policy=QualityPolicy(options.quality_policy),
+            min_bitrate=options.min_bitrate,
+            prefer=options.prefer,
+            decisions=decisions,
+            events=events,
+            source_factory=lambda: cast(SoulseekWorkflowSource, SeakarrSource()),
+            cancellation=cancellation,
         ),
     )
 

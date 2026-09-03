@@ -237,6 +237,9 @@ class RejectChapters:
     def choose_soulseek_candidate(self, candidates):
         return candidates[0]
 
+    def confirm_quality_replacement(self, current, candidate):
+        return False
+
 
 class AcceptChapters(RejectChapters):
     def confirm_chapters(self, source, chapters):

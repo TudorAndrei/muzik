@@ -23,6 +23,7 @@ from muzik.config import (
     DEFAULT_SPLITS_DIR,
 )
 from muzik.core.audio import extract_metadata, get_duration
+from muzik.core.quality import QualityPolicy
 from muzik.core.chapters import (
     Chapter,
     find_chapters,
@@ -73,6 +74,7 @@ from muzik.core.workflow.service import (
     SoulseekWorkflowSource,
     acquire_from_soulseek as acquire_soulseek_audio,
     acquire_track_from_soulseek,
+    check_youtube_quality,
     common_parent as _common_parent,
     find_audio_inputs as _find_audio_inputs,
     process_audio_plan,
@@ -620,6 +622,19 @@ def workflow_cmd(
         "--interactive/--no-interactive",
         help="Prompt for source candidate choices when multiple results are available.",
     ),
+    quality_policy: str = typer.Option(
+        QualityPolicy.OFF.value,
+        "--quality-policy",
+        help=(
+            "After a YouTube download: off (never check), ask (check and "
+            "prompt before replacing), or auto (replace automatically when safe)."
+        ),
+    ),
+    min_bitrate: int = typer.Option(
+        256,
+        "--min-bitrate",
+        help="Lossy files at or above this bitrate (kbps) are kept as-is.",
+    ),
 ) -> None:
     """Full pipeline: acquire input → detect scenario → split/organize.
 
@@ -637,6 +652,7 @@ def workflow_cmd(
         metadata_source = MetadataSource(metadata_source)
         audio_source = AudioSource(audio_source)
         fallback = AudioFallback(fallback)
+        quality_policy = QualityPolicy(quality_policy)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -661,6 +677,8 @@ def workflow_cmd(
         prefer=prefer,
         fallback=fallback,
         interactive=interactive,
+        quality_policy=quality_policy,
+        min_bitrate=min_bitrate,
     )
     decisions: WorkflowDecisions = CliWorkflowDecisions(interactive=options.interactive)
     events: WorkflowEventEmitter = RichWorkflowEventRenderer()
@@ -739,6 +757,16 @@ def workflow_cmd(
                 events=events,
                 cancellation=cancellation,
             )
+        ),
+        check_quality=lambda audio_files, *, cancellation=None: check_youtube_quality(
+            audio_files,
+            policy=QualityPolicy(options.quality_policy),
+            min_bitrate=options.min_bitrate,
+            prefer=prefer,
+            decisions=decisions,
+            events=events,
+            source_factory=_soulseek_source,
+            cancellation=cancellation,
         ),
     )
 

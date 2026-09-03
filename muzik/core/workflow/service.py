@@ -9,16 +9,22 @@ import hashlib
 import os
 import inspect
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast
 
 from muzik.config import AUDIO_EXTENSIONS
-from muzik.core.audio import get_duration
+from muzik.core.audio import extract_metadata, get_duration
 from muzik.core.library import seed_archive_from_downloads
 import muzik.core.cache as cache_mod
-from muzik.core.chapters import Chapter
-from muzik.core.quality import QualityPolicy
+from muzik.core.chapters import Chapter, sidecar_path
+from muzik.core.quality import (
+    QualityDecision,
+    QualityPolicy,
+    decide_quality,
+    measure_quality,
+)
 from muzik.core.sources.base import (
     Candidate,
     DownloadRequest,
@@ -146,6 +152,25 @@ class SplitTask:
 
 
 @dataclass(frozen=True, slots=True)
+class QualityUpgradeResult:
+    """Outcome of checking one YouTube download against the quality policy.
+
+    ``audio_files``/``pre_split_dirs`` follow the same contract as
+    :func:`_acquire_single_workflow_inputs`'s return value, so a caller can
+    feed them into ``process_audio_plan`` unchanged. A multi-file Seakarr
+    replacement becomes a pre-split directory (chapter parsing/splitting is
+    skipped for it, same as any other pre-split input); a single-file
+    replacement stays in ``audio_files`` so it still goes through chapter
+    parsing/splitting like the YouTube file it replaced.
+    """
+
+    audio_files: list[Path]
+    pre_split_dirs: list[Path]
+    decision: QualityDecision
+    replaced: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class WorkflowRunOperations:
     # Operations may opt into cooperative cancellation with a keyword-only
     # ``cancellation`` argument. Legacy adapters remain supported.
@@ -160,6 +185,11 @@ class WorkflowRunOperations:
     # flat joined query. Falls back to ``acquire_soulseek`` with a joined
     # query when unset, so existing callers/tests are unaffected.
     acquire_soulseek_track: Callable[..., list[Path]] | None = None
+    # Measures a freshly-downloaded YouTube file and, per the configured
+    # QualityPolicy, optionally replaces it with a Seakarr upgrade. Unset
+    # (the default) skips the check entirely — existing callers/tests are
+    # unaffected until this is wired.
+    check_quality: Callable[..., QualityUpgradeResult] | None = None
 
 
 class SoulseekWorkflowSource(Protocol):
@@ -679,6 +709,176 @@ def acquire_track_from_soulseek(
     return result.files
 
 
+def _copy_chapter_sidecars(original: Path, replacement: Path) -> None:
+    """Copy yt-dlp chapter sidecars so a replacement file keeps them.
+
+    ``find_chapters`` locates sidecars by the audio file's own stem, so a
+    single-file quality replacement needs its own copies to "use the
+    YouTube chapter data" the plan calls for — swapping the audio file
+    alone would silently lose the chapters.
+    """
+    for ext in (".chapters.txt", ".info.json"):
+        source_sidecar = sidecar_path(original, ext)
+        if source_sidecar.exists():
+            shutil.copyfile(source_sidecar, sidecar_path(replacement, ext))
+
+
+def check_youtube_quality(
+    audio_files: list[Path],
+    *,
+    policy: QualityPolicy,
+    min_bitrate: int,
+    prefer: str,
+    decisions: WorkflowDecisions,
+    events: WorkflowEventEmitter | None = None,
+    source_factory: Callable[[], SoulseekWorkflowSource] = _default_soulseek_source,
+    duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
+    cancellation: CancellationToken | None = None,
+) -> QualityUpgradeResult:
+    """Measure a freshly-downloaded YouTube file and apply the quality policy.
+
+    A search or download failure never destroys the YouTube file: any
+    exception from the Seakarr side is swallowed here and reported as
+    ``KEEP_NO_SAFE_REPLACEMENT`` rather than raised, so quality checking can
+    never turn into a workflow failure. Only the pre-flight file/measurement
+    checks and ``policy == OFF`` return the more literal ``KEEP``.
+    """
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    keep = QualityUpgradeResult(
+        audio_files=audio_files, pre_split_dirs=[], decision=QualityDecision.KEEP
+    )
+    if policy == QualityPolicy.OFF or not audio_files:
+        return keep
+    primary = audio_files[0]
+    measured = measure_quality(primary)
+    if measured is None:
+        return keep
+    decision = decide_quality(measured, policy=policy, min_bitrate=min_bitrate)
+    if decision == QualityDecision.KEEP:
+        return keep
+
+    cancellation.raise_if_cancelled()
+    no_safe_replacement = QualityUpgradeResult(
+        audio_files=audio_files,
+        pre_split_dirs=[],
+        decision=QualityDecision.KEEP_NO_SAFE_REPLACEMENT,
+    )
+    try:
+        source = source_factory()
+        meta = extract_metadata(primary)
+        track = ResolvedTrack(
+            title=str(meta.get("title") or primary.stem),
+            artist=meta.get("artist") or None,
+            album=meta.get("album") or None,
+            duration=get_duration(primary),
+            source="youtube",
+        )
+        candidates = source.search(track, prefer=prefer, limit=10)
+        safe_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate_matches_track(
+                candidate, track, duration_tolerance_seconds=duration_tolerance_seconds
+            )
+        ]
+    except Exception as exc:
+        events.emit(
+            MessageEvent(
+                f"Quality check: Soulseek search failed, keeping YouTube file: {exc}",
+                severity="warning",
+            )
+        )
+        return no_safe_replacement
+
+    if not safe_candidates:
+        events.emit(
+            MessageEvent(
+                "Quality check: no safe Soulseek replacement found, keeping "
+                "the YouTube file."
+            )
+        )
+        return no_safe_replacement
+
+    candidate = safe_candidates[0]
+    if decision == QualityDecision.ASK:
+        if not decisions.confirm_quality_replacement(primary, candidate):
+            return keep
+
+    try:
+        result = cast(
+            DownloadResult,
+            _call_with_cancellation(
+                source.download,
+                candidate,
+                wait=True,
+                cancellation=cancellation,
+            ),
+        )
+    except Exception as exc:
+        events.emit(
+            MessageEvent(
+                f"Quality check: Soulseek download failed, keeping YouTube file: {exc}",
+                severity="warning",
+            )
+        )
+        return no_safe_replacement
+
+    if not result.files:
+        events.emit(
+            MessageEvent(
+                "Quality check: Soulseek download returned no files, keeping "
+                "the YouTube file.",
+                severity="warning",
+            )
+        )
+        return no_safe_replacement
+
+    if len(result.files) > 1:
+        # A multi-file replacement is treated as a pre-split album: chapter
+        # parsing/splitting is skipped for it entirely.
+        events.emit(
+            MessageEvent(
+                f"Quality check: replaced with a {len(result.files)}-file Soulseek "
+                "album, skipping chapter parsing."
+            )
+        )
+        return QualityUpgradeResult(
+            audio_files=[],
+            pre_split_dirs=[result.root],
+            decision=decision,
+            replaced=True,
+        )
+
+    replacement = result.files[0]
+    replacement_duration = get_duration(replacement)
+    original_duration = measured.duration or get_duration(primary)
+    if (
+        original_duration
+        and replacement_duration
+        and abs(replacement_duration - original_duration) > duration_tolerance_seconds
+    ):
+        events.emit(
+            MessageEvent(
+                "Quality check: replacement duration does not match the YouTube "
+                "file closely enough, keeping the YouTube file.",
+                severity="warning",
+            )
+        )
+        return no_safe_replacement
+
+    _copy_chapter_sidecars(primary, replacement)
+    events.emit(
+        MessageEvent(f"Quality check: replaced {primary.name} with {replacement.name}.")
+    )
+    return QualityUpgradeResult(
+        audio_files=[replacement],
+        pre_split_dirs=[],
+        decision=decision,
+        replaced=True,
+    )
+
+
 def _new_audio_files(before: set[Path], after: set[Path]) -> list[Path]:
     return sorted(
         path
@@ -1030,11 +1230,12 @@ def _process_playlist_video(
         return True
 
     video_url = f"https://www.youtube.com/watch?v={video_id}"
-    # Skip Soulseek once it has proven dry for the playlist: it makes an extra
-    # yt-dlp metadata call per video, so this halves the YouTube requests.
+    # A YouTube playlist always downloads with YouTubeSource first — AUTO no
+    # longer tries Soulseek before it here either (see the single-input
+    # routing above). Only an explicit --audio-source soulseek still
+    # searches Soulseek per video ahead of YouTube.
     use_soulseek = not progress.soulseek_disabled and (
         options.audio_source == AudioSource.SOULSEEK
-        or (options.audio_source == AudioSource.AUTO and operations.soulseek_ready())
     )
 
     def _mark_soulseek_dry() -> None:
@@ -1134,6 +1335,21 @@ def _process_playlist_video(
             if not new_files:
                 progress.note_failed(video_id)
                 return False
+            if operations.check_quality is not None:
+                quality_result = operations.check_quality(new_files)
+                if quality_result.pre_split_dirs:
+                    # A pre-split (multi-file) replacement does not fit this
+                    # per-video, one-file playlist state model; keep the
+                    # YouTube file rather than partially support it here.
+                    events.emit(
+                        MessageEvent(
+                            "Quality check found a multi-file replacement for a "
+                            "playlist entry; keeping the YouTube file.",
+                            severity="info",
+                        )
+                    )
+                else:
+                    new_files = quality_result.audio_files
             audio_file = new_files[0]
             playlist_state["videos"][video_id] = {
                 "status": "downloaded",
@@ -1194,8 +1410,13 @@ def _acquire_single_workflow_inputs(
     if local_input:
         audio_files = find_audio_inputs([local_path])
 
+    # A YouTube video/playlist always downloads with YouTubeSource first —
+    # AUTO no longer tries Soulseek before it. A later quality check (below)
+    # is the only thing that can still route to Soulseek for this input.
     use_soulseek = options.audio_source == AudioSource.SOULSEEK or (
-        options.audio_source == AudioSource.AUTO and operations.soulseek_ready()
+        options.audio_source == AudioSource.AUTO
+        and yt_id is None
+        and operations.soulseek_ready()
     )
     if not local_input and use_soulseek:
         try:
@@ -1243,6 +1464,10 @@ def _acquire_single_workflow_inputs(
     audio_files = _new_audio_files(before, after)
     if not audio_files and yt_id and request.output.exists():
         audio_files = find_audio_by_id(request.output, yt_id)
+    if audio_files and operations.check_quality is not None:
+        quality_result = operations.check_quality(audio_files)
+        audio_files = quality_result.audio_files
+        pre_split_dirs = pre_split_dirs + quality_result.pre_split_dirs
     if audio_files and cache_key:
         cache_mod.set(cache_key, str(audio_files[0]))
     return audio_files, pre_split_dirs

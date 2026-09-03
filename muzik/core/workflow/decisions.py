@@ -31,6 +31,12 @@ class WorkflowDecisions(Protocol):
 
     def edit_chapters(self, chapters: list[Chapter]) -> list[Chapter] | None: ...
 
+    def confirm_quality_replacement(
+        self,
+        current: Path,
+        candidate: Candidate,
+    ) -> bool: ...
+
 
 class NonInteractiveWorkflowDecisions:
     """Deterministic workflow decisions for tests and unattended runs."""
@@ -40,9 +46,11 @@ class NonInteractiveWorkflowDecisions:
         *,
         candidate_index: int = 0,
         chapter_decision: ChapterDecision = ChapterDecision.ACCEPT,
+        confirm_quality_replacement: bool = False,
     ) -> None:
         self.candidate_index = candidate_index
         self.chapter_decision = chapter_decision
+        self._confirm_quality_replacement = confirm_quality_replacement
 
     def choose_soulseek_candidate(self, candidates: list[Candidate]) -> Candidate:
         if not candidates:
@@ -60,3 +68,10 @@ class NonInteractiveWorkflowDecisions:
 
     def edit_chapters(self, chapters: list[Chapter]) -> list[Chapter] | None:
         return chapters
+
+    def confirm_quality_replacement(
+        self,
+        current: Path,
+        candidate: Candidate,
+    ) -> bool:
+        return self._confirm_quality_replacement

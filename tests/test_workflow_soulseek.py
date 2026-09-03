@@ -79,6 +79,8 @@ def test_workflow_plain_text_query_uses_soulseek_source(
         prefer="flac",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert calls == {"resolve": 1, "search": 1, "download": 1}
@@ -166,6 +168,8 @@ def test_workflow_youtube_url_uses_youtube_metadata_for_soulseek_search(
         prefer="flac",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert calls == {"youtube_resolve": 1, "soulseek_search": 1}
@@ -223,6 +227,8 @@ def test_workflow_falls_back_to_youtube_when_soulseek_has_no_candidates(
         prefer="flac",
         fallback="youtube",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert calls["youtube_download"] == 1
@@ -264,6 +270,8 @@ def test_workflow_reads_legacy_youtube_cache(
         prefer="lossless",
         fallback="youtube",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
 
@@ -303,6 +311,8 @@ def test_workflow_youtube_audio_source_uses_download_cmd(
         prefer="lossless",
         fallback="youtube",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert calls == ["https://youtube.com/watch?v=abcdefghijk"]
@@ -353,6 +363,8 @@ def test_workflow_local_folder_organizes_directory_once(
         prefer="flac",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert organized == [album]
@@ -442,6 +454,8 @@ def test_workflow_playlist_uses_soulseek_per_video(
         prefer="flac",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert calls == [

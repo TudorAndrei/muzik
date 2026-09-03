@@ -64,6 +64,8 @@ def test_cli_routes_spotify_export_to_soulseek_without_media_download(
         prefer="lossless",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert len(acquired_tracks) == 1
@@ -131,6 +133,8 @@ def test_cli_routes_spotify_csv_export_to_soulseek_with_isrc_evidence(
         prefer="lossless",
         fallback="none",
         interactive=False,
+        quality_policy="off",
+        min_bitrate=256,
     )
 
     assert len(acquired_tracks) == 1

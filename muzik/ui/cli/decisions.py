@@ -79,6 +79,30 @@ class CliWorkflowDecisions:
     def edit_chapters(self, chapters: list[Chapter]) -> list[Chapter] | None:
         return edit_chapters(chapters)
 
+    def confirm_quality_replacement(
+        self,
+        current: Path,
+        candidate: Candidate,
+    ) -> bool:
+        # A non-interactive run cannot ask, and replacing audio the user
+        # never reviewed is a bigger risk than keeping a parsed chapter
+        # list, so it declines rather than defaulting to yes.
+        if not self.interactive:
+            return False
+        console.print(
+            f"  [dim]Quality upgrade available:[/dim] {candidate.title} "
+            f"[dim]user={candidate.user or '?'} "
+            f"files={len(candidate.files)}[/dim]"
+        )
+        try:
+            raw = self.prompt(
+                f"  Replace {current.name} with this Soulseek copy? [y/N]",
+                default="n",
+            )
+        except EOFError, KeyboardInterrupt:
+            return False
+        return str(raw).strip().lower() in {"y", "yes"}
+
 
 class CliChapterReviewDecisions:
     """Decision adapter for the standalone chapter editor loop."""
