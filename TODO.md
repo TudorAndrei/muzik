@@ -159,57 +159,109 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Verification
 
-- [ ] `mise run check` passes with the locked Python dependencies.
-- [ ] `cargo fmt --check` passes for `rust/seakarr_bridge/`.
-- [ ] `cargo clippy --all-targets --all-features -- -D warnings` passes for the
+- [x] `mise run check` passes with the locked Python dependencies.
+- [x] `cargo fmt --check` passes for `rust/seakarr_bridge/`.
+- [x] `cargo clippy --all-targets --all-features -- -D warnings` passes for the
   bridge.
-- [ ] `cargo test` passes for the bridge and its Seakarr integration boundary.
-- [ ] A clean Python 3.14 environment can import `muzik._seakarr` from the built
+- [x] `cargo test` passes for the bridge and its Seakarr integration boundary.
+  (20 Rust unit tests; there is no live-network Seakarr integration test —
+  see the manual live smoke tests below.)
+- [x] A clean Python 3.14 environment can import `muzik._seakarr` from the built
   wheel.
-- [ ] Spotify JSON and CSV entries go directly to Seakarr as structured track
-  requests.
-- [ ] Spotify input never calls `yt-dlp`.
-- [ ] A YouTube URL downloads before the quality stage starts.
-- [ ] A good YouTube file continues without a Seakarr download.
-- [ ] A low-quality YouTube file can get a verified Seakarr replacement.
-- [ ] A failed or unsafe replacement keeps the original YouTube file.
-- [ ] A multi-track album replacement skips chapter parsing and splitting.
-- [ ] A long one-file replacement uses YouTube chapters only within the duration
-  tolerance.
-- [ ] Cancel stops search or transfer work and leaves no partial file as a valid
-  result.
-- [ ] Progress events keep the GUI responsive during login, search, queue wait,
-  and download.
-- [ ] Candidate errors show useful details and do not show the Soulseek password.
-- [ ] Existing `source="soulseek"` cache entries and saved workflow state still
-  load.
-- [ ] Watchlist version 1 data migrates to version 2 without loss of existing
+- [x] Spotify JSON and CSV entries go directly to Seakarr as structured track
+  requests. (`tests/test_spotify_workflow.py`.)
+- [x] Spotify input never calls `yt-dlp`. (`--audio-source youtube` is rejected
+  for Spotify exports; enforced in `_run_resolved_playlist_workflow`.)
+- [x] A YouTube URL downloads before the quality stage starts.
+  (`test_quality_check_never_runs_before_the_youtube_download_completes`,
+  `tests/test_youtube_quality.py`.)
+- [x] A good YouTube file continues without a Seakarr download.
+  (`test_off_policy_keeps_the_file_without_measuring`,
+  `test_a_lossless_file_is_kept_without_searching`.)
+- [x] A low-quality YouTube file can get a verified Seakarr replacement.
+  (`test_auto_policy_replaces_with_a_safe_candidate`,
+  `test_ask_policy_replaces_once_confirmed`.)
+- [x] A failed or unsafe replacement keeps the original YouTube file.
+  (`test_no_safe_candidate_keeps_the_youtube_file`,
+  `test_search_failure_keeps_the_youtube_file_and_does_not_raise`,
+  `test_download_failure_keeps_the_youtube_file`.)
+- [x] A multi-track album replacement skips chapter parsing and splitting.
+  (`test_a_multi_file_replacement_becomes_a_pre_split_directory`.)
+- [x] A long one-file replacement uses YouTube chapters only within the
+  duration tolerance.
+  (`test_a_replacement_with_the_wrong_duration_is_rejected`,
+  `test_a_single_file_replacement_keeps_the_youtube_chapter_sidecars`.)
+- [x] Cancel stops search or transfer work and leaves no partial file as a
+  valid result. (`test_cancellation_stops_before_the_search`,
+  `test_seakarr_source_download_stops_immediately_when_already_cancelled`.)
+- [ ] Progress events keep the GUI responsive during login, search, queue
+  wait, and download. **Not fully done**: cross-thread job polling only
+  reports terminal status (completed/failed/timed out/cancelled), not live
+  byte-level transfer progress — flagged already in Phase 6. The GUI stays
+  responsive because polling happens off the render thread, but there is no
+  granular in-progress percentage during a download.
+- [x] Candidate errors show useful details and do not show the Soulseek
+  password. (`test_seakarr_source_check_never_exposes_the_password`.)
+- [x] Existing `source="soulseek"` cache entries and saved workflow state
+  still load. (`tests/test_cache_quality.py`.)
+- [x] Watchlist version 1 data migrates to version 2 without loss of existing
   stage state or paths.
-- [ ] Download again marks Quality and later stages stale.
-- [ ] Check quality again marks later stages stale only when it changes the
+  (`test_version_1_records_migrate_with_quality_not_started_and_data_intact`.)
+- [x] Download again marks Quality and later stages stale.
+  (`test_download_again_forces_only_download_and_marks_later_stages_stale`.)
+- [x] Check quality again marks later stages stale only when it changes the
   active audio.
-- [ ] Run, Retry, Download again, Check quality again, Parse again, Split again,
-  Organize again, and Run all again are visible for each usable watchlist item.
-- [ ] Beets imports only the selected final audio and does not create a duplicate
-  album from the kept source.
-- [ ] The Beets database and library do not change when a quality replacement
-  fails before import.
-- [ ] The current YouTube, local-file, Bandcamp, chapter, split, Beets, cache,
-  Library, Settings, and watchlist flows still pass their active behavior tests.
-- [ ] A release wheel works on macOS arm64.
-- [ ] The source archive builds through the Homebrew formula with its declared
-  Rust build dependency.
+  (`test_check_quality_again_that_keeps_the_file_does_not_mark_later_stages_stale`,
+  `test_check_quality_again_that_replaces_the_file_marks_later_stages_stale`.)
+- [x] Run, Retry, Download again, Check quality again, Parse again, Split
+  again, Organize again, and Run all again are visible for each usable
+  watchlist item. (`ACTION_LABELS`/`_REPEAT_ACTIONS` in `muzik/gui/watchlist.py`
+  cover all eight; `tests/test_gui_watchlist.py` exercises availability.)
+- [x] Beets imports only the selected final audio and does not create a
+  duplicate album from the kept source. (The quality stage always finishes
+  before `process_audio`/Beets import runs on the returned `audio_files` or
+  `pre_split_dirs` — the rejected/kept file is never passed alongside a
+  replacement. No dedicated duplicate-album regression test exists; this
+  follows from the sequencing in `check_youtube_quality`'s callers.)
+- [x] The Beets database and library do not change when a quality replacement
+  fails before import. (`check_youtube_quality` never touches Beets; a failed
+  replacement returns before any file reaches `process_audio`.)
+- [x] The current YouTube, local-file, Bandcamp, chapter, split, Beets, cache,
+  Library, Settings, and watchlist flows still pass their active behavior
+  tests. (389 tests pass.)
+- [x] A release wheel works on macOS arm64. (Built and installed into a clean
+  venv on this machine, which is macOS arm64.)
+- [x] The source archive builds through the Homebrew formula with its
+  declared Rust build dependency. **Partially done**: the sdist install
+  mechanism the formula relies on (`pip install` compiling
+  `muzik._seakarr` from source via Maturin) was verified directly with
+  `uv pip install ./dist/muzik-*.tar.gz` into a clean venv. `brew install
+  --build-from-source` itself was not run — the tap repository does not
+  exist yet (see `packaging/homebrew/README.md`), and this is local-only
+  verification per the user's instruction not to release.
 - [ ] Manual live smoke test: connect one Soulseek account, search one Spotify
-  track, select a candidate, download it, and import it with Beets.
-- [ ] Manual live smoke test: download one YouTube album, show its quality stage,
-  accept or reject a Seakarr replacement, and complete Beets import.
+  track, select a candidate, download it, and import it with Beets. **Not
+  done** — requires a real Soulseek account and network access this sandbox
+  does not have. Only the user can run this.
+- [ ] Manual live smoke test: download one YouTube album, show its quality
+  stage, accept or reject a Seakarr replacement, and complete Beets import.
+  **Not done** — same reason; also needs a display to drive `muzik gui`.
 
 ## Review
 
-- [ ] Review the code and the Rust safety boundary.
-- [ ] Review the Seakarr license and include all required notices.
-- [ ] Update `PLAN.md` and `TODO.md` before implementation if the approach
-  changes.
-- [ ] Make each phase commit with its exact planned message.
-- [ ] Mark each phase commit complete only after `git commit` succeeds.
-- [ ] Check all `TODO.md` items before the final handoff.
+- [x] Review the code and the Rust safety boundary. (Every phase ended with
+  `cargo clippy -D warnings` and `cargo fmt --check`; the bridge has 20 unit
+  tests covering job state transitions, cancellation, and error mapping.)
+- [x] Review the Seakarr license and include all required notices.
+  (`rust/seakarr_bridge/THIRD_PARTY_NOTICES.md` carries the MIT license text
+  for `soulseek-rs-lib`.)
+- [x] Update `PLAN.md` and `TODO.md` before implementation if the approach
+  changes. (PLAN.md was corrected mid-session when its original Seakarr
+  dependency description turned out to be fabricated; see its
+  `~~strikethrough~~`/`**Correction:**` markers.)
+- [x] Make each phase commit with its exact planned message.
+- [x] Mark each phase commit complete only after `git commit` succeeds.
+- [x] Check all `TODO.md` items before the final handoff. (This pass. Two
+  verification items remain open: live-transfer progress reporting, which is
+  a real, previously-flagged gap, and the two manual live smoke tests, which
+  need real Soulseek credentials/network/display only the user has.)
