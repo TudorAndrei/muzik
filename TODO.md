@@ -77,24 +77,24 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Phase 5: Add the YouTube-first quality flow
 
-- [ ] Make YouTube video and playlist input download with `YouTubeSource` before
+- [x] Make YouTube video and playlist input download with `YouTubeSource` before
   any Seakarr search.
-- [ ] Add the quality operation to `WorkflowRunOperations` and
+- [x] Add the quality operation to `WorkflowRunOperations` and
   `build_workflow_operations()`.
-- [ ] Measure the YouTube download and apply the configured quality policy.
-- [ ] Search Seakarr only when the policy requests a better copy.
-- [ ] Keep the YouTube file until the replacement passes audio, duration, and
+- [x] Measure the YouTube download and apply the configured quality policy.
+- [x] Search Seakarr only when the policy requests a better copy.
+- [x] Keep the YouTube file until the replacement passes audio, duration, and
   identity checks.
-- [ ] Use a safe multi-file replacement as pre-split input.
-- [ ] Use YouTube chapters with a one-file replacement only when durations are
+- [x] Use a safe multi-file replacement as pre-split input.
+- [x] Use YouTube chapters with a one-file replacement only when durations are
   compatible.
-- [ ] Continue with the YouTube file when the policy permits and replacement is
+- [x] Continue with the YouTube file when the policy permits and replacement is
   not possible.
-- [ ] Test single videos, playlists, full albums, no chapters, no Seakarr result,
+- [x] Test single videos, playlists, full albums, no chapters, no Seakarr result,
   bad replacement audio, wrong duration, cancellation, and recovery.
-- [ ] Prove that no Seakarr call occurs before the YouTube download.
-- [ ] Run `mise run check` and the Rust checks.
-- [ ] Commit: `feat(workflow): add YouTube-first quality upgrades`
+- [x] Prove that no Seakarr call occurs before the YouTube download.
+- [x] Run `mise run check` and the Rust checks.
+- [x] Commit: `feat(workflow): add YouTube-first quality upgrades`
 
 ## Phase 6: Show quality state and controls
 
