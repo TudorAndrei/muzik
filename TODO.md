@@ -43,20 +43,20 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Phase 3: Replace the slskd adapter
 
-- [ ] Add `muzik/core/sources/seakarr.py` and map Rust data to `Candidate`,
+- [x] Add `muzik/core/sources/seakarr.py` and map Rust data to `Candidate`,
   `CandidateFile`, `QualityInfo`, and `DownloadResult`.
-- [ ] Replace `SoulseekSource` use in workflow operations, workflow services,
+- [x] Replace `SoulseekSource` use in workflow operations, workflow services,
   CLI commands, and service checks.
-- [ ] Add Seakarr and Soulseek settings to `muzik/config.py` and
+- [x] Add Seakarr and Soulseek settings to `muzik/config.py` and
   `.env.example`.
-- [ ] Update `muzik config`, `muzik init`, and Settings status text.
-- [ ] Keep `muzik soulseek` and `source="soulseek"` data compatible.
-- [ ] Remove `slskd-api` from `pyproject.toml`.
-- [ ] Remove the slskd service from `docker-compose.yml`.
-- [ ] Replace slskd fixtures with bridge data used by active behavior tests.
-- [ ] Test readiness, login errors, search, selection, download, progress,
+- [x] Update `muzik config`, `muzik init`, and Settings status text.
+- [x] Keep `muzik soulseek` and `source="soulseek"` data compatible.
+- [x] Remove `slskd-api` from `pyproject.toml`.
+- [x] Remove the slskd service from `docker-compose.yml`.
+- [x] Replace slskd fixtures with bridge data used by active behavior tests.
+- [x] Test readiness, login errors, search, selection, download, progress,
   cancellation, cache compatibility, and secret redaction.
-- [ ] Run `mise run check` and the Rust checks.
+- [x] Run `mise run check` and the Rust checks.
 - [ ] Commit: `refactor(soulseek): replace slskd with embedded Seakarr`
 
 ## Phase 4: Route Spotify tracks directly to Seakarr
