@@ -420,7 +420,10 @@ class WatchlistView:
         with dpg.child_window(
             tag=f"watchlist-row-{item.position}",
             parent=GRID,
-            height=235,
+            # Tall enough for the title, state line, stage rail, an optional
+            # error line, and all 7 action buttons (3 rows of 3) without the
+            # card itself needing to scroll.
+            height=300,
             border=False,
             no_scrollbar=True,
         ):
