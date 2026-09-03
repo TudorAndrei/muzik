@@ -9,16 +9,22 @@ from enum import Enum
 from pathlib import Path
 
 from muzik.core.chapters import find_chapters
+from muzik.core.quality import QualityPolicy
 from muzik.core.sources.youtube import find_audio_by_id
 from muzik.core.watchlist import StageRecord, StageStatus, WatchlistItem
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
-from muzik.core.workflow.service import WorkflowOptions, WorkflowRequest
+from muzik.core.workflow.service import (
+    QualityUpgradeResult,
+    WorkflowOptions,
+    WorkflowRequest,
+)
 
 
 class ItemAction(str, Enum):
     RUN = "run"
     RETRY = "retry"
     DOWNLOAD_AGAIN = "download_again"
+    CHECK_QUALITY_AGAIN = "check_quality_again"
     PARSE_AGAIN = "parse_again"
     SPLIT_AGAIN = "split_again"
     ORGANIZE_AGAIN = "organize_again"
@@ -39,6 +45,9 @@ class ActionAvailability:
 class ItemActionOperations:
     run_workflow: Callable[[WorkflowRequest, WorkflowOptions, CancellationToken], None]
     parse_chapters: Callable[[Path, str, CancellationToken], Path]
+    check_quality: Callable[
+        [Path, WorkflowOptions, CancellationToken], QualityUpgradeResult
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +122,8 @@ def item_action_availability(
             "Download this video before you run this command.",
         )
     if action == ItemAction.PARSE_AGAIN:
+        return ActionAvailability(True)
+    if action == ItemAction.CHECK_QUALITY_AGAIN:
         return ActionAvailability(True)
     if action == ItemAction.SPLIT_AGAIN:
         if not find_chapters(audio):
@@ -247,6 +258,37 @@ def _run_action(
         )
         _mark_stale(item, "split", "organize")
         return
+    if action == ItemAction.CHECK_QUALITY_AGAIN:
+        result = operations.check_quality(audio, options, cancellation)
+        if result.pre_split_dirs:
+            # A multi-file replacement changes what "download" even means for
+            # this item (a directory, not one file) — later stages restart.
+            item.stages["download"] = StageRecord(
+                status=StageStatus.COMPLETE,
+                updated_at=_now(),
+                path=str(result.pre_split_dirs[0]),
+            )
+            item.stages["quality"] = StageRecord(
+                status=StageStatus.COMPLETE, updated_at=_now()
+            )
+            _mark_stale(item, "parse", "split", "organize")
+            return
+        replacement = result.audio_files[0] if result.audio_files else audio
+        item.stages["quality"] = StageRecord(
+            status=StageStatus.COMPLETE,
+            updated_at=_now(),
+            path=str(replacement.resolve()) if result.replaced else None,
+        )
+        if result.replaced:
+            # The active audio file changed: parse/split/organize ran against
+            # the old one and no longer reflect what will be imported.
+            item.stages["download"] = StageRecord(
+                status=StageStatus.COMPLETE,
+                updated_at=_now(),
+                path=str(replacement.resolve()),
+            )
+            _mark_stale(item, "parse", "split", "organize")
+        return
     if action == ItemAction.SPLIT_AGAIN:
         operations.run_workflow(
             replace(request, raw=str(audio)),
@@ -277,13 +319,15 @@ def _run_action(
 def _target_stage(item: WatchlistItem, action: ItemAction) -> str:
     if action in {ItemAction.DOWNLOAD_AGAIN, ItemAction.RUN_ALL_AGAIN}:
         return "download"
+    if action == ItemAction.CHECK_QUALITY_AGAIN:
+        return "quality"
     if action == ItemAction.PARSE_AGAIN:
         return "parse"
     if action == ItemAction.SPLIT_AGAIN:
         return "split"
     if action == ItemAction.ORGANIZE_AGAIN:
         return "organize"
-    for name in ("download", "parse", "split", "organize"):
+    for name in ("download", "quality", "parse", "split", "organize"):
         if item.stages[name].status not in {
             StageStatus.COMPLETE,
             StageStatus.SKIPPED,
@@ -333,6 +377,12 @@ def _mark_full_workflow_complete(
     item.last_error = None
     item.stages["download"].status = StageStatus.COMPLETE
     item.stages["download"].updated_at = _now()
+    item.stages["quality"].status = (
+        StageStatus.SKIPPED
+        if QualityPolicy(options.quality_policy) == QualityPolicy.OFF
+        else StageStatus.COMPLETE
+    )
+    item.stages["quality"].updated_at = _now()
     item.stages["parse"].status = (
         StageStatus.SKIPPED if options.no_split else StageStatus.COMPLETE
     )

@@ -879,6 +879,8 @@ def _workflow_options(config: WorkflowLaunchConfig) -> WorkflowOptions:
         prefer=config.prefer,
         fallback=config.fallback,
         interactive=config.interactive,
+        quality_policy=config.quality_policy,
+        min_bitrate=config.min_bitrate,
     )
 
 

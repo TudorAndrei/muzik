@@ -13,6 +13,7 @@ import tempfile
 from typing import Any, cast
 
 from muzik.config import MUZIK_WATCHLIST_FILE
+from muzik.core.quality import QualityPolicy
 from muzik.core.sources.youtube import (
     PlaylistLookupError,
     YouTubePlaylistItem,
@@ -41,8 +42,13 @@ from muzik.core.workflow.service import (
 )
 
 
-WATCHLIST_VERSION = 1
-STAGE_NAMES = ("download", "parse", "split", "organize")
+WATCHLIST_VERSION = 2
+# Version 1 records have no "quality" key in their saved stages dict, so
+# _item_from_data's data-driven loop below leaves it at its NOT_STARTED
+# default — no separate migration step is needed beyond accepting the old
+# version number and always saving the current one back.
+SUPPORTED_WATCHLIST_VERSIONS = (1, WATCHLIST_VERSION)
+STAGE_NAMES = ("download", "quality", "parse", "split", "organize")
 
 
 class WatchlistError(RuntimeError):
@@ -549,6 +555,12 @@ def _mark_workflow_completed(
     item.last_error = None
     item.stages["download"].status = StageStatus.COMPLETE
     item.stages["download"].updated_at = updated_at
+    item.stages["quality"].status = (
+        StageStatus.SKIPPED
+        if QualityPolicy(options.quality_policy) == QualityPolicy.OFF
+        else StageStatus.COMPLETE
+    )
+    item.stages["quality"].updated_at = updated_at
     item.stages["parse"].status = (
         StageStatus.SKIPPED if options.no_split else StageStatus.COMPLETE
     )
@@ -571,9 +583,10 @@ def _now() -> str:
 def _watchlist_from_data(raw: object) -> Watchlist:
     root = _mapping(raw, "watchlist")
     version = root.get("version")
-    if version != WATCHLIST_VERSION:
+    if version not in SUPPORTED_WATCHLIST_VERSIONS:
         raise WatchlistFormatError(
-            f"Unsupported watchlist version {version!r}; expected {WATCHLIST_VERSION}."
+            f"Unsupported watchlist version {version!r}; expected one of "
+            f"{SUPPORTED_WATCHLIST_VERSIONS}."
         )
     playlists_raw = root.get("playlists")
     if not isinstance(playlists_raw, list):

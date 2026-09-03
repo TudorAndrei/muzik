@@ -131,6 +131,61 @@ def test_invalid_watchlist_is_not_replaced(
     assert path.read_text(encoding="utf-8") == content
 
 
+def test_version_1_records_migrate_with_quality_not_started_and_data_intact(
+    tmp_path: Path,
+) -> None:
+    """A saved version 1 watchlist has no "quality" key in its stages dict —
+    loading it must not reject it, must not touch its existing download/
+    parse/split/organize results, and must add "quality" as NOT_STARTED."""
+    path = tmp_path / "watchlist.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "playlists": [
+                    {
+                        "playlist_id": "PL1",
+                        "url": "https://www.youtube.com/playlist?list=PL1",
+                        "items": [
+                            {
+                                "position": 1,
+                                "title": "Song",
+                                "video_id": "abcdefghijk",
+                                "stages": {
+                                    "download": {
+                                        "status": "complete",
+                                        "path": "/music/song.flac",
+                                    },
+                                    "parse": {"status": "complete"},
+                                    "split": {"status": "skipped"},
+                                    "organize": {"status": "complete"},
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository = WatchlistRepository(path)
+
+    loaded = repository.load()
+
+    assert loaded.version == 2
+    item = loaded.playlists[0].items[0]
+    assert item.stages["quality"].status is StageStatus.NOT_STARTED
+    assert item.stages["download"].status is StageStatus.COMPLETE
+    assert item.stages["download"].path == "/music/song.flac"
+    assert item.stages["parse"].status is StageStatus.COMPLETE
+    assert item.stages["split"].status is StageStatus.SKIPPED
+    assert item.stages["organize"].status is StageStatus.COMPLETE
+
+    # Saving it back upgrades the file's own version field to 2.
+    repository.save(loaded)
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+
+
 def test_save_replaces_file_from_same_directory(
     tmp_path: Path,
     monkeypatch,
@@ -151,7 +206,7 @@ def test_save_replaces_file_from_same_directory(
 
     assert calls and calls[0][0].parent == path.parent
     assert calls[0][1] == path
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
     assert list(path.parent.glob(".watchlist.json.*.tmp")) == []
 
 

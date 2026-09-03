@@ -755,6 +755,13 @@ def check_youtube_quality(
     if measured is None:
         return keep
     decision = decide_quality(measured, policy=policy, min_bitrate=min_bitrate)
+    bitrate_text = f"{measured.bitrate}kbps" if measured.bitrate else "unknown bitrate"
+    events.emit(
+        MessageEvent(
+            f"Quality check: {primary.name} is {measured.format or 'unknown format'}, "
+            f"{bitrate_text} ({decision.value})."
+        )
+    )
     if decision == QualityDecision.KEEP:
         return keep
 
@@ -791,6 +798,9 @@ def check_youtube_quality(
         )
         return no_safe_replacement
 
+    events.emit(
+        CandidatesFoundEvent(candidates=safe_candidates, source="soulseek", limit=10)
+    )
     if not safe_candidates:
         events.emit(
             MessageEvent(

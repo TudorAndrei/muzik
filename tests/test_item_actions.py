@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from muzik.core.chapters import sidecar_path
+from muzik.core.quality import QualityDecision
 from muzik.core.watchlist import StageRecord, StageStatus, WatchlistItem
 from muzik.core.workflow import operations as workflow_operations
 from muzik.core.workflow.cancellation import WorkflowCancelled
@@ -17,6 +18,7 @@ from muzik.core.workflow.item_actions import (
     run_item_action,
 )
 from muzik.core.workflow.service import (
+    QualityUpgradeResult,
     WorkflowOptions,
     WorkflowRequest,
     WorkflowServiceError,
@@ -38,6 +40,40 @@ def _request(tmp_path: Path) -> WorkflowRequest:
         output=tmp_path / "downloads",
         splits=tmp_path / "splits",
     )
+
+
+def _fail_check_quality(*args):
+    raise AssertionError("check_quality should not run for this action")
+
+
+def test_stage_names_order_puts_quality_between_download_and_parse() -> None:
+    from muzik.core.watchlist import STAGE_NAMES
+
+    assert STAGE_NAMES == ("download", "quality", "parse", "split", "organize")
+
+
+@pytest.mark.parametrize(
+    ("quality_policy", "expected_status"),
+    [("off", StageStatus.SKIPPED), ("ask", StageStatus.COMPLETE)],
+)
+def test_run_marks_quality_stage_from_the_configured_policy(
+    tmp_path: Path,
+    quality_policy: str,
+    expected_status: StageStatus,
+) -> None:
+    item = _item()
+
+    run_item_action(
+        item,
+        ItemAction.RUN,
+        request=_request(tmp_path),
+        options=WorkflowOptions(quality_policy=quality_policy),
+        operations=ItemActionOperations(
+            lambda *args: None, lambda *args: Path("unused"), _fail_check_quality
+        ),
+    )
+
+    assert item.stages["quality"].status is expected_status
 
 
 def test_download_again_forces_only_download_and_marks_later_stages_stale(
@@ -63,7 +99,9 @@ def test_download_again_forces_only_download_and_marks_later_stages_stale(
         ItemAction.DOWNLOAD_AGAIN,
         request=_request(tmp_path),
         options=WorkflowOptions(),
-        operations=ItemActionOperations(run, lambda *args: Path("unused")),
+        operations=ItemActionOperations(
+            run, lambda *args: Path("unused"), _fail_check_quality
+        ),
         on_state_change=changed,
     )
 
@@ -99,12 +137,139 @@ def test_parse_again_marks_later_stages_stale(tmp_path: Path) -> None:
         ItemAction.PARSE_AGAIN,
         request=_request(tmp_path),
         options=WorkflowOptions(),
-        operations=ItemActionOperations(lambda *args: None, parse),
+        operations=ItemActionOperations(lambda *args: None, parse, _fail_check_quality),
     )
 
     assert item.stages["parse"].path == str(chapter_path.resolve())
     assert item.stages["split"].status is StageStatus.STALE
     assert item.stages["organize"].status is StageStatus.STALE
+
+
+def test_check_quality_again_that_keeps_the_file_does_not_mark_later_stages_stale(
+    tmp_path: Path,
+) -> None:
+    item = _item()
+    audio = tmp_path / "Mix [abcdefghijk].m4a"
+    audio.write_bytes(b"audio")
+    item.stages["download"] = StageRecord(status=StageStatus.COMPLETE, path=str(audio))
+    item.stages["parse"].status = StageStatus.COMPLETE
+    item.stages["split"].status = StageStatus.COMPLETE
+    item.stages["organize"].status = StageStatus.COMPLETE
+
+    def check_quality(checked_audio, options, cancellation):
+        assert checked_audio == audio
+        return QualityUpgradeResult(
+            audio_files=[checked_audio],
+            pre_split_dirs=[],
+            decision=QualityDecision.KEEP,
+            replaced=False,
+        )
+
+    run_item_action(
+        item,
+        ItemAction.CHECK_QUALITY_AGAIN,
+        request=_request(tmp_path),
+        options=WorkflowOptions(),
+        operations=ItemActionOperations(
+            lambda *args: None, lambda *args: Path("unused"), check_quality
+        ),
+    )
+
+    assert item.stages["quality"].status is StageStatus.COMPLETE
+    assert item.stages["quality"].path is None
+    # The active audio file did not change, so nothing downstream is stale.
+    assert item.stages["parse"].status is StageStatus.COMPLETE
+    assert item.stages["split"].status is StageStatus.COMPLETE
+    assert item.stages["organize"].status is StageStatus.COMPLETE
+
+
+def test_check_quality_again_that_replaces_the_file_marks_later_stages_stale(
+    tmp_path: Path,
+) -> None:
+    item = _item()
+    audio = tmp_path / "Mix [abcdefghijk].m4a"
+    audio.write_bytes(b"audio")
+    replacement = tmp_path / "Mix.flac"
+    replacement.write_bytes(b"better")
+    item.stages["download"] = StageRecord(status=StageStatus.COMPLETE, path=str(audio))
+    item.stages["parse"].status = StageStatus.COMPLETE
+    item.stages["split"].status = StageStatus.COMPLETE
+    item.stages["organize"].status = StageStatus.COMPLETE
+
+    def check_quality(checked_audio, options, cancellation):
+        return QualityUpgradeResult(
+            audio_files=[replacement],
+            pre_split_dirs=[],
+            decision=QualityDecision.REPLACE,
+            replaced=True,
+        )
+
+    run_item_action(
+        item,
+        ItemAction.CHECK_QUALITY_AGAIN,
+        request=_request(tmp_path),
+        options=WorkflowOptions(),
+        operations=ItemActionOperations(
+            lambda *args: None, lambda *args: Path("unused"), check_quality
+        ),
+    )
+
+    assert item.stages["quality"].status is StageStatus.COMPLETE
+    assert item.stages["quality"].path == str(replacement.resolve())
+    assert item.stages["download"].path == str(replacement.resolve())
+    assert item.stages["parse"].status is StageStatus.STALE
+    assert item.stages["split"].status is StageStatus.STALE
+    assert item.stages["organize"].status is StageStatus.STALE
+
+
+def test_check_quality_again_with_a_pre_split_replacement_restarts_from_download(
+    tmp_path: Path,
+) -> None:
+    item = _item()
+    audio = tmp_path / "Mix [abcdefghijk].m4a"
+    audio.write_bytes(b"audio")
+    album_dir = tmp_path / "album"
+    album_dir.mkdir()
+    item.stages["download"] = StageRecord(status=StageStatus.COMPLETE, path=str(audio))
+    item.stages["parse"].status = StageStatus.COMPLETE
+    item.stages["split"].status = StageStatus.COMPLETE
+    item.stages["organize"].status = StageStatus.COMPLETE
+
+    def check_quality(checked_audio, options, cancellation):
+        return QualityUpgradeResult(
+            audio_files=[],
+            pre_split_dirs=[album_dir],
+            decision=QualityDecision.REPLACE,
+            replaced=True,
+        )
+
+    run_item_action(
+        item,
+        ItemAction.CHECK_QUALITY_AGAIN,
+        request=_request(tmp_path),
+        options=WorkflowOptions(),
+        operations=ItemActionOperations(
+            lambda *args: None, lambda *args: Path("unused"), check_quality
+        ),
+    )
+
+    assert item.stages["download"].path == str(album_dir)
+    assert item.stages["quality"].status is StageStatus.COMPLETE
+    assert item.stages["parse"].status is StageStatus.STALE
+    assert item.stages["split"].status is StageStatus.STALE
+    assert item.stages["organize"].status is StageStatus.STALE
+
+
+def test_check_quality_again_requires_downloaded_audio(tmp_path: Path) -> None:
+    item = _item()
+    request = _request(tmp_path)
+
+    availability = item_action_availability(
+        item, ItemAction.CHECK_QUALITY_AGAIN, request=request
+    )
+
+    assert availability.enabled is False
+    assert availability.reason == "Download this video before you run this command."
 
 
 def test_split_again_requires_chapters_and_marks_organize_stale(
@@ -133,7 +298,9 @@ def test_split_again_requires_chapters_and_marks_organize_stale(
         ItemAction.SPLIT_AGAIN,
         request=request,
         options=WorkflowOptions(),
-        operations=ItemActionOperations(run, lambda *args: Path("unused")),
+        operations=ItemActionOperations(
+            run, lambda *args: Path("unused"), _fail_check_quality
+        ),
     )
 
     assert item.stages["split"].status is StageStatus.COMPLETE
@@ -157,7 +324,9 @@ def test_organize_again_uses_split_directory(tmp_path: Path) -> None:
         ItemAction.ORGANIZE_AGAIN,
         request=_request(tmp_path),
         options=WorkflowOptions(),
-        operations=ItemActionOperations(run, lambda *args: Path("unused")),
+        operations=ItemActionOperations(
+            run, lambda *args: Path("unused"), _fail_check_quality
+        ),
     )
 
     assert calls[0][0].raw == str(split_dir)
@@ -179,7 +348,9 @@ def test_item_action_failure_is_saved_and_retry_becomes_primary(tmp_path: Path) 
             ItemAction.RUN,
             request=_request(tmp_path),
             options=WorkflowOptions(),
-            operations=ItemActionOperations(fail, lambda *args: Path("unused")),
+            operations=ItemActionOperations(
+                fail, lambda *args: Path("unused"), _fail_check_quality
+            ),
             on_state_change=lambda: saved_states.append(item.stages["download"].status),
         )
 
@@ -202,7 +373,9 @@ def test_item_action_cancellation_restores_previous_stage(tmp_path: Path) -> Non
             ItemAction.RUN,
             request=_request(tmp_path),
             options=WorkflowOptions(),
-            operations=ItemActionOperations(cancel, lambda *args: Path("unused")),
+            operations=ItemActionOperations(
+                cancel, lambda *args: Path("unused"), _fail_check_quality
+            ),
         )
 
     assert item.stages["download"].status is StageStatus.STALE

@@ -5,6 +5,7 @@ from typing import Any, cast
 
 import dearpygui.dearpygui as dpg
 
+from muzik.core.quality import QualityPolicy
 from muzik.core.thumbnails import ThumbnailRequest, ThumbnailResult
 from muzik.core.watchlist import (
     Watchlist,
@@ -17,8 +18,21 @@ from muzik.core.workflow.item_actions import ItemAction, ItemActionOperations
 from muzik.core.workflow.launch import WorkflowLaunchConfig
 from muzik.core.workflow.service import WorkflowRunOperations
 from muzik.gui.launcher import FIELD_TAGS
-from muzik.gui.app import MuzikGuiApp
+from muzik.gui.app import MuzikGuiApp, _workflow_options
 from muzik.gui.watchlist import WATCHLIST_WINDOW
+
+
+def test_workflow_options_carries_the_launcher_quality_settings() -> None:
+    config = WorkflowLaunchConfig(
+        raw="https://youtube.com/watch?v=abcdefghijk",
+        quality_policy=QualityPolicy.ASK,
+        min_bitrate=192,
+    )
+
+    options = _workflow_options(config)
+
+    assert QualityPolicy(options.quality_policy) == QualityPolicy.ASK
+    assert options.min_bitrate == 192
 
 
 def test_direct_gui_launch_sets_viewport_icons(monkeypatch) -> None:
@@ -179,6 +193,9 @@ def test_item_action_saves_state_and_returns_to_watchlist(
         return ItemActionOperations(
             run_workflow=lambda request, options, cancellation: ran.set(),
             parse_chapters=lambda audio, url, cancellation: audio,
+            check_quality=lambda audio, options, cancellation: (_ for _ in ()).throw(
+                AssertionError("check_quality should not run")
+            ),
         )
 
     monkeypatch.setattr("muzik.gui.app.build_item_action_operations", operations)

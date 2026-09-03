@@ -154,6 +154,53 @@ def test_cards_show_item_data_stage_rail_and_placeholder(tmp_path: Path) -> None
         dpg.destroy_context()
 
 
+def test_stage_rail_shows_quality_state_across_a_full_run(tmp_path: Path) -> None:
+    """Render-context smoke test: a pending quality check, an active
+    transfer, a kept YouTube file, and a completed replacement, all on one
+    watchlist page."""
+    pending = _item(1)
+    pending.stages["quality"] = StageRecord(status=StageStatus.NOT_STARTED)
+
+    active_transfer = _item(2)
+    active_transfer.stages["download"] = StageRecord(status=StageStatus.COMPLETE)
+    active_transfer.stages["quality"] = StageRecord(status=StageStatus.RUNNING)
+
+    kept_youtube_file = _item(3)
+    kept_youtube_file.stages["download"] = StageRecord(status=StageStatus.COMPLETE)
+    kept_youtube_file.stages["quality"] = StageRecord(status=StageStatus.COMPLETE)
+
+    completed_replacement = _item(4)
+    completed_replacement.stages["download"] = StageRecord(
+        status=StageStatus.COMPLETE, path="/music/replacement.flac"
+    )
+    completed_replacement.stages["quality"] = StageRecord(
+        status=StageStatus.COMPLETE, path="/music/replacement.flac"
+    )
+
+    playlist = WatchlistPlaylist(
+        "PL123",
+        "https://example.test",
+        items=[pending, active_transfer, kept_youtube_file, completed_replacement],
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([playlist]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        text = _text_values(GRID)
+
+        assert text.count("Quality: Not started") == 1
+        assert text.count("Quality: Running") == 1
+        assert text.count("Quality: Complete") == 2
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
 def test_items_render_as_vertical_rows_with_controls(tmp_path: Path) -> None:
     playlist = WatchlistPlaylist(
         "PL123",

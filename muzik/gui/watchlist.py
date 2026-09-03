@@ -61,6 +61,7 @@ ACTION_LABELS = {
     ItemAction.RUN: "Run",
     ItemAction.RETRY: "Retry",
     ItemAction.DOWNLOAD_AGAIN: "Download again",
+    ItemAction.CHECK_QUALITY_AGAIN: "Check quality again",
     ItemAction.PARSE_AGAIN: "Parse again",
     ItemAction.SPLIT_AGAIN: "Split again",
     ItemAction.ORGANIZE_AGAIN: "Organize again",
@@ -68,6 +69,7 @@ ACTION_LABELS = {
 }
 _REPEAT_ACTIONS = (
     ItemAction.DOWNLOAD_AGAIN,
+    ItemAction.CHECK_QUALITY_AGAIN,
     ItemAction.PARSE_AGAIN,
     ItemAction.SPLIT_AGAIN,
     ItemAction.ORGANIZE_AGAIN,
@@ -76,6 +78,7 @@ _REPEAT_ACTIONS = (
 
 _STAGE_LABELS = {
     "download": "Download",
+    "quality": "Quality",
     "parse": "Parse",
     "split": "Split",
     "organize": "Organize",

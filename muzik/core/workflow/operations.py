@@ -269,6 +269,28 @@ def build_item_action_operations(
             cancellation=cancellation,
         )
 
+    def check_quality_action(
+        audio: Path,
+        options: WorkflowOptions,
+        cancellation: CancellationToken,
+    ):
+        # An explicit "check quality again" click always actually checks —
+        # a global "off" policy would otherwise make this button a silent
+        # no-op, which is not what a user asking for it right now expects.
+        policy = QualityPolicy(options.quality_policy)
+        if policy == QualityPolicy.OFF:
+            policy = QualityPolicy.ASK
+        return check_youtube_quality(
+            [audio],
+            policy=policy,
+            min_bitrate=options.min_bitrate,
+            prefer=options.prefer,
+            decisions=decisions,
+            events=events,
+            source_factory=lambda: cast(SoulseekWorkflowSource, SeakarrSource()),
+            cancellation=cancellation,
+        )
+
     return ItemActionOperations(
         run_workflow=run_action,
         parse_chapters=lambda audio, video_url, cancellation: refresh_youtube_chapters(
@@ -278,6 +300,7 @@ def build_item_action_operations(
             events=events,
             cancellation=cancellation,
         ),
+        check_quality=check_quality_action,
     )
 
 
