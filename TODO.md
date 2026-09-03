@@ -57,23 +57,23 @@ Corrected against the real dependency before implementation — see PLAN.md's
 - [x] Test readiness, login errors, search, selection, download, progress,
   cancellation, cache compatibility, and secret redaction.
 - [x] Run `mise run check` and the Rust checks.
-- [ ] Commit: `refactor(soulseek): replace slskd with embedded Seakarr`
+- [x] Commit: `refactor(soulseek): replace slskd with embedded Seakarr`
 
 ## Phase 4: Route Spotify tracks directly to Seakarr
 
-- [ ] Change metadata-only acquisition in `WorkflowRunOperations` to accept a
+- [x] Change metadata-only acquisition in `WorkflowRunOperations` to accept a
   `ResolvedTrack`.
-- [ ] Pass each Spotify entry directly from
+- [x] Pass each Spotify entry directly from
   `_run_resolved_playlist_workflow()` to the Seakarr adapter.
-- [ ] Use artist, title, album, duration, track number, and ISRC as separate
+- [x] Use artist, title, album, duration, track number, and ISRC as separate
   identity evidence.
-- [ ] Use track search for playlist tracks. Do not get a complete album for one
+- [x] Use track search for playlist tracks. Do not get a complete album for one
   playlist track.
-- [ ] Keep playlist state, duplicate occurrence, and resume behavior.
-- [ ] Test JSON and CSV input, direct structured requests, no YouTube call,
+- [x] Keep playlist state, duplicate occurrence, and resume behavior.
+- [x] Test JSON and CSV input, direct structured requests, no YouTube call,
   unsafe matches, cancellation, duplicate tracks, and resume behavior.
-- [ ] Run `mise run check` and the Rust checks.
-- [ ] Commit: `feat(spotify): acquire tracks directly with Seakarr`
+- [x] Run `mise run check` and the Rust checks.
+- [x] Commit: `feat(spotify): acquire tracks directly with Seakarr`
 
 ## Phase 5: Add the YouTube-first quality flow
 
