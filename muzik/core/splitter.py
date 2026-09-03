@@ -18,6 +18,7 @@ from muzik.core.chapters import (
     sidecar_path,
     strip_featured,
 )
+from muzik.core.metadata import find_muzik_metadata, write_muzik_metadata
 from muzik.core.workflow.cancellation import CancellationToken
 
 
@@ -60,6 +61,8 @@ def split_audio(
         raise SplitError("No chapters found.")
 
     metadata = extract_metadata(path)
+    source_meta = find_muzik_metadata(path)
+    source_id = source_meta.get("source_id") if source_meta else None
     chapter_path = sidecar_path(path, ".chapters.txt")
     cache_key: str | None = None
     if chapter_path.exists():
@@ -93,6 +96,7 @@ def split_audio(
                 metadata,
                 len(chapters),
                 compilation,
+                source_id,
             ): chapter
             for chapter in chapters
         }
@@ -152,6 +156,7 @@ def _split_track(
     metadata: dict,
     track_count: int,
     compilation: bool = False,
+    source_id: str | None = None,
 ) -> tuple[bool, str]:
     # For a compilation, identify each song's own artist from its
     # "Artist - Song" title; the album artist becomes "Various Artists".
@@ -214,4 +219,10 @@ def _split_track(
         ]
     )
     result = subprocess.run(command, capture_output=True)
-    return result.returncode == 0, chapter.title
+    ok = result.returncode == 0
+    if ok and source_id:
+        # The muzik_source beets plugin reads this at import time, before
+        # the file is moved into the library, to record an exact video-id
+        # match for the Watchlist page instead of guessing from the title.
+        write_muzik_metadata(output_path, {"source_id": source_id})
+    return ok, chapter.title

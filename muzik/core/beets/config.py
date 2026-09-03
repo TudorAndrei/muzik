@@ -12,7 +12,7 @@ from beets.library import Library
 # muzik ships its own beets plugins (e.g. ftclean) in this directory. Adding it
 # to beets' pluginpath makes them importable as ``beetsplug.<name>``.
 _PLUGIN_DIR = Path(__file__).resolve().parent.parent.parent / "beets_plugins"
-_MUZIK_PLUGINS = ["ftclean"]
+_MUZIK_PLUGINS = ["ftclean", "muzik_source"]
 
 
 def load_config(config_path: Path | None = None) -> None:

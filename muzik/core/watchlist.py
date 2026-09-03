@@ -16,7 +16,7 @@ from beets.library import Library
 
 from muzik.config import MUZIK_WATCHLIST_FILE
 from muzik.core.beets.config import open_library
-from muzik.core.beets.lookup import find_organized_path
+from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
 from muzik.core.quality import QualityPolicy
 from muzik.core.sources.youtube import (
     PlaylistLookupError,
@@ -494,7 +494,9 @@ def _reconcile_playlist(
                     path=str(local_files[0].resolve()),
                 )
             elif beets_library is not None:
-                organized_path = find_organized_path(item.title, beets_library)
+                organized_path = find_path_by_source_id(
+                    video_id, beets_library
+                ) or find_organized_path(item.title, beets_library)
                 if organized_path is not None:
                     # No muzik record of this video exists, but its album is
                     # already in the Beets library — treat it the same as a

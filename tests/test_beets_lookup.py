@@ -5,7 +5,7 @@ from pathlib import Path
 
 from beets.library import Item, Library
 
-from muzik.core.beets.lookup import find_organized_path
+from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
 
 
 def _library(tmp_path: Path) -> tuple[Library, Path]:
@@ -64,3 +64,36 @@ def test_unparsable_title_returns_none_without_a_library_scan(
     monkeypatch.setattr(lib, "albums", fail_if_called)
 
     assert find_organized_path("Garbled Title With No Separator", lib) is None
+
+
+def _add_item_with_source_id(lib: Library, path: Path, source_id: str) -> None:
+    item = Item(path=os.fsencode(str(path)), title="Track 1")
+    item.muzik_source_id = source_id
+    lib.add(item)
+    item.store()
+
+
+def test_find_path_by_source_id_matches_exactly(tmp_path: Path) -> None:
+    lib, music = _library(tmp_path)
+    track = music / "Track 1.mp3"
+    track.write_bytes(b"x")
+    _add_item_with_source_id(lib, track, "abc-def_123")
+
+    assert find_path_by_source_id("abc-def_123", lib) == track
+
+
+def test_find_path_by_source_id_does_not_match_a_substring(tmp_path: Path) -> None:
+    lib, music = _library(tmp_path)
+    track = music / "Track 1.mp3"
+    track.write_bytes(b"x")
+    _add_item_with_source_id(lib, track, "abc-def_123")
+
+    # Beets' query syntax matches a flex field by substring by default; a
+    # shorter id that happens to be a substring must not count as a match.
+    assert find_path_by_source_id("abc", lib) is None
+
+
+def test_find_path_by_source_id_returns_none_without_a_match(tmp_path: Path) -> None:
+    lib, _music = _library(tmp_path)
+
+    assert find_path_by_source_id("nope", lib) is None

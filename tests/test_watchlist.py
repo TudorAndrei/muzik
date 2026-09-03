@@ -598,6 +598,54 @@ def test_reconcile_watchlist_finds_an_already_organized_album_in_beets(
     assert watchlist.playlists[0].processed_video_ids == [video_id]
 
 
+def test_reconcile_watchlist_finds_an_album_by_exact_source_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    # The title deliberately does not match the beets album at all — this
+    # only passes if the exact source-id match is tried, not title parsing.
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    lib = _beets_library(tmp_path)
+    track = Path(lib.directory.decode()) / "Etnobotanika" / "01 Track 1.mp3"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"audio")
+    item = Item(
+        path=os.fsencode(str(track)),
+        title="Track 1",
+        artist="Etnobotanika",
+        album="Kosmobotanika",
+        albumartist="Etnobotanika",
+    )
+    item.muzik_source_id = "gZUPDL3RBYs"
+    lib.add(item)
+    item.store()
+    monkeypatch.setattr(
+        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+    )
+    video_id = "gZUPDL3RBYs"
+    watchlist = Watchlist(
+        playlists=[
+            WatchlistPlaylist(
+                playlist_id="PL_ONE",
+                url="https://youtube.com/playlist?list=PL_ONE",
+                items=[WatchlistItem(1, "A totally unrelated video title", video_id)],
+            )
+        ]
+    )
+
+    reconcile_watchlist(
+        watchlist,
+        request=_refresh_request(tmp_path),
+        options=WorkflowOptions(),
+    )
+
+    item = watchlist.playlists[0].items[0]
+    assert item.stages["download"].status is StageStatus.COMPLETE
+    assert item.stages["download"].path == str(track)
+    assert item.stages["organize"].status is StageStatus.COMPLETE
+    assert watchlist.playlists[0].processed_video_ids == [video_id]
+
+
 def test_reconcile_watchlist_ignores_an_unrelated_beets_library(
     tmp_path: Path,
     monkeypatch,

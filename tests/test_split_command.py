@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import typer
@@ -7,6 +9,7 @@ from muzik.commands import split
 from muzik.core import cache as cache_mod
 from muzik.core import splitter
 from muzik.core.chapters import Chapter
+from muzik.core.metadata import write_muzik_metadata
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
 
@@ -97,7 +100,13 @@ def test_split_force_replaces_output_and_empty_output_is_allowed(
     old_file.write_bytes(b"old")
 
     def split_track(
-        audio_path, output_dir, chapter, metadata, track_count, compilation=False
+        audio_path,
+        output_dir,
+        chapter,
+        metadata,
+        track_count,
+        compilation=False,
+        source_id=None,
     ):
         (output_dir / "01-Track.flac").write_bytes(b"new")
         return True, chapter.title
@@ -167,3 +176,79 @@ def test_split_cancellation_preserves_existing_output(
 
     assert retained.read_bytes() == b"keep"
     assert audio.exists()
+
+
+def _fake_ffmpeg_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        splitter.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+
+
+def test_split_track_writes_a_per_track_sidecar_with_the_source_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_ffmpeg_success(monkeypatch)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    chapter = Chapter(index=1, start=0, end=None, title="Track")
+    metadata = {"artist": "Artist", "album": "Album", "year": "2026"}
+
+    ok, _title = splitter._split_track(
+        tmp_path / "source.flac",
+        output_dir,
+        chapter,
+        metadata,
+        1,
+        False,
+        "abcdefghijk",
+    )
+
+    assert ok is True
+    sidecar = output_dir / "01-Track.muzik.json"
+    assert json.loads(sidecar.read_text())["source_id"] == "abcdefghijk"
+
+
+def test_split_track_skips_the_sidecar_without_a_source_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fake_ffmpeg_success(monkeypatch)
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    chapter = Chapter(index=1, start=0, end=None, title="Track")
+    metadata = {"artist": "Artist", "album": "Album", "year": "2026"}
+
+    splitter._split_track(tmp_path / "source.flac", output_dir, chapter, metadata, 1)
+
+    assert list(output_dir.iterdir()) == []
+
+
+def test_split_audio_reads_the_source_sidecar_and_forwards_the_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _configure_split(monkeypatch)
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    audio, _chapters = _audio_with_chapters(tmp_path)
+    write_muzik_metadata(audio, {"source_id": "abcdefghijk"})
+    output = tmp_path / "output"
+    seen: list[str | None] = []
+
+    def split_track(
+        audio_path,
+        output_dir,
+        chapter,
+        metadata,
+        track_count,
+        compilation=False,
+        source_id=None,
+    ):
+        seen.append(source_id)
+        (output_dir / "01-Track.flac").write_bytes(b"new")
+        return True, chapter.title
+
+    monkeypatch.setattr(splitter, "_split_track", split_track)
+
+    split.split_cmd(path=audio, output=output, jobs=1, review=False, force=True)
+
+    assert seen == ["abcdefghijk"]

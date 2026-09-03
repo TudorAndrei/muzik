@@ -1,4 +1,4 @@
-"""Best-effort matching between a video title and an existing Beets album."""
+"""Best-effort matching between a video and an existing Beets album."""
 
 from __future__ import annotations
 
@@ -7,7 +7,32 @@ from pathlib import Path
 
 from beets.library import Library
 
+from muzik.beets_plugins.muzik_source import FIELD_NAME
 from muzik.core.audio import _parse_title
+
+
+def _resolve_path(directory: str, raw_path: bytes) -> Path:
+    decoded = os.fsdecode(raw_path)
+    if not os.path.isabs(decoded):
+        decoded = os.path.join(directory, decoded)
+    return Path(decoded)
+
+
+def find_path_by_source_id(video_id: str, library: Library) -> Path | None:
+    """Return the path of a Beets item tagged with this exact video id.
+
+    The `muzik_source` beets plugin records the id at import time (see
+    ``muzik/beets_plugins/muzik_source.py``); this only finds items
+    imported since that plugin existed. Beets' query syntax matches a
+    flexible field by substring, so results are re-checked for an exact
+    value before accepting one, rather than trusting the query alone.
+    """
+    directory = os.fsdecode(library.directory)
+    for item in library.items(f"{FIELD_NAME}:{video_id}"):
+        if str(item.get(FIELD_NAME) or "") != video_id:
+            continue
+        return _resolve_path(directory, item.path)
+    return None
 
 
 def find_organized_path(title: str, library: Library) -> Path | None:
@@ -35,8 +60,5 @@ def find_organized_path(title: str, library: Library) -> Path | None:
         items = list(candidate.items())
         if not items:
             continue
-        raw_path = os.fsdecode(items[0].path)
-        if not os.path.isabs(raw_path):
-            raw_path = os.path.join(directory, raw_path)
-        return Path(raw_path)
+        return _resolve_path(directory, items[0].path)
     return None
