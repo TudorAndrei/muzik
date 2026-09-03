@@ -130,6 +130,11 @@ fn candidate_to_dict<'py>(py: Python<'py>, candidate: &Candidate) -> PyResult<Bo
         let file_dict = PyDict::new(py);
         file_dict.set_item("name", &file.name)?;
         file_dict.set_item("size", file.size)?;
+        file_dict.set_item("bitrate_kbps", file.bitrate_kbps)?;
+        file_dict.set_item("duration_seconds", file.duration_seconds)?;
+        file_dict.set_item("vbr", file.vbr)?;
+        file_dict.set_item("sample_rate_hz", file.sample_rate_hz)?;
+        file_dict.set_item("bit_depth", file.bit_depth)?;
         files.append(file_dict)?;
     }
     dict.set_item("files", files)?;
