@@ -3,15 +3,34 @@
 from __future__ import annotations
 
 import re
+from enum import Enum
 from pathlib import Path
 from typing import Iterable, Optional
 
+from muzik.core.audio import probe
 from muzik.core.sources.base import Candidate, CandidateFile, QualityInfo
 
 
 LOSSLESS_FORMATS = {"flac", "alac", "wav", "aiff", "aif", "ape", "wv"}
 LOSSY_FORMATS = {"mp3", "m4a", "aac", "opus", "ogg"}
 SUPPORTED_QUALITY_FORMATS = LOSSLESS_FORMATS | LOSSY_FORMATS
+
+
+class QualityPolicy(str, Enum):
+    """How aggressively the workflow should act on a measured quality gap."""
+
+    OFF = "off"
+    ASK = "ask"
+    AUTO = "auto"
+
+
+class QualityDecision(str, Enum):
+    """The outcome of applying a :class:`QualityPolicy` to measured quality."""
+
+    KEEP = "keep"
+    ASK = "ask"
+    REPLACE = "replace"
+    KEEP_NO_SAFE_REPLACEMENT = "keep_no_safe_replacement"
 
 
 def normalize_format(value: str | Path | None) -> Optional[str]:
@@ -58,6 +77,83 @@ def parse_bitrate(value: str | None) -> Optional[int]:
     if match:
         return int(match.group(1))
     return None
+
+
+def measure_quality(path: Path) -> Optional[QualityInfo]:
+    """Measure the real audio quality of a local file with ffprobe.
+
+    Returns ``None`` when the file cannot be probed or has no audio stream.
+    """
+    try:
+        data = probe(path)
+    except ValueError:
+        return None
+
+    streams = data.get("streams") or []
+    audio_stream = next(
+        (stream for stream in streams if stream.get("codec_type") == "audio"), None
+    )
+    if audio_stream is None:
+        return None
+
+    format_info = data.get("format") or {}
+    format_name = normalize_format(audio_stream.get("codec_name"))
+
+    bit_rate = audio_stream.get("bit_rate") or format_info.get("bit_rate")
+    bitrate = int(int(bit_rate) / 1000) if bit_rate else None
+
+    sample_rate_raw = audio_stream.get("sample_rate")
+    sample_rate = int(sample_rate_raw) if sample_rate_raw else None
+
+    bit_depth_raw = audio_stream.get("bits_per_raw_sample") or audio_stream.get(
+        "bits_per_sample"
+    )
+    bit_depth = int(bit_depth_raw) if bit_depth_raw else None
+
+    channels_raw = audio_stream.get("channels")
+    channels = int(channels_raw) if channels_raw else None
+
+    duration_raw = format_info.get("duration") or audio_stream.get("duration")
+    duration = float(duration_raw) if duration_raw else None
+
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = None
+
+    return QualityInfo(
+        format=format_name,
+        lossless=is_lossless(format_name),
+        bitrate=bitrate,
+        sample_rate=sample_rate,
+        bit_depth=bit_depth,
+        size=size,
+        channels=channels,
+        duration=duration,
+        measured=True,
+    )
+
+
+def decide_quality(
+    quality: QualityInfo,
+    *,
+    policy: QualityPolicy = QualityPolicy.OFF,
+    min_bitrate: int = 256,
+) -> QualityDecision:
+    """Decide what to do about a measured quality result under *policy*.
+
+    The policy stays inactive (``QualityPolicy.OFF`` always keeps the file)
+    until a Seakarr adapter exists to act on ``ASK``/``REPLACE`` decisions.
+    """
+    if policy == QualityPolicy.OFF:
+        return QualityDecision.KEEP
+    if quality.lossless:
+        return QualityDecision.KEEP
+    if quality.bitrate is not None and quality.bitrate >= min_bitrate:
+        return QualityDecision.KEEP
+    if policy == QualityPolicy.AUTO:
+        return QualityDecision.REPLACE
+    return QualityDecision.ASK
 
 
 def best_quality(files: Iterable[CandidateFile]) -> QualityInfo:

@@ -10,6 +10,7 @@ import dearpygui.dearpygui as dpg
 
 from muzik.branding import logo_path
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+from muzik.core.quality import QualityPolicy
 from muzik.core.workflow.launch import WorkflowLaunchConfig
 from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
 from muzik.gui.theme import bind_primary_button
@@ -37,6 +38,8 @@ FIELD_TAGS = {
     "metadata_source": "launcher-metadata-source",
     "prefer": "launcher-prefer",
     "fallback": "launcher-fallback",
+    "quality_policy": "launcher-quality-policy",
+    "min_bitrate": "launcher-min-bitrate",
     "jobs": "launcher-jobs",
     "review": "launcher-review",
     "no_split": "launcher-no-split",
@@ -73,6 +76,8 @@ def config_from_values(values: Mapping[str, Any]) -> WorkflowLaunchConfig:
         prefer=str(values.get("prefer", "lossless")),
         fallback=AudioFallback(str(values.get("fallback", "youtube"))),
         interactive=bool(values.get("interactive", True)),
+        quality_policy=QualityPolicy(str(values.get("quality_policy", "off"))),
+        min_bitrate=int(str(values.get("min_bitrate", "")).strip() or "256"),
     )
 
 
@@ -162,6 +167,20 @@ class LauncherView:
                 width=180,
             )
             dpg.add_input_int(label="Jobs", tag=FIELD_TAGS["jobs"], width=90)
+        with dpg.group(horizontal=True):
+            dpg.add_combo(
+                ["off", "ask", "auto"],
+                default_value="off",
+                label="Quality policy",
+                tag=FIELD_TAGS["quality_policy"],
+                width=180,
+            )
+            dpg.add_input_int(
+                label="Min bitrate",
+                default_value=256,
+                tag=FIELD_TAGS["min_bitrate"],
+                width=90,
+            )
 
         dpg.add_separator()
         switches = [

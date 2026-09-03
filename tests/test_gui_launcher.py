@@ -3,6 +3,7 @@ from typing import cast
 
 import dearpygui.dearpygui as dpg
 
+from muzik.core.quality import QualityPolicy
 from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
 from muzik.gui.launcher import FIELD_TAGS, ERROR_TEXT, LauncherView, config_from_values
 
@@ -49,6 +50,8 @@ def test_launcher_maps_every_field_and_coerces_enums() -> None:
             "prefer": "flac",
             "fallback": "none",
             "interactive": False,
+            "quality_policy": "ask",
+            "min_bitrate": "192",
         }
     )
 
@@ -70,6 +73,8 @@ def test_launcher_maps_every_field_and_coerces_enums() -> None:
     assert config.prefer == "flac"
     assert config.fallback is AudioFallback.NONE
     assert config.interactive is False
+    assert config.quality_policy is QualityPolicy.ASK
+    assert config.min_bitrate == 192
 
 
 def test_launcher_empty_jobs_and_config_use_defaults() -> None:

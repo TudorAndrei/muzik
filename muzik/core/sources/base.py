@@ -79,6 +79,9 @@ class QualityInfo:
     sample_rate: Optional[int] = None
     bit_depth: Optional[int] = None
     size: Optional[int] = None
+    channels: Optional[int] = None
+    duration: Optional[float] = None
+    measured: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -93,6 +96,9 @@ class QualityInfo:
             sample_rate=data.get("sample_rate"),
             bit_depth=data.get("bit_depth"),
             size=data.get("size"),
+            channels=data.get("channels"),
+            duration=data.get("duration"),
+            measured=bool(data.get("measured", False)),
         )
 
 

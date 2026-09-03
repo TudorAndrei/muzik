@@ -14,11 +14,21 @@ from muzik.core.workflow import service
         lambda: service.WorkflowOptions(metadata_source="invalid"),
         lambda: service.WorkflowOptions(audio_source="invalid"),
         lambda: service.WorkflowOptions(fallback="invalid"),
+        lambda: service.WorkflowOptions(quality_policy="invalid"),
     ],
 )
 def test_workflow_options_reject_invalid_source_policies(factory) -> None:
     with pytest.raises(ValueError):
         factory()
+
+
+def test_workflow_options_quality_policy_defaults_to_inactive() -> None:
+    from muzik.core.quality import QualityPolicy
+
+    options = service.WorkflowOptions()
+
+    assert options.quality_policy is QualityPolicy.OFF
+    assert options.min_bitrate == 256
 
 
 def test_local_input_bypasses_remote_source_routing(tmp_path: Path) -> None:

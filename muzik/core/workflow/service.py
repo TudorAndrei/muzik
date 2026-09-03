@@ -17,6 +17,7 @@ from muzik.core.audio import get_duration
 from muzik.core.library import seed_archive_from_downloads
 import muzik.core.cache as cache_mod
 from muzik.core.chapters import Chapter
+from muzik.core.quality import QualityPolicy
 from muzik.core.sources.base import (
     Candidate,
     DownloadRequest,
@@ -87,6 +88,8 @@ class WorkflowOptions:
     prefer: str = "lossless"
     fallback: AudioFallback | str = AudioFallback.YOUTUBE
     interactive: bool = True
+    quality_policy: QualityPolicy | str = QualityPolicy.OFF
+    min_bitrate: int = 256
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -94,6 +97,7 @@ class WorkflowOptions:
         )
         object.__setattr__(self, "audio_source", AudioSource(self.audio_source))
         object.__setattr__(self, "fallback", AudioFallback(self.fallback))
+        object.__setattr__(self, "quality_policy", QualityPolicy(self.quality_policy))
 
 
 class WorkflowServiceError(RuntimeError):

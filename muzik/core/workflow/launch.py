@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+from muzik.core.quality import QualityPolicy
 from muzik.core.workflow.service import AudioFallback, AudioSource, MetadataSource
 
 
@@ -29,3 +30,5 @@ class WorkflowLaunchConfig:
     prefer: str = "lossless"
     fallback: AudioFallback = AudioFallback.YOUTUBE
     interactive: bool = True
+    quality_policy: QualityPolicy = QualityPolicy.OFF
+    min_bitrate: int = 256
