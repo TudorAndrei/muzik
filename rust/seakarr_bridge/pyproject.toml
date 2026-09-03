@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1,<2"]
+build-backend = "maturin"
+
+[project]
+name = "seakarr-bridge"
+version = "0.1.0"
+description = "Embedded PyO3 Soulseek bridge for Muzik (private submodule muzik._seakarr)"
+requires-python = ">=3.12"
+
+[tool.maturin]
+# Places the compiled extension at muzik/_seakarr*.so, alongside the
+# existing hand-written muzik/ package under python-source, rather than as
+# a top-level _seakarr package.
+module-name = "muzik._seakarr"
+python-source = "../.."
