@@ -2,16 +2,16 @@
 
 ## Phase 1: Add measured audio quality decisions
 
-- [ ] Extend `QualityInfo` in `muzik/core/sources/base.py` with measured audio
+- [x] Extend `QualityInfo` in `muzik/core/sources/base.py` with measured audio
   fields.
-- [ ] Add local `ffprobe` measurement in `muzik/core/quality.py`.
-- [ ] Add explicit keep, ask, replace, and no-safe-replacement policy results.
-- [ ] Add inactive quality options to `WorkflowOptions` and
+- [x] Add local `ffprobe` measurement in `muzik/core/quality.py`.
+- [x] Add explicit keep, ask, replace, and no-safe-replacement policy results.
+- [x] Add inactive quality options to `WorkflowOptions` and
   `WorkflowLaunchConfig`.
-- [ ] Test measured quality, invalid audio, missing fields, policy thresholds,
+- [x] Test measured quality, invalid audio, missing fields, policy thresholds,
   and launcher value conversion.
-- [ ] Run `mise run check`.
-- [ ] Commit: `feat(quality): add measured audio quality decisions`
+- [x] Run `mise run check`.
+- [x] Commit: `feat(quality): add measured audio quality decisions`
 
 ## Phase 2: Build the embedded Seakarr bridge
 
