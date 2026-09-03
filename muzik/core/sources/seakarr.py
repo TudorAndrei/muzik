@@ -7,6 +7,7 @@ relying on ``pathlib.Path`` (which only splits on ``/`` on POSIX).
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any, Protocol
@@ -374,3 +375,57 @@ def _query_for_resolved(
     elif prefer == "lossless" and not tokens.intersection({"flac", "lossless"}):
         query = f"{query} flac"
     return query.strip()
+
+
+# Below what fraction of a query's artist/title words a candidate must match
+# in its title, path, and username to count as identity evidence. Chosen to
+# tolerate one missing/reordered word (e.g. a peer's folder dropping "The")
+# without accepting a same-length coincidence.
+_IDENTITY_TOKEN_OVERLAP_THRESHOLD = 0.5
+
+# Default duration tolerance for a direct Spotify-to-Soulseek match. Wide
+# enough to absorb a few seconds of silence-trim or encoder rounding between
+# Spotify's reported duration and a peer's file, tight enough to reject a
+# same-title live/remix/extended version.
+DEFAULT_DURATION_TOLERANCE_SECONDS = 10.0
+
+
+def candidate_matches_track(
+    candidate: Candidate,
+    track: ResolvedTrack,
+    *,
+    duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
+) -> bool:
+    """Identity check for direct Spotify-track acquisition.
+
+    Rejects a candidate whose best-matching file duration falls outside
+    *duration_tolerance_seconds* of the known track duration, or whose
+    title/path/username text does not plausibly reference the track's
+    artist and title. A quality upgrade with the wrong recording is worse
+    than no upgrade, so this errs toward rejecting weak evidence.
+    """
+    track_duration = track.duration
+    if track_duration and candidate.files:
+        durations = [file.duration for file in candidate.files if file.duration]
+        if durations:
+            closest = min(
+                durations, key=lambda duration: abs(duration - track_duration)
+            )
+            if abs(closest - track_duration) > duration_tolerance_seconds:
+                return False
+
+    needed = {
+        token
+        for token in re.findall(
+            r"[a-z0-9]+", f"{track.artist or ''} {track.title}".lower()
+        )
+        if len(token) > 2
+    }
+    if not needed:
+        return True
+    haystack = " ".join(
+        filter(None, [candidate.title, candidate.path or "", candidate.user or ""])
+    ).lower()
+    found = set(re.findall(r"[a-z0-9]+", haystack))
+    overlap = len(needed & found) / len(needed)
+    return overlap >= _IDENTITY_TOKEN_OVERLAP_THRESHOLD

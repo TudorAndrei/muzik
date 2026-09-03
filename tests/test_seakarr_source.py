@@ -3,11 +3,12 @@ from pathlib import Path
 import pytest
 
 from muzik.core import cache as cache_mod
-from muzik.core.sources.base import Candidate, CandidateFile, QualityInfo
+from muzik.core.sources.base import Candidate, CandidateFile, QualityInfo, ResolvedTrack
 from muzik.core.sources.seakarr import (
     SeakarrSource,
     SoulseekError,
     candidate_from_result,
+    candidate_matches_track,
     remote_basename,
     remote_parent,
 )
@@ -282,3 +283,62 @@ def test_seakarr_source_check_never_exposes_the_password(monkeypatch) -> None:
 
     assert "super-secret" not in str(info)
     assert info["connected"] is False
+
+
+def _matching_candidate(*, duration: float = 180.0) -> Candidate:
+    return Candidate(
+        source="soulseek",
+        source_id="peer:Artist/Album/01 One.flac",
+        title="Album",
+        user="peer",
+        path="Artist/Album",
+        files=[
+            CandidateFile(name="Artist/Album/01 One.flac", size=1, duration=duration)
+        ],
+    )
+
+
+def test_candidate_matches_track_accepts_a_close_duration_and_text_match() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+
+    assert candidate_matches_track(_matching_candidate(duration=182.0), track)
+
+
+def test_candidate_matches_track_rejects_a_duration_outside_tolerance() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+
+    assert not candidate_matches_track(
+        _matching_candidate(duration=240.0), track, duration_tolerance_seconds=10.0
+    )
+
+
+def test_candidate_matches_track_accepts_at_the_tolerance_boundary() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+
+    assert candidate_matches_track(
+        _matching_candidate(duration=190.0), track, duration_tolerance_seconds=10.0
+    )
+
+
+def test_candidate_matches_track_rejects_weak_text_evidence() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+    unrelated = Candidate(
+        source="soulseek",
+        source_id="peer:Random/Nothing/07 Track.flac",
+        title="Random",
+        user="peer",
+        path="Random/Nothing",
+        files=[
+            CandidateFile(name="Random/Nothing/07 Track.flac", size=1, duration=180.0)
+        ],
+    )
+
+    assert not candidate_matches_track(unrelated, track)
+
+
+def test_candidate_matches_track_skips_duration_check_when_unknown() -> None:
+    # A track with no known duration (e.g. missing Spotify metadata) can
+    # only be judged on text evidence.
+    track = ResolvedTrack(title="One", artist="Artist", duration=None)
+
+    assert candidate_matches_track(_matching_candidate(duration=9999.0), track)

@@ -38,6 +38,7 @@ from muzik.core.description_chapters import (
     get_description_from_info_json,
 )
 from muzik.core.tracklist import chapters_from_comments, chapters_from_description
+from muzik.core.sources.base import ResolvedTrack
 from muzik.core.sources.seakarr import SeakarrSource
 from muzik.core.sources.youtube import (
     get_playlist_video_ids,
@@ -71,6 +72,7 @@ from muzik.core.workflow.service import (
     MetadataWorkflowSource,
     SoulseekWorkflowSource,
     acquire_from_soulseek as acquire_soulseek_audio,
+    acquire_track_from_soulseek,
     common_parent as _common_parent,
     find_audio_inputs as _find_audio_inputs,
     process_audio_plan,
@@ -482,6 +484,35 @@ def _acquire_from_soulseek(
         raise typer.Exit(exc.exit_code) from exc
 
 
+def _acquire_track_from_soulseek(
+    track: ResolvedTrack,
+    *,
+    prefer: str,
+    interactive: bool,
+    decisions: WorkflowDecisions | None = None,
+    events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
+) -> list[Path]:
+    """Search/download one resolved track (e.g. Spotify) directly, no yt-dlp."""
+    events = events or NullWorkflowEventEmitter()
+    decisions = decisions or CliWorkflowDecisions(interactive=interactive)
+    try:
+        return acquire_track_from_soulseek(
+            track,
+            prefer=prefer,
+            decisions=decisions,
+            events=events,
+            source_factory=_soulseek_source,
+            cancellation=cancellation,
+        )
+    except WorkflowServiceError as exc:
+        if exc.exit_code == 0:
+            err(f"[yellow]{exc.message}[/yellow]")
+            raise typer.Exit(0) from exc
+        err(f"[red]{exc.message}[/red]")
+        raise typer.Exit(exc.exit_code) from exc
+
+
 def workflow_cmd(
     url: str = typer.Argument(
         ...,
@@ -699,6 +730,16 @@ def workflow_cmd(
         prepopulate_archive=_prepopulate_archive,
         get_playlist_video_ids=_get_playlist_video_ids,
         soulseek_ready=_soulseek_ready,
+        acquire_soulseek_track=lambda track, *, cancellation=None: (
+            _acquire_track_from_soulseek(
+                track,
+                prefer=prefer,
+                interactive=interactive,
+                decisions=decisions,
+                events=events,
+                cancellation=cancellation,
+            )
+        ),
     )
 
     try:

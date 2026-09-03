@@ -6,7 +6,13 @@ import pytest
 from muzik.core.workflow import service
 from muzik.core import cache as cache_mod
 from muzik.core.chapters import Chapter
-from muzik.core.sources.base import Candidate, DownloadResult, ResolvedRelease
+from muzik.core.sources.base import (
+    Candidate,
+    CandidateFile,
+    DownloadResult,
+    ResolvedRelease,
+    ResolvedTrack,
+)
 from muzik.core.workflow.decisions import NonInteractiveWorkflowDecisions
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.events import (
@@ -576,6 +582,47 @@ def test_workflow_uses_spotify_export_as_soulseek_metadata_only(
     assert next(iter(state["videos"].values()))["source"] == "soulseek"
 
 
+def test_csv_import_with_a_colon_containing_local_playlist_id_does_not_crash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A CSV export has no real Spotify playlist id, so one is generated as
+    "spotify:local:<hash>" — load_playlist_state's cache key must not choke
+    on the colons (cache keys allow only letters, digits, '_', '-')."""
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = tmp_path / "playlist.csv"
+    export.write_text(
+        "track_name,artist_name,spotify_track_id\nSong,Artist,\n",
+        encoding="utf-8",
+    )
+    audio = tmp_path / "downloads" / "song.flac"
+    audio.parent.mkdir()
+    audio.write_bytes(b"audio")
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(
+            AssertionError("yt-dlp must not run")
+        ),
+        process_audio=lambda *args: None,
+        acquire_soulseek=lambda query: [audio],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: [],
+    )
+
+    service.run_workflow(
+        service.WorkflowRequest(
+            raw=str(export), output=tmp_path / "downloads", splits=tmp_path / "splits"
+        ),
+        service.WorkflowOptions(audio_source="soulseek", no_organize=True),
+        operations=operations,
+    )
+
+    saved = list((tmp_path / "cache").glob("playlist_spotify_spotify_local_*.json"))
+    assert len(saved) == 1
+    state = cache_mod.get_json(saved[0].stem)
+    assert state is not None
+    assert next(iter(state["videos"].values()))["source"] == "soulseek"
+
+
 def test_spotify_playlist_state_survives_reordering_and_processes_new_entries(
     tmp_path: Path,
     monkeypatch,
@@ -644,6 +691,226 @@ def test_spotify_playlist_state_survives_reordering_and_processes_new_entries(
         "spotify:track:second#0",
         "spotify:track:third#0",
     }
+
+
+def test_workflow_passes_the_resolved_track_not_a_joined_string(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """When acquire_soulseek_track is wired, each Spotify entry's structured
+    fields (artist, title, album, duration, ISRC) reach it directly — Phase 4
+    stops joining them into one text query."""
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = tmp_path / "playlist.spotify.json"
+    export.write_text(
+        """{
+          "version": 1,
+          "source": "spotify",
+          "type": "playlist",
+          "id": "playlist-1",
+          "title": "Playlist",
+          "entries": [{
+            "index": 1, "title": "Song", "artist": "Artist", "album": "Album",
+            "isrc": "USFIXTURE0001", "source_metadata": {"isrc": "USFIXTURE0001"}
+          }]
+        }""",
+        encoding="utf-8",
+    )
+    audio = tmp_path / "downloads" / "song.flac"
+    audio.parent.mkdir()
+    audio.write_bytes(b"audio")
+    acquired_tracks = []
+    string_acquisitions: list[str] = []
+
+    def acquire_track(track, **_kwargs):
+        acquired_tracks.append(track)
+        return [audio]
+
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(
+            AssertionError("yt-dlp must not run")
+        ),
+        process_audio=lambda files, split_dirs: None,
+        acquire_soulseek=lambda query: string_acquisitions.append(query) or [audio],
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: [],
+        acquire_soulseek_track=acquire_track,
+    )
+
+    service.run_workflow(
+        service.WorkflowRequest(
+            raw=str(export), output=tmp_path / "downloads", splits=tmp_path / "splits"
+        ),
+        service.WorkflowOptions(audio_source="soulseek", no_organize=True),
+        operations=operations,
+    )
+
+    assert string_acquisitions == []
+    assert len(acquired_tracks) == 1
+    assert acquired_tracks[0].artist == "Artist"
+    assert acquired_tracks[0].title == "Song"
+    assert acquired_tracks[0].album == "Album"
+
+
+def test_structured_track_acquisition_keeps_resume_and_duplicate_behavior(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    export = tmp_path / "playlist.spotify.json"
+
+    def write_export(entries: list[dict[str, object]]) -> None:
+        export.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "source": "spotify",
+                    "type": "playlist",
+                    "id": "playlist-1",
+                    "title": "Playlist",
+                    "entries": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    first: dict[str, object] = {
+        "index": 1,
+        "title": "First",
+        "artist": "Artist",
+        "source_id": "spotify:track:first",
+    }
+    second: dict[str, object] = {
+        "index": 2,
+        "title": "Second",
+        "artist": "Artist",
+        "source_id": "spotify:track:second",
+    }
+    write_export([first, second])
+    acquired_ids: list[str] = []
+    audio = tmp_path / "audio.flac"
+    audio.write_bytes(b"audio")
+
+    def acquire_track(track, **_kwargs):
+        acquired_ids.append(track.source_id)
+        return [audio]
+
+    operations = service.WorkflowRunOperations(
+        download_audio=lambda *args: (_ for _ in ()).throw(AssertionError("no yt-dlp")),
+        process_audio=lambda *args: None,
+        acquire_soulseek=lambda query: (_ for _ in ()).throw(
+            AssertionError("must use structured acquisition")
+        ),
+        prepopulate_archive=lambda archive: None,
+        get_playlist_video_ids=lambda url: [],
+        acquire_soulseek_track=acquire_track,
+    )
+    request = service.WorkflowRequest(
+        raw=str(export), output=tmp_path / "downloads", splits=tmp_path / "splits"
+    )
+    options = service.WorkflowOptions(audio_source="soulseek")
+
+    service.run_workflow(request, options, operations=operations)
+    # A second run over the same (already-organized) entries must not
+    # re-acquire them — this is the existing resume behavior, unaffected by
+    # switching to structured acquisition.
+    service.run_workflow(request, options, operations=operations)
+
+    assert acquired_ids == ["spotify:track:first", "spotify:track:second"]
+
+
+def test_acquire_track_from_soulseek_rejects_an_unsafe_candidate() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+    wrong_duration = Candidate(
+        source="soulseek",
+        source_id="peer:One.flac",
+        title="One",
+        user="peer",
+        files=[CandidateFile(name="One.flac", size=1, duration=999.0)],
+        score=100,
+    )
+
+    class FakeSource:
+        def resolve(self, request):
+            raise AssertionError("resolve is not used by structured acquisition")
+
+        def search(self, resolved, *, prefer, limit):
+            return [wrong_duration]
+
+        def download(self, candidate, wait):
+            raise AssertionError("an unsafe candidate must never be downloaded")
+
+    with pytest.raises(service.WorkflowServiceError, match="No safe Soulseek"):
+        service.acquire_track_from_soulseek(
+            track,
+            prefer="lossless",
+            decisions=NonInteractiveWorkflowDecisions(),
+            source_factory=FakeSource,
+        )
+
+
+def test_acquire_track_from_soulseek_downloads_the_safe_candidate(
+    tmp_path: Path,
+) -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+    audio = tmp_path / "One.flac"
+    good = Candidate(
+        source="soulseek",
+        source_id="peer:One.flac",
+        title="One",
+        user="peer",
+        files=[CandidateFile(name="One.flac", size=1, duration=181.0)],
+        score=100,
+    )
+
+    class FakeSource:
+        def resolve(self, request):
+            raise AssertionError("resolve is not used by structured acquisition")
+
+        def search(self, resolved, *, prefer, limit):
+            return [good]
+
+        def download(self, candidate, wait):
+            return DownloadResult(
+                source="soulseek",
+                source_id=candidate.source_id,
+                files=[audio],
+                root=tmp_path,
+            )
+
+    files = service.acquire_track_from_soulseek(
+        track,
+        prefer="lossless",
+        decisions=NonInteractiveWorkflowDecisions(),
+        source_factory=FakeSource,
+    )
+
+    assert files == [audio]
+
+
+def test_acquire_track_from_soulseek_respects_cancellation() -> None:
+    track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
+    token = CancellationToken()
+    token.cancel()
+
+    class FakeSource:
+        def resolve(self, request):
+            raise AssertionError("resolve is not used by structured acquisition")
+
+        def search(self, resolved, *, prefer, limit):
+            raise AssertionError("search should not run once cancelled")
+
+        def download(self, candidate, wait):
+            raise AssertionError("download should not run once cancelled")
+
+    with pytest.raises(WorkflowCancelled):
+        service.acquire_track_from_soulseek(
+            track,
+            prefer="lossless",
+            decisions=NonInteractiveWorkflowDecisions(),
+            source_factory=FakeSource,
+            cancellation=token,
+        )
 
 
 def test_playlist_cancellation_stops_before_later_entries(

@@ -8,6 +8,7 @@ from enum import Enum
 import hashlib
 import os
 import inspect
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, cast
@@ -27,7 +28,12 @@ from muzik.core.sources.base import (
     ResolvedTrack,
 )
 from muzik.core.sources.spotify import is_spotify_export, load_playlist
-from muzik.core.sources.seakarr import SoulseekError, SeakarrSource
+from muzik.core.sources.seakarr import (
+    DEFAULT_DURATION_TOLERANCE_SECONDS,
+    SoulseekError,
+    SeakarrSource,
+    candidate_matches_track,
+)
 from muzik.core.sources.youtube import (
     YouTubeSource,
     find_audio_by_id,
@@ -149,6 +155,11 @@ class WorkflowRunOperations:
     prepopulate_archive: Callable[[Path], None]
     get_playlist_video_ids: Callable[[str], list[str]]
     soulseek_ready: Callable[[], bool] = lambda: False
+    # Structured direct acquisition for one resolved track (e.g. a Spotify
+    # entry): track search only, with identity/duration checks, never a
+    # flat joined query. Falls back to ``acquire_soulseek`` with a joined
+    # query when unset, so existing callers/tests are unaffected.
+    acquire_soulseek_track: Callable[..., list[Path]] | None = None
 
 
 class SoulseekWorkflowSource(Protocol):
@@ -585,6 +596,89 @@ def acquire_from_soulseek(
     return result.files
 
 
+def acquire_track_from_soulseek(
+    track: ResolvedTrack,
+    *,
+    prefer: str,
+    decisions: WorkflowDecisions,
+    events: WorkflowEventEmitter | None = None,
+    source_factory: Callable[[], SoulseekWorkflowSource] = _default_soulseek_source,
+    duration_tolerance_seconds: float = DEFAULT_DURATION_TOLERANCE_SECONDS,
+    cancellation: CancellationToken | None = None,
+) -> list[Path]:
+    """Search/download one resolved track (e.g. a Spotify entry) directly.
+
+    Uses track search only, never an album search, and rejects a candidate
+    whose duration or artist/title text does not plausibly match *track* —
+    see :func:`muzik.core.sources.seakarr.candidate_matches_track`. There is
+    no YouTube fallback: a track resolved from Spotify metadata is never
+    sent to yt-dlp.
+    """
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    cancellation.raise_if_cancelled()
+    source = source_factory()
+    try:
+        candidates = source.search(track, prefer=prefer, limit=10)
+    except Exception as exc:
+        if isinstance(exc, WorkflowServiceError):
+            raise
+        raise WorkflowServiceError(f"Soulseek search failed: {exc}") from exc
+    cancellation.raise_if_cancelled()
+
+    safe_candidates = [
+        candidate
+        for candidate in candidates
+        if candidate_matches_track(
+            candidate, track, duration_tolerance_seconds=duration_tolerance_seconds
+        )
+    ]
+    events.emit(
+        CandidatesFoundEvent(candidates=safe_candidates, source="soulseek", limit=10)
+    )
+    if not safe_candidates:
+        raise WorkflowServiceError(
+            f"No safe Soulseek candidates found for {track.title}.", exit_code=0
+        )
+
+    try:
+        candidate = decisions.choose_soulseek_candidate(safe_candidates)
+    except WorkflowDecisionError as exc:
+        raise WorkflowServiceError(str(exc)) from exc
+
+    events.emit(
+        MessageEvent(
+            f"Selected Soulseek candidate: {candidate.title or candidate.source_id}"
+        )
+    )
+    events.emit(MessageEvent("Downloading selected Soulseek candidate."))
+    try:
+        result = cast(
+            DownloadResult,
+            _call_with_cancellation(
+                source.download,
+                candidate,
+                wait=True,
+                cancellation=cancellation,
+            ),
+        )
+    except SoulseekError as exc:
+        raise WorkflowServiceError(f"Soulseek download failed: {exc}") from exc
+
+    events.emit(
+        MessageEvent(f"Soulseek download returned {len(result.files)} file(s).")
+    )
+    cancellation.raise_if_cancelled()
+    record_soulseek_download(track.source_id or track.title, result)
+    if not result.files:
+        raise WorkflowServiceError(
+            "Soulseek download was enqueued, but no local audio files were found. "
+            "Check MUZIK_SOULSEEK_DOWNLOAD_DIR.",
+            exit_code=0,
+        )
+    return result.files
+
+
 def _new_audio_files(before: set[Path], after: set[Path]) -> list[Path]:
     return sorted(
         path
@@ -832,7 +926,12 @@ def _run_resolved_playlist_workflow(
             f"Soulseek is not ready for {source_label} metadata acquisition."
         )
     playlist_id = playlist.source_id or playlist.source
-    state_id = f"{playlist.source}_{playlist_id}"
+    # A cache key may only contain letters, digits, '_', and '-' — a
+    # locally-generated playlist id (CSV imports with no real Spotify
+    # playlist id, e.g. "spotify:local:<hash>") contains colons, so sanitize
+    # rather than let load_playlist_state's cache lookup raise.
+    safe_playlist_id = re.sub(r"[^A-Za-z0-9_-]", "_", playlist_id)
+    state_id = f"{playlist.source}_{safe_playlist_id}"
     state = load_playlist_state(state_id)
     if options.dry_run:
         return
@@ -852,22 +951,34 @@ def _run_resolved_playlist_workflow(
         entry = state["videos"].get(entry_id, {})
         if entry.get("status") == "organized":
             continue
-        query = " - ".join(
-            part for part in (track.artist, track.title, track.album) if part
-        )
         events.emit(
             MessageEvent(
                 message=f"Acquiring {track.title} from Soulseek using {playlist.source} metadata."
             )
         )
-        files = cast(
-            list[Path],
-            _call_with_cancellation(
-                operations.acquire_soulseek,
-                query,
-                cancellation=cancellation,
-            ),
-        )
+        if operations.acquire_soulseek_track is not None:
+            files = cast(
+                list[Path],
+                _call_with_cancellation(
+                    operations.acquire_soulseek_track,
+                    track,
+                    cancellation=cancellation,
+                ),
+            )
+        else:
+            # No structured acquisition wired: fall back to a joined query
+            # string, losing per-field identity evidence.
+            query = " - ".join(
+                part for part in (track.artist, track.title, track.album) if part
+            )
+            files = cast(
+                list[Path],
+                _call_with_cancellation(
+                    operations.acquire_soulseek,
+                    query,
+                    cancellation=cancellation,
+                ),
+            )
         if not files:
             raise WorkflowServiceError(
                 f"No Soulseek audio files were acquired for {track.title}."

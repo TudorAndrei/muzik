@@ -60,6 +60,7 @@ from muzik.core.workflow.service import (
     MetadataWorkflowSource,
     SoulseekWorkflowSource,
     acquire_from_soulseek,
+    acquire_track_from_soulseek,
     find_audio_inputs,
     process_audio_plan,
     run_workflow,
@@ -212,6 +213,16 @@ def build_workflow_operations(
         prepopulate_archive=lambda archive: _prepopulate_archive(archive),
         get_playlist_video_ids=get_playlist_video_ids,
         soulseek_ready=_soulseek_ready,
+        acquire_soulseek_track=lambda track, *, cancellation=None: (
+            acquire_track_from_soulseek(
+                track,
+                prefer=options.prefer,
+                decisions=decisions,
+                events=events,
+                source_factory=lambda: cast(SoulseekWorkflowSource, SeakarrSource()),
+                cancellation=cancellation,
+            )
+        ),
     )
 
 
