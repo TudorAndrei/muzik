@@ -98,20 +98,29 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Phase 6: Show quality state and controls
 
-- [ ] Move the watchlist schema from version 1 to version 2.
-- [ ] Migrate version 1 records without changing their existing stage results.
-- [ ] Add Quality between Download and Parse in `STAGE_NAMES`.
-- [ ] Add Check quality again to `ItemAction` and keep all current actions.
-- [ ] Mark later stages stale only when the active audio file changes.
-- [ ] Show measured quality, quality decision, selected candidate, and transfer
-  progress in the pipeline and watchlist views.
-- [ ] Add quality controls to the launcher and a Seakarr row to Settings.
-- [ ] Test schema migration, stage order, action availability, stale rules,
-  errors, progress, cancellation, and all visible action buttons.
-- [ ] Run a DearPyGui render-context smoke test for a pending quality check, an
+- [x] Move the watchlist schema from version 1 to version 2.
+- [x] Migrate version 1 records without changing their existing stage results.
+- [x] Add Quality between Download and Parse in `STAGE_NAMES`.
+- [x] Add Check quality again to `ItemAction` and keep all current actions.
+- [x] Mark later stages stale only when the active audio file changes.
+- [x] Show measured quality, quality decision, and selected candidate in the
+  pipeline and watchlist views.
+- [ ] Show live transfer progress. **Not done**: `SeakarrJob` (the Rust bridge)
+  only reports terminal status (running/completed/failed/cancelled), not
+  partial bytes-downloaded while a download is in flight — showing real
+  transfer progress needs new Rust bridge work (expose partial
+  `DownloadProgress` from a running job) before the GUI side can display it.
+- [x] Add quality controls to the launcher (done in Phase 1; this phase wired
+  them through `WorkflowLaunchConfig` into the GUI-launched `WorkflowOptions`,
+  which Phase 1 had missed) and a Seakarr row to Settings (automatic since
+  Phase 3 renamed the service to "Soulseek (Seakarr)" in the existing generic
+  status list).
+- [x] Test schema migration, stage order, action availability, stale rules,
+  errors, cancellation, and all visible action buttons.
+- [x] Run a DearPyGui render-context smoke test for a pending quality check, an
   active transfer, a kept YouTube file, and a completed replacement.
-- [ ] Run `mise run check` and the Rust checks.
-- [ ] Commit: `feat(gui): add quality and Seakarr workflow controls`
+- [x] Run `mise run check` and the Rust checks.
+- [x] Commit: `feat(gui): add quality and Seakarr workflow controls`
 
 ## Phase 7: Package the native integration
 
