@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 
 import pytest
+from beets.library import Item, Library
 
 from muzik.core.watchlist import (
     DuplicatePlaylistError,
@@ -435,6 +437,9 @@ def test_reconcile_watchlist_reads_playlist_state_and_download_folder(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        "muzik.core.watchlist.open_library", lambda config_path=None: None
+    )
     cache_mod.set_json(
         "playlist_PL_ONE",
         {
@@ -485,6 +490,9 @@ def test_reconcile_watchlist_repairs_false_processed_beets_skip(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        "muzik.core.watchlist.open_library", lambda config_path=None: None
+    )
     video_id = "-ON_sl7ZGdk"
     audio = tmp_path / "downloads" / f"Terrace Brothers + Asa [1997] [{video_id}].opus"
     split_dir = tmp_path / "splits" / audio.stem
@@ -525,3 +533,107 @@ def test_reconcile_watchlist_repairs_false_processed_beets_skip(
     assert item.stages["split"].path == str(split_dir)
     assert item.stages["organize"].status is StageStatus.FAILED
     assert item.last_error == "Beets did not import this item. Select Retry."
+
+
+def _beets_library(tmp_path: Path) -> Library:
+    music = tmp_path / "beets-music"
+    music.mkdir()
+    return Library(str(tmp_path / "beets-lib.db"), str(music))
+
+
+def _add_beets_album(lib: Library, path: Path, *, artist: str, album: str) -> None:
+    item = Item(
+        path=os.fsencode(str(path)),
+        title="Track 1",
+        artist=artist,
+        album=album,
+        albumartist=artist,
+    )
+    lib.add(item)
+    lib.add_album([item])
+
+
+def test_reconcile_watchlist_finds_an_already_organized_album_in_beets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    lib = _beets_library(tmp_path)
+    track = Path(lib.directory.decode()) / "Etnobotanika" / "01 Track 1.mp3"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"audio")
+    _add_beets_album(lib, track, artist="Etnobotanika", album="Kosmobotanika")
+    monkeypatch.setattr(
+        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+    )
+    video_id = "gZUPDL3RBYs"
+    watchlist = Watchlist(
+        playlists=[
+            WatchlistPlaylist(
+                playlist_id="PL_ONE",
+                url="https://youtube.com/playlist?list=PL_ONE",
+                items=[
+                    WatchlistItem(
+                        1,
+                        "Etnobotanika - Kosmobotanika (Full Album)",
+                        video_id,
+                    )
+                ],
+            )
+        ]
+    )
+
+    reconcile_watchlist(
+        watchlist,
+        request=_refresh_request(tmp_path),
+        options=WorkflowOptions(),
+    )
+
+    item = watchlist.playlists[0].items[0]
+    assert item.stages["download"].status is StageStatus.COMPLETE
+    assert item.stages["download"].path == str(track)
+    assert item.stages["parse"].status is StageStatus.COMPLETE
+    assert item.stages["split"].status is StageStatus.SKIPPED
+    assert item.stages["organize"].status is StageStatus.COMPLETE
+    assert watchlist.playlists[0].processed_video_ids == [video_id]
+
+
+def test_reconcile_watchlist_ignores_an_unrelated_beets_library(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    lib = _beets_library(tmp_path)
+    track = Path(lib.directory.decode()) / "Other Artist" / "01 Track 1.mp3"
+    track.parent.mkdir(parents=True)
+    track.write_bytes(b"audio")
+    _add_beets_album(lib, track, artist="Other Artist", album="Other Album")
+    monkeypatch.setattr(
+        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+    )
+    video_id = "gZUPDL3RBYs"
+    watchlist = Watchlist(
+        playlists=[
+            WatchlistPlaylist(
+                playlist_id="PL_ONE",
+                url="https://youtube.com/playlist?list=PL_ONE",
+                items=[
+                    WatchlistItem(
+                        1,
+                        "Etnobotanika - Kosmobotanika (Full Album)",
+                        video_id,
+                    )
+                ],
+            )
+        ]
+    )
+
+    reconcile_watchlist(
+        watchlist,
+        request=_refresh_request(tmp_path),
+        options=WorkflowOptions(),
+    )
+
+    item = watchlist.playlists[0].items[0]
+    assert item.stages["download"].status is StageStatus.NOT_STARTED
+    assert watchlist.playlists[0].processed_video_ids == []

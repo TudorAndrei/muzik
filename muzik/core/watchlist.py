@@ -12,7 +12,11 @@ from pathlib import Path
 import tempfile
 from typing import Any, cast
 
+from beets.library import Library
+
 from muzik.config import MUZIK_WATCHLIST_FILE
+from muzik.core.beets.config import open_library
+from muzik.core.beets.lookup import find_organized_path
 from muzik.core.quality import QualityPolicy
 from muzik.core.sources.youtube import (
     PlaylistLookupError,
@@ -388,9 +392,24 @@ def reconcile_watchlist(
     request: WorkflowRequest,
     options: WorkflowOptions,
 ) -> None:
-    """Update item stages from existing muzik records and local files."""
+    """Update item stages from muzik records, local files, and Beets."""
+    beets_library = _open_beets_library(options.config)
     for playlist in watchlist.playlists:
-        _reconcile_playlist(playlist, request=request, options=options)
+        _reconcile_playlist(
+            playlist,
+            request=request,
+            options=options,
+            beets_library=beets_library,
+        )
+
+
+def _open_beets_library(config_path: Path | None) -> Library | None:
+    # Best-effort: an unconfigured or broken Beets setup must not break
+    # watchlist reconciliation, which already works fine without it.
+    try:
+        return open_library(config_path)
+    except Exception:
+        return None
 
 
 def _merge_playlist_items(
@@ -429,6 +448,7 @@ def _reconcile_playlist(
     *,
     request: WorkflowRequest,
     options: WorkflowOptions,
+    beets_library: Library | None = None,
 ) -> None:
     playlist_state = load_playlist_state(playlist.playlist_id)
     for item in playlist.items:
@@ -473,6 +493,18 @@ def _reconcile_playlist(
                     status=StageStatus.COMPLETE,
                     path=str(local_files[0].resolve()),
                 )
+            elif beets_library is not None:
+                organized_path = find_organized_path(item.title, beets_library)
+                if organized_path is not None:
+                    # No muzik record of this video exists, but its album is
+                    # already in the Beets library — treat it the same as a
+                    # real cache hit so the blocks below (and any future
+                    # reconcile, via processed_video_ids) short-circuit too.
+                    status = "organized"
+                    item.stages["download"] = StageRecord(
+                        status=StageStatus.COMPLETE,
+                        path=str(organized_path),
+                    )
         if status in {"split", "organized"}:
             item.stages["parse"].status = StageStatus.COMPLETE
             split_dir = entry.get("split_dir")
