@@ -145,14 +145,17 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Phase 8: Document direct acquisition and quality checks
 
-- [ ] Update `README.md` with Seakarr setup, source routing, quality policy, and
-  recovery behavior.
-- [ ] Update `GUI.md` with the Quality stage, progress events, cancellation, and
-  item controls.
-- [ ] Update `SPOTIFY.md` with the direct structured Seakarr flow and its limits.
-- [ ] Record the supported platforms and native-wheel limits in
-  `DISTRIBUTION.md`.
-- [ ] Commit: `docs(seakarr): explain direct acquisition and quality checks`
+- [x] Update `README.md` with Seakarr setup, source routing, quality policy, and
+  recovery behavior. (Seakarr setup and source routing were already documented
+  in an earlier phase; this phase added the quality-policy and direct-Spotify
+  sections.)
+- [x] Update `GUI.md` with the Quality stage, progress events, cancellation, and
+  item controls. (Cancellation was already documented in an earlier phase.)
+- [x] Update `SPOTIFY.md` with the direct structured Seakarr flow and its limits.
+- [x] Record the supported platforms and native-wheel limits in
+  `DISTRIBUTION.md`. (Already recorded in Phase 7's "Native module" section;
+  no further Phase 8 changes were needed.)
+- [x] Commit: `docs(seakarr): explain direct acquisition and quality checks`
 
 ## Verification
 
