@@ -45,19 +45,41 @@ def build(
     """Build the single primary window and its real navigation tab bar."""
     has_logo = _build_logo_texture()
     with dpg.window(tag=MAIN_WINDOW):
-        with dpg.group(horizontal=True):
-            if has_logo:
-                dpg.add_image(LOGO_TEXTURE, tag=LOGO_IMAGE, width=32, height=32)
-            with dpg.tab_bar(tag=NAV_TABS, callback=_dispatch(on_tab_changed)):
-                with dpg.tab(label="Workflow", tag=TAB_WORKFLOW):
-                    launcher.build(parent=TAB_WORKFLOW)
-                with dpg.tab(label="Watchlist", tag=TAB_WATCHLIST):
-                    watchlist.build(parent=TAB_WATCHLIST)
-                with dpg.tab(label="Library", tag=TAB_LIBRARY):
-                    library.build(parent=TAB_LIBRARY)
-                with dpg.tab(label="Settings", tag=TAB_SETTINGS):
-                    settings.build(parent=TAB_SETTINGS)
-            dpg.add_button(label="Quit", callback=on_quit, width=80)
+        # A plain horizontal group can't reserve space for the trailing Quit
+        # button: the tab bar has no fixed width, so its rendered width (and
+        # therefore where Quit lands) isn't stable across frames/resizes. A
+        # two-column table reserves Quit's column up front instead.
+        with dpg.table(
+            header_row=False,
+            policy=dpg.mvTable_SizingStretchProp,
+            borders_innerV=False,
+            borders_outerH=False,
+            borders_outerV=False,
+            borders_innerH=False,
+            no_pad_outerX=True,
+        ):
+            dpg.add_table_column(width_stretch=True)
+            dpg.add_table_column(width_fixed=True, init_width_or_weight=90)
+            with dpg.table_row():
+                with dpg.table_cell():
+                    with dpg.group(horizontal=True):
+                        if has_logo:
+                            dpg.add_image(
+                                LOGO_TEXTURE, tag=LOGO_IMAGE, width=32, height=32
+                            )
+                        with dpg.tab_bar(
+                            tag=NAV_TABS, callback=_dispatch(on_tab_changed)
+                        ):
+                            with dpg.tab(label="Workflow", tag=TAB_WORKFLOW):
+                                launcher.build(parent=TAB_WORKFLOW)
+                            with dpg.tab(label="Watchlist", tag=TAB_WATCHLIST):
+                                watchlist.build(parent=TAB_WATCHLIST)
+                            with dpg.tab(label="Library", tag=TAB_LIBRARY):
+                                library.build(parent=TAB_LIBRARY)
+                            with dpg.tab(label="Settings", tag=TAB_SETTINGS):
+                                settings.build(parent=TAB_SETTINGS)
+                with dpg.table_cell():
+                    dpg.add_button(label="Quit", callback=on_quit, width=80)
     dpg.set_primary_window(MAIN_WINDOW, True)
 
 
