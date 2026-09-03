@@ -59,11 +59,32 @@ The page has two main areas:
 - The main area has status filtering, paging, and a responsive thumbnail card
   grid. Paging limits the active card widgets and textures.
 
-Each card has a four-part Download, Parse, Split, and Organize rail. Every part
-shows a text state and a status color. The summary is Pending, Processing,
-Failed, Processed, or Unavailable. The primary button is Run, Resume, or Retry.
-The Actions window shows all focused commands and a reason under each disabled
-command.
+Each card has a five-part Download, Quality, Parse, Split, and Organize rail.
+Every part shows a text state and a status color. The summary is Pending,
+Processing, Failed, Processed, or Unavailable. The primary button is Run,
+Resume, or Retry. The Actions window shows all focused commands and a reason
+under each disabled command.
+
+### Quality stage
+
+The Quality stage runs `check_youtube_quality` against the item's downloaded
+file (see [README.md](README.md#quality-policy)). It only acts when the
+launcher's **Quality policy** field is `ask` or `auto` — `off` leaves the
+stage `Skipped`. A search/download error, no safe Soulseek candidate, or a
+duration mismatch all complete the stage as `Complete` with the YouTube file
+kept, not `Failed` — quality checking never fails an item.
+
+`ask` has no replacement dialog in the desktop interface yet:
+`GuiWorkflowDecisions.confirm_quality_replacement` always declines, so `ask`
+behaves like a check-only pass in the GUI even though the CLI prompts. Use
+`auto` in the GUI to actually replace a low-quality YouTube file.
+
+**Check quality again** in the item Actions window re-runs this stage on a
+downloaded item. When it replaces the file, Download is marked complete
+against the new file and Parse/Split/Organize become stale. When the
+replacement is a multi-file Soulseek album, Download is repointed at the
+result directory and the same later stages become stale — chapter parsing is
+skipped for that item going forward.
 
 `refresh_watchlist` performs one flat playlist lookup for each saved playlist.
 It merges the ordered snapshot, keeps unavailable items, reconciles local work,
@@ -76,7 +97,8 @@ later stages stale:
 
 | Command | Completed stage | Stale stages |
 |---------|-----------------|--------------|
-| Download again | Download | Parse, Split, Organize |
+| Download again | Download | Quality, Parse, Split, Organize |
+| Check quality again | Quality | Parse, Split, Organize (only if it replaces the file) |
 | Parse again | Parse | Split, Organize |
 | Split again | Split | Organize |
 | Organize again | Organize | None |

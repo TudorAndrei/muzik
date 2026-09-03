@@ -73,6 +73,31 @@ album_track_number,added_at
 This marker requirement keeps unrelated CSV files on the normal local-input
 path instead of misclassifying them as Spotify exports.
 
+## Direct structured acquisition
+
+Each entry is a resolved track (title, artist, duration), not a free-text
+search query. `acquire_track_from_soulseek` searches Soulseek by that
+identity and downloads the match directly — it never requests a complete
+album for one playlist track, and a Spotify-derived track is never sent to
+`yt-dlp` even with `--fallback youtube` (rejected, see above).
+
+A returned candidate is kept only when its title/artist text and duration
+plausibly match the track (see `candidate_matches_track` in
+`muzik/core/sources/seakarr.py`); a multi-file candidate matches on the sum
+of its file durations, for a candidate that is itself a bundled release.
+Limits:
+
+- If no safe candidate is found for a track, the run stops there (a graceful
+  exit, code 0) instead of skipping that track and continuing to the rest of
+  the playlist. A Soulseek search or download error stops the run the same
+  way. Tracks already organized before the stopping point are recorded in
+  playlist state and are not re-downloaded on the next run, but the run will
+  hit the same failing track again until it is resolved (a better search
+  term, a wider `--min-bitrate`, or removing that entry from the export).
+- Track identity matching can still choose a wrong pressing or edit that
+  happens to match on title, artist, and duration — review acquired files
+  before trusting them for anything but casual listening.
+
 ## Validation and resume behavior
 
 Episodes are rejected. Every track needs a title, artist, and positive unique

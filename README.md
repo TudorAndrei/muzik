@@ -72,6 +72,47 @@ are written (defaults to the platform data directory).
 
 Then run `muzik soulseek check`; it should report `Soulseek reachable`.
 
+## Quality policy
+
+`--quality-policy` decides what happens after a YouTube download finishes:
+
+| Value | Behavior |
+|-------|----------|
+| `off` (default) | Never measure or replace the downloaded file. |
+| `ask` | Measure the file; if it is lossy and below `--min-bitrate`, search Soulseek and ask before replacing it. |
+| `auto` | Same measurement, but replace automatically when a safe match is found — no prompt. |
+
+`--min-bitrate` (default `256`) sets the lossy-bitrate floor: a lossy file at
+or above it is kept as-is. A lossless file is always kept.
+
+A quality check never turns a workflow into a failure: a Soulseek search or
+download error, no safe candidate, or a duration mismatch all keep the
+YouTube file and log a warning instead of raising. "Safe" means the candidate
+passes the same identity and duration checks as any other Soulseek search
+result (see [SPOTIFY.md](SPOTIFY.md)). A multi-file replacement (a Soulseek
+result with more than one track) is treated as a pre-split album and skips
+chapter parsing for that item.
+
+```sh
+uv run muzik workflow "https://youtube.com/watch?v=..." --quality-policy ask
+uv run muzik workflow "https://youtube.com/watch?v=..." --quality-policy auto --min-bitrate 192
+```
+
+In `muzik gui`, the launcher exposes the same **Quality policy** and **Min
+bitrate** fields. `ask` currently has no replacement dialog in the desktop
+interface yet, so it always keeps the YouTube file there; use `auto` in the
+GUI for an actual replacement, or use the CLI for `ask`.
+
+## Direct Spotify acquisition
+
+A Spotify JSON or CSV entry is a resolved track, not a search query, so it
+skips YouTube entirely: `acquire_track_from_soulseek` searches Soulseek by
+track title/artist/duration and downloads the match directly. There is no
+YouTube fallback for a Spotify-derived track — if no safe Soulseek candidate
+is found, the run stops at that track (exit code 0) rather than skipping it;
+already-organized tracks before it are not re-downloaded on the next run. See
+[SPOTIFY.md](SPOTIFY.md) for the full source-routing policy.
+
 ## Install
 
 Install the GitHub release wheel as an isolated command-line tool:
