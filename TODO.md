@@ -124,19 +124,24 @@ Corrected against the real dependency before implementation — see PLAN.md's
 
 ## Phase 7: Package the native integration
 
-- [ ] Change `pyproject.toml` to a Maturin mixed Python and Rust build.
-- [ ] Add Rust and Maturin tools and checks to `mise.toml`.
-- [ ] Update `uv.lock`.
-- [ ] Update `.github/workflows/check.yml` for the Rust build and tests.
-- [ ] Update `.github/workflows/release.yml` for macOS arm64 and supported Linux
+- [x] Change `pyproject.toml` to a Maturin mixed Python and Rust build.
+- [x] Add Rust and Maturin tools and checks to `mise.toml`.
+- [x] Update `uv.lock`.
+- [x] Update `.github/workflows/check.yml` for the Rust build and tests.
+- [x] Update `.github/workflows/release.yml` for macOS arm64 and supported Linux
   platform wheels, a source archive, and one shared version.
-- [ ] Update `packaging/homebrew/muzik.rb` and `DISTRIBUTION.md` for the Rust build
+- [x] Update `packaging/homebrew/muzik.rb` and `DISTRIBUTION.md` for the Rust build
   dependency and native module.
-- [ ] Build the release wheel and source archive.
-- [ ] Install the wheel in a clean Python 3.14 environment.
-- [ ] Verify `muzik --help`, `muzik soulseek check`, a direct Spotify track run,
-  a YouTube-first quality run, and `muzik gui`.
-- [ ] Commit: `build(release): package the embedded Seakarr bridge`
+- [x] Build the release wheel and source archive. **Local only**: built with
+  `maturin build --release` and `maturin sdist`, per the user's instruction not
+  to trigger an actual release. The CI release job itself has not been run.
+- [x] Install the wheel in a clean Python 3.14 environment.
+- [x] Verify `muzik --help`, `muzik soulseek check`, a direct Spotify track run,
+  and the `--quality-policy` flag. **Not done**: a live YouTube-first quality
+  run and an interactive `muzik gui` launch — both need network/Soulseek
+  credentials or a display this sandbox does not have. `muzik gui` was checked
+  for import-time correctness only.
+- [x] Commit: `build(release): package the embedded Seakarr bridge`
 
 ## Phase 8: Document direct acquisition and quality checks
 
