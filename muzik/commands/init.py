@@ -9,9 +9,9 @@ from muzik.config import (
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_SOULSEEK_DIR,
     DEFAULT_SPLITS_DIR,
-    SLSKD_API_KEY,
-    SLSKD_DOWNLOAD_DIR,
-    SLSKD_URL,
+    SEAKARR_DOWNLOAD_DIR,
+    SEAKARR_PASSWORD,
+    SEAKARR_USERNAME,
 )
 from muzik.ui.console import console
 
@@ -151,15 +151,16 @@ def init_cmd() -> None:
     _configure_beets()
 
     console.print("\n[bold]Soulseek configuration[/bold]")
-    console.print(f"  SLSKD_URL           [dim]{SLSKD_URL}[/dim]")
-    console.print(f"  SLSKD_DOWNLOAD_DIR  [dim]{SLSKD_DOWNLOAD_DIR}[/dim]")
-    if SLSKD_API_KEY:
-        console.print("  SLSKD_API_KEY       [green]set[/green]")
+    console.print(f"  MUZIK_SOULSEEK_DOWNLOAD_DIR  [dim]{SEAKARR_DOWNLOAD_DIR}[/dim]")
+    if SEAKARR_USERNAME and SEAKARR_PASSWORD:
+        console.print("  MUZIK_SOULSEEK_USERNAME      [green]set[/green]")
+        console.print("  MUZIK_SOULSEEK_PASSWORD      [green]set[/green]")
     else:
-        console.print("  SLSKD_API_KEY       [yellow]not set[/yellow]")
+        console.print("  MUZIK_SOULSEEK_USERNAME      [yellow]not set[/yellow]")
+        console.print("  MUZIK_SOULSEEK_PASSWORD      [yellow]not set[/yellow]")
         console.print(
-            "  [dim]Set SLSKD_URL, SLSKD_API_KEY, and SLSKD_DOWNLOAD_DIR "
-            "to use Soulseek via slskd.[/dim]"
+            "  [dim]Set MUZIK_SOULSEEK_USERNAME and MUZIK_SOULSEEK_PASSWORD "
+            "to use Soulseek.[/dim]"
         )
 
     console.rule()

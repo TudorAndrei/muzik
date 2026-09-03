@@ -15,7 +15,7 @@ from muzik.config import (
     BEETS_CONFIG,
     DEFAULT_SOULSEEK_DIR,
     MUZIK_CONFIG_FILE,
-    get_slskd_settings,
+    get_seakarr_settings,
 )
 from muzik.ui.console import console
 
@@ -95,7 +95,7 @@ def config_show(
         raw = yaml.dump(data, default_flow_style=False, allow_unicode=True)
         console.print(Syntax(raw, "yaml", theme="ansi_dark", line_numbers=False))
 
-    soulseek = get_slskd_settings()
+    soulseek = get_seakarr_settings()
     soulseek_table = Table(title="muzik config", show_header=False, border_style="dim")
     soulseek_table.add_column("Key", style="bold cyan", width=18)
     soulseek_table.add_column("Value")
@@ -104,12 +104,19 @@ def config_show(
         "Exists",
         "[green]yes[/green]" if MUZIK_CONFIG_FILE.exists() else "[dim]no[/dim]",
     )
-    soulseek_table.add_row("slskd url", soulseek["url"])
     soulseek_table.add_row(
-        "slskd api key",
-        "[green]set[/green]" if soulseek["api_key"] else "[yellow]not set[/yellow]",
+        "Soulseek username",
+        soulseek["username"] or "[yellow]not set[/yellow]",
     )
-    soulseek_table.add_row("slskd downloads", soulseek["download_dir"])
+    soulseek_table.add_row(
+        "Soulseek password",
+        "[green]set[/green]" if soulseek["password"] else "[yellow]not set[/yellow]",
+    )
+    soulseek_table.add_row(
+        "Soulseek server",
+        f"{soulseek['server_host']}:{soulseek['server_port']}",
+    )
+    soulseek_table.add_row("Soulseek downloads", soulseek["download_dir"])
     console.print()
     console.print(soulseek_table)
 
@@ -174,45 +181,61 @@ def config_set_library(
 
 @app.command("set-soulseek")
 def config_set_soulseek(
-    url: str = typer.Option(
-        "http://localhost:5030",
-        "--url",
-        help="slskd base URL.",
-    ),
-    api_key: Optional[str] = typer.Option(
+    username: Optional[str] = typer.Option(
         None,
-        "--api-key",
-        help="slskd API key. If omitted, existing value is kept.",
+        "--username",
+        help="Soulseek username. If omitted, existing value is kept.",
+    ),
+    password: Optional[str] = typer.Option(
+        None,
+        "--password",
+        help="Soulseek password. If omitted, existing value is kept.",
+    ),
+    server_host: str = typer.Option(
+        "server.slsknet.org",
+        "--server-host",
+        help="Soulseek server hostname.",
+    ),
+    server_port: int = typer.Option(
+        2416,
+        "--server-port",
+        help="Soulseek server port.",
     ),
     download_dir: Path = typer.Option(
         DEFAULT_SOULSEEK_DIR,
         "--download-dir",
-        help="Local filesystem path where slskd completed downloads appear.",
+        help="Local filesystem path where completed Soulseek downloads appear.",
     ),
 ) -> None:
-    """Set Soulseek/slskd connection settings in muzik config."""
+    """Set Soulseek connection settings in muzik config."""
     data = _load_config(MUZIK_CONFIG_FILE)
-    slskd = data.get("slskd") or {}
-    if not isinstance(slskd, dict):
-        slskd = {}
+    soulseek = data.get("soulseek") or {}
+    if not isinstance(soulseek, dict):
+        soulseek = {}
 
-    slskd["url"] = url.rstrip("/")
-    if api_key is not None:
-        slskd["api_key"] = api_key
-    elif "api_key" not in slskd:
-        slskd["api_key"] = ""
-    slskd["download_dir"] = str(download_dir.expanduser())
-    data["slskd"] = slskd
+    if username is not None:
+        soulseek["username"] = username
+    elif "username" not in soulseek:
+        soulseek["username"] = ""
+    if password is not None:
+        soulseek["password"] = password
+    elif "password" not in soulseek:
+        soulseek["password"] = ""
+    soulseek["server_host"] = server_host
+    soulseek["server_port"] = server_port
+    soulseek["download_dir"] = str(download_dir.expanduser())
+    data["soulseek"] = soulseek
 
     _save_config(MUZIK_CONFIG_FILE, data)
     download_dir.expanduser().mkdir(parents=True, exist_ok=True)
 
     console.print(f"[green]Soulseek config saved:[/green] {MUZIK_CONFIG_FILE}")
-    console.print(f"  url: [dim]{slskd['url']}[/dim]")
+    console.print(f"  username: [dim]{soulseek['username'] or 'not set'}[/dim]")
     console.print(
-        f"  api_key: {'[green]set[/green]' if slskd.get('api_key') else '[yellow]not set[/yellow]'}"
+        f"  password: {'[green]set[/green]' if soulseek.get('password') else '[yellow]not set[/yellow]'}"
     )
-    console.print(f"  download_dir: [dim]{slskd['download_dir']}[/dim]")
+    console.print(f"  server: [dim]{server_host}:{server_port}[/dim]")
+    console.print(f"  download_dir: [dim]{soulseek['download_dir']}[/dim]")
 
 
 @app.command("edit")

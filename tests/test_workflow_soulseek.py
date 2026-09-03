@@ -56,7 +56,7 @@ def test_workflow_plain_text_query_uses_soulseek_source(
                 metadata_path=audio.with_suffix(".muzik.json"),
             )
 
-    monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
+    monkeypatch.setattr(workflow, "SeakarrSource", FakeSoulseekSource)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
 
@@ -142,7 +142,7 @@ def test_workflow_youtube_url_uses_youtube_metadata_for_soulseek_search(
         )
 
     monkeypatch.setattr(workflow, "YouTubeSource", FakeYouTubeSource)
-    monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
+    monkeypatch.setattr(workflow, "SeakarrSource", FakeSoulseekSource)
     monkeypatch.setattr(workflow, "_download_audio", fail_download_cmd)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)
@@ -199,7 +199,7 @@ def test_workflow_falls_back_to_youtube_when_soulseek_has_no_candidates(
         (output / "Fallback [abcdefghijk].flac").write_bytes(b"")
 
     monkeypatch.setattr(workflow, "YouTubeSource", FakeYouTubeSource)
-    monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
+    monkeypatch.setattr(workflow, "SeakarrSource", FakeSoulseekSource)
     monkeypatch.setattr(workflow, "_download_audio", fake_download_cmd)
     monkeypatch.setattr(workflow, "find_chapters", lambda path: [])
     monkeypatch.setattr(workflow, "get_duration", lambda path: 180)

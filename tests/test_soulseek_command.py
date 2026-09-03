@@ -37,12 +37,11 @@ def test_soulseek_check_command_uses_source(monkeypatch) -> None:
         def check(self):
             calls["check"] += 1
             return {
-                "url": "http://localhost:5030",
-                "download_dir": "/tmp/slskd",
-                "auth_valid": True,
-                "server_state": "Connected",
-                "server_connected": True,
-                "server_logged_in": True,
+                "username": "muziklistener",
+                "server": "server.slsknet.org:2416",
+                "download_dir": "/tmp/soulseek",
+                "connected": True,
+                "detail": "Connected",
             }
 
     monkeypatch.setattr(soulseek, "_source", FakeSource)

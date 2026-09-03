@@ -57,14 +57,16 @@ def test_paths_use_platformdirs_and_beets_config_helper(
         importlib.reload(config)
 
 
-def test_slskd_settings_read_from_muzik_config(tmp_path: Path) -> None:
+def test_seakarr_settings_read_from_muzik_config(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         yaml.dump(
             {
-                "slskd": {
-                    "url": "http://slskd.local:5030/",
-                    "api_key": "from-config",
+                "soulseek": {
+                    "username": "from-config",
+                    "password": "config-secret",
+                    "server_host": "config.slsknet.org",
+                    "server_port": "1234",
                     "download_dir": str(tmp_path / "downloads"),
                 }
             }
@@ -72,33 +74,35 @@ def test_slskd_settings_read_from_muzik_config(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    settings = config.get_slskd_settings(env={}, config_path=cfg)
+    settings = config.get_seakarr_settings(env={}, config_path=cfg)
 
-    assert settings == {
-        "url": "http://slskd.local:5030",
-        "api_key": "from-config",
-        "download_dir": str(tmp_path / "downloads"),
-    }
+    assert settings["username"] == "from-config"
+    assert settings["password"] == "config-secret"
+    assert settings["server_host"] == "config.slsknet.org"
+    assert settings["server_port"] == "1234"
+    assert settings["download_dir"] == str(tmp_path / "downloads")
 
 
-def test_slskd_env_overrides_muzik_config(tmp_path: Path) -> None:
+def test_seakarr_env_overrides_muzik_config(tmp_path: Path) -> None:
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
-        yaml.dump({"slskd": {"url": "http://config", "api_key": "config-key"}}),
+        yaml.dump(
+            {"soulseek": {"username": "config-user", "password": "config-secret"}}
+        ),
         encoding="utf-8",
     )
 
-    settings = config.get_slskd_settings(
+    settings = config.get_seakarr_settings(
         env={
-            "SLSKD_URL": "http://env/",
-            "SLSKD_API_KEY": "env-key",
-            "SLSKD_DOWNLOAD_DIR": str(tmp_path / "env-downloads"),
+            "MUZIK_SOULSEEK_USERNAME": "env-user",
+            "MUZIK_SOULSEEK_PASSWORD": "env-secret",
+            "MUZIK_SOULSEEK_DOWNLOAD_DIR": str(tmp_path / "env-downloads"),
         },
         config_path=cfg,
     )
 
-    assert settings["url"] == "http://env"
-    assert settings["api_key"] == "env-key"
+    assert settings["username"] == "env-user"
+    assert settings["password"] == "env-secret"
     assert settings["download_dir"] == str(tmp_path / "env-downloads")
 
 
@@ -108,18 +112,22 @@ def test_config_set_soulseek_writes_muzik_config(
 ) -> None:
     cfg = tmp_path / "muzik" / "config.yaml"
     monkeypatch.setattr(config_cmd, "MUZIK_CONFIG_FILE", cfg)
-    download_dir = tmp_path / "slskd-downloads"
+    download_dir = tmp_path / "soulseek-downloads"
 
     config_cmd.config_set_soulseek(
-        url="http://localhost:5030/",
-        api_key="secret",
+        username="listener",
+        password="secret",
+        server_host="server.slsknet.org",
+        server_port=2416,
         download_dir=download_dir,
     )
 
     data = yaml.safe_load(cfg.read_text(encoding="utf-8"))
-    assert data["slskd"] == {
-        "url": "http://localhost:5030",
-        "api_key": "secret",
+    assert data["soulseek"] == {
+        "username": "listener",
+        "password": "secret",
+        "server_host": "server.slsknet.org",
+        "server_port": 2416,
         "download_dir": str(download_dir),
     }
     assert download_dir.exists()

@@ -185,7 +185,7 @@ def test_acquire_from_soulseek_emits_candidates_found(
                 root=tmp_path,
             )
 
-    monkeypatch.setattr(workflow, "SoulseekSource", FakeSoulseekSource)
+    monkeypatch.setattr(workflow, "SeakarrSource", FakeSoulseekSource)
     events = RecordingWorkflowEventEmitter()
 
     files = workflow._acquire_from_soulseek(

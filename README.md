@@ -7,20 +7,21 @@ and Bandcamp.
 
 ---
 
-Wraps **slskd**, **yt-dlp**, **ffmpeg**, and **beets** with better progress
-feedback and an interactive chapter editor. Soulseek is used for higher-quality
-audio acquisition when configured; yt-dlp remains available for YouTube metadata,
-playlist parsing, and fallback audio downloads. Chapter sidecars can come from
-`.chapters.txt`, yt-dlp `.info.json`, or album `.cue` sheets. Also downloads
-your full Bandcamp collection.
+Wraps an embedded Soulseek client, **yt-dlp**, **ffmpeg**, and **beets** with
+better progress feedback and an interactive chapter editor. Soulseek is used
+for higher-quality audio acquisition when configured; yt-dlp remains
+available for YouTube metadata, playlist parsing, and fallback audio
+downloads. Chapter sidecars can come from `.chapters.txt`, yt-dlp
+`.info.json`, or album `.cue` sheets. Also downloads your full Bandcamp
+collection.
 
 ## Requirements
 
 - Python 3.14+
 - [`uv`](https://github.com/astral-sh/uv)
 - `yt-dlp`, `ffmpeg`, `ffprobe` on `$PATH`
-- Optional for Soulseek: a running [`slskd`](https://github.com/slskd/slskd)
-  instance
+- Optional for Soulseek: a Soulseek account (username/password) — the client
+  is embedded, no separate server to run
 
 Check external tools before running a full workflow:
 
@@ -28,7 +29,7 @@ Check external tools before running a full workflow:
 yt-dlp --version
 ffmpeg -version
 ffprobe -version
-uv run muzik soulseek check      # when using Soulseek/slskd
+uv run muzik soulseek check      # when using Soulseek
 uv run playwright install chromium
 ```
 
@@ -56,29 +57,20 @@ uv run playwright install chromium
 
 ## Soulseek setup
 
-Configure `muzik` to talk to `slskd` with environment variables:
+Soulseek support is an embedded Rust client (`rust/seakarr_bridge/`) — there
+is no separate server process to run. Set your Soulseek account credentials
+as environment variables:
 
 ```sh
-export SLSKD_URL="http://localhost:5030"
-export SLSKD_API_KEY="your-slskd-api-key"
-export SLSKD_DOWNLOAD_DIR="$HOME/.local/share/muzik/soulseek"
+export MUZIK_SOULSEEK_USERNAME="your-soulseek-username"
+export MUZIK_SOULSEEK_PASSWORD="your-soulseek-password"
 ```
 
-`SLSKD_DOWNLOAD_DIR` must match the local filesystem path where completed slskd
-downloads appear, so `muzik` can validate and organize them.
+Or write them to `muzik`'s own config file (see `muzik config set-soulseek
+--help`). `MUZIK_SOULSEEK_DOWNLOAD_DIR` controls where completed downloads
+are written (defaults to the platform data directory).
 
-`SLSKD_API_KEY` only authenticates `muzik` to the slskd API. slskd must also be
-logged in to the Soulseek network. In the slskd config mounted at
-`/app/slskd.yml`, set:
-
-```yaml
-soulseek:
-  username: your-soulseek-username
-  password: your-soulseek-password
-```
-
-Then restart slskd and run `muzik soulseek check`; it should report both
-`Soulseek connected: True` and `Soulseek logged in: True`.
+Then run `muzik soulseek check`; it should report `Soulseek reachable`.
 
 ## Install
 
@@ -150,7 +142,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik workflow <url-or-path>` | Full pipeline: acquire → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik downloaded` | List audio already in the output folder |
-| `muzik soulseek check` | Verify slskd connectivity and auth |
+| `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
 | `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
 | `muzik bandcamp` | Download Bandcamp collection and organize with beets |
@@ -303,7 +295,7 @@ To override the skip and download again, use `--force` (`-f`) on the CLI, or the
 ## Credits
 
 - Bandcamp collection downloading is a Python port of [bandsnatch](https://github.com/Ovyerus/bandsnatch)
-- Soulseek integration via [slskd](https://github.com/slskd/slskd)
+- Soulseek integration via the embedded [soulseek-rs](https://github.com/michel/soulseek-rs) client
 - YouTube metadata and fallback audio via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - Audio processing via [FFmpeg](https://ffmpeg.org/)
 - Music library management via [beets](https://beets.io/)

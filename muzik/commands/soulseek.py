@@ -1,4 +1,4 @@
-"""muzik soulseek — search and download via slskd."""
+"""muzik soulseek — search and download via the embedded Seakarr bridge."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from muzik.config import DEFAULT_SOULSEEK_DIR
 from muzik.commands.organize import organize_cmd
 import muzik.core.cache as cache_mod
 from muzik.core.sources.base import Candidate, DownloadRequest
-from muzik.core.sources.soulseek import SoulseekError, SoulseekSource
+from muzik.core.sources.seakarr import SoulseekError, SeakarrSource
 from muzik.core.workflow.decisions import WorkflowDecisionError
 from muzik.ui.cli.decisions import CliWorkflowDecisions
 from muzik.ui.console import console, err
@@ -20,8 +20,8 @@ from muzik.ui.console import console, err
 app = typer.Typer(no_args_is_help=True, help="Search and download from Soulseek.")
 
 
-def _source() -> SoulseekSource:
-    return SoulseekSource()
+def _source() -> SeakarrSource:
+    return SeakarrSource()
 
 
 def _format_size(size: int | None) -> str:
@@ -102,26 +102,26 @@ def _candidate_table(candidates: list[Candidate], *, limit: int) -> Table:
 
 @app.command("check")
 def check_cmd() -> None:
-    """Verify slskd connectivity and auth."""
+    """Verify the embedded Seakarr bridge can connect and log in."""
     try:
         info = _source().check()
     except Exception as exc:
-        err(f"[red]Soulseek/slskd check failed:[/red] {exc}")
+        err(f"[red]Soulseek check failed:[/red] {exc}")
         raise typer.Exit(1) from exc
 
-    console.print("[green]slskd reachable[/green]")
-    console.print(f"  URL: [dim]{info['url']}[/dim]")
+    console.print(
+        "[green]Soulseek reachable[/green]"
+        if info["connected"]
+        else "[red]Soulseek unreachable[/red]"
+    )
+    console.print(f"  Username: [dim]{info['username']}[/dim]")
+    console.print(f"  Server: [dim]{info['server']}[/dim]")
     console.print(f"  Download dir: [dim]{info['download_dir']}[/dim]")
-    console.print(f"  Auth valid: [dim]{info['auth_valid']}[/dim]")
-    console.print(f"  Soulseek state: [dim]{info['server_state']}[/dim]")
-    console.print(f"  Soulseek connected: [dim]{info['server_connected']}[/dim]")
-    console.print(f"  Soulseek logged in: [dim]{info['server_logged_in']}[/dim]")
-    if not info["auth_valid"]:
-        raise typer.Exit(1)
-    if not info["server_connected"] or not info["server_logged_in"]:
+    console.print(f"  Detail: [dim]{info['detail']}[/dim]")
+    if not info["connected"]:
         err(
-            "[red]slskd is not logged in to Soulseek.[/red] "
-            "Set soulseek.username and soulseek.password in slskd.yml, then restart slskd."
+            "[red]Set MUZIK_SOULSEEK_USERNAME and MUZIK_SOULSEEK_PASSWORD, "
+            "then retry.[/red]"
         )
         raise typer.Exit(1)
 
@@ -167,7 +167,7 @@ def download_cmd(
         DEFAULT_SOULSEEK_DIR,
         "--output",
         "-o",
-        help="Local slskd download directory mapping.",
+        help="Local Soulseek download directory.",
     ),
     no_interactive: bool = typer.Option(
         False,

@@ -23,7 +23,8 @@ app = typer.Typer(
     help=(
         "Music organizer CLI — acquire, split, tag, and organize music.\n\n"
         "Supports YouTube, Soulseek, Bandcamp, local audio, and metadata-only "
-        "Spotify playlist exports. Wraps yt-dlp, slskd, ffmpeg, and beets."
+        "Spotify playlist exports. Wraps yt-dlp, an embedded Soulseek client, "
+        "ffmpeg, and beets."
     ),
     add_completion=False,
     no_args_is_help=True,

@@ -74,46 +74,77 @@ def _env_or_config(
     return default
 
 
-def get_slskd_settings(
+def get_seakarr_settings(
     *,
     env: Mapping[str, str] = os.environ,
     config_path: Path = MUZIK_CONFIG_FILE,
 ) -> dict[str, str]:
-    """Return slskd settings from environment, muzik config, then defaults."""
+    """Return Seakarr/Soulseek settings from environment, muzik config, then defaults."""
     config = load_muzik_config(config_path)
     return {
-        "url": _env_or_config(
+        "username": _env_or_config(
+            env, "MUZIK_SOULSEEK_USERNAME", config, "soulseek", "username", ""
+        ),
+        "password": _env_or_config(
+            env, "MUZIK_SOULSEEK_PASSWORD", config, "soulseek", "password", ""
+        ),
+        "server_host": _env_or_config(
             env,
-            "SLSKD_URL",
+            "MUZIK_SOULSEEK_SERVER_HOST",
             config,
-            "slskd",
-            "url",
-            "http://localhost:5030",
-        ).rstrip("/"),
-        "api_key": _env_or_config(
+            "soulseek",
+            "server_host",
+            "server.slsknet.org",
+        ),
+        "server_port": _env_or_config(
+            env, "MUZIK_SOULSEEK_SERVER_PORT", config, "soulseek", "server_port", "2416"
+        ),
+        "listen_port": _env_or_config(
+            env, "MUZIK_SOULSEEK_LISTEN_PORT", config, "soulseek", "listen_port", "2234"
+        ),
+        "search_limit": _env_or_config(
+            env, "MUZIK_SOULSEEK_SEARCH_LIMIT", config, "soulseek", "search_limit", "20"
+        ),
+        "search_timeout": _env_or_config(
             env,
-            "SLSKD_API_KEY",
+            "MUZIK_SOULSEEK_SEARCH_TIMEOUT",
             config,
-            "slskd",
-            "api_key",
-            "",
+            "soulseek",
+            "search_timeout",
+            "15",
+        ),
+        "download_timeout": _env_or_config(
+            env,
+            "MUZIK_SOULSEEK_DOWNLOAD_TIMEOUT",
+            config,
+            "soulseek",
+            "download_timeout",
+            "600",
         ),
         "download_dir": _env_or_config(
             env,
-            "SLSKD_DOWNLOAD_DIR",
+            "MUZIK_SOULSEEK_DOWNLOAD_DIR",
             config,
-            "slskd",
+            "soulseek",
             "download_dir",
             str(DEFAULT_SOULSEEK_DIR),
         ),
     }
 
 
-# slskd/Soulseek backend settings. Env vars override muzik's config file.
-_SLSKD_SETTINGS = get_slskd_settings()
-SLSKD_URL = _SLSKD_SETTINGS["url"]
-SLSKD_API_KEY = _SLSKD_SETTINGS["api_key"]
-SLSKD_DOWNLOAD_DIR = _SLSKD_SETTINGS["download_dir"]
+# Seakarr/Soulseek backend settings. Env vars override muzik's config file.
+# Never print SEAKARR_PASSWORD — status output and error messages must not
+# show it.
+_SEAKARR_SETTINGS = get_seakarr_settings()
+SEAKARR_USERNAME = _SEAKARR_SETTINGS["username"]
+SEAKARR_PASSWORD = _SEAKARR_SETTINGS["password"]
+SEAKARR_SERVER_HOST = _SEAKARR_SETTINGS["server_host"]
+SEAKARR_SERVER_PORT = int(_SEAKARR_SETTINGS["server_port"])
+SEAKARR_LISTEN_PORT = int(_SEAKARR_SETTINGS["listen_port"])
+SEAKARR_SEARCH_LIMIT = int(_SEAKARR_SETTINGS["search_limit"])
+SEAKARR_SEARCH_TIMEOUT = float(_SEAKARR_SETTINGS["search_timeout"])
+SEAKARR_DOWNLOAD_TIMEOUT = float(_SEAKARR_SETTINGS["download_timeout"])
+SEAKARR_DOWNLOAD_DIR = _SEAKARR_SETTINGS["download_dir"]
 
 # ---------------------------------------------------------------------------
 # Constants

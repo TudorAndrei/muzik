@@ -5,7 +5,7 @@ from muzik.core.services import (
     ServiceStatus,
     _check_binary,
     _check_chromium,
-    _check_slskd,
+    _check_soulseek,
     check_services,
 )
 
@@ -67,14 +67,14 @@ def test_check_chromium_uses_playwright_install_list(monkeypatch) -> None:
     assert status.detail == "/cache/ms-playwright/chromium-1234"
 
 
-def test_check_slskd_reports_not_configured(monkeypatch) -> None:
+def test_check_soulseek_reports_not_configured(monkeypatch) -> None:
     monkeypatch.setattr(
         services,
-        "get_slskd_settings",
-        lambda: {"url": "http://localhost:5030", "api_key": "", "download_dir": "/tmp"},
+        "get_seakarr_settings",
+        lambda: {"username": "", "password": "", "download_dir": "/tmp"},
     )
 
-    status = _check_slskd()
+    status = _check_soulseek()
 
     assert status.available is None
     assert status.optional is True
@@ -89,7 +89,7 @@ def test_check_services_returns_all_service_names() -> None:
         "ffprobe",
         "yt-dlp",
         "Playwright Chromium",
-        "slskd (Soulseek)",
+        "Soulseek (Seakarr)",
     } <= names
 
 

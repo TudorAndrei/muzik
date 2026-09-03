@@ -14,8 +14,11 @@ CLI. Four runtime facts drive every packaging choice:
    and `ffprobe`). These are not Python packages.
 2. **A browser automation dependency.** Bandcamp downloads launch Chromium through
    Playwright with `headless=False`. This needs a real browser and a display.
-3. **An optional network service.** Soulseek support talks to a separate `slskd`
-   server over HTTP. `muzik` does not own that process.
+3. ~~An optional network service. Soulseek support talks to a separate `slskd`
+   server over HTTP.~~ **Correction:** Soulseek support is now an embedded
+   Rust bridge (`rust/seakarr_bridge/`, see PLAN.md), not a separate service.
+   Phase 7/8 of that plan will fold the native wheel's platform implications
+   into this document; item 4 below (two interface modes) still applies.
 4. **Two interface modes.** The GUI needs a GPU and a display. The CLI runs
    headless.
 
@@ -101,9 +104,11 @@ not this tool's audience. Keep it as a possible later track, not the first one.
 
 ### Option D — Docker image (headless CLI only)
 
-A `docker-compose.yml` already exists for the `slskd` side. A container can run the
-headless CLI paths, but the DearPyGui GUI and the `headless=False` Bandcamp browser
-do not run in a plain container without X forwarding.
+A container can run the headless CLI paths, but the DearPyGui GUI and the
+`headless=False` Bandcamp browser do not run in a plain container without X
+forwarding. (An earlier `docker-compose.yml` ran a separate `slskd` service;
+that is no longer needed now that Soulseek support is an embedded Rust
+bridge.)
 
 Verdict: useful only for server-side, headless CLI use. Not a GUI distribution
 path.

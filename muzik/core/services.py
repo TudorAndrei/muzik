@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import sys
 
-from muzik.config import get_slskd_settings
+from muzik.config import get_seakarr_settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +36,7 @@ def check_services() -> list[ServiceStatus]:
         _check_binary("ffprobe", "ffprobe", ["-version"]),
         _check_binary("yt-dlp", "yt-dlp", ["--version"]),
         _check_chromium(),
-        _check_slskd(),
+        _check_soulseek(),
     ]
 
 
@@ -95,31 +95,24 @@ def _check_chromium() -> ServiceStatus:
     )
 
 
-def _check_slskd() -> ServiceStatus:
-    name = "slskd (Soulseek)"
-    settings = get_slskd_settings()
-    if not settings["api_key"]:
+def _check_soulseek() -> ServiceStatus:
+    name = "Soulseek (Seakarr)"
+    settings = get_seakarr_settings()
+    if not settings["username"] or not settings["password"]:
         return ServiceStatus(
             name,
             None,
-            "Not configured (set SLSKD_API_KEY).",
+            "Not configured (set MUZIK_SOULSEEK_USERNAME/MUZIK_SOULSEEK_PASSWORD).",
             optional=True,
         )
     try:
-        from muzik.core.sources.soulseek import SoulseekSource
+        from muzik.core.sources.seakarr import SeakarrSource
 
-        info = SoulseekSource().check()
+        info = SeakarrSource().check()
     except Exception as exc:  # noqa: BLE001 - any client error means unreachable
         return ServiceStatus(name, False, f"Unreachable: {exc}", optional=True)
-    if not info.get("auth_valid"):
+    if not info.get("connected"):
         return ServiceStatus(
-            name, False, "Reachable but auth is invalid.", optional=True
+            name, False, info.get("detail", "Unreachable"), optional=True
         )
-    if not (info.get("server_connected") and info.get("server_logged_in")):
-        return ServiceStatus(
-            name,
-            False,
-            "slskd is not logged in to Soulseek.",
-            optional=True,
-        )
-    return ServiceStatus(name, True, f"Connected: {settings['url']}", optional=True)
+    return ServiceStatus(name, True, f"Connected: {info['server']}", optional=True)

@@ -27,7 +27,7 @@ from muzik.core.sources.base import (
     ResolvedTrack,
 )
 from muzik.core.sources.spotify import is_spotify_export, load_playlist
-from muzik.core.sources.soulseek import SoulseekError, SoulseekSource
+from muzik.core.sources.seakarr import SoulseekError, SeakarrSource
 from muzik.core.sources.youtube import (
     YouTubeSource,
     find_audio_by_id,
@@ -204,7 +204,7 @@ class NullAudioProcessingHooks:
 
 
 def _default_soulseek_source() -> SoulseekWorkflowSource:
-    return cast(SoulseekWorkflowSource, SoulseekSource())
+    return cast(SoulseekWorkflowSource, SeakarrSource())
 
 
 def _default_youtube_source() -> MetadataWorkflowSource:
@@ -579,7 +579,7 @@ def acquire_from_soulseek(
     if not result.files:
         raise WorkflowServiceError(
             "Soulseek download was enqueued, but no local audio files were found. "
-            "Check SLSKD_DOWNLOAD_DIR.",
+            "Check MUZIK_SOULSEEK_DOWNLOAD_DIR.",
             exit_code=0,
         )
     return result.files

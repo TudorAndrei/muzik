@@ -32,7 +32,7 @@ from muzik.core.sources.youtube import video_id_from_path
 from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters_verbose
 from muzik.core.metadata_repair import repair_placeholder_album_tags
 from muzik.core.sources.base import Candidate
-from muzik.core.sources.soulseek import SoulseekSource
+from muzik.core.sources.seakarr import SeakarrSource
 from muzik.core.sources.youtube import (
     YouTubeSource,
     dump_json,
@@ -203,7 +203,7 @@ def build_workflow_operations(
             fallback=AudioFallback(options.fallback).value,
             decisions=decisions,
             events=events,
-            source_factory=lambda: cast(SoulseekWorkflowSource, SoulseekSource()),
+            source_factory=lambda: cast(SoulseekWorkflowSource, SeakarrSource()),
             youtube_source_factory=lambda: cast(
                 MetadataWorkflowSource, YouTubeSource()
             ),
@@ -415,10 +415,10 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def _soulseek_ready() -> bool:
     try:
-        state = SoulseekSource().check()
+        state = SeakarrSource().check()
     except Exception:
         return False
-    return bool(state.get("auth_valid") and state.get("server_connected"))
+    return bool(state.get("connected"))
 
 
 def _prepopulate_archive(archive: Path) -> None:

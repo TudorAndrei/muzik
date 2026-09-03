@@ -38,7 +38,7 @@ from muzik.core.description_chapters import (
     get_description_from_info_json,
 )
 from muzik.core.tracklist import chapters_from_comments, chapters_from_description
-from muzik.core.sources.soulseek import SoulseekSource
+from muzik.core.sources.seakarr import SeakarrSource
 from muzik.core.sources.youtube import (
     get_playlist_video_ids,
     prepopulate_archive,
@@ -104,7 +104,7 @@ def _get_playlist_video_ids(url: str) -> list[str]:
 
 
 def _soulseek_source() -> SoulseekWorkflowSource:
-    return cast(SoulseekWorkflowSource, SoulseekSource())
+    return cast(SoulseekWorkflowSource, SeakarrSource())
 
 
 def _youtube_source() -> MetadataWorkflowSource:
