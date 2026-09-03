@@ -67,50 +67,80 @@ file that Muzik replaces in the same run.
 
 ### PyO3 bridge
 
-A new Rust crate at `rust/seakarr_bridge/` will build the private Python module
-`muzik._seakarr`. The crate will use PyO3 and a Tokio runtime. Maturin will build
-the extension.
+**Correction (verified against the live repository before implementation):**
+this section originally named a dependency called "Seakarr" with an invented
+API (`RealClient`, `SoulseekClient`, `search_album_with_fallback()`,
+`filter_results()`, `rank_candidates()`, `download_file()`,
+`download_album()`, `FileInfo`, `DownloadHandle`), a Tokio runtime, and a
+commit hash that does not exist in any real repository. The real dependency,
+confirmed with `gh api`, is **`soulseek-rs-lib`** at
+<https://github.com/michel/soulseek-rs> (MIT licensed — see "Prerequisite and
+limits" below). Its public API is a synchronous `Client` — no async runtime,
+no album-level search, no built-in candidate ranking. What follows replaces
+the original design with one grounded in that real API.
 
-The bridge will have a small API:
+A new Rust crate at `rust/seakarr_bridge/` builds the private Python module
+`muzik._seakarr`. The crate uses PyO3 only — no async runtime. Maturin builds
+the extension (`maturin develop` locally today; Phase 7 wires this into
+`mise run check` and the release build).
+
+The bridge has this API:
 
 ```text
-SeakarrSession.connect(settings)
-SeakarrSession.start_track_search(request) -> SeakarrJob
-SeakarrSession.start_album_search(request) -> SeakarrJob
-SeakarrSession.start_download(candidate_id, destination) -> SeakarrJob
-SeakarrJob.poll() -> status and progress events
+SeakarrSession.connect(username, password, server_host=None, server_port=None,
+                        enable_listen=None, listen_port=None)
+SeakarrSession.start_track_search(query, timeout_secs) -> SeakarrJob
+SeakarrSession.start_download(username, filename, size, destination) -> SeakarrJob
+SeakarrJob.poll() -> "running" | "completed" | "failed" | "cancelled"
 SeakarrJob.cancel()
-SeakarrJob.result() -> candidates or downloaded files
+SeakarrJob.result() -> candidates (search) or download progress (download)
 SeakarrSession.close()
 ```
 
+There is no `start_album_search`: `soulseek_rs::Client` has no album-level
+search, so Muzik keeps assembling a multi-track candidate from individual
+track searches itself, exactly as it does today against slskd's flat search
+results (`muzik/core/quality.py`'s `score_candidate`/`rank`-style scoring is
+unchanged by this bridge).
+
+`Client::connect(&mut self)` takes `&mut self`; every other operation used
+here (`search`, `search_with_cancel`, `download_with_metadata`,
+`get_all_downloads`, `remove_download`, ...) takes `&self` and is safe to call
+from multiple threads — the crate's internal state is each `Arc<RwLock<_>>`.
+So `SeakarrSession.connect()` connects once and wraps the client in an `Arc`;
+each `start_track_search`/`start_download` call spawns one plain OS thread
+(`std::thread::spawn`) that calls the blocking `Client` method and writes its
+outcome to a `Mutex`-guarded job state `SeakarrJob.poll()` reads without
+blocking. Cancellation is a shared `AtomicBool`: `Client::search_with_cancel`
+takes one directly; a download's worker thread polls the flag (via
+`recv_timeout` on the status channel) and calls `Client::remove_download` when
+it is set. No Tokio runtime, and no `pyo3-asyncio`, is needed.
+
 The GUI already runs workflows on a worker thread in `muzik/gui/app.py`. The
-Python adapter will poll `SeakarrJob` from that worker. It will emit the current
-events from `muzik/core/workflow/events.py`. A cancel request will call both the
-current `CancellationToken` and `SeakarrJob.cancel()`. DearPyGui calls will stay
-on the render thread through `GuiBridge`.
+Python adapter polls `SeakarrJob` from that worker. It emits the current
+events from `muzik/core/workflow/events.py`. A cancel request calls both the
+current `CancellationToken` and `SeakarrJob.cancel()`. DearPyGui calls stay on
+the render thread through `GuiBridge`.
 
-The Rust boundary will return owned values only. It will not return Seakarr
-database connections, Tokio channels, or internal Rust references to Python.
-Python values will contain candidate IDs, peers, file names, sizes, measured
-quality, queue state, transfer progress, and error details.
+The Rust boundary returns owned values only. It never returns a
+`soulseek_rs::Client`, a channel, or any internal Rust reference to Python.
+Python values contain usernames, file names, sizes, slot/speed counts,
+transfer progress, and error text — built from `soulseek_rs`'s own public
+types (`SearchResult`, `File`, `Download`, `DownloadStatus`) via `From` impls
+in the bridge crate's `types` module.
 
-The bridge will use these public Seakarr parts where possible:
+The dependency is pinned to a full commit hash:
+`a62bab1e6a505362109b8303aa528af03403eeae` (verified to exist on `master` at
+plan-correction time; the pin lives in `rust/seakarr_bridge/Cargo.toml`'s
+`soulseek_rs` dependency, not duplicated here, so it cannot drift out of
+sync). An update needs explicit review and bridge tests.
 
-- `RealClient` and `SoulseekClient`
-- `search_album_with_fallback()` and the public client search method
-- `filter_results()` and `rank_candidates()`
-- `download_file()` and `download_album()`
-- `SearchResult`, `FileInfo`, `DownloadStatus`, and `DownloadHandle`
-
-Some useful Seakarr helpers are only `pub(crate)`. An external PyO3 crate cannot
-call them. The preferred fix is a small public integration module in Seakarr.
-If that change is not accepted, Muzik will use a pinned fork with the same
-module. Muzik will not copy private Seakarr logic into Python.
-
-The Seakarr dependency will be pinned to a full commit hash. The first reviewed
-target is `571819f1101bb99bce5c839cb4ffcdf967c94d0c`. An update will need explicit
-review and bridge tests.
+`soulseek-rs-lib` ships no mock server or test client. Bridge tests build
+`soulseek_rs`'s own public wire types (`SearchResult`, `File`,
+`DownloadStatus`) directly and exercise the bridge's conversion and
+state-machine logic against them — the parts of the crate that do not need a
+live Soulseek connection. Search/download against a real server is exercised
+only by the manual live smoke tests in the Verification checklist.
 
 ### Python source adapter
 
@@ -143,9 +173,12 @@ joins artist, title, and album into one string. It then calls
 existing `ResolvedTrack` object. The Seakarr adapter can then use artist, title,
 album, duration, track number, and ISRC as separate evidence.
 
-Spotify playlist entries will use track search. Album search will be used only
-when the input is an album request or when a later feature supplies a complete
-album. This work will not download a complete album for each playlist track.
+Spotify playlist entries will use track search. For an album request, Muzik
+assembles the album candidate from several track searches itself — the
+bridge has no album-level search primitive (see "PyO3 bridge" above) — the
+same grouping-by-path approach `score_candidate()` already uses for slskd's
+flat search results. This work will not download a complete album for each
+playlist track.
 
 The adapter will reject a candidate when its duration is outside the configured
 tolerance or its title and artist do not have enough identity evidence. The
@@ -197,10 +230,13 @@ Rust as a build dependency when it builds from the source archive.
 
 ### Prerequisite and limits
 
-Seakarr has no license file or declared package license at the reviewed commit.
-Muzik is proprietary. Do not add, link, or distribute the Seakarr dependency
-until its author adds a compatible license or gives written permission. The
-license text and required notices must be in the release package.
+**Correction:** the real dependency (`soulseek-rs-lib`,
+<https://github.com/michel/soulseek-rs>, verified with `gh api`) carries the
+MIT license, confirmed at the pinned commit. MIT permits use in Muzik's
+proprietary distribution; no author permission is needed. The license text
+and required notice are recorded in
+`rust/seakarr_bridge/THIRD_PARTY_NOTICES.md`, which the release package
+(Phase 7) must include.
 
 This work does not use Seakarr to scan, organize, replace, or delete files in the
 Beets library. Muzik remains the only owner of library changes. This work also
@@ -225,15 +261,24 @@ candidate selector.
 
 ### Phase 2: Build the embedded Seakarr bridge
 
-- Complete the license prerequisite before this phase starts.
-- Add the PyO3 crate under `rust/seakarr_bridge/` and pin the reviewed Seakarr
-  commit.
+- ~~Complete the license prerequisite before this phase starts.~~ Resolved:
+  `soulseek-rs-lib` is MIT licensed; no permission needed. Notice recorded in
+  `rust/seakarr_bridge/THIRD_PARTY_NOTICES.md`.
+- Add the PyO3 crate under `rust/seakarr_bridge/` and pin the verified
+  `soulseek-rs-lib` commit (`a62bab1e6a505362109b8303aa528af03403eeae`).
 - Add the session, job, candidate, progress, cancellation, and structured error
   boundary.
-- Use a public Seakarr integration module. Submit the small upstream change or
-  record the pinned fork commit before the bridge depends on it.
-- Add Rust unit tests with Seakarr's mock client. Cover track search, album
-  search, ranking, download progress, cancellation, unsafe paths, and errors.
+- ~~Use a public Seakarr integration module...~~ Not applicable: the real
+  `Client` API (`search`, `search_with_cancel`, `download_with_metadata`,
+  `get_all_downloads`, `remove_download`, ...) is already public. No upstream
+  change or fork is needed.
+- Add Rust unit tests covering the bridge's own logic: wire-type-to-candidate
+  conversion, download-status-to-progress conversion, the job state machine
+  (running/completed/failed/cancelled, including that a late finish cannot
+  overwrite an already-terminal job), and error mapping. `soulseek-rs-lib` has
+  no mock client, so these tests build its public wire types directly instead
+  of using a network mock; live search/download is covered only by the manual
+  smoke tests in Verification.
 - Add a Python import smoke test for `muzik._seakarr`.
 
 **Commit:** `feat(seakarr): add the embedded Soulseek bridge`
@@ -327,12 +372,14 @@ candidate selector.
 
 ## Risks & Tradeoffs
 
-- Seakarr has no declared license. Implementation and distribution are blocked
-  until this is resolved.
+- ~~Seakarr has no declared license...~~ Resolved: `soulseek-rs-lib` is MIT
+  licensed (verified). See "Prerequisite and limits".
 - A native module makes release files platform-specific. CI must build and test
   each supported wheel.
-- Seakarr can change its Rust API. A full commit pin and bridge tests limit this
-  risk.
+- `soulseek-rs-lib` can change its Rust API. A full commit pin and bridge tests
+  limit this risk. It is also a young, single-maintainer project (no mock
+  client, no stability guarantee yet) — more exposed to breaking changes than
+  a mature dependency.
 - A Soulseek account must have only one active session. Starting Muzik can end
   another client session that uses the same account.
 - Soulseek search results are not trusted. The Rust bridge must keep path checks,
@@ -349,10 +396,11 @@ candidate selector.
 
 ## Open Questions
 
-- Which license will the Seakarr author add, and is it compatible with Muzik's
-  proprietary distribution?
-- Will the required public integration module be accepted upstream, or must
-  Muzik use a pinned fork?
+- ~~Which license will the Seakarr author add...~~ Resolved: MIT, compatible
+  with Muzik's proprietary distribution.
+- ~~Will the required public integration module be accepted upstream...~~ Not
+  applicable: `soulseek-rs-lib`'s `Client` API needed by the bridge is already
+  public.
 - Should automatic quality replacement be the default, or should the first
   release only ask the user? The safe initial default is to check and ask.
 - What is the minimum accepted quality for YouTube audio? The initial proposal

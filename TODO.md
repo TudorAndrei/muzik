@@ -15,21 +15,31 @@
 
 ## Phase 2: Build the embedded Seakarr bridge
 
-- [ ] Get a compatible Seakarr license or written distribution permission.
-- [ ] Record the license and required notices in the repository.
-- [ ] Add `rust/seakarr_bridge/` and pin Seakarr commit
-  `571819f1101bb99bce5c839cb4ffcdf967c94d0c`.
-- [ ] Add `SeakarrSession` and pollable `SeakarrJob` Python classes.
-- [ ] Add structured track requests, album requests, candidates, progress,
-  results, and errors.
-- [ ] Connect `SeakarrJob.cancel()` to active search and download work.
-- [ ] Add or consume the reviewed public Seakarr integration module.
-- [ ] Add Rust tests with the Seakarr mock client for search, rank, download,
-  progress, cancellation, unsafe paths, and errors.
-- [ ] Add a Python test that imports `muzik._seakarr` and checks its API shape.
-- [ ] Run Rust formatting, Rust lint checks, Rust tests, and the Python import
+Corrected against the real dependency before implementation — see PLAN.md's
+"PyO3 bridge" section for the full explanation. The real crate is
+`soulseek-rs-lib` at github.com/michel/soulseek-rs (MIT), a synchronous
+`Client`, not the originally assumed API/Tokio/commit.
+
+- [x] Get a compatible Seakarr license or written distribution permission.
+  (Resolved: MIT — no permission needed.)
+- [x] Record the license and required notices in the repository.
+  (`rust/seakarr_bridge/THIRD_PARTY_NOTICES.md`.)
+- [x] Add `rust/seakarr_bridge/` and pin the verified `soulseek-rs-lib` commit
+  `a62bab1e6a505362109b8303aa528af03403eeae`.
+- [x] Add `SeakarrSession` and pollable `SeakarrJob` Python classes.
+- [x] Add structured track requests, candidates, progress, results, and
+  errors. (No album requests: the real crate has no album-level search: see
+  PLAN.md.)
+- [x] Connect `SeakarrJob.cancel()` to active search and download work.
+- [x] ~~Add or consume the reviewed public Seakarr integration module.~~ Not
+  applicable: the real `Client` API needed is already public.
+- [x] Add Rust tests covering the bridge's own conversion and job-state-machine
+  logic against `soulseek-rs-lib`'s public wire types (no mock client exists
+  upstream to test search/rank/download against; see PLAN.md).
+- [x] Add a Python test that imports `muzik._seakarr` and checks its API shape.
+- [x] Run Rust formatting, Rust lint checks, Rust tests, and the Python import
   smoke test.
-- [ ] Commit: `feat(seakarr): add the embedded Soulseek bridge`
+- [x] Commit: `feat(seakarr): add the embedded Soulseek bridge`
 
 ## Phase 3: Replace the slskd adapter
 
