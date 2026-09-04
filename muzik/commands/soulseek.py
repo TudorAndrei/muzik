@@ -2,16 +2,31 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+from typing import Optional
 
+from beets.library import Item
 import typer
 from rich.table import Table
 
-from muzik.config import DEFAULT_SOULSEEK_DIR
+from muzik.config import BEETS_CONFIG, DEFAULT_SOULSEEK_DIR
 from muzik.commands.organize import organize_cmd
 import muzik.core.cache as cache_mod
-from muzik.core.sources.base import Candidate, DownloadRequest
-from muzik.core.sources.seakarr import SoulseekError, SeakarrSource
+from muzik.core.beets.config import open_library
+from muzik.core.beets.lookup import resolve_item_path
+from muzik.core.quality import measure_quality, quality_score
+from muzik.core.sources.base import (
+    Candidate,
+    DownloadRequest,
+    QualityInfo,
+    ResolvedTrack,
+)
+from muzik.core.sources.seakarr import (
+    SoulseekError,
+    SeakarrSource,
+    candidate_matches_track,
+)
 from muzik.core.workflow.decisions import WorkflowDecisionError
 from muzik.ui.cli.decisions import CliWorkflowDecisions
 from muzik.ui.console import console, err
@@ -282,3 +297,157 @@ def download_cmd(
             if getattr(exc, "code", 0) != 0:
                 err(f"[red]beet failed for {target}[/red]")
                 raise
+
+
+@app.command("check-library")
+def check_library_cmd(
+    query: Optional[str] = typer.Option(
+        None,
+        "--query",
+        "-q",
+        help="Beets query to scope the scan (e.g. 'albumartist:Etnobotanika'). "
+        "Without it, the whole library is scanned.",
+    ),
+    min_bitrate: int = typer.Option(
+        256,
+        "--min-bitrate",
+        help="Lossy tracks at or above this bitrate (kbps) are left alone.",
+    ),
+    prefer: str = typer.Option(
+        "lossless",
+        "--prefer",
+        help="Preferred replacement quality: flac, lossless, mp3-320, or any.",
+    ),
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        "-n",
+        help="Maximum number of below-threshold tracks to search Soulseek for.",
+    ),
+    config: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help=f"Beets config file (default: {BEETS_CONFIG}).",
+    ),
+) -> None:
+    """Measure real quality across the Beets library and suggest Soulseek replacements.
+
+    Read-only: nothing is downloaded or changed. A printed candidate's ID
+    works with `muzik soulseek download --candidate <id>` to fetch it.
+    """
+    try:
+        library = open_library(config)
+    except Exception as exc:
+        err(f"[red]Could not open the Beets library:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    directory = os.fsdecode(library.directory)
+    scanned = 0
+    flagged: list[tuple[Item, QualityInfo, Path]] = []
+    for item in library.items(query):
+        path = resolve_item_path(directory, item.path)
+        if not path.is_file():
+            continue
+        quality = measure_quality(path)
+        if quality is None:
+            continue
+        scanned += 1
+        if quality.lossless:
+            continue
+        if quality.bitrate is not None and quality.bitrate >= min_bitrate:
+            continue
+        flagged.append((item, quality, path))
+
+    flagged.sort(
+        key=lambda entry: (
+            str(entry[0].albumartist or entry[0].artist or ""),
+            str(entry[0].album or ""),
+            str(entry[0].title or ""),
+        )
+    )
+
+    if not flagged:
+        console.print(
+            f"[green]No tracks below {min_bitrate}kbps out of {scanned} scanned.[/green]"
+        )
+        return
+
+    to_search = flagged[:limit]
+    skipped = len(flagged) - len(to_search)
+
+    table = Table(
+        title="Library quality check",
+        show_header=True,
+        header_style="bold cyan",
+        border_style="dim",
+    )
+    table.add_column("Artist", overflow="fold")
+    table.add_column("Title", overflow="fold")
+    table.add_column("Current", width=14)
+    table.add_column("Status", width=18)
+    table.add_column("Suggested", width=18)
+    table.add_column("Candidate ID", width=16)
+
+    source = _source()
+    replacements: list[Candidate] = []
+    found = 0
+    for item, quality, _path in to_search:
+        artist = str(item.artist or "?")
+        title = str(item.title or "?")
+        current = f"{quality.format or '?'} {quality.bitrate or '?'}kbps"
+        track = ResolvedTrack(
+            title=str(item.title or ""),
+            artist=str(item.artist) if item.artist else None,
+            album=str(item.album) if item.album else None,
+            duration=float(item.length) if item.length else None,
+            source="beets",
+        )
+        try:
+            candidates = source.search(track, prefer=prefer, limit=10)
+        except Exception as exc:
+            table.add_row(artist, title, current, "search failed", str(exc)[:60], "")
+            continue
+
+        safe = [c for c in candidates if candidate_matches_track(c, track)]
+        current_score = quality_score(quality, prefer)
+        better = next(
+            (c for c in safe if quality_score(c.quality, prefer) > current_score),
+            None,
+        )
+        if better is None:
+            table.add_row(artist, title, current, "no safe match", "", "")
+            continue
+
+        found += 1
+        replacements.append(better)
+        suggested = (
+            f"{better.quality.format or '?'} {better.quality.bitrate or '?'}kbps"
+        )
+        table.add_row(
+            artist,
+            title,
+            current,
+            "[green]replacement found[/green]",
+            suggested,
+            _candidate_id(better),
+        )
+
+    if replacements:
+        _store_candidates(replacements)
+    summary = (
+        f"Scanned {scanned} track(s); {len(flagged)} below {min_bitrate}kbps; "
+        f"{found} replacement(s) found."
+    )
+    if skipped:
+        summary += (
+            f" {skipped} more below-threshold track(s) not searched "
+            "(raise --limit or narrow --query)."
+        )
+    original_width = console.width
+    console.width = max(original_width, 140)
+    try:
+        console.print(table)
+        console.print(summary)
+    finally:
+        console.width = original_width

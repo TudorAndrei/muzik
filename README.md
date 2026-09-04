@@ -186,6 +186,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
 | `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
+| `muzik soulseek check-library` | Measure real quality across the Beets library and suggest Soulseek replacements |
 | `muzik bandcamp` | Download Bandcamp collection and organize with beets |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Tag/import audio with beets |
@@ -355,6 +356,11 @@ muzik soulseek download "Artist - Album" --prefer flac
 
 # Or download a candidate ID shown by `muzik soulseek search`
 muzik soulseek download --candidate <id>
+
+# Measure real quality across the Beets library and suggest replacements
+# (read-only; scope it to one artist first with --query)
+muzik soulseek check-library --query "albumartist:Etnobotanika"
+muzik soulseek download --candidate <id>   # fetch a suggested replacement
 
 # Use YouTube metadata/playlist parsing but Soulseek for audio
 muzik workflow "https://youtube.com/watch?v=..." --audio-source soulseek --prefer flac

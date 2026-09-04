@@ -1,4 +1,7 @@
+import os
 from pathlib import Path
+
+from beets.library import Item, Library
 
 from muzik.commands import soulseek
 from muzik.core import cache as cache_mod
@@ -165,3 +168,235 @@ def test_soulseek_download_command_uses_cached_candidate(
     )
 
     assert calls == [f"download:peer:/Music/Artist/Album:{tmp_path}:True"]
+
+
+def _beets_library(tmp_path: Path) -> tuple[Library, Path]:
+    music = tmp_path / "music"
+    music.mkdir()
+    return Library(str(tmp_path / "lib.db"), str(music)), music
+
+
+def _add_item(
+    lib: Library,
+    path: Path,
+    *,
+    title: str,
+    artist: str,
+    album: str,
+    length: float = 200.0,
+) -> None:
+    path.write_bytes(b"x")
+    item = Item(
+        path=os.fsencode(str(path)),
+        title=title,
+        artist=artist,
+        album=album,
+        albumartist=artist,
+        length=length,
+    )
+    lib.add(item)
+    item.store()
+
+
+def _lossy_quality(bitrate: int = 128) -> QualityInfo:
+    return QualityInfo(format="mp3", lossless=False, bitrate=bitrate)
+
+
+def _better_candidate(*, title: str, artist: str, duration: float) -> Candidate:
+    return Candidate(
+        source="soulseek",
+        source_id=f"peer:/Music/{artist}/{title}",
+        title=f"{artist} - {title}",
+        user="peer",
+        path=f"/Music/{artist}/{title}.flac",
+        files=[
+            CandidateFile(
+                name=f"{title}.flac",
+                size=10,
+                duration=duration,
+                quality=QualityInfo(format="flac", lossless=True),
+            )
+        ],
+        quality=QualityInfo(format="flac", lossless=True),
+        score=100,
+    )
+
+
+def test_check_library_skips_tracks_already_at_or_above_the_threshold(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    lib, music = _beets_library(tmp_path)
+    _add_item(lib, music / "good.flac", title="Good", artist="Artist", album="Album")
+    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(
+        soulseek,
+        "measure_quality",
+        lambda path: QualityInfo(format="flac", lossless=True),
+    )
+
+    def fail_search(*args, **kwargs):
+        raise AssertionError("a fine track must not be searched")
+
+    monkeypatch.setattr(
+        soulseek, "_source", lambda: type("S", (), {"search": fail_search})()
+    )
+
+    soulseek.check_library_cmd(
+        query=None, min_bitrate=256, prefer="lossless", limit=20, config=None
+    )
+
+
+def test_check_library_reports_a_better_replacement(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    lib, music = _beets_library(tmp_path)
+    _add_item(
+        lib,
+        music / "low.mp3",
+        title="Low Quality",
+        artist="Test Artist",
+        album="Album",
+        length=200.0,
+    )
+    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
+    candidate = _better_candidate(
+        title="Low Quality", artist="Test Artist", duration=200.0
+    )
+
+    class FakeSource:
+        def search(self, track, *, prefer, limit):
+            return [candidate]
+
+    monkeypatch.setattr(soulseek, "_source", lambda: FakeSource())
+
+    soulseek.check_library_cmd(
+        query=None, min_bitrate=256, prefer="lossless", limit=20, config=None
+    )
+
+    captured = capsys.readouterr()
+    assert "replacement found" in captured.err
+    assert "Test Artist" in captured.err
+    assert "1 replacement(s) found" in captured.err
+    stored = soulseek._load_candidate(soulseek._candidate_id(candidate))
+    assert stored.source_id == candidate.source_id
+
+
+def test_check_library_reports_no_safe_match_for_a_wrong_recording(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    lib, music = _beets_library(tmp_path)
+    _add_item(
+        lib,
+        music / "low.mp3",
+        title="Low Quality",
+        artist="Test Artist",
+        album="Album",
+        length=200.0,
+    )
+    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
+    # Duration is far off and the text is unrelated — candidate_matches_track
+    # must reject this, so it must not be reported as a replacement.
+    wrong = _better_candidate(title="Unrelated", artist="Nobody", duration=9999.0)
+
+    class FakeSource:
+        def search(self, track, *, prefer, limit):
+            return [wrong]
+
+    monkeypatch.setattr(soulseek, "_source", lambda: FakeSource())
+
+    soulseek.check_library_cmd(
+        query=None, min_bitrate=256, prefer="lossless", limit=20, config=None
+    )
+
+    captured = capsys.readouterr()
+    assert "no safe match" in captured.err
+    assert "0 replacement(s) found" in captured.err
+
+
+def test_check_library_reports_a_failed_search_and_keeps_scanning(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    lib, music = _beets_library(tmp_path)
+    _add_item(
+        lib,
+        music / "one.mp3",
+        title="One",
+        artist="Artist One",
+        album="Album",
+        length=200.0,
+    )
+    _add_item(
+        lib,
+        music / "two.mp3",
+        title="Two",
+        artist="Artist Two",
+        album="Album",
+        length=200.0,
+    )
+    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
+    good = _better_candidate(title="Two", artist="Artist Two", duration=200.0)
+
+    class FakeSource:
+        def search(self, track, *, prefer, limit):
+            if track.artist == "Artist One":
+                raise RuntimeError("Soulseek timed out")
+            return [good]
+
+    monkeypatch.setattr(soulseek, "_source", lambda: FakeSource())
+
+    soulseek.check_library_cmd(
+        query=None, min_bitrate=256, prefer="lossless", limit=20, config=None
+    )
+
+    captured = capsys.readouterr()
+    assert "search failed" in captured.err
+    assert "replacement found" in captured.err
+    assert "Scanned 2 track(s); 2 below 256kbps; 1 replacement(s) found." in (
+        captured.err
+    )
+
+
+def test_check_library_limit_caps_searches_and_reports_the_remainder(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    lib, music = _beets_library(tmp_path)
+    for name in ("one", "two", "three"):
+        _add_item(
+            lib,
+            music / f"{name}.mp3",
+            title=name,
+            artist=name,
+            album="Album",
+            length=200.0,
+        )
+    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
+    calls: list[str] = []
+
+    class FakeSource:
+        def search(self, track, *, prefer, limit):
+            calls.append(track.artist)
+            return []
+
+    monkeypatch.setattr(soulseek, "_source", lambda: FakeSource())
+
+    soulseek.check_library_cmd(
+        query=None, min_bitrate=256, prefer="lossless", limit=1, config=None
+    )
+
+    assert len(calls) == 1
+    captured = capsys.readouterr()
+    assert "2 more below-threshold track(s) not searched" in captured.err

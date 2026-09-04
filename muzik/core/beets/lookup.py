@@ -11,7 +11,13 @@ from muzik.beets_plugins.muzik_source import FIELD_NAME
 from muzik.core.audio import _parse_title
 
 
-def _resolve_path(directory: str, raw_path: bytes) -> Path:
+def resolve_item_path(directory: str, raw_path: bytes) -> Path:
+    """Turn a Beets item's stored ``path`` into a real absolute path.
+
+    A move-mode import stores the path relative to the library directory;
+    resolve it the same way ``_item_fullpath`` does in
+    ``muzik/core/beets/importer.py``.
+    """
     decoded = os.fsdecode(raw_path)
     if not os.path.isabs(decoded):
         decoded = os.path.join(directory, decoded)
@@ -31,7 +37,7 @@ def find_path_by_source_id(video_id: str, library: Library) -> Path | None:
     for item in library.items(f"{FIELD_NAME}:{video_id}"):
         if str(item.get(FIELD_NAME) or "") != video_id:
             continue
-        return _resolve_path(directory, item.path)
+        return resolve_item_path(directory, item.path)
     return None
 
 
@@ -60,5 +66,5 @@ def find_organized_path(title: str, library: Library) -> Path | None:
         items = list(candidate.items())
         if not items:
             continue
-        return _resolve_path(directory, items[0].path)
+        return resolve_item_path(directory, items[0].path)
     return None
