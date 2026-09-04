@@ -8,6 +8,13 @@ from typing import Optional
 
 from beets.library import Item
 import typer
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from muzik.config import BEETS_CONFIG, DEFAULT_SOULSEEK_DIR
@@ -392,46 +399,62 @@ def check_library_cmd(
     source = _source()
     replacements: list[Candidate] = []
     found = 0
-    for item, quality, _path in to_search:
-        artist = str(item.artist or "?")
-        title = str(item.title or "?")
-        current = f"{quality.format or '?'} {quality.bitrate or '?'}kbps"
-        track = ResolvedTrack(
-            title=str(item.title or ""),
-            artist=str(item.artist) if item.artist else None,
-            album=str(item.album) if item.album else None,
-            duration=float(item.length) if item.length else None,
-            source="beets",
-        )
-        try:
-            candidates = source.search(track, prefer=prefer, limit=10)
-        except Exception as exc:
-            table.add_row(artist, title, current, "search failed", str(exc)[:60], "")
-            continue
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    )
+    with progress:
+        task_id = progress.add_task("Checking Soulseek…", total=len(to_search))
+        for item, quality, _path in to_search:
+            artist = str(item.artist or "?")
+            title = str(item.title or "?")
+            progress.update(task_id, description=f"{artist} - {title}")
+            current = f"{quality.format or '?'} {quality.bitrate or '?'}kbps"
+            track = ResolvedTrack(
+                title=str(item.title or ""),
+                artist=str(item.artist) if item.artist else None,
+                album=str(item.album) if item.album else None,
+                duration=float(item.length) if item.length else None,
+                source="beets",
+            )
+            try:
+                candidates = source.search(track, prefer=prefer, limit=10)
+            except Exception as exc:
+                table.add_row(
+                    artist, title, current, "search failed", str(exc)[:60], ""
+                )
+                progress.advance(task_id)
+                continue
 
-        safe = [c for c in candidates if candidate_matches_track(c, track)]
-        current_score = quality_score(quality, prefer)
-        better = next(
-            (c for c in safe if quality_score(c.quality, prefer) > current_score),
-            None,
-        )
-        if better is None:
-            table.add_row(artist, title, current, "no safe match", "", "")
-            continue
+            safe = [c for c in candidates if candidate_matches_track(c, track)]
+            current_score = quality_score(quality, prefer)
+            better = next(
+                (c for c in safe if quality_score(c.quality, prefer) > current_score),
+                None,
+            )
+            if better is None:
+                table.add_row(artist, title, current, "no safe match", "", "")
+                progress.advance(task_id)
+                continue
 
-        found += 1
-        replacements.append(better)
-        suggested = (
-            f"{better.quality.format or '?'} {better.quality.bitrate or '?'}kbps"
-        )
-        table.add_row(
-            artist,
-            title,
-            current,
-            "[green]replacement found[/green]",
-            suggested,
-            _candidate_id(better),
-        )
+            found += 1
+            replacements.append(better)
+            suggested = (
+                f"{better.quality.format or '?'} {better.quality.bitrate or '?'}kbps"
+            )
+            progress.advance(task_id)
+            table.add_row(
+                artist,
+                title,
+                current,
+                "[green]replacement found[/green]",
+                suggested,
+                _candidate_id(better),
+            )
 
     if replacements:
         _store_candidates(replacements)
