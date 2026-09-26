@@ -159,6 +159,7 @@ struct Muzik {
     services: Value,
     spotify: Value,
     defaults: Value,
+    config_window: Option<WindowHandle<Root>>,
 }
 
 impl Muzik {
@@ -252,6 +253,7 @@ impl Muzik {
             services: Value::Null,
             spotify: Value::Null,
             defaults: Value::Null,
+            config_window: None,
         };
         match Bridge::start() {
             Ok(bridge) => {
@@ -333,6 +335,73 @@ impl Muzik {
             params.insert(switch.key.into(), json!(switch.enabled));
         }
         Value::Object(params)
+    }
+
+    fn apply_defaults(&mut self, defaults: Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.defaults = defaults;
+        for field in &self.fields {
+            if field.key == "raw" {
+                continue;
+            }
+            let value = match &self.defaults[field.key] {
+                Value::String(value) => value.clone(),
+                Value::Number(value) => value.to_string(),
+                _ => continue,
+            };
+            field
+                .state
+                .update(cx, |state, cx| state.set_value(value, window, cx));
+        }
+        for choice in &mut self.choices {
+            if let Some(value) = self.defaults[choice.key].as_str() {
+                if let Some(index) = choice.values.iter().position(|item| *item == value) {
+                    choice.selected = index;
+                    choice.state.update(cx, |state, cx| {
+                        state.set_selected_index(Some(IndexPath::new(index)), window, cx)
+                    });
+                }
+            }
+        }
+        for switch in &mut self.switches {
+            if let Some(value) = self.defaults[switch.key].as_bool() {
+                switch.enabled = value;
+            }
+        }
+        cx.notify();
+    }
+
+    fn open_config(&mut self, cx: &mut Context<Self>) {
+        if !self.defaults.is_object() {
+            self.status = "Config is loading".into();
+            cx.notify();
+            return;
+        }
+        if let Some(handle) = &self.config_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+        }
+        let main = cx.entity();
+        let defaults = self.defaults.clone();
+        let bounds = WindowBounds::centered(size(px(920.), px(760.)), cx);
+        match cx.open_window(
+            WindowOptions {
+                window_bounds: Some(bounds),
+                focus: true,
+                ..Default::default()
+            },
+            move |window, cx| {
+                let view = cx.new(|cx| ConfigView::new(main, defaults, window, cx));
+                cx.new(|cx| Root::new(view, window, cx))
+            },
+        ) {
+            Ok(handle) => self.config_window = Some(handle),
+            Err(error) => self.status = format!("Could not open Config: {error}"),
+        }
+        cx.notify();
     }
 
     fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
@@ -623,18 +692,13 @@ impl Muzik {
                 }
                 let result = &message["result"];
                 match command.as_str() {
-                    "hello" => {
+                    "hello" | "config.get" | "config.save" => {
                         self.status = "Python service ready".into();
-                        self.defaults = result["defaults"].clone();
-                        for field in &self.fields {
-                            if matches!(field.key, "output" | "splits") {
-                                if let Some(value) = self.defaults[field.key].as_str() {
-                                    field.state.update(_cx, |state, cx| {
-                                        state.set_value(value.to_string(), window, cx)
-                                    });
-                                }
-                            }
+                        if command == "config.save" {
+                            self.status = "Config saved".into();
+                            self.error = None;
                         }
+                        self.apply_defaults(result["defaults"].clone(), window, _cx);
                     }
                     "watchlist.load" | "watchlist.add" | "watchlist.remove"
                     | "watchlist.rename" => {
@@ -957,6 +1021,11 @@ impl Muzik {
                 .on_click(cx.listener(move |view, _, _, cx| view.set_page(page, cx))),
             );
         }
+        row = row.child(
+            Button::new("open-config")
+                .label("Config")
+                .on_click(cx.listener(|view, _, _, cx| view.open_config(cx))),
+        );
         row.into_any_element()
     }
 
@@ -2212,6 +2281,292 @@ impl Muzik {
             .overflow_y_scrollbar()
             .child(page)
             .into_any_element()
+    }
+}
+
+struct ConfigView {
+    main: Entity<Muzik>,
+    fields: Vec<Field>,
+    choices: Vec<Choice>,
+    switches: Vec<Switch>,
+    status: String,
+}
+
+impl ConfigView {
+    fn new(
+        main: Entity<Muzik>,
+        defaults: Value,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        cx.observe(&main, |_, _, cx| cx.notify()).detach();
+        let fields = [
+            ("output", "Downloads"),
+            ("splits", "Splits"),
+            ("config", "Beets config"),
+            ("jobs", "Jobs"),
+            ("min_bitrate", "Min bitrate"),
+        ]
+        .into_iter()
+        .map(|(key, label)| {
+            let value = match &defaults[key] {
+                Value::String(value) => value.clone(),
+                Value::Number(value) => value.to_string(),
+                _ => String::new(),
+            };
+            Field {
+                key,
+                label,
+                state: cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(label)
+                        .default_value(value)
+                }),
+            }
+        })
+        .collect();
+        let choices: Vec<Choice> = CHOICES
+            .iter()
+            .map(|(key, label, values)| {
+                let selected = values
+                    .iter()
+                    .position(|value| Some(*value) == defaults[*key].as_str())
+                    .unwrap_or(0);
+                Choice {
+                    key,
+                    label,
+                    values,
+                    selected,
+                    state: cx.new(|cx| {
+                        SelectState::new(
+                            values.to_vec(),
+                            Some(IndexPath::new(selected)),
+                            window,
+                            cx,
+                        )
+                    }),
+                }
+            })
+            .collect();
+        for (index, choice) in choices.iter().enumerate() {
+            cx.subscribe_in(&choice.state, window, move |view, _, event, _, cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    if let Some(selected) = view.choices[index]
+                        .values
+                        .iter()
+                        .position(|item| item == value)
+                    {
+                        view.choices[index].selected = selected;
+                        cx.notify();
+                    }
+                }
+            })
+            .detach();
+        }
+        let switches = SWITCHES
+            .iter()
+            .map(|(key, label, initial)| Switch {
+                key,
+                label,
+                enabled: defaults[*key].as_bool().unwrap_or(*initial),
+            })
+            .collect();
+        Self {
+            main,
+            fields,
+            choices,
+            switches,
+            status: String::new(),
+        }
+    }
+
+    fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let directories = matches!(self.fields[index].key, "output" | "splits");
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: !directories,
+            directories,
+            multiple: false,
+            prompt: Some("Select".into()),
+        });
+        cx.spawn_in(window, async move |view, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.into_iter().next() {
+                    let value = path.to_string_lossy().into_owned();
+                    let _ = view.update_in(cx, |view, window, cx| {
+                        view.fields[index]
+                            .state
+                            .update(cx, |state, cx| state.set_value(value, window, cx));
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn save(&mut self, cx: &mut Context<Self>) {
+        let mut params = Map::new();
+        for field in &self.fields {
+            let value = field.state.read(cx).value().to_string();
+            if matches!(field.key, "jobs" | "min_bitrate") {
+                let Ok(number) = value.parse::<u64>() else {
+                    self.status = format!("Enter a number for {}", field.label);
+                    cx.notify();
+                    return;
+                };
+                params.insert(field.key.into(), json!(number));
+            } else {
+                params.insert(field.key.into(), json!(value));
+            }
+        }
+        for choice in &self.choices {
+            params.insert(choice.key.into(), json!(choice.values[choice.selected]));
+        }
+        for switch in &self.switches {
+            params.insert(switch.key.into(), json!(switch.enabled));
+        }
+        self.main.update(cx, |main, cx| {
+            main.error = None;
+            main.send("config.save", Value::Object(params));
+            cx.notify();
+        });
+        self.status = "Saving config".into();
+        cx.notify();
+    }
+}
+
+impl Render for ConfigView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut destinations = div().v_flex().gap_3();
+        let mut tuning = div().flex().flex_wrap().gap_4();
+        for (index, field) in self.fields.iter().enumerate() {
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(div().flex_1().child(Input::new(&field.state)));
+            if matches!(field.key, "output" | "splits" | "config") {
+                row = row.child(
+                    Button::new(("config-pick", index))
+                        .label("Choose…")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.pick_path(index, window, cx)
+                        })),
+                );
+            }
+            let field_view = div()
+                .v_flex()
+                .gap_1()
+                .child(div().text_sm().font_semibold().child(field.label))
+                .child(row);
+            if matches!(field.key, "jobs" | "min_bitrate") {
+                tuning = tuning.child(div().w(px(180.)).child(field_view));
+            } else {
+                destinations = destinations.child(field_view);
+            }
+        }
+        let mut choices = div().flex().flex_wrap().gap_4();
+        for choice in &self.choices {
+            choices = choices.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .w(px(240.))
+                    .child(div().text_sm().font_semibold().child(choice.label))
+                    .child(Select::new(&choice.state).w_full()),
+            );
+        }
+        let mut switches = div().flex().flex_wrap().gap_3();
+        for (index, switch) in self.switches.iter().enumerate() {
+            switches = switches.child(
+                div().w(px(210.)).child(
+                    Checkbox::new(("config-switch", index))
+                        .label(switch.label)
+                        .checked(switch.enabled)
+                        .on_change(cx.listener(move |view, checked, _, cx| {
+                            view.switches[index].enabled = *checked;
+                            cx.notify();
+                        })),
+                ),
+            );
+        }
+        let main = self.main.read(cx);
+        let main_status = main.error.clone().unwrap_or_else(|| main.status.clone());
+        let status =
+            if self.status.is_empty() || main_status == "Config saved" || main.error.is_some() {
+                main_status
+            } else {
+                self.status.clone()
+            };
+        div()
+            .v_flex()
+            .size_full()
+            .bg(cx.theme().muted)
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .p_6()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .child(div().text_2xl().font_semibold().child("Config"))
+                    .child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Save these settings once. Workflow uses them for each run."),
+                    ),
+            )
+            .child(
+                div().flex_1().overflow_y_scrollbar().child(
+                    div()
+                        .v_flex()
+                        .gap_5()
+                        .p_6()
+                        .max_w(px(860.))
+                        .child(
+                            GroupBox::new()
+                                .id("config-destinations")
+                                .title("DESTINATIONS")
+                                .outline()
+                                .child(destinations),
+                        )
+                        .child(
+                            GroupBox::new()
+                                .id("config-quality")
+                                .title("SOURCES AND QUALITY")
+                                .outline()
+                                .child(choices),
+                        )
+                        .child(
+                            GroupBox::new()
+                                .id("config-processing")
+                                .title("PROCESSING")
+                                .outline()
+                                .child(tuning)
+                                .child(switches),
+                        ),
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .p_4()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .bg(cx.theme().background)
+                    .child(div().text_sm().child(status))
+                    .child(
+                        Button::new("save-config")
+                            .primary()
+                            .label("Save config")
+                            .on_click(cx.listener(|view, _, _, cx| view.save(cx))),
+                    ),
+            )
     }
 }
 
