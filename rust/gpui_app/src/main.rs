@@ -494,7 +494,7 @@ impl Muzik {
                         self.status = "Spotify ready".into();
                     }
                     "workflow.start" | "watchlist.refresh" | "watchlist.action"
-                    | "spotify.login" | "thumbnails.cache" => {
+                    | "spotify.login" => {
                         if let Some(id) = result["job_id"].as_str() {
                             if !self.completed_jobs.remove(id) {
                                 self.job_id = Some(id.to_string());
@@ -516,6 +516,7 @@ impl Muzik {
                         self.cache_visible_thumbnails(_cx);
                         self.status = "Watchlist updated".into();
                     }
+                    "thumbnails.updated" => self.merge_thumbnail_results(data),
                     "watchlist.error" => {
                         self.error = Some(
                             data["message"]
@@ -567,7 +568,6 @@ impl Muzik {
                                     | "watchlist.refresh"
                                     | "watchlist.action"
                                     | "spotify.login"
-                                    | "thumbnails.cache"
                             )
                         }) {
                             if let Some(id) = data["job_id"].as_str() {
@@ -658,7 +658,7 @@ impl Muzik {
     }
 
     fn cache_visible_thumbnails(&mut self, cx: &mut Context<Self>) {
-        if self.page != Page::Watchlist || self.job_kind.is_some() || self.job_id.is_some() {
+        if self.page != Page::Watchlist {
             return;
         }
         let video_ids: Vec<String> = self
@@ -670,7 +670,13 @@ impl Muzik {
             return;
         }
         self.thumbnail_attempted.extend(video_ids.iter().cloned());
-        self.start_job("thumbnails.cache", json!({"video_ids":video_ids}), cx);
+        self.send("thumbnails.cache", json!({"video_ids":video_ids}));
+        cx.notify();
+    }
+
+    fn merge_thumbnail_results(&mut self, data: &Value) {
+        let visible: HashSet<String> = self.visible_thumbnail_ids().into_iter().collect();
+        merge_thumbnail_paths(&mut self.watchlist, &visible, data);
     }
 
     fn reply(&mut self, value: Value, cx: &mut Context<Self>) {
@@ -1018,11 +1024,8 @@ impl Muzik {
                                 for video_id in &video_ids {
                                     view.thumbnail_attempted.insert(video_id.clone());
                                 }
-                                view.start_job(
-                                    "thumbnails.cache",
-                                    json!({"video_ids":video_ids}),
-                                    cx,
-                                );
+                                view.send("thumbnails.cache", json!({"video_ids":video_ids}));
+                                cx.notify();
                             }
                         })),
                 ),
@@ -1619,6 +1622,33 @@ fn watch_page_count(playlist: &Value, filter: usize) -> usize {
     matches.div_ceil(WATCH_PAGE_SIZE).max(1)
 }
 
+fn merge_thumbnail_paths(watchlist: &mut Value, visible: &HashSet<String>, data: &Value) {
+    let Some(results) = data["thumbnails"].as_array() else {
+        return;
+    };
+    let Some(playlists) = watchlist["playlists"].as_array_mut() else {
+        return;
+    };
+    for result in results {
+        let (Some(video_id), Some(path)) = (result["video_id"].as_str(), result["path"].as_str())
+        else {
+            continue;
+        };
+        if !visible.contains(video_id) {
+            continue;
+        }
+        for playlist in playlists.iter_mut() {
+            if let Some(items) = playlist["items"].as_array_mut() {
+                for item in items {
+                    if item["video_id"] == video_id {
+                        item["thumbnail_path"] = json!(path);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn decision_details(decision: &Value) -> Vec<String> {
     let payload = &decision["payload"];
     match decision["kind"].as_str().unwrap_or("") {
@@ -1842,8 +1872,9 @@ fn check_backend() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decision_choices, decision_details};
+    use super::{decision_choices, decision_details, merge_thumbnail_paths};
     use serde_json::json;
+    use std::collections::HashSet;
 
     #[test]
     fn soulseek_review_shows_candidate_quality_and_selects_its_index() {
@@ -1875,5 +1906,25 @@ mod tests {
         assert!(details.iter().any(|line| line.contains("old.flac")));
         assert!(details.iter().any(|line| line.contains("new.flac")));
         assert_eq!(decision_choices(&decision).len(), 4);
+    }
+
+    #[test]
+    fn thumbnail_event_updates_only_current_visible_cards() {
+        let mut watchlist = json!({"playlists":[{"items":[
+            {"video_id":"visible", "thumbnail_path":null},
+            {"video_id":"other", "thumbnail_path":null}
+        ]}]});
+        let visible = HashSet::from(["visible".to_string()]);
+        let event = json!({"thumbnails":[
+            {"video_id":"visible", "path":"/cache/visible.jpg"},
+            {"video_id":"other", "path":"/cache/other.jpg"},
+            {"video_id":"visible", "path":null}
+        ]});
+        merge_thumbnail_paths(&mut watchlist, &visible, &event);
+        assert_eq!(
+            watchlist["playlists"][0]["items"][0]["thumbnail_path"],
+            "/cache/visible.jpg"
+        );
+        assert!(watchlist["playlists"][0]["items"][1]["thumbnail_path"].is_null());
     }
 }
