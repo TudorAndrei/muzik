@@ -100,7 +100,7 @@ The decision kinds and reply values are:
 
 | Kind | Reply value |
 | --- | --- |
-| `soulseek_candidate` | zero-based candidate index, or `{ "index": 0 }` |
+| `soulseek_candidate` | zero-based candidate index, `{ "index": 0 }`, or `null` to skip |
 | `chapter_review` | `accept`, `edit`, or `reject` |
 | `chapter_edit` | a list of chapters with `index`, `start`, `end`, and `title`; `null` cancels the edit |
 | `quality_replacement` | `true` or `false` |

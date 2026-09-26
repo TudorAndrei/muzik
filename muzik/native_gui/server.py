@@ -746,6 +746,8 @@ class _WorkflowDecisions:
         if not self.interactive:
             return candidates[0]
         value = self._ask("soulseek_candidate", {"candidates": _json_value(candidates)})
+        if value is None:
+            raise WorkflowDecisionError("No Soulseek candidate selected.")
         index = value.get("index") if isinstance(value, dict) else value
         if not isinstance(index, int) or not 0 <= index < len(candidates):
             raise WorkflowDecisionError("Select a candidate index in range.")

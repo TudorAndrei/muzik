@@ -18,14 +18,15 @@ from muzik.core.watchlist import (
     WatchlistRepository,
 )
 from muzik.core.sources.spotify_api import SpotifyPlaylistRef
-from muzik.core.sources.base import ResolvedTrack
+from muzik.core.sources.base import Candidate, ResolvedTrack
 from muzik.core.thumbnails import ThumbnailResult
 from muzik.core.workflow.item_actions import ItemAction, ItemActionOperations
 from muzik.core.workflow.cancellation import CancellationToken
+from muzik.core.workflow.decisions import WorkflowDecisionError
 from muzik.core.workflow.events import MessageEvent
 from muzik.core.workflow.service import WorkflowOptions, WorkflowRequest
 from muzik.core.workflow.service import QualityUpgradeResult
-from muzik.native_gui.server import NativeGuiServer, _watchlist_data
+from muzik.native_gui.server import NativeGuiServer, _WorkflowDecisions, _watchlist_data
 
 
 def _records(writer: StringIO) -> list[dict]:
@@ -139,6 +140,20 @@ def test_decision_reply_unblocks_worker(tmp_path) -> None:
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert answer == ["accept"]
+
+
+def test_skipping_soulseek_candidates_reports_clear_error(
+    monkeypatch, tmp_path
+) -> None:
+    server = NativeGuiServer(
+        StringIO(),
+        StringIO(),
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    monkeypatch.setattr(server, "_request_decision", lambda *_args: None)
+    decisions = _WorkflowDecisions(server, "job", True, CancellationToken())
+    with pytest.raises(WorkflowDecisionError, match="No Soulseek candidate selected"):
+        decisions.choose_soulseek_candidate([cast(Candidate, object())])
 
 
 def test_cancel_pending_decision_emits_cancelled_event(monkeypatch, tmp_path) -> None:
