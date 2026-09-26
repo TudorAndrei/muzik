@@ -52,6 +52,10 @@ Issues = "https://github.com/TudorAndrei/muzik/issues"
 manifest-path = "rust/seakarr_bridge/Cargo.toml"
 python-source = "."
 module-name = "muzik._seakarr"
+include = [
+    { path = "muzik/bin/muzik-gpui", format = "wheel" },
+    { path = "rust/gpui_app/**", format = "sdist" },
+]
 
 [dependency-groups]
 dev = [

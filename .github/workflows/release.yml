@@ -74,11 +74,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
+      - name: Build GPUI desktop app
+        run: |
+          rustup target add aarch64-apple-darwin
+          MUZIK_NATIVE_TARGET=aarch64-apple-darwin ./scripts/build-native-gui.sh
       - name: Build wheel
         uses: PyO3/maturin-action@v1
         with:
           target: aarch64
           args: --release --out dist
+      - name: Check desktop binary in wheel
+        run: python scripts/check-native-wheel.py
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-macos-arm64
@@ -93,6 +99,17 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version
+      - name: Install GPUI Linux libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ clang libfontconfig-dev libwayland-dev \
+            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
+            libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
+      - name: Build GPUI desktop app
+        run: ./scripts/build-native-gui.sh
       - name: Set the shared version in Cargo.toml
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -104,8 +121,10 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          manylinux: auto
-          args: --release --out dist
+          manylinux: off
+          args: --release --out dist --compatibility off
+      - name: Check desktop binary in wheel
+        run: python scripts/check-native-wheel.py
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-linux-x86_64

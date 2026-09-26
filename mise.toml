@@ -19,8 +19,11 @@ HK_MISE = 1
 postinstall = "hk install --mise"
 
 [tasks.gui]
-description = "Run the DearPyGui desktop interface"
-run = "uv run muzik gui"
+description = "Build and run the GPUI Kit desktop interface"
+run = """
+cargo build --manifest-path rust/gpui_app/Cargo.toml --locked
+uv run muzik gui
+"""
 
 [tasks.develop]
 description = "Rebuild the Rust bridge and reinstall muzik editable in the local venv"
@@ -39,4 +42,7 @@ cargo fmt --manifest-path rust/seakarr_bridge/Cargo.toml --check
 cargo clippy --manifest-path rust/seakarr_bridge/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path rust/seakarr_bridge/Cargo.toml
 cargo build --manifest-path rust/seakarr_bridge/Cargo.toml --release
+cargo fmt --manifest-path rust/gpui_app/Cargo.toml --check
+cargo clippy --manifest-path rust/gpui_app/Cargo.toml --all-targets --locked -- -D warnings
+cargo test --manifest-path rust/gpui_app/Cargo.toml --locked
 """

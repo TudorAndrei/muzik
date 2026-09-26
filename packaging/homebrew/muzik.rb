@@ -5,7 +5,7 @@
 #
 # The formula builds muzik from the GitHub Release source archive into a private
 # libexec virtual environment. pip fetches the Python dependencies from PyPI at
-# install time (dearpygui ships as a cp314 wheel there). ffmpeg, ffprobe, and
+# install time. ffmpeg, ffprobe, and
 # yt-dlp come from Homebrew. Bandcamp still needs a one-time Chromium install:
 #   "#{libexec}/bin/playwright" install chromium
 #
@@ -14,6 +14,8 @@
 # compiles the native muzik._seakarr extension from source at install time —
 # this needs a Rust toolchain (below) and network access to fetch the pinned
 # soulseek-rs-lib git dependency declared in rust/seakarr_bridge/Cargo.toml.
+# The GPUI desktop program is a separate Rust crate. Build it before pip so
+# Maturin can put the native program in the installed Python package.
 class Muzik < Formula
   include Language::Python::Virtualenv
 
@@ -29,8 +31,12 @@ class Muzik < Formula
   depends_on "yt-dlp"
 
   def install
+    system "cargo", "build", "--manifest-path", "rust/gpui_app/Cargo.toml", "--release", "--locked"
+    (buildpath/"muzik/bin").mkpath
+    (buildpath/"muzik/bin").install "rust/gpui_app/target/release/muzik-gpui"
     venv = virtualenv_create(libexec, "python3.14")
     system venv.root/"bin/pip", "install", "--verbose", buildpath
+    system venv.root/"bin/python", "-c", "from muzik.commands.gui import gui_binary; print(gui_binary())"
     bin.install_symlink libexec/"bin/muzik"
   end
 
