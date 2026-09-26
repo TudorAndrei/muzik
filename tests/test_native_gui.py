@@ -16,8 +16,12 @@ from muzik.core.watchlist import (
     WatchlistRepository,
 )
 from muzik.core.sources.spotify_api import SpotifyPlaylistRef
+from muzik.core.sources.base import ResolvedTrack
+from muzik.core.workflow.item_actions import ItemAction, ItemActionOperations
 from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.workflow.events import MessageEvent
+from muzik.core.workflow.service import WorkflowOptions, WorkflowRequest
+from muzik.core.workflow.service import QualityUpgradeResult
 from muzik.native_gui.server import NativeGuiServer, _watchlist_data
 
 
@@ -37,7 +41,7 @@ def test_process_round_trip_and_watchlist_storage(tmp_path) -> None:
         reader, writer, repository=WatchlistRepository(tmp_path / "watchlist.json")
     )
     server.serve()
-    records = _records(writer)
+    records = [record for record in _records(writer) if record["type"] == "response"]
     assert [record["id"] for record in records] == [None, "a", "b", "c"]
     assert records[0]["ok"] is False
     assert all(record["ok"] for record in records[1:])
@@ -255,3 +259,90 @@ def test_spotify_status_and_playlists_protocol(monkeypatch, tmp_path) -> None:
             "image_url": None,
         }
     ]
+
+
+def test_spotify_item_action_uses_source_and_entry_key(monkeypatch, tmp_path) -> None:
+    track = ResolvedTrack(
+        title="Track",
+        source="spotify",
+        source_id="spotify:track:track-7",
+        source_url="https://open.spotify.com/track/track-7",
+    )
+    item = WatchlistItem.from_track(track, "entry-7", position=1)
+    playlist = WatchlistPlaylist(
+        playlist_id="spotify:playlist:source-42",
+        url="https://open.spotify.com/playlist/source-42",
+        kind="spotify",
+        items=[item],
+    )
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.save(Watchlist(playlists=[playlist]))
+    acquired: list[str] = []
+
+    def run_track(track, source_id, options, cancellation):
+        acquired.append(source_id)
+
+    def unexpected_quality(path, options, cancellation) -> QualityUpgradeResult:
+        raise AssertionError("A Spotify run cannot check YouTube quality.")
+
+    monkeypatch.setattr(
+        "muzik.native_gui.server.build_item_action_operations",
+        lambda **kwargs: ItemActionOperations(
+            run_workflow=lambda *args: None,
+            parse_chapters=lambda *args: tmp_path,
+            check_quality=unexpected_quality,
+            run_track=run_track,
+        ),
+    )
+    writer = StringIO()
+    server = NativeGuiServer(StringIO(), writer, repository=repository)
+    result = server._run_item_action(
+        {
+            "playlist_id": playlist.playlist_id,
+            "position": 1,
+            "video_id": "track-7",
+            "action": ItemAction.RUN.value,
+        },
+        WorkflowRequest("", tmp_path, tmp_path / "splits"),
+        WorkflowOptions(),
+        None,
+        None,
+        None,
+        None,
+        CancellationToken(),
+    )
+    assert acquired == ["source-42"]
+    assert result["watchlist"]["playlists"][0]["processed_video_ids"] == ["entry-7"]
+    assert repository.load().playlists[0].processed_video_ids == ["entry-7"]
+
+
+def test_watchlist_load_returns_before_reconcile_and_keeps_newer_write(
+    monkeypatch, tmp_path
+) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("https://www.youtube.com/playlist?list=PL123456789012345")
+    entered = Event()
+    release = Event()
+    calls: list[str] = []
+
+    def reconcile(watchlist, *, request, options):
+        calls.append(watchlist.playlists[0].title or "old")
+        entered.set()
+        release.wait(2)
+
+    monkeypatch.setattr("muzik.native_gui.server.reconcile_watchlist", reconcile)
+    writer = StringIO()
+    server = NativeGuiServer(StringIO(), writer, repository=repository)
+    start = time.monotonic()
+    loaded = server.dispatch("watchlist.load", {})
+    assert time.monotonic() - start < 0.5
+    assert loaded["watchlist"]["playlists"][0]["title"] is None
+    assert entered.wait(2)
+    repository.rename("PL123456789012345", "New name")
+    release.set()
+    assert server._reconcile_worker is not None
+    server._reconcile_worker.join(timeout=2)
+    assert not server._reconcile_worker.is_alive()
+    assert repository.load().playlists[0].title == "New name"
+    assert calls == ["old", "New name"]
+    assert _records(writer)[-1]["event"] == "watchlist.updated"

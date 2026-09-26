@@ -95,6 +95,7 @@ class NativeGuiServer:
         self._job_id: str | None = None
         self._cancellation: CancellationToken | None = None
         self._decisions: dict[str, tuple[Event, list[Any]]] = {}
+        self._reconcile_worker: Thread | None = None
 
     def _write(self, record: dict[str, Any]) -> None:
         line = json.dumps(_json_value(record), ensure_ascii=False, allow_nan=False)
@@ -144,6 +145,8 @@ class NativeGuiServer:
             self.cancel()
             if self._job is not None:
                 self._job.join(timeout=5)
+            if self._reconcile_worker is not None:
+                self._reconcile_worker.join(timeout=5)
 
     def dispatch(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
         if command == "hello":
@@ -219,30 +222,33 @@ class NativeGuiServer:
         if command == "watchlist.load":
             request, options = _request_options(params)
             watchlist = self.repository.load()
-            if not self._job_active():
-                reconcile_watchlist(watchlist, request=request, options=options)
-                self.repository.save(watchlist)
+            self._start_reconcile(request, options)
             return {"watchlist": _watchlist_data(watchlist, request)}
         if command == "watchlist.add":
-            self._require_idle()
-            playlist = self.repository.add(_required_string(params, "url"))
+            with self._job_lock:
+                self._require_idle()
+                playlist = self.repository.add(_required_string(params, "url"))
             return {
                 "playlist": playlist.to_dict(),
                 "watchlist": _watchlist_data(self.repository.load()),
             }
         if command == "watchlist.rename":
-            self._require_idle()
-            renamed = self.repository.rename(
-                _required_string(params, "playlist_id"),
-                _required_string(params, "title"),
-            )
+            with self._job_lock:
+                self._require_idle()
+                renamed = self.repository.rename(
+                    _required_string(params, "playlist_id"),
+                    _required_string(params, "title"),
+                )
             return {
                 "renamed": renamed,
                 "watchlist": _watchlist_data(self.repository.load()),
             }
         if command == "watchlist.remove":
-            self._require_idle()
-            removed = self.repository.remove(_required_string(params, "playlist_id"))
+            with self._job_lock:
+                self._require_idle()
+                removed = self.repository.remove(
+                    _required_string(params, "playlist_id")
+                )
             return {
                 "removed": removed,
                 "watchlist": _watchlist_data(self.repository.load()),
@@ -269,6 +275,55 @@ class NativeGuiServer:
     def _require_idle(self) -> None:
         if self._job_active():
             raise RuntimeError("A job is already active.")
+
+    def _watchlist_stamp(self) -> tuple[int, int]:
+        try:
+            stat = self.repository.path.stat()
+        except OSError:
+            return (0, 0)
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _start_reconcile(
+        self, request: WorkflowRequest, options: WorkflowOptions
+    ) -> None:
+        with self._job_lock:
+            if self._job_active() or (
+                self._reconcile_worker is not None and self._reconcile_worker.is_alive()
+            ):
+                return
+            self._reconcile_worker = Thread(
+                target=self._run_reconcile,
+                args=(request, options),
+                name="muzik-native-gui-reconcile",
+                daemon=True,
+            )
+            self._reconcile_worker.start()
+
+    def _run_reconcile(
+        self, request: WorkflowRequest, options: WorkflowOptions
+    ) -> None:
+        try:
+            for _ in range(3):
+                stamp = self._watchlist_stamp()
+                watchlist = self.repository.load()
+                reconcile_watchlist(watchlist, request=request, options=options)
+                with self._job_lock:
+                    if self._job_active():
+                        return
+                    if self._watchlist_stamp() != stamp:
+                        continue
+                    self.repository.save(watchlist)
+                    self._event(
+                        "watchlist.updated",
+                        {"watchlist": _watchlist_data(watchlist, request)},
+                    )
+                    return
+            self._event(
+                "watchlist.error",
+                {"message": "The watchlist changed during the local check. Reload it."},
+            )
+        except Exception as exc:
+            self._event("watchlist.error", {"message": str(exc)})
 
     def _start_spotify_login(self) -> dict[str, Any]:
         with self._job_lock:
@@ -507,15 +562,17 @@ class NativeGuiServer:
             request=request,
             options=options,
             operations=item_operations,
+            source_id=playlist.playlist_id,
             cancellation=cancellation,
             on_state_change=lambda: self.repository.save(watchlist),
         )
+        done_key = item.entry_id or item.video_id
         if (
-            item.video_id
+            done_key
             and item_summary_state(item) == "Processed"
-            and item.video_id not in playlist.processed_video_ids
+            and done_key not in playlist.processed_video_ids
         ):
-            playlist.processed_video_ids.append(item.video_id)
+            playlist.processed_video_ids.append(done_key)
         self.repository.save(watchlist)
         return {
             "action": _json_value(action_result),

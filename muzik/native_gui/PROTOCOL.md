@@ -66,9 +66,13 @@ the public fields of that event. Paths become strings and enums become their
 values. Terminal events are `job.completed`, `job.failed`, and `job.cancelled`.
 A completed watchlist job includes the new `watchlist` object. `job.failed`
 has an `error` object. The GPUI app should reload the watchlist after a job
-that changes it. While a job runs, `watchlist.load` returns the saved data
-without a reconciliation write. The service rejects add, rename, and remove
-commands until the job ends.
+that changes it. `watchlist.load` returns saved cards at once. A worker then
+checks local files and Beets. If the watchlist file did not change during that
+check, the service saves the checked cards and sends `watchlist.updated` with
+`{ "watchlist": ... }`. If another process changed the file, the worker reads
+it again before it saves. If the check fails, the service sends
+`watchlist.error` with a `message`. A load during a job does not start this
+check. The service rejects add, rename, and remove commands until the job ends.
 
 ## Blocking decisions
 
