@@ -99,9 +99,8 @@ uv run muzik workflow "https://youtube.com/watch?v=..." --quality-policy auto --
 ```
 
 In `muzik gui`, the launcher exposes the same **Quality policy** and **Min
-bitrate** fields. `ask` currently has no replacement dialog in the desktop
-interface yet, so it always keeps the YouTube file there; use `auto` in the
-GUI for an actual replacement, or use the CLI for `ask`.
+bitrate** fields. With `ask`, the desktop app asks you before it replaces a
+YouTube file.
 
 ## Direct Spotify acquisition
 
@@ -198,7 +197,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik import <dir>` | Import an existing music library into beets (`--agent` auto-tags) |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
-| `muzik gui` | Open the DearPyGui workflow interface |
+| `muzik gui` | Open the GPUI Kit desktop interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage beets configuration |
 
@@ -270,20 +269,24 @@ metadata-only policy.
 
 ## Desktop interface
 
-Run the desktop interface with:
+Build and run the desktop interface from a source checkout with:
 
 ```sh
-uv run muzik gui
+mise run gui
 ```
+
+An installed release wheel includes the native desktop program. Run it with
+`muzik gui`. To build the program for a local wheel, run
+`./scripts/build-native-gui.sh` before the wheel build.
 
 The interface provides a workflow launcher, pipeline progress and logs, source
 candidate tables, chapter review and editing, and Beets match and duplicate
-decisions. It uses the same workflow and Beets service layer as the CLI. Long
-work runs in a background thread. Back requests cooperative cancellation and
-waits for the worker to stop before it returns to the launcher.
+decisions. It uses the same workflow and Beets service layer as the CLI. The
+Rust window sends commands to a Python worker process. Cancel asks the worker
+to stop at the next safe point.
 
-The launcher **Library** button lists the audio already in the output folder,
-so you can see what is downloaded before you start a run.
+The **Library** page lists the audio already in the output folder, so you can
+see what is downloaded before you start a run.
 
 ### Playlist watchlist
 
@@ -293,9 +296,9 @@ videos.
 1. Set the Downloads and Splits paths in the launcher. Set the source, split,
    organization, and review options that you want to use.
 2. Select **Watchlist**.
-3. Paste a YouTube playlist URL and select **Add source**. You can add more
+3. Paste a YouTube playlist URL and select **Add playlist**. You can add more
    than one source.
-4. Select **Refresh new videos**.
+4. Select **Refresh**.
 
 The first refresh reads every playlist item. It compares the item IDs with the
 saved watchlist, yt-dlp archive, muzik playlist state, download folder, and split
@@ -308,22 +311,21 @@ item count, and the link of each source. Open, Copy, Rename, and Remove source
 apply to the selected source.
 
 You can also add a Spotify playlist, a Spotify album, or your Liked Songs.
-Connect your Spotify account first: select **Spotify...** in the Watchlist
-tab, or run `muzik spotify login`. Each refresh then reads the current tracks
+Connect your Spotify account first on the **Spotify** page, or run
+`muzik spotify login`. Each refresh then reads the current tracks
 with the Spotify Web API and acquires the new ones from Soulseek. muzik reads
 metadata only; it never downloads Spotify media. Set the audio source to
 Soulseek for these sources. See [SPOTIFY.md](SPOTIFY.md) for the application
 setup, the scopes, and the limits.
 
 Select a source in the left rail. The page shows all current items in a paged
-card list. Each card shows the playlist position, title, YouTube ID, and a
-five-part bar for the Download, Quality, Parse, Split, and Organize state.
-Point at the bar to read each state. **Processed** means that this computer
+card list. Each card shows its title and the Download, Quality, Parse, Split,
+and Organize states. **Processed** means that this computer
 has the required local workflow state. A private or deleted video stays in the
 list as **Unavailable** and does not run.
 
-Use **Run**, **Resume**, or **Retry** for the normal next command. Use
-**More actions** for these focused commands:
+Use **Run** or **Retry** for the normal next command. Each card also has
+these focused commands:
 
 - **Download again** replaces the download and makes later stages stale.
 - **Parse again** replaces accepted chapter data only after the new parse
@@ -333,12 +335,11 @@ Use **Run**, **Resume**, or **Retry** for the normal next command. Use
 - **Run all again** runs the complete item workflow again.
 
 The interface asks for confirmation before a command can replace local files.
-If a command is not available, the Actions window shows the missing input.
+If a command is not available, the card shows the missing input.
 
-Refresh also stores valid JPEG or PNG thumbnails in the normal muzik cache. The
-viewer uses cached images when it starts and does not request them from the
-network. A failed image uses a placeholder and is tried again on the next
-refresh. The current `muzik cache` commands list and clean these files.
+**Load thumbnails** stores valid JPEG or PNG images in the normal muzik cache.
+The viewer uses cached images when it starts and does not request them from the
+network. The current `muzik cache` commands list and clean these files.
 
 ## Avoiding re-downloads
 
