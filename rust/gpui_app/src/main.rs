@@ -2,8 +2,11 @@ mod bridge;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::*;
 use gpui_kit::*;
 use serde_json::{json, Map, Value};
@@ -30,6 +33,7 @@ struct Choice {
     label: &'static str,
     values: &'static [&'static str],
     selected: usize,
+    state: Entity<SelectState<Vec<&'static str>>>,
 }
 struct Switch {
     key: &'static str,
@@ -150,18 +154,38 @@ impl Muzik {
             }),
         })
         .collect();
+        let choices: Vec<Choice> = CHOICES
+            .iter()
+            .map(|(key, label, values)| Choice {
+                key,
+                label,
+                values,
+                selected: 0,
+                state: cx.new(|cx| {
+                    SelectState::new(values.to_vec(), Some(IndexPath::default()), window, cx)
+                }),
+            })
+            .collect();
+        for (index, choice) in choices.iter().enumerate() {
+            cx.subscribe_in(&choice.state, window, move |view, _, event, _, cx| {
+                let SelectEvent::Confirm(value) = event;
+                if let Some(value) = value {
+                    if let Some(selected) = view.choices[index]
+                        .values
+                        .iter()
+                        .position(|item| item == value)
+                    {
+                        view.choices[index].selected = selected;
+                        cx.notify();
+                    }
+                }
+            })
+            .detach();
+        }
         let mut this = Self {
             page: Page::Workflow,
             fields,
-            choices: CHOICES
-                .iter()
-                .map(|(key, label, values)| Choice {
-                    key,
-                    label,
-                    values,
-                    selected: 0,
-                })
-                .collect(),
+            choices,
             switches: SWITCHES
                 .iter()
                 .map(|(key, label, enabled)| Switch {
@@ -729,15 +753,18 @@ impl Muzik {
             .flex()
             .flex_row()
             .items_center()
-            .gap_2()
-            .p_3()
-            .bg(rgb(0x18202a))
+            .gap_1()
+            .px_6()
+            .py_3()
+            .border_b_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xffffff))
             .child(
                 div()
                     .text_xl()
                     .font_semibold()
-                    .text_color(rgb(0xffffff))
-                    .mr_4()
+                    .text_color(rgb(0x17212f))
+                    .mr_8()
                     .child("muzik"),
             );
         for (page, label) in [
@@ -752,7 +779,7 @@ impl Muzik {
                 if self.page == page {
                     button.primary()
                 } else {
-                    button.ghost()
+                    button
                 }
                 .on_click(cx.listener(move |view, _, _, cx| view.set_page(page, cx))),
             );
@@ -761,68 +788,62 @@ impl Muzik {
     }
 
     fn workflow(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut form = div()
-            .v_flex()
-            .gap_3()
-            .p_5()
-            .overflow_y_scrollbar()
-            .flex_1()
-            .child(div().text_2xl().font_semibold().child("Workflow"))
-            .child(
-                div()
-                    .text_color(rgb(0x64748b))
-                    .child("Download, split, and organize audio."),
-            );
+        let mut source = div().v_flex().gap_3();
+        let mut destinations = div().v_flex().gap_3();
+        let mut tuning = div().flex().flex_wrap().gap_4();
         for (index, field) in self.fields.iter().enumerate() {
             let mut row = div()
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(Input::new(&field.state));
+                .child(div().flex_1().child(Input::new(&field.state)));
             if matches!(field.key, "raw" | "output" | "splits" | "config") {
                 row = row.child(Button::new(("pick-path", index)).label("Choose…").on_click(
                     cx.listener(move |view, _, window, cx| view.pick_path(index, window, cx)),
                 ));
             }
-            form = form.child(div().v_flex().gap_1().child(field.label).child(row));
+            let field_view = div()
+                .v_flex()
+                .gap_1()
+                .child(div().text_sm().font_semibold().child(field.label))
+                .child(row);
+            match field.key {
+                "raw" => source = source.child(field_view),
+                "jobs" | "min_bitrate" => {
+                    tuning = tuning.child(div().w(px(180.)).child(field_view))
+                }
+                _ => destinations = destinations.child(field_view),
+            }
         }
-        form = form.child(
-            div()
-                .text_lg()
-                .font_semibold()
-                .mt_3()
-                .child("Sources and quality"),
-        );
-        for (index, choice) in self.choices.iter().enumerate() {
-            let label = format!("{}: {}", choice.label, choice.values[choice.selected]);
-            form = form.child(
-                Button::new(("choice", index))
-                    .label(label)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        let choice = &mut view.choices[index];
-                        choice.selected = (choice.selected + 1) % choice.values.len();
-                        cx.notify();
-                    })),
+        let mut choices = div().flex().flex_wrap().gap_4();
+        for choice in &self.choices {
+            choices = choices.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .w(px(240.))
+                    .child(div().text_sm().font_semibold().child(choice.label))
+                    .child(Select::new(&choice.state).w_full()),
             );
         }
-        form = form.child(div().text_lg().font_semibold().mt_3().child("Options"));
+        let mut switches = div().flex().flex_wrap().gap_3();
         for (index, switch) in self.switches.iter().enumerate() {
-            let label = format!(
-                "{} {}",
-                if switch.enabled { "☑" } else { "☐" },
-                switch.label
-            );
-            form = form.child(
-                Button::new(("switch", index))
-                    .label(label)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.switches[index].enabled = !view.switches[index].enabled;
-                        cx.notify();
-                    })),
+            switches = switches.child(
+                div().w(px(210.)).child(
+                    Checkbox::new(("switch", index))
+                        .label(switch.label)
+                        .checked(switch.enabled)
+                        .on_change(cx.listener(move |view, checked, _, cx| {
+                            view.switches[index].enabled = *checked;
+                            cx.notify();
+                        })),
+                ),
             );
         }
-        form = form.child(Button::new("run").primary().label("Run workflow").on_click(
-            cx.listener(|view, _, _, cx| {
+        let run = Button::new("run")
+            .primary()
+            .label("Run workflow")
+            .on_click(cx.listener(|view, _, _, cx| {
                 let params = view.launcher_params(cx);
                 if params["raw"].as_str().unwrap_or("").trim().is_empty() {
                     view.status = "Enter a URL or local path".into();
@@ -830,13 +851,67 @@ impl Muzik {
                     return;
                 }
                 view.start_job("workflow.start", params, cx);
-            }),
-        ));
+            }));
+        let form = div()
+            .v_flex()
+            .gap_5()
+            .w_full()
+            .max_w(px(860.))
+            .py_8()
+            .px_6()
+            .child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(div().text_2xl().font_semibold().child("Workflow"))
+                    .child(
+                        div()
+                            .text_color(rgb(0x64748b))
+                            .child("Download, split, and organize audio."),
+                    ),
+            )
+            .child(
+                GroupBox::new()
+                    .id("workflow-source")
+                    .title("SOURCE")
+                    .outline()
+                    .child(source),
+            )
+            .child(
+                GroupBox::new()
+                    .id("workflow-destinations")
+                    .title("DESTINATIONS")
+                    .outline()
+                    .child(destinations),
+            )
+            .child(
+                GroupBox::new()
+                    .id("workflow-quality")
+                    .title("SOURCES AND QUALITY")
+                    .outline()
+                    .child(choices),
+            )
+            .child(
+                GroupBox::new()
+                    .id("workflow-processing")
+                    .title("PROCESSING")
+                    .outline()
+                    .child(tuning)
+                    .child(switches),
+            )
+            .child(div().flex().justify_end().child(run));
         div()
             .flex()
             .flex_row()
             .size_full()
-            .child(form)
+            .child(
+                div()
+                    .flex()
+                    .justify_center()
+                    .flex_1()
+                    .overflow_y_scrollbar()
+                    .child(form),
+            )
             .child(self.job_panel(cx))
             .into_any_element()
     }
@@ -844,14 +919,24 @@ impl Muzik {
     fn job_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut panel = div()
             .v_flex()
-            .gap_2()
-            .p_4()
-            .w(px(360.))
+            .gap_4()
+            .p_6()
+            .w(px(320.))
             .h_full()
-            .bg(rgb(0xf1f5f9))
+            .border_l_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xf8fafc))
             .child(div().text_lg().font_semibold().child("Activity"))
-            .child(self.job_status.clone())
-            .child(self.progress.clone());
+            .child(
+                GroupBox::new().id("activity-status").outline().child(
+                    div()
+                        .v_flex()
+                        .gap_2()
+                        .child(div().text_sm().text_color(rgb(0x64748b)).child("STATUS"))
+                        .child(div().font_semibold().child(self.job_status.clone()))
+                        .child(self.progress.clone()),
+                ),
+            );
         if let Some(id) = &self.job_id {
             let id = id.clone();
             panel = panel.child(Button::new("cancel-job").danger().label("Cancel").on_click(
@@ -914,11 +999,22 @@ impl Muzik {
             }
             panel = panel.child(review);
         }
-        let mut log = div().v_flex().gap_1().overflow_y_scrollbar().flex_1();
+        let mut log = div().v_flex().gap_2().overflow_y_scrollbar().flex_1();
+        if self.logs.is_empty() {
+            log = log.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0x64748b))
+                    .child("Job updates will appear here."),
+            );
+        }
         for (index, line) in self.logs.iter().rev().take(100).enumerate() {
             log = log.child(div().id(("log", index)).text_sm().child(line.clone()));
         }
-        panel.child(log).into_any_element()
+        panel
+            .child(div().text_sm().font_semibold().child("Recent events"))
+            .child(log)
+            .into_any_element()
     }
 
     fn watchlist(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -987,8 +1083,9 @@ impl Muzik {
         let mut content = div()
             .v_flex()
             .gap_3()
-            .p_4()
+            .p_6()
             .flex_1()
+            .max_w(px(1060.))
             .overflow_y_scrollbar()
             .child(div().text_2xl().font_semibold().child("Watchlist"));
         let refresh = self.launcher_params(cx);
@@ -1320,10 +1417,10 @@ impl Muzik {
     fn library(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut page = div()
             .v_flex()
-            .gap_3()
-            .p_5()
-            .overflow_y_scrollbar()
-            .size_full()
+            .gap_4()
+            .p_8()
+            .w_full()
+            .max_w(px(960.))
             .child(div().text_2xl().font_semibold().child("Downloaded audio"))
             .child(
                 Button::new("library-refresh")
@@ -1367,16 +1464,22 @@ impl Muzik {
         } else {
             page = page.child("No downloads found.");
         }
-        page.into_any_element()
+        div()
+            .flex()
+            .justify_center()
+            .flex_1()
+            .overflow_y_scrollbar()
+            .child(page)
+            .into_any_element()
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut page = div()
             .v_flex()
-            .gap_3()
-            .p_5()
-            .overflow_y_scrollbar()
-            .size_full()
+            .gap_4()
+            .p_8()
+            .w_full()
+            .max_w(px(960.))
             .child(
                 div()
                     .text_2xl()
@@ -1414,7 +1517,13 @@ impl Muzik {
                 );
             }
         }
-        page.into_any_element()
+        div()
+            .flex()
+            .justify_center()
+            .flex_1()
+            .overflow_y_scrollbar()
+            .child(page)
+            .into_any_element()
     }
 
     fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1427,10 +1536,10 @@ impl Muzik {
         let liked_saved = saved_ids.contains("spotify:liked");
         let mut page = div()
             .v_flex()
-            .gap_3()
-            .p_5()
-            .overflow_y_scrollbar()
-            .size_full()
+            .gap_4()
+            .p_8()
+            .w_full()
+            .max_w(px(960.))
             .child(div().text_2xl().font_semibold().child("Spotify"))
             .child("Set a Spotify application client ID, then connect your account.")
             .child(
@@ -1553,7 +1662,13 @@ impl Muzik {
                 );
             }
         }
-        page.into_any_element()
+        div()
+            .flex()
+            .justify_center()
+            .flex_1()
+            .overflow_y_scrollbar()
+            .child(page)
+            .into_any_element()
     }
 }
 
@@ -1580,7 +1695,7 @@ impl Render for Muzik {
         div()
             .v_flex()
             .size_full()
-            .bg(rgb(0xffffff))
+            .bg(rgb(0xf8fafc))
             .child(self.header(cx))
             .child(body)
             .child(self.confirmation_view(cx))
