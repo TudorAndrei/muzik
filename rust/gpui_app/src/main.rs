@@ -531,7 +531,8 @@ impl Muzik {
             .items_center()
             .gap_3()
             .p_3()
-            .bg(rgb(0xffedd5))
+            .bg(cx.theme().warning)
+            .text_color(cx.theme().warning_foreground)
             .child(format!("Confirm: {}", action.title))
             .child(
                 Button::new("confirm-action")
@@ -929,13 +930,13 @@ impl Muzik {
             .px_6()
             .py_3()
             .border_b_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xffffff))
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
             .child(
                 div()
                     .text_xl()
                     .font_semibold()
-                    .text_color(rgb(0x17212f))
+                    .text_color(cx.theme().foreground)
                     .mr_8()
                     .child("muzik"),
             );
@@ -1038,7 +1039,7 @@ impl Muzik {
                     .child(div().text_2xl().font_semibold().child("Workflow"))
                     .child(
                         div()
-                            .text_color(rgb(0x64748b))
+                            .text_color(cx.theme().muted_foreground)
                             .child("Download, split, and organize audio."),
                     ),
             )
@@ -1097,15 +1098,20 @@ impl Muzik {
             .h_full()
             .overflow_y_scrollbar()
             .border_l_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xf8fafc))
+            .border_color(cx.theme().border)
+            .bg(cx.theme().muted)
             .child(div().text_lg().font_semibold().child("Activity"))
             .child(
                 GroupBox::new().id("activity-status").outline().child(
                     div()
                         .v_flex()
                         .gap_2()
-                        .child(div().text_sm().text_color(rgb(0x64748b)).child("STATUS"))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("STATUS"),
+                        )
                         .child(div().font_semibold().child(self.job_status.clone()))
                         .child(div().text_sm().child(self.progress.clone()))
                         .when(
@@ -1201,7 +1207,7 @@ impl Muzik {
                     div()
                         .id(("activity-row", index * 10 + row_index))
                         .text_sm()
-                        .text_color(rgb(0x475569))
+                        .text_color(cx.theme().muted_foreground)
                         .child(row.clone()),
                 );
             }
@@ -1209,7 +1215,7 @@ impl Muzik {
                 summary = summary.child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x64748b))
+                        .text_color(cx.theme().muted_foreground)
                         .child(format!("{} more", section.count - section.rows.len())),
                 );
             }
@@ -1230,7 +1236,7 @@ impl Muzik {
             log = log.child(
                 div()
                     .text_sm()
-                    .text_color(rgb(0x64748b))
+                    .text_color(cx.theme().muted_foreground)
                     .child("Job updates will appear here."),
             );
         }
@@ -1254,8 +1260,8 @@ impl Muzik {
             .w(px(260.))
             .h_full()
             .border_r_1()
-            .border_color(rgb(0xe2e8f0))
-            .bg(rgb(0xffffff))
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
             .child(div().text_lg().font_semibold().child("Sources"));
         if let Some(playlists) = playlists {
             for (index, playlist) in playlists.iter().enumerate() {
@@ -1293,7 +1299,7 @@ impl Muzik {
                     entry = entry.child(
                         div()
                             .text_sm()
-                            .text_color(rgb(0xb91c1c))
+                            .text_color(cx.theme().red)
                             .child(error.to_string()),
                     );
                 }
@@ -1575,9 +1581,9 @@ impl Muzik {
             .gap_3()
             .p_4()
             .border_1()
-            .border_color(rgb(0xe2e8f0))
+            .border_color(cx.theme().border)
             .rounded_md()
-            .bg(rgb(0xffffff))
+            .bg(cx.theme().background)
             .child(
                 div()
                     .flex()
@@ -1600,14 +1606,14 @@ impl Muzik {
         card = card.child(
             div()
                 .text_sm()
-                .text_color(rgb(0x64748b))
+                .text_color(cx.theme().muted_foreground)
                 .child(format!("{source_label}: {source_id}")),
         );
         if let Some(error) = item["last_error"].as_str() {
             card = card.child(
                 div()
                     .text_sm()
-                    .text_color(rgb(0xb91c1c))
+                    .text_color(cx.theme().red)
                     .child(error.to_string()),
             );
         }
@@ -1698,7 +1704,7 @@ impl Muzik {
             .gap_2()
             .pt_3()
             .border_t_1()
-            .border_color(rgb(0xe2e8f0))
+            .border_color(cx.theme().border)
             .child(div().font_semibold().child("Commands"));
         if let Some(url) = item["video_url"].as_str() {
             let url = url.to_string();
@@ -1762,7 +1768,7 @@ impl Muzik {
                     action_row = action_row.child(
                         div()
                             .text_sm()
-                            .text_color(rgb(0x64748b))
+                            .text_color(cx.theme().muted_foreground)
                             .child(reason.to_string()),
                     );
                 }
@@ -1807,7 +1813,7 @@ impl Muzik {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(rgb(0x64748b))
+                        .text_color(cx.theme().muted_foreground)
                         .child(self.library["output"].as_str().unwrap_or("").to_string()),
                 )
                 .child(if scanning {
@@ -1837,11 +1843,16 @@ impl Muzik {
                         .gap_1()
                         .p_4()
                         .border_1()
-                        .border_color(rgb(0xe2e8f0))
+                        .border_color(cx.theme().border)
                         .rounded_md()
-                        .bg(rgb(0xffffff))
+                        .bg(cx.theme().background)
                         .child(div().font_semibold().child(title.to_string()))
-                        .child(div().text_sm().text_color(rgb(0x64748b)).child(detail)),
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(detail),
+                        ),
                 );
             }
         } else {
@@ -1911,32 +1922,36 @@ impl Muzik {
                     Some(false) => Tag::danger().child("Unavailable").into_any_element(),
                     None => Tag::secondary().child("Not configured").into_any_element(),
                 };
-                page =
-                    page.child(
-                        div()
-                            .id(("service", index))
-                            .flex()
-                            .items_center()
-                            .gap_4()
-                            .p_4()
-                            .border_1()
-                            .border_color(rgb(0xe2e8f0))
-                            .rounded_md()
-                            .bg(rgb(0xffffff))
-                            .child(
-                                div()
-                                    .v_flex()
-                                    .gap_1()
-                                    .flex_1()
-                                    .child(div().font_semibold().child(
-                                        service["name"].as_str().unwrap_or("Service").to_string(),
-                                    ))
-                                    .child(div().text_sm().text_color(rgb(0x64748b)).child(
-                                        service["detail"].as_str().unwrap_or("").to_string(),
-                                    )),
-                            )
-                            .child(status),
-                    );
+                page = page.child(
+                    div()
+                        .id(("service", index))
+                        .flex()
+                        .items_center()
+                        .gap_4()
+                        .p_4()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_md()
+                        .bg(cx.theme().background)
+                        .child(
+                            div()
+                                .v_flex()
+                                .gap_1()
+                                .flex_1()
+                                .child(div().font_semibold().child(
+                                    service["name"].as_str().unwrap_or("Service").to_string(),
+                                ))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            service["detail"].as_str().unwrap_or("").to_string(),
+                                        ),
+                                ),
+                        )
+                        .child(status),
+                );
             }
         } else {
             page = page.child(if checking {
@@ -1987,7 +2002,7 @@ impl Muzik {
                     .title("YOUR SPOTIFY APPLICATION")
                     .outline()
                     .child(
-                        div().text_color(rgb(0x64748b)).child(
+                        div().text_color(cx.theme().muted_foreground).child(
                             "Create an application in Spotify, add this redirect URI, then save its client ID here.",
                         ),
                     )
@@ -2054,7 +2069,7 @@ impl Muzik {
                                     ),
                             )
                             .child(
-                                div().text_sm().text_color(rgb(0x64748b)).child(
+                                div().text_sm().text_color(cx.theme().muted_foreground).child(
                                     "Use the exact URI. localhost and 127.0.0.1 are different.",
                                 ),
                             ),
@@ -2113,14 +2128,14 @@ impl Muzik {
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x64748b))
+                        .text_color(cx.theme().muted_foreground)
                         .child("muzik opens your browser. Approve access, then return here."),
                 );
         } else if !checking {
             page = page.child("Save a client ID to connect your account.");
         }
         if let Some(error) = self.spotify["error"].as_str() {
-            page = page.child(div().text_color(rgb(0xb91c1c)).child(error.to_string()));
+            page = page.child(div().text_color(cx.theme().red).child(error.to_string()));
         }
         if connected {
             page = page.child(
@@ -2223,7 +2238,7 @@ impl Render for Muzik {
         div()
             .v_flex()
             .size_full()
-            .bg(rgb(0xf8fafc))
+            .bg(cx.theme().muted)
             .child(self.header(cx))
             .child(body)
             .child(self.confirmation_view(cx))
@@ -2231,11 +2246,15 @@ impl Render for Muzik {
                 div()
                     .p_2()
                     .bg(if self.error.is_some() {
-                        rgb(0x991b1b)
+                        cx.theme().danger
                     } else {
-                        rgb(0x18202a)
+                        cx.theme().secondary
                     })
-                    .text_color(rgb(0xffffff))
+                    .text_color(if self.error.is_some() {
+                        cx.theme().danger_foreground
+                    } else {
+                        cx.theme().secondary_foreground
+                    })
                     .text_sm()
                     .child(self.error.clone().unwrap_or_else(|| self.status.clone())),
             )
