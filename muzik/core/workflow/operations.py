@@ -32,7 +32,7 @@ from muzik.core.tracklist import chapters_from_comments, chapters_from_descripti
 from muzik.core.sources.youtube import video_id_from_path
 from muzik.core.musicbrainz import MIN_ALBUM_DURATION, lookup_chapters_verbose
 from muzik.core.metadata_repair import repair_placeholder_album_tags
-from muzik.core.sources.base import Candidate
+from muzik.core.sources.base import Candidate, ResolvedPlaylist, ResolvedTrack
 from muzik.core.sources.seakarr import SeakarrSource
 from muzik.core.sources.youtube import (
     YouTubeSource,
@@ -65,6 +65,7 @@ from muzik.core.workflow.service import (
     check_youtube_quality,
     find_audio_inputs,
     process_audio_plan,
+    run_resolved_playlist_tracks,
     run_workflow,
     validated_audio_files,
 )
@@ -291,8 +292,44 @@ def build_item_action_operations(
             cancellation=cancellation,
         )
 
+    def run_track_action(
+        track: ResolvedTrack,
+        playlist_identifier: str,
+        options: WorkflowOptions,
+        cancellation: CancellationToken,
+    ) -> None:
+        # One track, under the playlist state of its own source, so that a
+        # later sync of that source sees this track as done.
+        playlist = ResolvedPlaylist(
+            title=playlist_identifier,
+            entries=[track],
+            source="spotify",
+            source_id=playlist_identifier,
+        )
+        operations = build_workflow_operations(
+            splits=Path(),
+            options=options,
+            decisions=decisions,
+            events=events,
+            beets_decisions=beets_decisions,
+            beets_events=beets_events,
+        )
+        results = run_resolved_playlist_tracks(
+            playlist,
+            options,
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+        )
+        failed = [result for result in results if not result.completed]
+        if failed:
+            raise WorkflowServiceError(
+                failed[0].error or f"No audio was acquired for {track.title}."
+            )
+
     return ItemActionOperations(
         run_workflow=run_action,
+        run_track=run_track_action,
         parse_chapters=lambda audio, video_url, cancellation: refresh_youtube_chapters(
             audio,
             video_url,

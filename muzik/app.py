@@ -12,6 +12,7 @@ from muzik.commands.init import init_cmd
 from muzik.commands.split import split_cmd
 from muzik.commands.organize import organize_cmd
 from muzik.commands import soulseek as soulseek_mod
+from muzik.commands import spotify as spotify_mod
 from muzik.commands.workflow import workflow_cmd
 from muzik.commands.archive import archive_cmd
 from muzik.commands.validate import validate_cmd
@@ -59,3 +60,4 @@ app.command("install-app", help="Install a macOS app bundle into Applications.")
 app.add_typer(cache_mod.app, name="cache")
 app.add_typer(config_mod.app, name="config")
 app.add_typer(soulseek_mod.app, name="soulseek")
+app.add_typer(spotify_mod.app, name="spotify")

@@ -8,6 +8,7 @@ import dearpygui.dearpygui as dpg
 from muzik.core.quality import QualityPolicy
 from muzik.core.thumbnails import ThumbnailRequest, ThumbnailResult
 from muzik.core.watchlist import (
+    StageStatus,
     Watchlist,
     WatchlistItem,
     WatchlistPlaylist,
@@ -317,7 +318,7 @@ def test_missing_thumbnail_is_cached_when_item_becomes_visible(
     app = MuzikGuiApp(watchlist_repository=repository)
     app.watchlist = cast(Any, FakeView())
     try:
-        app._queue_cached_thumbnail("video000001")
+        app._queue_cached_thumbnail("video000001", "https://example.test/thumb.jpg")
         app._thumbnail_workers["video000001"].join(timeout=1)
         app.bridge.drain()
 
@@ -361,6 +362,132 @@ def test_overwrite_item_action_starts_only_after_confirmation(
         assert callback is not None
         callback()
         assert starts == [ItemAction.DOWNLOAD_AGAIN]
+    finally:
+        app.bridge.shutdown()
+        dpg.destroy_context()
+
+
+def test_spotify_window_shows_the_saved_client_id_and_adds_a_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from muzik.core.sources.spotify_auth import TokenStore
+    from muzik.gui import app as gui_app
+    from muzik.gui.spotify import CLIENT_ID_INPUT, SPOTIFY_BODY
+
+    config = tmp_path / "config.yaml"
+    monkeypatch.setattr(
+        gui_app,
+        "get_spotify_settings",
+        lambda: {"client_id": "client-1", "redirect_port": "8888"},
+    )
+    monkeypatch.setattr(
+        gui_app, "TokenStore", lambda: TokenStore(tmp_path / "no-token.json")
+    )
+    monkeypatch.setattr(
+        gui_app,
+        "save_muzik_config_value",
+        lambda section, key, value: config.write_text(f"{section}.{key}={value}"),
+    )
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    dpg.create_context()
+    app = MuzikGuiApp(watchlist_repository=repository)
+    try:
+        app.launcher.build()
+        app.watchlist.build()
+
+        app.open_spotify_dialog()
+
+        assert dpg.does_item_exist(SPOTIFY_BODY)
+        assert dpg.get_value(CLIENT_ID_INPUT) == "client-1"
+        assert app.spotify.is_open is True
+
+        app.save_spotify_client_id("client-2")
+        app.add_watchlist_playlist("spotify:liked")
+
+        assert config.read_text() == "spotify.client_id=client-2"
+        assert [playlist.playlist_id for playlist in repository.load().playlists] == [
+            "spotify:liked"
+        ]
+    finally:
+        app.spotify.close()
+        app.bridge.shutdown()
+        dpg.destroy_context()
+
+
+def test_reload_renders_at_once_and_reconciles_in_a_worker(tmp_path: Path) -> None:
+    """The render thread must never wait for Beets and the download folder."""
+    started = Event()
+    release = Event()
+    reconciled: list[str] = []
+
+    def slow_reconcile(watchlist, *, request, options) -> None:
+        started.set()
+        release.wait(5)
+        for playlist in watchlist.playlists:
+            reconciled.append(playlist.playlist_id)
+            for item in playlist.items:
+                item.stages["download"].status = StageStatus.COMPLETE
+
+    repository = _repository(tmp_path, with_item=True)
+    dpg.create_context()
+    app = MuzikGuiApp(watchlist_repository=repository, reconcile=slow_reconcile)
+    try:
+        app.launcher.build()
+        app.watchlist.build()
+
+        app.open_watchlist()
+
+        # The cards are on screen before the reconcile has even finished.
+        assert dpg.does_item_exist("watchlist-row-1")
+        assert started.wait(5) is True
+        assert dpg.get_value("watchlist-status") == "Checking local files and Beets..."
+
+        release.set()
+        for _ in range(200):
+            app.bridge.drain()
+            if reconciled and dpg.get_value("watchlist-status") == "":
+                break
+            time.sleep(0.01)
+
+        assert reconciled == ["PL123"]
+        assert dpg.get_value("watchlist-status") == ""
+        saved = repository.load().playlists[0].items[0]
+        assert saved.stages["download"].status is StageStatus.COMPLETE
+    finally:
+        app.bridge.shutdown()
+        dpg.destroy_context()
+
+
+def test_a_watchlist_change_during_a_reconcile_is_not_overwritten(
+    tmp_path: Path,
+) -> None:
+    release = Event()
+
+    def slow_reconcile(watchlist, *, request, options) -> None:
+        release.wait(5)
+
+    repository = _repository(tmp_path, with_item=True)
+    dpg.create_context()
+    app = MuzikGuiApp(watchlist_repository=repository, reconcile=slow_reconcile)
+    try:
+        app.launcher.build()
+        app.watchlist.build()
+        app.open_watchlist()
+
+        app.add_watchlist_playlist("https://youtube.com/playlist?list=PL_NEW")
+        release.set()
+        for _ in range(200):
+            app.bridge.drain()
+            time.sleep(0.01)
+            worker = app._reconcile_worker
+            if worker is None or not worker.is_alive():
+                break
+
+        assert [playlist.playlist_id for playlist in repository.load().playlists] == [
+            "PL123",
+            "PL_NEW",
+        ]
     finally:
         app.bridge.shutdown()
         dpg.destroy_context()

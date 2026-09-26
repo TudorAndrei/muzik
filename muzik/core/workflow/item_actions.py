@@ -10,8 +10,14 @@ from pathlib import Path
 
 from muzik.core.chapters import find_chapters
 from muzik.core.quality import QualityPolicy
+from muzik.core.sources.base import ResolvedTrack
 from muzik.core.sources.youtube import find_audio_by_id
-from muzik.core.watchlist import StageRecord, StageStatus, WatchlistItem
+from muzik.core.watchlist import (
+    StageRecord,
+    StageStatus,
+    WatchlistItem,
+    WatchlistSourceKind,
+)
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.service import (
     QualityUpgradeResult,
@@ -48,6 +54,12 @@ class ItemActionOperations:
     check_quality: Callable[
         [Path, WorkflowOptions, CancellationToken], QualityUpgradeResult
     ]
+    # Acquires one Spotify track from Soulseek and organizes it, under the
+    # playlist state of its source. Unset outside the watchlist, where no
+    # card can hold a Spotify track.
+    run_track: (
+        Callable[[ResolvedTrack, str, WorkflowOptions, CancellationToken], None] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +110,8 @@ def item_action_availability(
     """Return whether an item command has the local inputs it needs."""
     if not item.video_id or not item.video_url:
         return ActionAvailability(False, "This playlist item is unavailable.")
+    if item.source_kind is WatchlistSourceKind.SPOTIFY:
+        return _spotify_action_availability(item, action, request=request)
     if action in {
         ItemAction.RUN,
         ItemAction.RETRY,
@@ -135,6 +149,34 @@ def item_action_availability(
     return ActionAvailability(False, "This command is not available.")
 
 
+def _spotify_action_availability(
+    item: WatchlistItem,
+    action: ItemAction,
+    *,
+    request: WorkflowRequest,
+) -> ActionAvailability:
+    """Return the commands that apply to one Spotify track."""
+    if item.resolved_track is None:
+        return ActionAvailability(False, "This track has no saved Spotify metadata.")
+    if action in {
+        ItemAction.RUN,
+        ItemAction.RETRY,
+        ItemAction.DOWNLOAD_AGAIN,
+        ItemAction.RUN_ALL_AGAIN,
+    }:
+        return ActionAvailability(True)
+    if action == ItemAction.ORGANIZE_AGAIN:
+        target = _organize_target(item, request)
+        if target is None or not target.exists():
+            return ActionAvailability(False, "No acquired audio is available.")
+        return ActionAvailability(True)
+    return ActionAvailability(
+        False,
+        "A Spotify track is one file: it has no quality check, no chapters "
+        "to parse, and nothing to split.",
+    )
+
+
 def run_item_action(
     item: WatchlistItem,
     action: ItemAction,
@@ -142,6 +184,7 @@ def run_item_action(
     request: WorkflowRequest,
     options: WorkflowOptions,
     operations: ItemActionOperations,
+    source_id: str | None = None,
     cancellation: CancellationToken | None = None,
     on_state_change: StateCallback | None = None,
 ) -> ItemActionResult:
@@ -168,6 +211,7 @@ def run_item_action(
             request=request,
             options=options,
             operations=operations,
+            source_id=source_id,
             cancellation=token,
         )
     except WorkflowCancelled:
@@ -198,9 +242,21 @@ def _run_action(
     request: WorkflowRequest,
     options: WorkflowOptions,
     operations: ItemActionOperations,
+    source_id: str | None = None,
     cancellation: CancellationToken,
 ) -> None:
     assert item.video_url is not None
+    if item.source_kind is WatchlistSourceKind.SPOTIFY:
+        _run_spotify_action(
+            item,
+            action,
+            request=request,
+            options=options,
+            operations=operations,
+            source_id=source_id,
+            cancellation=cancellation,
+        )
+        return
     if action in {ItemAction.RUN, ItemAction.RETRY}:
         operations.run_workflow(
             replace(request, raw=item.video_url),
@@ -314,6 +370,73 @@ def _run_action(
         _mark_full_workflow_complete(item, options=options)
         return
     raise ItemActionError("This command is not available.")
+
+
+def _run_spotify_action(
+    item: WatchlistItem,
+    action: ItemAction,
+    *,
+    request: WorkflowRequest,
+    options: WorkflowOptions,
+    operations: ItemActionOperations,
+    source_id: str | None,
+    cancellation: CancellationToken,
+) -> None:
+    """Acquire or organize one Spotify track."""
+    track = item.resolved_track
+    if track is None:
+        raise ItemActionError("This track has no saved Spotify metadata.")
+    if action == ItemAction.ORGANIZE_AGAIN:
+        target = _organize_target(item, request)
+        if target is None:
+            raise ItemActionError("No acquired audio is available.")
+        operations.run_workflow(
+            replace(request, raw=str(target)),
+            replace(options, force=True, no_split=True, no_organize=False),
+            cancellation,
+        )
+        item.stages["organize"] = StageRecord(
+            status=StageStatus.COMPLETE,
+            updated_at=_now(),
+        )
+        return
+    if action not in {
+        ItemAction.RUN,
+        ItemAction.RETRY,
+        ItemAction.DOWNLOAD_AGAIN,
+        ItemAction.RUN_ALL_AGAIN,
+    }:
+        raise ItemActionError(
+            "A Spotify track is one file: it has no quality check, no "
+            "chapters to parse, and nothing to split."
+        )
+    if operations.run_track is None:
+        raise ItemActionError("Spotify track acquisition is not available.")
+    if not source_id:
+        raise ItemActionError("The Spotify source of this track is not known.")
+    force = action in {ItemAction.DOWNLOAD_AGAIN, ItemAction.RUN_ALL_AGAIN}
+    operations.run_track(
+        track,
+        source_id.rpartition(":")[2] or source_id,
+        replace(options, force=force),
+        cancellation,
+    )
+    _mark_track_complete(item, options=options)
+
+
+def _mark_track_complete(item: WatchlistItem, *, options: WorkflowOptions) -> None:
+    updated_at = _now()
+    item.stages["download"] = StageRecord(
+        status=StageStatus.COMPLETE, updated_at=updated_at
+    )
+    for name in ("quality", "parse", "split"):
+        item.stages[name] = StageRecord(
+            status=StageStatus.SKIPPED, updated_at=updated_at
+        )
+    item.stages["organize"] = StageRecord(
+        status=(StageStatus.SKIPPED if options.no_organize else StageStatus.COMPLETE),
+        updated_at=updated_at,
+    )
 
 
 def _target_stage(item: WatchlistItem, action: ItemAction) -> str:

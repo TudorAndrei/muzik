@@ -187,6 +187,11 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
 | `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
 | `muzik soulseek check-library` | Measure real quality across the Beets library and suggest Soulseek replacements |
+| `muzik spotify set-client-id <id>` | Save the client ID of your own Spotify application |
+| `muzik spotify login` \| `logout` \| `status` | Connect, disconnect, and check the Spotify account |
+| `muzik spotify playlists` | List Liked Songs and your Spotify playlists |
+| `muzik spotify export <ref>` | Write one Spotify playlist as a metadata export |
+| `muzik spotify watch <ref>` | Add one Spotify playlist to the watchlist |
 | `muzik bandcamp` | Download Bandcamp collection and organize with beets |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Tag/import audio with beets |
@@ -288,8 +293,8 @@ videos.
 1. Set the Downloads and Splits paths in the launcher. Set the source, split,
    organization, and review options that you want to use.
 2. Select **Watchlist**.
-3. Paste a YouTube playlist URL and select **Add playlist**. You can add more
-   than one playlist.
+3. Paste a YouTube playlist URL and select **Add source**. You can add more
+   than one source.
 4. Select **Refresh new videos**.
 
 The first refresh reads every playlist item. It compares the item IDs with the
@@ -298,14 +303,27 @@ folder. It sends only pending IDs to the workflow. A later refresh reads the
 playlist again and sends only new or failed IDs. An error in one playlist does
 not stop the other playlists.
 
-Select a playlist in the left rail. The page shows all current items in a paged
-thumbnail grid. Each card shows the playlist position, title, YouTube ID, and
-the local Download, Parse, Split, and Organize state. **Processed** means that
-this computer has the required local workflow state. A private or deleted video
-stays in the list as **Unavailable** and does not run.
+The left rail keeps all saved sources. It shows the service, the name, the
+item count, and the link of each source. Open, Copy, Rename, and Remove source
+apply to the selected source.
+
+You can also add a Spotify playlist, a Spotify album, or your Liked Songs.
+Connect your Spotify account first: select **Spotify...** in the Watchlist
+tab, or run `muzik spotify login`. Each refresh then reads the current tracks
+with the Spotify Web API and acquires the new ones from Soulseek. muzik reads
+metadata only; it never downloads Spotify media. Set the audio source to
+Soulseek for these sources. See [SPOTIFY.md](SPOTIFY.md) for the application
+setup, the scopes, and the limits.
+
+Select a source in the left rail. The page shows all current items in a paged
+card list. Each card shows the playlist position, title, YouTube ID, and a
+five-part bar for the Download, Quality, Parse, Split, and Organize state.
+Point at the bar to read each state. **Processed** means that this computer
+has the required local workflow state. A private or deleted video stays in the
+list as **Unavailable** and does not run.
 
 Use **Run**, **Resume**, or **Retry** for the normal next command. Use
-**Actions...** for these focused commands:
+**More actions** for these focused commands:
 
 - **Download again** replaces the download and makes later stages stale.
 - **Parse again** replaces accepted chapter data only after the new parse

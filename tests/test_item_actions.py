@@ -496,3 +496,82 @@ def test_refresh_description_chapters_preserves_sidecar_on_rejection(
         )
 
     assert chapter_path.read_text(encoding="utf-8") == "00:00 Old chapter\n"
+
+
+def _spotify_item() -> WatchlistItem:
+    return WatchlistItem(
+        position=1,
+        title="Kohsuke Mine - Sunshower",
+        video_id="track1",
+        video_url="https://open.spotify.com/track/track1",
+        kind="spotify",
+        entry_id="spotify:track:track1#0",
+        track={
+            "title": "Sunshower",
+            "artist": "Kohsuke Mine",
+            "source": "spotify",
+            "source_id": "spotify:track:track1",
+        },
+    )
+
+
+def test_a_spotify_track_runs_under_the_state_of_its_own_source(
+    tmp_path: Path,
+) -> None:
+    calls: list[tuple[str, str, bool]] = []
+
+    def run_track(track, playlist_identifier, options, cancellation) -> None:
+        calls.append((track.title, playlist_identifier, options.force))
+
+    item = _spotify_item()
+    operations = ItemActionOperations(
+        run_workflow=lambda *args: None,
+        parse_chapters=lambda *args: Path(),
+        check_quality=_fail_check_quality,
+        run_track=run_track,
+    )
+
+    run_item_action(
+        item,
+        ItemAction.RUN,
+        request=_request(tmp_path),
+        options=WorkflowOptions(audio_source="soulseek"),
+        operations=operations,
+        source_id="spotify:liked",
+    )
+
+    assert calls == [("Sunshower", "liked", False)]
+    assert item.stages["download"].status is StageStatus.COMPLETE
+    assert item.stages["parse"].status is StageStatus.SKIPPED
+    assert item.stages["split"].status is StageStatus.SKIPPED
+    assert item.stages["organize"].status is StageStatus.COMPLETE
+
+
+def test_chapter_commands_do_not_apply_to_a_spotify_track(tmp_path: Path) -> None:
+    item = _spotify_item()
+    request = _request(tmp_path)
+
+    for action in (
+        ItemAction.PARSE_AGAIN,
+        ItemAction.SPLIT_AGAIN,
+        ItemAction.CHECK_QUALITY_AGAIN,
+    ):
+        available = item_action_availability(item, action, request=request)
+        assert available.enabled is False
+        assert "Spotify track" in (available.reason or "")
+
+    assert (
+        item_action_availability(item, ItemAction.RUN, request=request).enabled is True
+    )
+
+
+def test_a_spotify_track_without_saved_metadata_cannot_run(tmp_path: Path) -> None:
+    item = _spotify_item()
+    item.track = None
+
+    available = item_action_availability(
+        item, ItemAction.RUN, request=_request(tmp_path)
+    )
+
+    assert available.enabled is False
+    assert available.reason == "This track has no saved Spotify metadata."

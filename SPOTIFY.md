@@ -109,7 +109,85 @@ organized, a rerun skips it even if the export is reordered; newly added entries
 are acquired and processed. Repeated tracks remain distinct through their
 occurrence in the playlist.
 
+## Spotify Web API
+
+muzik can also read playlists directly from your Spotify account. It reads
+**metadata only**: names, artists, albums, durations, and ISRC codes. It never
+downloads Spotify media, and it never sends a Spotify URL to `yt-dlp`. The
+audio still comes from Soulseek.
+
+### Set up your own application
+
+muzik has no Spotify application of its own, thus each user registers one:
+
+1. Open <https://developer.spotify.com/dashboard> and create an application.
+2. In **Edit settings**, add this redirect URI, then select **Add** and
+   **Save**: `http://127.0.0.1:8888/callback`
+
+   The value must agree character for character. Spotify accepts a loopback
+   IP address, but not the name `localhost`, and the path `/callback` is part
+   of the value. Use `muzik spotify login --port <number>` for a different
+   port; muzik then saves that port and shows the new URI.
+3. Save the client ID:
+
+```sh
+uv run muzik spotify set-client-id <client-id>
+uv run muzik spotify status
+```
+
+The flow is Authorization Code with PKCE, thus there is no client secret.
+Tokens are written to `spotify-token.json` in the muzik config directory,
+with owner-only permissions. `MUZIK_SPOTIFY_CLIENT_ID` overrides the
+config file.
+
+A new application starts in Development Mode. Spotify then answers only for
+the users that you add to the application, and its owner needs a Spotify
+Premium account. A 403 answer usually has one of these two causes.
+
+### Connect and read
+
+```sh
+uv run muzik spotify login          # opens the browser, then saves the tokens
+uv run muzik spotify playlists      # Liked Songs and your playlists
+uv run muzik spotify export liked -o liked.json
+uv run muzik spotify watch liked    # add it to the watchlist
+uv run muzik spotify logout
+```
+
+`export` writes the same canonical JSON v1 document as above, thus a file
+from the API and a file from a manual export behave identically.
+
+Scopes: `playlist-read-private`, `playlist-read-collaborative`, and
+`user-library-read`. muzik asks for no write scope.
+
+### Login problems
+
+| What you see | Cause and correction |
+|---|---|
+| `redirect_uri: Not matching configuration` in the browser | The application does not have the URI that `muzik spotify status` shows. Add it in **Edit settings**, then **Save**. |
+| `Port 8888 is in use` | Another program, or an earlier login that still waits, holds the port. Stop it, or use `--port`. |
+| `No Spotify answer was received` | The browser never came back. This is almost always the redirect URI. |
+| `403` with a Development Mode message | Add your Spotify user to the application, and give the owner account Premium. |
+
+### Watchlist sync
+
+A Spotify playlist, album, or the Liked Songs collection can be a watchlist
+source. Each refresh reads the current tracks, adds new cards, keeps the
+state of the tracks that are done, and acquires only the tracks that are not
+done. Set the audio source to Soulseek: a Spotify source cannot use YouTube.
+
+Unlike a single export run, a watchlist sync does not stop at the first track
+that Soulseek cannot supply. That track keeps a `Failed` download stage, and
+the sync continues with the other tracks. Use **Retry** on the card, or the
+next refresh, to try that track again.
+
+A Spotify card has only two stages that do work: Download (Soulseek) and
+Organize (beets). Quality, Parse, and Split stay `Skipped`, because one track
+is one file with no chapters.
+
+Podcast episodes and local files in a playlist are skipped.
+
 ## Deferred work
 
-Direct OAuth/API export, Spotify account-data archive import, album grouping,
-and Spotify media playback/download are intentionally out of scope.
+Spotify account-data archive import, album grouping, and Spotify media
+playback/download are intentionally out of scope.

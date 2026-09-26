@@ -26,7 +26,8 @@ FAIL_COLOR: tuple[int, int, int] = (230, 120, 120)
 NA_COLOR: tuple[int, int, int] = (198, 198, 128)
 
 # Watchlist card and stage tokens. Status text is always shown with these colors.
-CARD_BG: tuple[int, int, int] = (30, 33, 38)
+CARD_BG: tuple[int, int, int] = (36, 40, 46)
+MUTED: tuple[int, int, int] = (148, 152, 160)
 STAGE_NOT_STARTED: tuple[int, int, int] = (148, 152, 160)
 STAGE_RUNNING: tuple[int, int, int] = ACCENT
 STAGE_COMPLETE: tuple[int, int, int] = OK_COLOR
@@ -96,6 +97,22 @@ def bind_primary_button(item: str | int) -> None:
                 dpg.mvThemeCol_ButtonActive, _ACCENT_ACTIVE, category=core
             )
     dpg.bind_item_theme(item, theme)
+
+
+def build_card_theme() -> str | int:
+    """Create the raised card surface theme and return its tag.
+
+    Cards sit one step above the page on the elevation ramp, with their own
+    padding, so a list of them reads as separate objects without borders.
+    """
+    core = dpg.mvThemeCat_Core
+    with dpg.theme() as theme:
+        with dpg.theme_component(dpg.mvChildWindow):
+            dpg.add_theme_color(dpg.mvThemeCol_ChildBg, CARD_BG, category=core)
+            dpg.add_theme_style(dpg.mvStyleVar_ChildRounding, 8, category=core)
+            dpg.add_theme_style(dpg.mvStyleVar_WindowPadding, 12, 9, category=core)
+            dpg.add_theme_style(dpg.mvStyleVar_ItemSpacing, 8, 5, category=core)
+    return theme
 
 
 def _apply_colors() -> None:

@@ -48,22 +48,59 @@ deletes the texture registry.
 ## Watchlist viewer
 
 `muzik.core.watchlist` owns the versioned playlist snapshot and stage state.
-The GUI reads this file when the Watchlist page opens. It reconciles the saved
-state with the current launcher download and split paths. Opening the page does
+The GUI reads this file when the Watchlist page opens. Opening the page does
 not read YouTube.
+
+Reconciliation compares the saved state with the download folder, the muzik
+playlist state, and the Beets library. It takes seconds on a large library,
+thus it never runs on the render thread. The page shows the saved file at
+once, a worker reconciles it, and the result comes back through `GuiBridge`.
+If the watchlist file changed while that worker ran, its result is thrown away
+and the worker starts again: a saved snapshot from before an addition must
+never overwrite the new source.
 
 The page has two main areas:
 
-- The left rail lists saved playlists, item counts, last check times, and
-  playlist errors.
-- The main area has status filtering, paging, and a responsive thumbnail card
-  grid. Paging limits the active card widgets and textures.
+- The left rail is the permanent list of saved sources. Each entry shows its
+  service, its name, its item count or `Link only`, its last check time, and
+  its errors. The footer of the rail shows the link of the selected source,
+  with Open, Copy, Rename, and Remove source.
+- The main area has status filtering, paging, and a responsive card list.
+  Paging limits the active card widgets and textures.
 
-Each card has a five-part Download, Quality, Parse, Split, and Organize rail.
-Every part shows a text state and a status color. The summary is Pending,
-Processing, Failed, Processed, or Unavailable. The primary button is Run,
-Resume, or Retry. The Actions window shows all focused commands and a reason
-under each disabled command.
+### Sources
+
+`parse_source` finds the reference in the text that the user adds:
+
+- A YouTube playlist URL becomes a YouTube source. Refresh reads its items
+  with yt-dlp and saves its name.
+- A Spotify playlist link, a Spotify album link, or `liked` becomes a Spotify
+  source. Refresh reads its tracks with the Spotify Web API and acquires the
+  pending ones from Soulseek. A card is one track, thus its Quality, Parse,
+  and Split stages stay `Skipped`.
+
+### Spotify window
+
+**Spotify...** opens `SpotifyDialog`. It holds the client ID of the user's own
+application, the redirect URI, the login, and the list of the account's
+playlists with an **Add** button for each.
+
+Every call to Spotify runs in a worker thread, never on the render thread. The
+worker reports back through `GuiBridge.submit`, which rebuilds the window with
+a new `SpotifyState`. The window itself holds no Spotify logic: the app builds
+each state from the config file, the token store, and the saved watchlist.
+
+Each card has a five-part Download, Quality, Parse, Split, and Organize bar.
+Each part has a status color, and the tooltip of the bar gives the text state
+of every part. The summary is Pending, Processing, Failed, Processed, or
+Unavailable. The primary button is Run, Resume, or Retry. More actions opens
+the Commands window, which has all focused commands, a link to the video, and
+a reason under each disabled command.
+
+Card text is cut to one line, because a card has a calculated height. The
+card width comes from the rendered width of the card area, not from the
+viewport width: the page is inside the shell tab bar, which is more narrow
+than the viewport.
 
 ### Quality stage
 

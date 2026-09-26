@@ -1,4 +1,4 @@
-"""Durable YouTube playlist watchlist records."""
+"""Durable watchlist records for saved external playlist sources."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
+import re
 import tempfile
 from typing import Any, cast
 
@@ -18,11 +19,22 @@ from muzik.config import MUZIK_WATCHLIST_FILE
 from muzik.core.beets.config import open_library
 from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
 from muzik.core.quality import QualityPolicy
+from muzik.core.sources.base import ResolvedPlaylist, ResolvedTrack
+from muzik.core.sources.spotify import parse_link as parse_spotify_link
+from muzik.core.sources.spotify_api import (
+    LIKED_NAME,
+    LIKED_URI,
+    SpotifyApiError,
+    SpotifyClient,
+    is_readable as is_readable_spotify_reference,
+)
+from muzik.core.sources.spotify_auth import SpotifyAuthError
 from muzik.core.sources.youtube import (
     PlaylistLookupError,
+    YouTubePlaylist,
     YouTubePlaylistItem,
     find_audio_by_id,
-    get_playlist_items,
+    get_playlist,
     playlist_id,
 )
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
@@ -35,6 +47,7 @@ from muzik.core.workflow.events import (
     WorkflowEventEmitter,
 )
 from muzik.core.workflow.service import (
+    PlaylistTrackResult,
     PlaylistVideoResult,
     WorkflowOptions,
     WorkflowRequest,
@@ -42,17 +55,24 @@ from muzik.core.workflow.service import (
     backfill_playlist_entry_from_legacy_cache,
     find_audio_inputs,
     load_playlist_state,
+    resolved_track_entries,
+    run_resolved_playlist_tracks,
     run_youtube_playlist_videos,
 )
 
 
-WATCHLIST_VERSION = 2
+WATCHLIST_VERSION = 3
 # Version 1 records have no "quality" key in their saved stages dict, so
 # _item_from_data's data-driven loop below leaves it at its NOT_STARTED
 # default — no separate migration step is needed beyond accepting the old
-# version number and always saving the current one back.
-SUPPORTED_WATCHLIST_VERSIONS = (1, WATCHLIST_VERSION)
+# version number and always saving the current one back. Version 2 records
+# have no "kind" or "title" key; _playlist_from_data defaults them to a
+# YouTube source with no name.
+SUPPORTED_WATCHLIST_VERSIONS = (1, 2, WATCHLIST_VERSION)
 STAGE_NAMES = ("download", "quality", "parse", "split", "organize")
+
+
+SpotifyLoader = Callable[[str], ResolvedPlaylist]
 
 
 class WatchlistError(RuntimeError):
@@ -64,11 +84,69 @@ class WatchlistFormatError(WatchlistError):
 
 
 class InvalidPlaylistUrlError(WatchlistError):
-    """Raised when a URL does not contain a YouTube playlist ID."""
+    """Raised when a URL contains no known playlist reference."""
 
 
 class DuplicatePlaylistError(WatchlistError):
     """Raised when the watchlist already contains a playlist ID."""
+
+
+class WatchlistSourceKind(str, Enum):
+    """The external service that a saved watchlist entry points to."""
+
+    YOUTUBE = "youtube"
+    SPOTIFY = "spotify"
+
+
+@dataclass(frozen=True, slots=True)
+class WatchlistSource:
+    """One external playlist reference, taken from a link."""
+
+    kind: WatchlistSourceKind
+    source_id: str
+    url: str
+    title: str | None = None
+
+
+_LIKED_ALIASES = (
+    LIKED_URI,
+    "liked",
+    "liked songs",
+    "https://open.spotify.com/collection/tracks",
+)
+
+
+def parse_source(value: str) -> WatchlistSource:
+    """Return the external playlist reference in *value*.
+
+    A YouTube playlist, a Spotify playlist or album, and the Spotify Liked
+    Songs collection are all accepted. A Spotify source needs the Web API.
+    """
+    text = value.strip()
+    if text.lower().rstrip("/") in _LIKED_ALIASES:
+        return WatchlistSource(
+            kind=WatchlistSourceKind.SPOTIFY,
+            source_id=LIKED_URI,
+            url="https://open.spotify.com/collection/tracks",
+            title=LIKED_NAME,
+        )
+    youtube_id = playlist_id(text)
+    if youtube_id:
+        return WatchlistSource(
+            kind=WatchlistSourceKind.YOUTUBE,
+            source_id=youtube_id,
+            url=f"https://www.youtube.com/playlist?list={youtube_id}",
+        )
+    spotify = parse_spotify_link(text)
+    if spotify is not None:
+        return WatchlistSource(
+            kind=WatchlistSourceKind.SPOTIFY,
+            source_id=spotify.uri,
+            url=spotify.url,
+        )
+    raise InvalidPlaylistUrlError(
+        "Enter a YouTube playlist URL, a Spotify playlist link, or 'liked'."
+    )
 
 
 class StageStatus(str, Enum):
@@ -107,13 +185,32 @@ class WatchlistItem:
     video_id: str | None
     video_url: str | None = None
     thumbnail_url: str | None = None
+    kind: str = WatchlistSourceKind.YOUTUBE.value
+    # Spotify only: the playlist-state key of this track, and the resolved
+    # track itself, so that one card can run the track again on its own.
+    entry_id: str | None = None
+    track: dict[str, Any] | None = None
     stages: dict[str, StageRecord] = field(default_factory=new_stage_records)
     last_action: str | None = None
     last_error: str | None = None
 
     @property
     def key(self) -> str:
-        return self.video_id or f"unavailable:{self.position}"
+        return self.entry_id or self.video_id or f"unavailable:{self.position}"
+
+    @property
+    def source_kind(self) -> WatchlistSourceKind:
+        return WatchlistSourceKind(self.kind)
+
+    @property
+    def resolved_track(self) -> ResolvedTrack | None:
+        """Return the saved Spotify track, if this item has one."""
+        if not self.track:
+            return None
+        fields = {name for name in ResolvedTrack.__dataclass_fields__}
+        return ResolvedTrack(
+            **{key: value for key, value in self.track.items() if key in fields}
+        )
 
     @classmethod
     def from_youtube(cls, item: YouTubePlaylistItem) -> WatchlistItem:
@@ -125,6 +222,29 @@ class WatchlistItem:
             thumbnail_url=item.thumbnail_url,
         )
 
+    @classmethod
+    def from_track(
+        cls,
+        track: ResolvedTrack,
+        entry_id: str,
+        *,
+        position: int,
+    ) -> WatchlistItem:
+        """Build one card from a Spotify track."""
+        identifier = (track.source_id or "").rpartition(":")[2] or None
+        title = f"{track.artist} - {track.title}" if track.artist else track.title
+        image = track.source_metadata.get("image")
+        return cls(
+            position=track.index or position,
+            title=title,
+            video_id=identifier,
+            video_url=track.source_url,
+            thumbnail_url=image if isinstance(image, str) else None,
+            kind=WatchlistSourceKind.SPOTIFY.value,
+            entry_id=entry_id,
+            track=track.to_dict(),
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "position": self.position,
@@ -132,6 +252,9 @@ class WatchlistItem:
             "video_id": self.video_id,
             "video_url": self.video_url,
             "thumbnail_url": self.thumbnail_url,
+            "kind": self.kind,
+            "entry_id": self.entry_id,
+            "track": self.track,
             "stages": {name: record.to_dict() for name, record in self.stages.items()},
             "last_action": self.last_action,
             "last_error": self.last_error,
@@ -142,15 +265,46 @@ class WatchlistItem:
 class WatchlistPlaylist:
     playlist_id: str
     url: str
+    kind: str = WatchlistSourceKind.YOUTUBE.value
+    title: str | None = None
     items: list[WatchlistItem] = field(default_factory=list)
     processed_video_ids: list[str] = field(default_factory=list)
     last_checked_at: str | None = None
     last_error: str | None = None
 
+    @property
+    def source_kind(self) -> WatchlistSourceKind:
+        return WatchlistSourceKind(self.kind)
+
+    @property
+    def display_name(self) -> str:
+        return self.title or self.playlist_id
+
+    @property
+    def is_refreshable(self) -> bool:
+        """Return whether muzik can read new items from this source.
+
+        A Spotify source needs the Web API, thus it also needs a client ID
+        and a connected account. Those are checked at refresh time.
+        """
+        if self.source_kind is WatchlistSourceKind.YOUTUBE:
+            return True
+        return is_readable_spotify_reference(self.playlist_id)
+
+    @property
+    def state_id(self) -> str:
+        """Return the playlist-state key that holds the results of this source."""
+        if self.source_kind is WatchlistSourceKind.YOUTUBE:
+            return self.playlist_id
+        identifier = self.playlist_id.rpartition(":")[2] or self.playlist_id
+        return f"spotify_{re.sub(r'[^A-Za-z0-9_-]', '_', identifier)}"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "playlist_id": self.playlist_id,
             "url": self.url,
+            "kind": self.kind,
+            "title": self.title,
             "items": [item.to_dict() for item in self.items],
             "processed_video_ids": list(self.processed_video_ids),
             "last_checked_at": self.last_checked_at,
@@ -223,21 +377,32 @@ class WatchlistRepository:
                 temp_path.unlink()
 
     def add(self, url: str) -> WatchlistPlaylist:
-        normalized_id = playlist_id(url.strip())
-        if not normalized_id:
-            raise InvalidPlaylistUrlError("Enter a YouTube playlist URL.")
+        source = parse_source(url)
         watchlist = self.load()
-        if any(item.playlist_id == normalized_id for item in watchlist.playlists):
+        if any(item.playlist_id == source.source_id for item in watchlist.playlists):
             raise DuplicatePlaylistError(
-                f"Playlist {normalized_id} is already in the watchlist."
+                f"Playlist {source.source_id} is already in the watchlist."
             )
         playlist = WatchlistPlaylist(
-            playlist_id=normalized_id,
-            url=f"https://www.youtube.com/playlist?list={normalized_id}",
+            playlist_id=source.source_id,
+            url=source.url,
+            kind=source.kind.value,
+            title=source.title,
         )
         watchlist.playlists.append(playlist)
         self.save(watchlist)
         return playlist
+
+    def rename(self, playlist_id_value: str, title: str) -> bool:
+        """Give one saved source a name of the user's choice."""
+        watchlist = self.load()
+        for playlist in watchlist.playlists:
+            if playlist.playlist_id != playlist_id_value:
+                continue
+            playlist.title = title.strip() or None
+            self.save(watchlist)
+            return True
+        return False
 
     def remove(self, playlist_id_value: str) -> bool:
         watchlist = self.load()
@@ -259,11 +424,14 @@ def refresh_watchlist(
     options: WorkflowOptions,
     *,
     operations: WorkflowRunOperations,
-    item_loader: Callable[[str], list[YouTubePlaylistItem]] = get_playlist_items,
+    item_loader: Callable[
+        [str], YouTubePlaylist | list[YouTubePlaylistItem]
+    ] = get_playlist,
+    spotify_loader: SpotifyLoader | None = None,
     events: WorkflowEventEmitter | None = None,
     cancellation: CancellationToken | None = None,
 ) -> WatchlistRefreshSummary:
-    """Refresh every saved playlist and process only its pending videos."""
+    """Refresh every saved source and process only its pending items."""
     events = events or NullWorkflowEventEmitter()
     cancellation = cancellation or CancellationToken()
     watchlist = repository.load()
@@ -282,9 +450,32 @@ def refresh_watchlist(
 
     for playlist in watchlist.playlists:
         cancellation.raise_if_cancelled()
-        events.emit(MessageEvent(f"Checking playlist {playlist.playlist_id}."))
+        if playlist.source_kind is WatchlistSourceKind.SPOTIFY:
+            totals = _refresh_spotify_playlist(
+                playlist,
+                repository=repository,
+                watchlist=watchlist,
+                options=options,
+                operations=operations,
+                loader=spotify_loader or _load_spotify_playlist,
+                events=events,
+                cancellation=cancellation,
+            )
+            pending_total += totals.pending
+            completed_total += totals.completed
+            failed_total += totals.failed
+            playlist_errors += totals.errors
+            events.emit(ProgressAdvancedEvent(task_id=task_id))
+            continue
+        if not playlist.is_refreshable:
+            events.emit(
+                MessageEvent(f"muzik cannot read the source {playlist.display_name}.")
+            )
+            events.emit(ProgressAdvancedEvent(task_id=task_id))
+            continue
+        events.emit(MessageEvent(f"Checking playlist {playlist.display_name}."))
         try:
-            discovered = item_loader(playlist.url)
+            loaded = item_loader(playlist.url)
         except PlaylistLookupError as exc:
             playlist.last_checked_at = _now()
             playlist.last_error = str(exc)
@@ -294,6 +485,11 @@ def refresh_watchlist(
             events.emit(ProgressAdvancedEvent(task_id=task_id))
             continue
 
+        if isinstance(loaded, YouTubePlaylist):
+            playlist.title = loaded.title or playlist.title
+            discovered = loaded.items
+        else:
+            discovered = loaded
         playlist.items = _merge_playlist_items(playlist.items, discovered)
         playlist.last_checked_at = _now()
         playlist.last_error = None
@@ -378,12 +574,186 @@ def refresh_watchlist(
         )
     )
     return WatchlistRefreshSummary(
-        playlists_checked=len(watchlist.playlists),
+        playlists_checked=sum(
+            1 for playlist in watchlist.playlists if playlist.is_refreshable
+        ),
         pending_videos=pending_total,
         completed_videos=completed_total,
         failed_videos=failed_total,
         playlist_errors=playlist_errors,
     )
+
+
+@dataclass(slots=True)
+class _SourceTotals:
+    """Counts of one source in a refresh run."""
+
+    pending: int = 0
+    completed: int = 0
+    failed: int = 0
+    errors: int = 0
+
+
+def _load_spotify_playlist(uri: str) -> ResolvedPlaylist:
+    """Read one Spotify reference with the connected account."""
+    return SpotifyClient().load_playlist(uri)
+
+
+def _refresh_spotify_playlist(
+    playlist: WatchlistPlaylist,
+    *,
+    repository: WatchlistRepository,
+    watchlist: Watchlist,
+    options: WorkflowOptions,
+    operations: WorkflowRunOperations,
+    loader: SpotifyLoader,
+    events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
+) -> _SourceTotals:
+    """Sync one Spotify source and acquire the tracks that are not done."""
+    totals = _SourceTotals()
+    events.emit(MessageEvent(f"Reading Spotify source {playlist.display_name}."))
+    try:
+        resolved = loader(playlist.playlist_id)
+    except (SpotifyApiError, SpotifyAuthError) as exc:
+        playlist.last_checked_at = _now()
+        playlist.last_error = str(exc)
+        repository.save(watchlist)
+        totals.errors = 1
+        events.emit(MessageEvent(str(exc), severity="error"))
+        return totals
+
+    pairs = resolved_track_entries(resolved)
+    playlist.title = resolved.title or playlist.title
+    playlist.items = _merge_spotify_items(playlist.items, pairs)
+    playlist.last_checked_at = _now()
+    playlist.last_error = None
+    _reconcile_spotify_playlist(playlist, options=options)
+    repository.save(watchlist)
+
+    pending = [
+        item.entry_id
+        for item in playlist.items
+        if item.entry_id and item.entry_id not in playlist.processed_video_ids
+    ]
+    totals.pending = len(pending)
+    events.emit(
+        MessageEvent(
+            f"Spotify source {playlist.display_name} has "
+            f"{len(pending)} pending track(s)."
+        )
+    )
+
+    def save_result(result: PlaylistTrackResult) -> None:
+        matches = [item for item in playlist.items if item.entry_id == result.entry_id]
+        if result.completed:
+            if result.entry_id not in playlist.processed_video_ids:
+                playlist.processed_video_ids.append(result.entry_id)
+            totals.completed += 1
+            for item in matches:
+                _mark_track_completed(item, options=options)
+        else:
+            totals.failed += 1
+            for item in matches:
+                item.last_action = "refresh"
+                item.last_error = result.error or "Soulseek found no audio."
+                item.stages["download"] = StageRecord(
+                    status=StageStatus.FAILED,
+                    updated_at=_now(),
+                    error=item.last_error,
+                )
+        repository.save(watchlist)
+
+    if not pending:
+        return totals
+    try:
+        run_resolved_playlist_tracks(
+            resolved,
+            options,
+            entry_ids=pending,
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+            on_result=save_result,
+        )
+    except WorkflowCancelled:
+        raise
+    except Exception as exc:
+        playlist.last_error = str(exc)
+        repository.save(watchlist)
+        totals.errors += 1
+        events.emit(
+            MessageEvent(
+                f"Spotify source {playlist.display_name} stopped: {exc}",
+                severity="error",
+            )
+        )
+    return totals
+
+
+def _merge_spotify_items(
+    existing: list[WatchlistItem],
+    pairs: list[tuple[ResolvedTrack, str]],
+) -> list[WatchlistItem]:
+    """Rebuild the cards of a Spotify source, keeping the stage state."""
+    saved = {item.entry_id: item for item in existing if item.entry_id}
+    merged: list[WatchlistItem] = []
+    for position, (track, entry_id) in enumerate(pairs, start=1):
+        item = WatchlistItem.from_track(track, entry_id, position=position)
+        previous = saved.get(entry_id)
+        if previous is not None:
+            item.stages = previous.stages
+            item.last_action = previous.last_action
+            item.last_error = previous.last_error
+        merged.append(item)
+    return merged
+
+
+def _reconcile_spotify_playlist(
+    playlist: WatchlistPlaylist,
+    *,
+    options: WorkflowOptions,
+) -> None:
+    """Update Spotify card stages from the saved playlist state."""
+    state = load_playlist_state(playlist.state_id)
+    for item in playlist.items:
+        for stage in item.stages.values():
+            if stage.status == StageStatus.RUNNING:
+                stage.status = StageStatus.NOT_STARTED
+        # A Spotify track is one file: it has no quality check, no chapters
+        # to parse, and nothing to split.
+        for name in ("quality", "parse", "split"):
+            item.stages[name].status = StageStatus.SKIPPED
+        entry = state["videos"].get(item.entry_id or "", {})
+        status = entry.get("status")
+        if status not in {"downloaded", "organized"}:
+            continue
+        files = entry.get("files") or []
+        item.stages["download"] = StageRecord(
+            status=StageStatus.COMPLETE,
+            path=str(files[0]) if files else None,
+        )
+        if status == "organized":
+            item.stages["organize"].status = StageStatus.COMPLETE
+            if item.entry_id and item.entry_id not in playlist.processed_video_ids:
+                playlist.processed_video_ids.append(item.entry_id)
+        elif options.no_organize:
+            item.stages["organize"].status = StageStatus.SKIPPED
+
+
+def _mark_track_completed(item: WatchlistItem, *, options: WorkflowOptions) -> None:
+    updated_at = _now()
+    item.last_action = "refresh"
+    item.last_error = None
+    item.stages["download"].status = StageStatus.COMPLETE
+    item.stages["download"].updated_at = updated_at
+    for name in ("quality", "parse", "split"):
+        item.stages[name].status = StageStatus.SKIPPED
+        item.stages[name].updated_at = updated_at
+    item.stages["organize"].status = (
+        StageStatus.SKIPPED if options.no_organize else StageStatus.COMPLETE
+    )
+    item.stages["organize"].updated_at = updated_at
 
 
 def reconcile_watchlist(
@@ -395,6 +765,9 @@ def reconcile_watchlist(
     """Update item stages from muzik records, local files, and Beets."""
     beets_library = _open_beets_library(options.config)
     for playlist in watchlist.playlists:
+        if playlist.source_kind is WatchlistSourceKind.SPOTIFY:
+            _reconcile_spotify_playlist(playlist, options=options)
+            continue
         _reconcile_playlist(
             playlist,
             request=request,
@@ -649,9 +1022,18 @@ def _playlist_from_data(raw: object, field_name: str) -> WatchlistPlaylist:
             f"{field_name}.processed_video_ids must be a string list."
         )
     processed_ids = [value for value in processed if isinstance(value, str)]
+    raw_kind = data.get("kind", WatchlistSourceKind.YOUTUBE.value)
+    try:
+        kind = WatchlistSourceKind(raw_kind)
+    except (TypeError, ValueError) as exc:
+        raise WatchlistFormatError(
+            f"{field_name}.kind has unknown value {raw_kind!r}."
+        ) from exc
     return WatchlistPlaylist(
         playlist_id=playlist_id_value,
         url=url,
+        kind=kind.value,
+        title=_optional_string(data, "title", field_name),
         items=[
             _item_from_data(value, f"{field_name}.items[{index}]")
             for index, value in enumerate(items_raw)
@@ -676,12 +1058,25 @@ def _item_from_data(raw: object, field_name: str) -> WatchlistItem:
             stages[name] = _stage_from_data(
                 stages_raw[name], f"{field_name}.stages.{name}"
             )
+    raw_kind = data.get("kind", WatchlistSourceKind.YOUTUBE.value)
+    try:
+        kind = WatchlistSourceKind(raw_kind)
+    except (TypeError, ValueError) as exc:
+        raise WatchlistFormatError(
+            f"{field_name}.kind has unknown value {raw_kind!r}."
+        ) from exc
+    track = data.get("track")
+    if track is not None and not isinstance(track, dict):
+        raise WatchlistFormatError(f"{field_name}.track must be an object or null.")
     return WatchlistItem(
         position=position,
         title=_required_string(data, "title", field_name),
         video_id=_optional_string(data, "video_id", field_name),
         video_url=_optional_string(data, "video_url", field_name),
         thumbnail_url=_optional_string(data, "thumbnail_url", field_name),
+        kind=kind.value,
+        entry_id=_optional_string(data, "entry_id", field_name),
+        track=cast(dict[str, Any], track) if track is not None else None,
         stages=stages,
         last_action=_optional_string(data, "last_action", field_name),
         last_error=_optional_string(data, "last_error", field_name),

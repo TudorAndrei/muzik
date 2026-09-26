@@ -40,7 +40,6 @@ def _build_shell(*, on_tab_changed=lambda tab: None, on_quit=lambda: None) -> No
             on_refresh=lambda: None,
             on_action=lambda playlist_id, item, action: None,
             on_back=lambda: None,
-            on_quit=lambda: None,
         ),
         library=LibraryView(Path("."), lambda: None, lambda: None),
         settings=SettingsView(lambda: None, lambda: None),

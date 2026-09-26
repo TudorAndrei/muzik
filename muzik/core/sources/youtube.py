@@ -45,6 +45,14 @@ class YouTubePlaylistItem:
     thumbnail_url: str | None
 
 
+@dataclass(frozen=True, slots=True)
+class YouTubePlaylist:
+    """One flat YouTube playlist lookup: its name and its ordered items."""
+
+    title: str | None
+    items: list[YouTubePlaylistItem]
+
+
 def js_runtime_args() -> list[str]:
     """Enable a JavaScript runtime for yt-dlp if one is on PATH.
 
@@ -189,6 +197,11 @@ def get_playlist_video_ids(url: str) -> list[str]:
 
 def get_playlist_items(url: str) -> list[YouTubePlaylistItem]:
     """Return ordered item metadata from one flat YouTube playlist lookup."""
+    return get_playlist(url).items
+
+
+def get_playlist(url: str) -> YouTubePlaylist:
+    """Return the playlist name and its ordered items from one lookup."""
     result = run_silent(
         [
             "yt-dlp",
@@ -240,7 +253,10 @@ def get_playlist_items(url: str) -> list[YouTubePlaylistItem]:
                 thumbnail_url=_playlist_thumbnail_url(raw),
             )
         )
-    return items
+    return YouTubePlaylist(
+        title=str(payload.get("title") or "").strip() or None,
+        items=items,
+    )
 
 
 def _positive_int(value: object, fallback: int) -> int:

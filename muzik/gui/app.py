@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 from threading import Thread
 from typing import Any
+import webbrowser
 
 import dearpygui.dearpygui as dpg
 
@@ -39,7 +40,22 @@ from muzik.gui.adapters import (
     GuiWorkflowEventEmitter,
 )
 from muzik.core.services import check_services
-from muzik.config import DEFAULT_DOWNLOAD_DIR
+from muzik.config import (
+    DEFAULT_DOWNLOAD_DIR,
+    get_spotify_settings,
+    save_muzik_config_value,
+)
+from muzik.core.sources.spotify_api import (
+    SpotifyApiError,
+    SpotifyClient,
+    SpotifyPlaylistRef,
+)
+from muzik.core.sources.spotify_auth import (
+    SpotifyAuthError,
+    TokenStore,
+    login as spotify_login,
+    redirect_uri as spotify_redirect_uri,
+)
 from muzik.core.library import scan_downloads
 from muzik.gui.bridge import GuiBridge
 from muzik.gui import shell
@@ -61,10 +77,12 @@ from muzik.core.watchlist import (
     reconcile_watchlist,
     refresh_watchlist as run_watchlist_refresh,
 )
+from muzik.gui.spotify import SpotifyDialog, SpotifyState
 from muzik.gui.watchlist import WATCHLIST_ROOT, WatchlistView
 
 
 WorkflowOperationsFactory = Callable[..., WorkflowRunOperations]
+WatchlistReconciler = Callable[..., None]
 
 
 class MuzikGuiApp:
@@ -75,9 +93,11 @@ class MuzikGuiApp:
         *,
         operations_factory: WorkflowOperationsFactory | None = None,
         watchlist_repository: WatchlistRepository | None = None,
+        reconcile: WatchlistReconciler | None = None,
     ) -> None:
         self.operations_factory = operations_factory or _default_operations
         self.watchlist_repository = watchlist_repository or WatchlistRepository()
+        self.reconcile = reconcile or reconcile_watchlist
         self.bridge = GuiBridge(on_error=self._handle_bridge_error)
         self.launcher = LauncherView(self.open_pipeline, self.quit)
         self.watchlist = WatchlistView(
@@ -85,10 +105,24 @@ class MuzikGuiApp:
             on_remove=self.remove_watchlist_playlist,
             on_refresh=self.refresh_watchlist,
             on_action=self.request_item_action,
+            on_rename=self.rename_watchlist_playlist,
             on_thumbnail_needed=self._queue_cached_thumbnail,
+            on_spotify=self.open_spotify_dialog,
             on_back=self._go_to_workflow_tab,
-            on_quit=self.quit,
         )
+        self.spotify = SpotifyDialog(
+            on_save_client_id=self.save_spotify_client_id,
+            on_connect=self.connect_spotify,
+            on_disconnect=self.disconnect_spotify,
+            on_reload=self.reload_spotify_playlists,
+            on_add=self.add_watchlist_playlist,
+            on_copy=dpg.set_clipboard_text,
+            on_open_link=webbrowser.open,
+        )
+        self._reconcile_worker: Thread | None = None
+        self._spotify_worker: Thread | None = None
+        self._spotify_playlists: tuple[SpotifyPlaylistRef, ...] = ()
+        self._spotify_account = ""
         self.library = LibraryView(
             DEFAULT_DOWNLOAD_DIR,
             self.refresh_library,
@@ -137,9 +171,7 @@ class MuzikGuiApp:
                 self.bridge.drain()
                 self._poll_worker()
                 if dpg.does_item_exist(WATCHLIST_ROOT):
-                    self.watchlist.set_available_width(
-                        max(300, dpg.get_viewport_client_width() - 290)
-                    )
+                    self.watchlist.set_available_width(dpg.get_viewport_client_width())
                 dpg.render_dearpygui_frame()
         finally:
             self._cancel_worker()
@@ -151,6 +183,10 @@ class MuzikGuiApp:
                 self._settings_worker.join(timeout=5)
             if self._library_worker is not None:
                 self._library_worker.join(timeout=5)
+            if self._reconcile_worker is not None:
+                self._reconcile_worker.join(timeout=5)
+            if self._spotify_worker is not None:
+                self._spotify_worker.join(timeout=1)
             for worker in tuple(self._thumbnail_workers.values()):
                 worker.join(timeout=1)
             dpg.destroy_context()
@@ -223,15 +259,141 @@ class MuzikGuiApp:
         self._reload_watchlist()
 
     def add_watchlist_playlist(self, url: str) -> None:
-        """Add one normalized YouTube playlist and reload the rail."""
+        """Add one normalized source and reload the rail."""
         try:
             self.watchlist_repository.add(url)
         except WatchlistError as exc:
+            if self.spotify.is_open:
+                self.spotify.show(self._spotify_state(error=str(exc)))
+                return
             if self.watchlist is not None:
                 self.watchlist.show_error(str(exc))
             return
         if self.watchlist is not None:
             self.watchlist.clear_error()
+        self._reload_watchlist()
+        if self.spotify.is_open:
+            self.spotify.show(
+                self._spotify_state(status="Added. Select Refresh to sync it.")
+            )
+
+    def open_spotify_dialog(
+        self,
+        sender: Any = None,
+        app_data: Any = None,
+        user_data: Any = None,
+    ) -> None:
+        """Show the Spotify window and read the account in the background."""
+        self.spotify.open(self._spotify_state())
+        if TokenStore().load() is not None:
+            self._start_spotify_worker(self._load_spotify_account)
+
+    def save_spotify_client_id(self, value: str) -> None:
+        """Save the client ID of the user's own Spotify application."""
+        try:
+            save_muzik_config_value("spotify", "client_id", value)
+        except OSError as exc:
+            self.spotify.show(self._spotify_state(error=str(exc)))
+            return
+        self.spotify.show(self._spotify_state(status="Client ID saved."))
+
+    def connect_spotify(self) -> None:
+        """Run the Spotify login in a browser, from a worker thread."""
+        self.spotify.show(
+            self._spotify_state(status="Approve muzik in your browser.", busy=True)
+        )
+        self._start_spotify_worker(self._run_spotify_login)
+
+    def disconnect_spotify(self) -> None:
+        """Remove the saved Spotify tokens."""
+        TokenStore().clear()
+        self._spotify_playlists = ()
+        self.spotify.show(self._spotify_state(status="Spotify is disconnected."))
+
+    def reload_spotify_playlists(self) -> None:
+        """Read the playlists of the connected account again."""
+        self._spotify_playlists = ()
+        self.spotify.show(self._spotify_state(busy=True))
+        self._start_spotify_worker(self._load_spotify_account)
+
+    def _spotify_state(
+        self,
+        *,
+        account: str = "",
+        status: str = "",
+        error: str = "",
+        busy: bool = False,
+    ) -> SpotifyState:
+        settings = get_spotify_settings()
+        try:
+            saved = {
+                playlist.playlist_id
+                for playlist in self.watchlist_repository.load().playlists
+            }
+        except WatchlistError:
+            saved = set()
+        return SpotifyState(
+            client_id=settings.get("client_id", ""),
+            redirect_uri=spotify_redirect_uri(
+                int(settings.get("redirect_port", "8888") or "8888")
+            ),
+            connected=TokenStore().load() is not None,
+            account=account or self._spotify_account,
+            playlists=self._spotify_playlists,
+            saved_uris=frozenset(saved),
+            status=status,
+            error=error,
+            busy=busy,
+        )
+
+    def _start_spotify_worker(self, target: Callable[[], None]) -> None:
+        if self._spotify_worker is not None and self._spotify_worker.is_alive():
+            return
+        self._spotify_worker = Thread(
+            target=target,
+            name="muzik-spotify",
+            daemon=True,
+        )
+        self._spotify_worker.start()
+
+    def _run_spotify_login(self) -> None:
+        try:
+            spotify_login()
+        except (SpotifyApiError, SpotifyAuthError) as exc:
+            self._submit_spotify_state(error=str(exc))
+            return
+        self._load_spotify_account()
+
+    def _load_spotify_account(self) -> None:
+        try:
+            client = SpotifyClient()
+            account = client.account_name()
+            playlists = tuple(client.list_playlists())
+        except (SpotifyApiError, SpotifyAuthError) as exc:
+            self._submit_spotify_state(error=str(exc))
+            return
+        self._spotify_account = account
+        self._spotify_playlists = playlists
+        self._submit_spotify_state(account=account)
+
+    def _submit_spotify_state(self, *, account: str = "", error: str = "") -> None:
+        if self.bridge.is_shutdown():
+            return
+
+        def update() -> None:
+            if self.spotify.is_open:
+                self.spotify.show(self._spotify_state(account=account, error=error))
+
+        self.bridge.submit(update)
+
+    def rename_watchlist_playlist(self, playlist_id: str, title: str) -> None:
+        """Give one saved source the name that the user entered."""
+        try:
+            self.watchlist_repository.rename(playlist_id, title)
+        except WatchlistError as exc:
+            if self.watchlist is not None:
+                self.watchlist.show_error(str(exc))
+            return
         self._reload_watchlist()
 
     def remove_watchlist_playlist(self, playlist_id: str) -> None:
@@ -610,15 +772,17 @@ class MuzikGuiApp:
                 request=request,
                 options=options,
                 operations=operations,
+                source_id=playlist.playlist_id,
                 cancellation=cancellation,
                 on_state_change=lambda: self.watchlist_repository.save(watchlist),
             )
+            done_key = item.entry_id or item.video_id
             if (
-                item.video_id
+                done_key
                 and item_summary_state(item) == "Processed"
-                and item.video_id not in playlist.processed_video_ids
+                and done_key not in playlist.processed_video_ids
             ):
-                playlist.processed_video_ids.append(item.video_id)
+                playlist.processed_video_ids.append(done_key)
             self.watchlist_repository.save(watchlist)
         except WorkflowCancelled:
             return
@@ -736,6 +900,12 @@ class MuzikGuiApp:
                 self.watchlist.show_error(str(error))
 
     def _reload_watchlist(self) -> None:
+        """Show the saved watchlist at once, then reconcile it in a worker.
+
+        Reconciliation reads the download folder and queries Beets for every
+        item, which takes seconds on a large library. It must never run on the
+        render thread: that is what froze the whole window.
+        """
         view = self.watchlist
         if view is None:
             return
@@ -744,20 +914,83 @@ class MuzikGuiApp:
             request = WorkflowRequest("", config.output, config.splits)
             options = _workflow_options(config)
             watchlist = self.watchlist_repository.load()
-            reconcile_watchlist(watchlist, request=request, options=options)
-            self.watchlist_repository.save(watchlist)
         except (WatchlistError, TypeError, ValueError) as exc:
             view.show_error(str(exc))
             return
         view.load(watchlist, request)
+        self._start_reconcile(request, options)
 
-    def _queue_cached_thumbnail(self, video_id: str) -> None:
+    def _watchlist_stamp(self) -> tuple[int, int]:
+        """Return a value that changes when the watchlist file is written."""
+        try:
+            stat = self.watchlist_repository.path.stat()
+        except OSError:
+            return (0, 0)
+        return (stat.st_mtime_ns, stat.st_size)
+
+    def _start_reconcile(
+        self,
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+    ) -> None:
+        if self._reconcile_worker is not None and self._reconcile_worker.is_alive():
+            return
+        if self.watchlist is not None:
+            self.watchlist.set_status("Checking local files and Beets...")
+        self._reconcile_worker = Thread(
+            target=self._run_reconcile,
+            args=(request, options, self._watchlist_stamp()),
+            name="muzik-reconcile",
+            daemon=True,
+        )
+        self._reconcile_worker.start()
+
+    def _run_reconcile(
+        self,
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+        stamp: tuple[int, int],
+    ) -> None:
+        try:
+            watchlist = self.watchlist_repository.load()
+            self.reconcile(watchlist, request=request, options=options)
+        except Exception as exc:
+            message = str(exc)
+
+            def report() -> None:
+                if self.watchlist is not None:
+                    self.watchlist.set_status("")
+                    self.watchlist.show_error(message)
+
+            self.bridge.submit(report)
+            return
+
+        def apply() -> None:
+            view = self.watchlist
+            if view is None:
+                return
+            view.set_status("")
+            if self._watchlist_stamp() != stamp:
+                # The user added, renamed, or removed a source while this ran.
+                # Saving now would drop that change, so start again instead.
+                self._start_reconcile(request, options)
+                return
+            try:
+                self.watchlist_repository.save(watchlist)
+            except WatchlistError as exc:
+                view.show_error(str(exc))
+                return
+            view.load(watchlist, request, keep_page=True)
+
+        self.bridge.submit(apply)
+
+    def _queue_cached_thumbnail(self, video_id: str, thumbnail_url: str) -> None:
         view = self.watchlist
         path = cached_thumbnail_path(video_id)
         if view is None:
             return
         if path is None:
-            self._start_thumbnail_download(view, video_id)
+            self._start_thumbnail_download(view, video_id, thumbnail_url)
             return
 
         def load_thumbnail() -> None:
@@ -770,24 +1003,12 @@ class MuzikGuiApp:
         self,
         view: WatchlistView,
         video_id: str,
+        thumbnail_url: str,
     ) -> None:
         worker = self._thumbnail_workers.get(video_id)
         if worker is not None and worker.is_alive():
             return
-        try:
-            watchlist = self.watchlist_repository.load()
-        except WatchlistError:
-            return
-        thumbnail_url = next(
-            (
-                item.thumbnail_url
-                for playlist in watchlist.playlists
-                for item in playlist.items
-                if item.video_id == video_id and item.thumbnail_url
-            ),
-            None,
-        )
-        if thumbnail_url is None:
+        if not thumbnail_url:
             return
 
         def download() -> None:

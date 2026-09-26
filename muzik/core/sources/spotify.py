@@ -6,16 +6,51 @@ This module never calls Spotify or downloads Spotify media.
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any, cast
 
 from muzik.core.sources.base import ResolvedPlaylist, ResolvedTrack
 
 
+SPOTIFY_LINK_RE = re.compile(
+    r"(?:open\.spotify\.com/(?:intl-[a-z]{2}/)?|spotify:)"
+    r"(playlist|album)[/:]([A-Za-z0-9]{10,})"
+)
+
+
 class SpotifyExportError(ValueError):
     """Raised when a Spotify metadata export is unsupported or malformed."""
+
+
+@dataclass(frozen=True, slots=True)
+class SpotifyLink:
+    """One Spotify playlist or album reference taken from a link."""
+
+    kind: str
+    spotify_id: str
+
+    @property
+    def uri(self) -> str:
+        return f"spotify:{self.kind}:{self.spotify_id}"
+
+    @property
+    def url(self) -> str:
+        return f"https://open.spotify.com/{self.kind}/{self.spotify_id}"
+
+
+def parse_link(value: str) -> SpotifyLink | None:
+    """Return the playlist or album reference in *value*, if it has one.
+
+    This reads the link text only. muzik does not call Spotify.
+    """
+    match = SPOTIFY_LINK_RE.search(value.strip())
+    if match is None:
+        return None
+    return SpotifyLink(kind=match.group(1), spotify_id=match.group(2))
 
 
 def load_playlist(path: Path) -> ResolvedPlaylist:

@@ -9,6 +9,7 @@ from muzik.core.watchlist import (
     Watchlist,
     WatchlistItem,
     WatchlistPlaylist,
+    WatchlistSourceKind,
 )
 from muzik.core.workflow.item_actions import ItemAction
 from muzik.core.workflow.service import WorkflowRequest
@@ -17,6 +18,7 @@ from muzik.gui.watchlist import (
     ADD_URL,
     FILTER,
     GRID,
+    PAGE_SIZE,
     PAGE_TEXT,
     PLAYLIST_RAIL,
     TEXTURE_REGISTRY,
@@ -38,6 +40,7 @@ def _item(
         title=f"Video {position}",
         video_id=video_id,
         video_url=(f"https://youtu.be/{video_id}" if video_id else None),
+        thumbnail_url=(f"https://img.test/{video_id}.jpg" if video_id else None),
     )
     item.stages["download"] = StageRecord(status=status)
     if status is StageStatus.COMPLETE:
@@ -53,7 +56,6 @@ def _view(**callbacks: Any) -> WatchlistView:
         "on_refresh": lambda: None,
         "on_action": lambda playlist_id, item, action: None,
         "on_back": lambda: None,
-        "on_quit": lambda: None,
     }
     defaults.update(callbacks)
     return WatchlistView(**defaults)
@@ -81,9 +83,9 @@ def _text_values(parent) -> list[str]:
 
 
 def test_thumbnail_width_follows_available_width() -> None:
-    assert thumbnail_width_for_width(500) == 180
-    assert thumbnail_width_for_width(900) == 240
-    assert thumbnail_width_for_width(1200) == 300
+    assert thumbnail_width_for_width(500) == 128
+    assert thumbnail_width_for_width(700) == 160
+    assert thumbnail_width_for_width(1200) == 192
 
 
 def test_page_filters_summary_state_and_clamps_page() -> None:
@@ -93,7 +95,7 @@ def test_page_filters_summary_state_and_clamps_page() -> None:
     items[3] = _item(4, available=False)
 
     failed = page_for_items(items, status_filter="Failed", page=0)
-    last_page = page_for_items(items, status_filter="All", page=20)
+    last_page = page_for_items(items, status_filter="All", page=20, page_size=6)
 
     assert [item.position for item in failed.items] == [2]
     assert last_page.page == 1
@@ -119,6 +121,109 @@ def test_unchecked_playlist_explains_how_to_load_videos(tmp_path: Path) -> None:
             "This playlist has not been checked yet. Select Refresh new videos."
         )
         assert "Not checked yet" in _text_values(PLAYLIST_RAIL)
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
+def test_rail_lists_every_saved_source_with_its_link(tmp_path: Path) -> None:
+    youtube = WatchlistPlaylist(
+        "PL123",
+        "https://www.youtube.com/playlist?list=PL123",
+        title="Jazz albums",
+        items=[_item(1)],
+    )
+    spotify = WatchlistPlaylist(
+        "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+        "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+        kind=WatchlistSourceKind.SPOTIFY.value,
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([youtube, spotify]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        rail = _text_values(PLAYLIST_RAIL)
+        labels = {dpg.get_item_label(item) for item in _descendants(PLAYLIST_RAIL)}
+
+        assert "YouTube" in rail
+        assert "Spotify" in rail
+        assert youtube.url in rail
+        assert "Jazz albums" in labels
+        assert {"Open", "Copy", "Rename", "Remove source"} <= labels
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
+def test_empty_spotify_source_explains_the_first_sync(tmp_path: Path) -> None:
+    spotify = WatchlistPlaylist(
+        "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M",
+        "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
+        kind=WatchlistSourceKind.SPOTIFY.value,
+        title="Road trip",
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([spotify]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        text = _text_values(GRID)
+        labels = {dpg.get_item_label(item) for item in _descendants(GRID)}
+
+        assert "Road trip" in text
+        assert any("Select Refresh" in value for value in text)
+        assert {"Spotify...", "Open in Spotify"} <= labels
+    finally:
+        view.destroy()
+        dpg.destroy_context()
+
+
+def test_spotify_tracks_render_as_cards_with_a_spotify_id(tmp_path: Path) -> None:
+    track = WatchlistItem(
+        position=1,
+        title="Kohsuke Mine - Sunshower",
+        video_id="track1",
+        video_url="https://open.spotify.com/track/track1",
+        kind=WatchlistSourceKind.SPOTIFY.value,
+        entry_id="spotify:track:track1#0",
+        track={"title": "Sunshower", "artist": "Kohsuke Mine", "source": "spotify"},
+    )
+    track.stages["download"] = StageRecord(status=StageStatus.COMPLETE)
+    for name in ("quality", "parse", "split"):
+        track.stages[name] = StageRecord(status=StageStatus.SKIPPED)
+    spotify = WatchlistPlaylist(
+        "spotify:liked",
+        "https://open.spotify.com/collection/tracks",
+        kind=WatchlistSourceKind.SPOTIFY.value,
+        title="Liked Songs",
+        items=[track],
+    )
+
+    dpg.create_context()
+    view = _view()
+    try:
+        view.build()
+        view.load(
+            Watchlist([spotify]),
+            WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
+        )
+        text = _text_values(GRID)
+        labels = {dpg.get_item_label(item) for item in _descendants(GRID)}
+
+        assert "1. Kohsuke Mine - Sunshower" in text
+        assert "Spotify ID: track1" in text
+        assert "Split: Skipped" in text
+        assert {"Run", "More actions"} <= labels
+        assert "1 track(s)" in _text_values(PLAYLIST_RAIL)
     finally:
         view.destroy()
         dpg.destroy_context()
@@ -222,14 +327,7 @@ def test_items_render_as_vertical_rows_with_controls(tmp_path: Path) -> None:
             assert dpg.does_item_exist(row)
             assert dpg.get_item_parent(row) == GRID
             labels = {dpg.get_item_label(item) for item in _descendants(row)}
-            assert {
-                "Run",
-                "Download again",
-                "Parse again",
-                "Split again",
-                "Organize again",
-                "Run all again",
-            } <= labels
+            assert {"Run", "More actions"} <= labels
     finally:
         view.destroy()
         dpg.destroy_context()
@@ -265,7 +363,8 @@ def test_item_action_callback_runs_from_dearpygui_queue(tmp_path: Path) -> None:
 
 
 def test_paging_and_status_filter_replace_visible_cards(tmp_path: Path) -> None:
-    items = [_item(index) for index in range(1, 8)]
+    overflow = PAGE_SIZE + 1
+    items = [_item(index) for index in range(1, overflow + 1)]
     items[0].stages["download"].status = StageStatus.FAILED
     playlist = WatchlistPlaylist("PL123", "https://example.test", items=items)
 
@@ -277,12 +376,13 @@ def test_paging_and_status_filter_replace_visible_cards(tmp_path: Path) -> None:
             Watchlist([playlist]),
             WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
         )
+        last = f"{overflow}. Video {overflow}"
         assert "1. Video 1" in _text_values(GRID)
-        assert "7. Video 7" not in _text_values(GRID)
+        assert last not in _text_values(GRID)
 
         view._next_page()
         assert dpg.get_value(PAGE_TEXT) == "Page 2 of 2"
-        assert "7. Video 7" in _text_values(GRID)
+        assert last in _text_values(GRID)
 
         dpg.set_value(FILTER, "Failed")
         view._filter_changed(app_data="Failed")
@@ -378,31 +478,37 @@ def test_page_requests_only_visible_textures_and_releases_old_page(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    requests: list[str] = []
+    requests: list[tuple[str, str]] = []
+    overflow = PAGE_SIZE + 1
     playlist = WatchlistPlaylist(
         "PL123",
         "https://example.test",
-        items=[_item(index) for index in range(1, 8)],
+        items=[_item(index) for index in range(1, overflow + 1)],
     )
     image = tmp_path / "thumbnail.png"
     image.write_bytes(b"image bytes")
     monkeypatch.setattr(dpg, "load_image", lambda path: (1, 1, 4, [1.0] * 4))
 
     dpg.create_context()
-    view = _view(on_thumbnail_needed=requests.append)
+    view = _view(
+        on_thumbnail_needed=lambda video_id, url: requests.append((video_id, url))
+    )
     try:
         view.build()
         view.load(
             Watchlist([playlist]),
             WorkflowRequest("", tmp_path / "downloads", tmp_path / "splits"),
         )
-        assert requests == [f"video{index:06d}" for index in range(1, 7)]
+        assert requests == [
+            (f"video{index:06d}", f"https://img.test/video{index:06d}.jpg")
+            for index in range(1, PAGE_SIZE + 1)
+        ]
         view.load_cached_thumbnail("video000001", image)
         old_texture = view._textures["video000001"]
 
         view._next_page()
 
-        assert requests[-1] == "video000007"
+        assert requests[-1][0] == f"video{overflow:06d}"
         assert "video000001" not in view._textures
         assert not dpg.does_item_exist(old_texture)
     finally:

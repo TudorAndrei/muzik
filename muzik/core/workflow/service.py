@@ -47,7 +47,7 @@ from muzik.core.sources.youtube import (
     youtube_id as parse_youtube_id,
 )
 from muzik.core.workflow.decisions import WorkflowDecisionError, WorkflowDecisions
-from muzik.core.workflow.cancellation import CancellationToken
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 from muzik.core.workflow.events import (
     CandidatesFoundEvent,
     MessageEvent,
@@ -1117,15 +1117,51 @@ def _load_spotify_playlist(path: Path) -> ResolvedPlaylist | None:
         raise WorkflowServiceError(str(exc)) from exc
 
 
-def _run_resolved_playlist_workflow(
+def resolved_playlist_state_id(playlist: ResolvedPlaylist) -> str:
+    """Return the playlist-state key for a metadata-only playlist."""
+    playlist_id = playlist.source_id or playlist.source
+    # A cache key may only contain letters, digits, '_', and '-' — a
+    # locally-generated playlist id (CSV imports with no real Spotify
+    # playlist id, e.g. "spotify:local:<hash>") contains colons, so sanitize
+    # rather than let load_playlist_state's cache lookup raise.
+    safe_playlist_id = re.sub(r"[^A-Za-z0-9_-]", "_", playlist_id)
+    return f"{playlist.source}_{safe_playlist_id}"
+
+
+def resolved_track_entries(
     playlist: ResolvedPlaylist,
-    *,
+) -> list[tuple[ResolvedTrack, str]]:
+    """Return each track of *playlist* with its stable playlist-state key.
+
+    The same track can be in a playlist more than once, thus each repeat gets
+    its own occurrence number.
+    """
+    occurrences: dict[str, int] = {}
+    pairs: list[tuple[ResolvedTrack, str]] = []
+    for track in playlist.entries:
+        if not isinstance(track, ResolvedTrack):
+            continue
+        source_id = track.source_id or f"{playlist.source}:{track.index}"
+        occurrence = occurrences.get(source_id, 0)
+        occurrences[source_id] = occurrence + 1
+        pairs.append((track, f"{source_id}#{occurrence}"))
+    return pairs
+
+
+@dataclass(frozen=True, slots=True)
+class PlaylistTrackResult:
+    """Result of one track in a metadata-only playlist run."""
+
+    entry_id: str
+    completed: bool
+    error: str | None = None
+
+
+def _require_metadata_acquisition(
+    playlist: ResolvedPlaylist,
     options: WorkflowOptions,
     operations: WorkflowRunOperations,
-    events: WorkflowEventEmitter,
-    cancellation: CancellationToken,
 ) -> None:
-    """Acquire and process any metadata-only resolved playlist entry-by-entry."""
     source_label = playlist.source.capitalize()
     if options.audio_source == AudioSource.YOUTUBE:
         raise WorkflowServiceError(
@@ -1135,79 +1171,187 @@ def _run_resolved_playlist_workflow(
         raise WorkflowServiceError(
             f"Soulseek is not ready for {source_label} metadata acquisition."
         )
-    playlist_id = playlist.source_id or playlist.source
-    # A cache key may only contain letters, digits, '_', and '-' — a
-    # locally-generated playlist id (CSV imports with no real Spotify
-    # playlist id, e.g. "spotify:local:<hash>") contains colons, so sanitize
-    # rather than let load_playlist_state's cache lookup raise.
-    safe_playlist_id = re.sub(r"[^A-Za-z0-9_-]", "_", playlist_id)
-    state_id = f"{playlist.source}_{safe_playlist_id}"
+
+
+def _record_resolved_snapshot(
+    state: dict,
+    playlist: ResolvedPlaylist,
+    pairs: list[tuple[ResolvedTrack, str]],
+) -> None:
+    source_ids = [entry_id.rsplit("#", maxsplit=1)[0] for _track, entry_id in pairs]
+    state["snapshot_hash"] = hashlib.sha256("\n".join(source_ids).encode()).hexdigest()
+    state["snapshot_id"] = playlist.source_metadata.get("snapshot_id")
+
+
+def _acquire_resolved_track(
+    track: ResolvedTrack,
+    *,
+    operations: WorkflowRunOperations,
+    cancellation: CancellationToken,
+) -> list[Path]:
+    if operations.acquire_soulseek_track is not None:
+        return cast(
+            list[Path],
+            _call_with_cancellation(
+                operations.acquire_soulseek_track,
+                track,
+                cancellation=cancellation,
+            ),
+        )
+    # No structured acquisition wired: fall back to a joined query
+    # string, losing per-field identity evidence.
+    query = " - ".join(
+        part for part in (track.artist, track.title, track.album) if part
+    )
+    return cast(
+        list[Path],
+        _call_with_cancellation(
+            operations.acquire_soulseek,
+            query,
+            cancellation=cancellation,
+        ),
+    )
+
+
+def _process_resolved_track(
+    track: ResolvedTrack,
+    entry_id: str,
+    *,
+    state: dict,
+    state_id: str,
+    options: WorkflowOptions,
+    operations: WorkflowRunOperations,
+    events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
+    source: str,
+) -> bool:
+    """Acquire and process one resolved track. Return False with no audio."""
+    cancellation.raise_if_cancelled()
+    if state["videos"].get(entry_id, {}).get("status") == "organized":
+        return True
+    events.emit(
+        MessageEvent(
+            message=f"Acquiring {track.title} from Soulseek using {source} metadata."
+        )
+    )
+    files = _acquire_resolved_track(
+        track, operations=operations, cancellation=cancellation
+    )
+    if not files:
+        return False
+    cancellation.raise_if_cancelled()
+    state["videos"][entry_id] = {
+        "status": "downloaded",
+        "source": "soulseek",
+        "files": [str(path.resolve()) for path in files],
+        "track": track.to_dict(),
+    }
+    save_playlist_state(state_id, state)
+    _call_with_cancellation(
+        operations.process_audio, files, [], cancellation=cancellation
+    )
+    cancellation.raise_if_cancelled()
+    if not options.no_organize:
+        state["videos"][entry_id]["status"] = "organized"
+        save_playlist_state(state_id, state)
+    return True
+
+
+def run_resolved_playlist_tracks(
+    playlist: ResolvedPlaylist,
+    options: WorkflowOptions,
+    *,
+    entry_ids: list[str] | None = None,
+    operations: WorkflowRunOperations,
+    events: WorkflowEventEmitter | None = None,
+    cancellation: CancellationToken | None = None,
+    on_result: Callable[[PlaylistTrackResult], None] | None = None,
+) -> list[PlaylistTrackResult]:
+    """Process the given tracks of a metadata-only playlist, one at a time.
+
+    A track that acquires no audio does not stop the run: it is reported as
+    not completed, and the other tracks continue. This is what a watchlist
+    sync of a large playlist needs.
+    """
+    events = events or NullWorkflowEventEmitter()
+    cancellation = cancellation or CancellationToken()
+    _require_metadata_acquisition(playlist, options, operations)
+    state_id = resolved_playlist_state_id(playlist)
+    state = load_playlist_state(state_id)
+    pairs = resolved_track_entries(playlist)
+    _record_resolved_snapshot(state, playlist, pairs)
+    if options.dry_run:
+        return []
+    wanted = set(entry_ids) if entry_ids is not None else None
+    results: list[PlaylistTrackResult] = []
+    for track, entry_id in pairs:
+        if wanted is not None and entry_id not in wanted:
+            continue
+        cancellation.raise_if_cancelled()
+        error: str | None = None
+        try:
+            completed = _process_resolved_track(
+                track,
+                entry_id,
+                state=state,
+                state_id=state_id,
+                options=options,
+                operations=operations,
+                events=events,
+                cancellation=cancellation,
+                source=playlist.source,
+            )
+            if not completed:
+                error = f"No Soulseek audio files were acquired for {track.title}."
+        except WorkflowCancelled:
+            raise
+        except Exception as exc:
+            completed = False
+            error = str(exc)
+        if error is not None:
+            events.emit(MessageEvent(message=error, severity="error"))
+        result = PlaylistTrackResult(
+            entry_id=entry_id, completed=completed, error=error
+        )
+        results.append(result)
+        if on_result is not None:
+            on_result(result)
+    return results
+
+
+def _run_resolved_playlist_workflow(
+    playlist: ResolvedPlaylist,
+    *,
+    options: WorkflowOptions,
+    operations: WorkflowRunOperations,
+    events: WorkflowEventEmitter,
+    cancellation: CancellationToken,
+) -> None:
+    """Acquire and process any metadata-only resolved playlist entry-by-entry."""
+    _require_metadata_acquisition(playlist, options, operations)
+    state_id = resolved_playlist_state_id(playlist)
     state = load_playlist_state(state_id)
     if options.dry_run:
         return
-    entries = [entry for entry in playlist.entries if isinstance(entry, ResolvedTrack)]
-    source_ids = [
-        track.source_id or f"{playlist.source}:{track.index}" for track in entries
-    ]
-    state["snapshot_hash"] = hashlib.sha256("\n".join(source_ids).encode()).hexdigest()
-    state["snapshot_id"] = playlist.source_metadata.get("snapshot_id")
-    occurrences: dict[str, int] = {}
-    for track in entries:
+    pairs = resolved_track_entries(playlist)
+    _record_resolved_snapshot(state, playlist, pairs)
+    for track, entry_id in pairs:
         cancellation.raise_if_cancelled()
-        source_id = track.source_id or f"{playlist.source}:{track.index}"
-        occurrence = occurrences.get(source_id, 0)
-        occurrences[source_id] = occurrence + 1
-        entry_id = f"{source_id}#{occurrence}"
-        entry = state["videos"].get(entry_id, {})
-        if entry.get("status") == "organized":
-            continue
-        events.emit(
-            MessageEvent(
-                message=f"Acquiring {track.title} from Soulseek using {playlist.source} metadata."
-            )
+        completed = _process_resolved_track(
+            track,
+            entry_id,
+            state=state,
+            state_id=state_id,
+            options=options,
+            operations=operations,
+            events=events,
+            cancellation=cancellation,
+            source=playlist.source,
         )
-        if operations.acquire_soulseek_track is not None:
-            files = cast(
-                list[Path],
-                _call_with_cancellation(
-                    operations.acquire_soulseek_track,
-                    track,
-                    cancellation=cancellation,
-                ),
-            )
-        else:
-            # No structured acquisition wired: fall back to a joined query
-            # string, losing per-field identity evidence.
-            query = " - ".join(
-                part for part in (track.artist, track.title, track.album) if part
-            )
-            files = cast(
-                list[Path],
-                _call_with_cancellation(
-                    operations.acquire_soulseek,
-                    query,
-                    cancellation=cancellation,
-                ),
-            )
-        if not files:
+        if not completed:
             raise WorkflowServiceError(
                 f"No Soulseek audio files were acquired for {track.title}."
             )
-        cancellation.raise_if_cancelled()
-        state["videos"][entry_id] = {
-            "status": "downloaded",
-            "source": "soulseek",
-            "files": [str(path.resolve()) for path in files],
-            "track": track.to_dict(),
-        }
-        save_playlist_state(state_id, state)
-        _call_with_cancellation(
-            operations.process_audio, files, [], cancellation=cancellation
-        )
-        cancellation.raise_if_cancelled()
-        if not options.no_organize:
-            state["videos"][entry_id]["status"] = "organized"
-            save_playlist_state(state_id, state)
 
 
 def _process_playlist_video(

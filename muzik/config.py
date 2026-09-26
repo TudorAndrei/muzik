@@ -31,6 +31,8 @@ BEETS_CONFIG = Path(beets_config.user_config_path())
 MUZIK_CONFIG_DIR = _APP_DIRS.user_config_path
 MUZIK_CONFIG_FILE = MUZIK_CONFIG_DIR / "config.yaml"
 MUZIK_WATCHLIST_FILE = MUZIK_CONFIG_DIR / "watchlist.json"
+# Spotify OAuth tokens. Written with owner-only permissions.
+MUZIK_SPOTIFY_TOKEN_FILE = MUZIK_CONFIG_DIR / "spotify-token.json"
 
 # Default directories for downloaded audio and chapter-split tracks.
 # These live under the platform-specific user data directory so they are:
@@ -53,6 +55,27 @@ def load_muzik_config(path: Path = MUZIK_CONFIG_FILE) -> dict:
     except yaml.YAMLError:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def save_muzik_config_value(
+    section: str,
+    key: str,
+    value: str,
+    *,
+    path: Path = MUZIK_CONFIG_FILE,
+) -> None:
+    """Write one value into muzik's own config file, keeping the other keys."""
+    data = load_muzik_config(path)
+    section_data = data.get(section)
+    if not isinstance(section_data, dict):
+        section_data = {}
+    section_data[key] = value
+    data[section] = section_data
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.dump(data, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
 
 
 def _env_or_config(
@@ -128,6 +151,33 @@ def get_seakarr_settings(
             "soulseek",
             "download_dir",
             str(DEFAULT_SOULSEEK_DIR),
+        ),
+    }
+
+
+def get_spotify_settings(
+    *,
+    env: Mapping[str, str] = os.environ,
+    config_path: Path = MUZIK_CONFIG_FILE,
+) -> dict[str, str]:
+    """Return Spotify API settings from environment, muzik config, then defaults.
+
+    muzik has no client ID of its own. Each user registers one application in
+    the Spotify developer dashboard and puts its client ID here. The flow is
+    Authorization Code with PKCE, thus there is no client secret to keep.
+    """
+    config = load_muzik_config(config_path)
+    return {
+        "client_id": _env_or_config(
+            env, "MUZIK_SPOTIFY_CLIENT_ID", config, "spotify", "client_id", ""
+        ),
+        "redirect_port": _env_or_config(
+            env,
+            "MUZIK_SPOTIFY_REDIRECT_PORT",
+            config,
+            "spotify",
+            "redirect_port",
+            "8888",
         ),
     }
 

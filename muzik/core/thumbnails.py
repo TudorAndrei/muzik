@@ -16,7 +16,8 @@ from muzik.config import CACHE_DIR
 from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
 
 
-_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+# A YouTube video id, a Spotify track id, or any other safe file-name key.
+_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 _CONTENT_EXTENSIONS = {
     "image/jpeg": "jpg",
     "image/png": "png",
@@ -117,7 +118,7 @@ async def _cache_with_fetcher(
             return ThumbnailResult(
                 video_id=request.video_id,
                 path=None,
-                error="Invalid YouTube video ID.",
+                error="Invalid thumbnail ID.",
             )
         existing = cached_thumbnail_path(request.video_id, cache_dir=root)
         if existing is not None:

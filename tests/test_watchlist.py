@@ -1,3 +1,4 @@
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -10,16 +11,24 @@ from muzik.core.watchlist import (
     InvalidPlaylistUrlError,
     StageRecord,
     StageStatus,
+    WATCHLIST_VERSION,
     Watchlist,
     WatchlistFormatError,
     WatchlistItem,
     WatchlistPlaylist,
     WatchlistRepository,
+    WatchlistSourceKind,
     reconcile_watchlist,
     refresh_watchlist,
 )
 from muzik.core import cache as cache_mod
-from muzik.core.sources.youtube import PlaylistLookupError, YouTubePlaylistItem
+from muzik.core.sources.base import ResolvedPlaylist, ResolvedTrack
+from muzik.core.sources.spotify_auth import SpotifyAuthError
+from muzik.core.sources.youtube import (
+    PlaylistLookupError,
+    YouTubePlaylist,
+    YouTubePlaylistItem,
+)
 from muzik.core.workflow.service import (
     WorkflowOptions,
     WorkflowRequest,
@@ -86,6 +95,47 @@ def test_add_normalizes_url_and_rejects_duplicate(tmp_path: Path) -> None:
     assert added.url == "https://www.youtube.com/playlist?list=PL_TEST-1"
     with pytest.raises(DuplicatePlaylistError, match="already in the watchlist"):
         repository.add("https://youtube.com/playlist?list=PL_TEST-1")
+
+
+def test_add_saves_a_spotify_playlist_source(tmp_path: Path) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+
+    added = repository.add(
+        " https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1 "
+    )
+
+    assert added.playlist_id == "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
+    assert added.url == "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+    assert added.source_kind is WatchlistSourceKind.SPOTIFY
+    assert added.is_refreshable is True
+    assert added.state_id == "spotify_37i9dQZF1DXcBWIGoYBM5M"
+    saved = repository.load().playlists[0]
+    assert saved.source_kind is WatchlistSourceKind.SPOTIFY
+    assert saved.url == added.url
+
+
+def test_add_accepts_the_spotify_liked_songs_collection(tmp_path: Path) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+
+    added = repository.add("liked")
+
+    assert added.playlist_id == "spotify:liked"
+    assert added.title == "Liked Songs"
+    assert added.url == "https://open.spotify.com/collection/tracks"
+    assert added.state_id == "spotify_liked"
+    with pytest.raises(DuplicatePlaylistError):
+        repository.add("https://open.spotify.com/collection/tracks")
+
+
+def test_rename_gives_a_source_a_name(tmp_path: Path) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("https://youtube.com/playlist?list=PL_ONE")
+
+    assert repository.rename("PL_ONE", " Jazz albums ") is True
+    assert repository.rename("PL_MISSING", "Nothing") is False
+    saved = repository.load().playlists[0]
+    assert saved.title == "Jazz albums"
+    assert saved.display_name == "Jazz albums"
 
 
 def test_add_rejects_non_playlist_url(tmp_path: Path) -> None:
@@ -174,7 +224,9 @@ def test_version_1_records_migrate_with_quality_not_started_and_data_intact(
 
     loaded = repository.load()
 
-    assert loaded.version == 2
+    assert loaded.version == WATCHLIST_VERSION
+    assert loaded.playlists[0].source_kind is WatchlistSourceKind.YOUTUBE
+    assert loaded.playlists[0].title is None
     item = loaded.playlists[0].items[0]
     assert item.stages["quality"].status is StageStatus.NOT_STARTED
     assert item.stages["download"].status is StageStatus.COMPLETE
@@ -183,9 +235,9 @@ def test_version_1_records_migrate_with_quality_not_started_and_data_intact(
     assert item.stages["split"].status is StageStatus.SKIPPED
     assert item.stages["organize"].status is StageStatus.COMPLETE
 
-    # Saving it back upgrades the file's own version field to 2.
+    # Saving it back upgrades the file's own version field to the current one.
     repository.save(loaded)
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == WATCHLIST_VERSION
 
 
 def test_save_replaces_file_from_same_directory(
@@ -208,7 +260,7 @@ def test_save_replaces_file_from_same_directory(
 
     assert calls and calls[0][0].parent == path.parent
     assert calls[0][1] == path
-    assert json.loads(path.read_text(encoding="utf-8"))["version"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["version"] == WATCHLIST_VERSION
     assert list(path.parent.glob(".watchlist.json.*.tmp")) == []
 
 
@@ -380,6 +432,179 @@ def test_refresh_continues_after_playlist_lookup_error(
     assert playlists[0].last_error == "Unable to read first playlist."
     assert playlists[1].processed_video_ids == ["abcdefghijk"]
     assert summary.playlists_checked == 2
+    assert calls == ["abcdefghijk"]
+
+
+def test_refresh_names_the_youtube_source_from_the_playlist(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("https://youtube.com/playlist?list=PL_ONE")
+    calls: list[str] = []
+    checked: list[str] = []
+
+    def load_playlist(url: str) -> YouTubePlaylist:
+        checked.append(url)
+        return YouTubePlaylist(
+            title="Jazz albums",
+            items=[_playlist_item(1, "abcdefghijk")],
+        )
+
+    summary = refresh_watchlist(
+        repository,
+        _refresh_request(tmp_path),
+        WorkflowOptions(no_organize=True),
+        operations=_workflow_operations(calls),
+        item_loader=load_playlist,
+    )
+
+    youtube = repository.load().playlists[0]
+    assert checked == ["https://www.youtube.com/playlist?list=PL_ONE"]
+    assert summary.playlists_checked == 1
+    assert youtube.title == "Jazz albums"
+    assert calls == ["abcdefghijk"]
+
+
+def _spotify_playlist(*titles: str) -> ResolvedPlaylist:
+    return ResolvedPlaylist(
+        title="Liked Songs",
+        source="spotify",
+        source_id="liked",
+        entries=[
+            ResolvedTrack(
+                title=title,
+                artist="Kohsuke Mine",
+                album="Sunshower",
+                index=index,
+                source="spotify",
+                source_id=f"spotify:track:track{index}",
+                source_url=f"https://open.spotify.com/track/track{index}",
+                source_metadata={"image": f"https://i.scdn.co/image/{index}"},
+            )
+            for index, title in enumerate(titles, start=1)
+        ],
+    )
+
+
+def test_refresh_syncs_a_spotify_source_and_acquires_pending_tracks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("liked")
+    acquired: list[str] = []
+
+    def acquire_track(track: ResolvedTrack) -> list[Path]:
+        acquired.append(track.title)
+        if track.title == "Missing":
+            return []
+        path = tmp_path / f"{track.title}.flac"
+        path.write_bytes(b"audio")
+        return [path]
+
+    operations = _workflow_operations([])
+    operations = replace(operations, acquire_soulseek_track=acquire_track)
+
+    summary = refresh_watchlist(
+        repository,
+        _refresh_request(tmp_path),
+        WorkflowOptions(audio_source="soulseek"),
+        operations=operations,
+        spotify_loader=lambda uri: _spotify_playlist("Sunshower", "Missing"),
+    )
+
+    saved = repository.load().playlists[0]
+    assert acquired == ["Sunshower", "Missing"]
+    assert summary.pending_videos == 2
+    assert summary.completed_videos == 1
+    assert summary.failed_videos == 1
+    assert saved.title == "Liked Songs"
+    assert [item.title for item in saved.items] == [
+        "Kohsuke Mine - Sunshower",
+        "Kohsuke Mine - Missing",
+    ]
+    done, failed = saved.items
+    assert done.kind == "spotify"
+    assert done.video_id == "track1"
+    assert done.entry_id == "spotify:track:track1#0"
+    assert done.stages["download"].status is StageStatus.COMPLETE
+    assert done.stages["split"].status is StageStatus.SKIPPED
+    assert done.stages["organize"].status is StageStatus.COMPLETE
+    assert saved.processed_video_ids == ["spotify:track:track1#0"]
+    assert failed.stages["download"].status is StageStatus.FAILED
+    assert failed.last_error is not None
+
+
+def test_refresh_keeps_organized_spotify_tracks_and_adds_new_ones(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("liked")
+    acquired: list[str] = []
+
+    def acquire_track(track: ResolvedTrack) -> list[Path]:
+        acquired.append(track.title)
+        path = tmp_path / f"{track.title}.flac"
+        path.write_bytes(b"audio")
+        return [path]
+
+    operations = replace(_workflow_operations([]), acquire_soulseek_track=acquire_track)
+    options = WorkflowOptions(audio_source="soulseek")
+    refresh_watchlist(
+        repository,
+        _refresh_request(tmp_path),
+        options,
+        operations=operations,
+        spotify_loader=lambda uri: _spotify_playlist("Sunshower"),
+    )
+    refresh_watchlist(
+        repository,
+        _refresh_request(tmp_path),
+        options,
+        operations=operations,
+        spotify_loader=lambda uri: _spotify_playlist("Sunshower", "Scenery"),
+    )
+
+    saved = repository.load().playlists[0]
+    assert acquired == ["Sunshower", "Scenery"]
+    assert len(saved.items) == 2
+    assert saved.processed_video_ids == [
+        "spotify:track:track1#0",
+        "spotify:track:track2#0",
+    ]
+
+
+def test_refresh_reports_a_spotify_error_without_stopping_youtube(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("liked")
+    repository.add("https://youtube.com/playlist?list=PL_ONE")
+    calls: list[str] = []
+
+    def broken_loader(uri: str) -> ResolvedPlaylist:
+        raise SpotifyAuthError("muzik is not connected to Spotify.")
+
+    summary = refresh_watchlist(
+        repository,
+        _refresh_request(tmp_path),
+        WorkflowOptions(no_organize=True),
+        operations=_workflow_operations(calls),
+        item_loader=lambda url: [_playlist_item(1, "abcdefghijk")],
+        spotify_loader=broken_loader,
+    )
+
+    spotify, youtube = repository.load().playlists
+    assert spotify.last_error == "muzik is not connected to Spotify."
+    assert summary.playlist_errors == 1
+    assert youtube.processed_video_ids == ["abcdefghijk"]
     assert calls == ["abcdefghijk"]
 
 
