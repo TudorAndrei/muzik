@@ -28,7 +28,9 @@ records can arrive before the response to a start command.
 | `library.scan` | optional `output` path | `items` array |
 | `watchlist.load` | optional launcher fields | `watchlist` object |
 | `watchlist.add` | `url` | `playlist`, `watchlist` |
+| `watchlist.rename` | `playlist_id`, `title` | `renamed`, `watchlist` |
 | `watchlist.remove` | `playlist_id` | `removed`, `watchlist` |
+| `thumbnails.cache` | none | `job_id` |
 | `watchlist.refresh` | optional launcher fields | `job_id` |
 | `watchlist.action` | `playlist_id`, `position`, `video_id`, `action`, optional launcher fields | `job_id` |
 | `decision.reply` | `decision_id`, `value` | `decision_id` |
@@ -44,7 +46,12 @@ Launcher fields match `WorkflowOptions`: `review`, `no_split`, `no_organize`,
 `quality_policy`, and `min_bitrate`. `raw`, `output`, and `splits` form the
 workflow request. `hello` returns the main defaults. A missing optional field
 uses the Python core default. `watchlist.add` accepts a YouTube or Spotify
-playlist link, a Spotify album link, or `liked`.
+playlist link, a Spotify album link, or `liked`. Each item in a returned
+`watchlist` has `summary`, `thumbnail_path`, `primary_action`, and `actions`.
+`primary_action` has an `action` and a `label`, or it is `null`. `actions` maps
+each action name to `enabled` and `reason`. A `thumbnail_path` is a local path
+or `null`. `thumbnails.cache` downloads missing YouTube card images. Its
+`job.completed` result has `thumbnails` and the updated `watchlist`.
 
 ## Events
 
@@ -59,7 +66,9 @@ the public fields of that event. Paths become strings and enums become their
 values. Terminal events are `job.completed`, `job.failed`, and `job.cancelled`.
 A completed watchlist job includes the new `watchlist` object. `job.failed`
 has an `error` object. The GPUI app should reload the watchlist after a job
-that changes it.
+that changes it. While a job runs, `watchlist.load` returns the saved data
+without a reconciliation write. The service rejects add, rename, and remove
+commands until the job ends.
 
 ## Blocking decisions
 

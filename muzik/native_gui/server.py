@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict, fields, is_dataclass
 from enum import Enum
 import json
@@ -28,6 +29,11 @@ from muzik.core.sources.spotify_auth import (
     login as spotify_login,
     redirect_uri,
 )
+from muzik.core.thumbnails import (
+    ThumbnailRequest,
+    cache_thumbnails,
+    cached_thumbnail_path,
+)
 from muzik.core.watchlist import (
     WatchlistError,
     WatchlistRepository,
@@ -39,7 +45,9 @@ from muzik.core.workflow.decisions import ChapterDecision, WorkflowDecisionError
 from muzik.core.workflow.events import WorkflowEvent
 from muzik.core.workflow.item_actions import (
     ItemAction,
+    item_action_availability,
     item_summary_state,
+    primary_item_action,
     run_item_action,
 )
 from muzik.core.workflow.operations import (
@@ -102,6 +110,7 @@ class NativeGuiServer:
             for line in self.reader:
                 if not line.strip():
                     continue
+                request: Any = None
                 try:
                     request = json.loads(line)
                     if not isinstance(request, dict):
@@ -210,18 +219,36 @@ class NativeGuiServer:
         if command == "watchlist.load":
             request, options = _request_options(params)
             watchlist = self.repository.load()
-            reconcile_watchlist(watchlist, request=request, options=options)
-            self.repository.save(watchlist)
-            return {"watchlist": watchlist.to_dict()}
+            if not self._job_active():
+                reconcile_watchlist(watchlist, request=request, options=options)
+                self.repository.save(watchlist)
+            return {"watchlist": _watchlist_data(watchlist, request)}
         if command == "watchlist.add":
+            self._require_idle()
             playlist = self.repository.add(_required_string(params, "url"))
             return {
                 "playlist": playlist.to_dict(),
-                "watchlist": self.repository.load().to_dict(),
+                "watchlist": _watchlist_data(self.repository.load()),
+            }
+        if command == "watchlist.rename":
+            self._require_idle()
+            renamed = self.repository.rename(
+                _required_string(params, "playlist_id"),
+                _required_string(params, "title"),
+            )
+            return {
+                "renamed": renamed,
+                "watchlist": _watchlist_data(self.repository.load()),
             }
         if command == "watchlist.remove":
+            self._require_idle()
             removed = self.repository.remove(_required_string(params, "playlist_id"))
-            return {"removed": removed, "watchlist": self.repository.load().to_dict()}
+            return {
+                "removed": removed,
+                "watchlist": _watchlist_data(self.repository.load()),
+            }
+        if command == "thumbnails.cache":
+            return self._start_thumbnail_cache()
         if command in {"workflow.start", "watchlist.refresh", "watchlist.action"}:
             request, options = _request_options(params)
             if command == "workflow.start" and not request.raw:
@@ -235,6 +262,13 @@ class NativeGuiServer:
                 ItemAction(_required_string(params, "action"))
             return self._start_job(command, params, request, options)
         raise ValueError(f"Unknown command: {command}")
+
+    def _job_active(self) -> bool:
+        return self._job is not None and self._job.is_alive()
+
+    def _require_idle(self) -> None:
+        if self._job_active():
+            raise RuntimeError("A job is already active.")
 
     def _start_spotify_login(self) -> dict[str, Any]:
         with self._job_lock:
@@ -262,6 +296,60 @@ class NativeGuiServer:
                     "result": {"account_name": SpotifyClient().account_name()},
                 },
             )
+        except Exception as exc:
+            self._event(
+                "job.failed",
+                {
+                    "job_id": job_id,
+                    "error": {"code": _error_code(exc), "message": str(exc)},
+                },
+            )
+
+    def _start_thumbnail_cache(self) -> dict[str, Any]:
+        with self._job_lock:
+            self._require_idle()
+            job_id = uuid4().hex
+            token = CancellationToken()
+            self._job_id = job_id
+            self._cancellation = token
+            self._job = Thread(
+                target=self._run_thumbnail_cache,
+                args=(job_id, token),
+                name="muzik-thumbnail-cache",
+                daemon=True,
+            )
+            self._job.start()
+        return {"job_id": job_id}
+
+    def _run_thumbnail_cache(
+        self, job_id: str, cancellation: CancellationToken
+    ) -> None:
+        try:
+            watchlist = self.repository.load()
+            requests = {
+                item.video_id: ThumbnailRequest(item.video_id, item.thumbnail_url)
+                for playlist in watchlist.playlists
+                for item in playlist.items
+                if item.video_id
+                and item.thumbnail_url
+                and cached_thumbnail_path(item.video_id) is None
+            }
+            results = asyncio.run(
+                cache_thumbnails(requests.values(), cancellation=cancellation)
+            )
+            cancellation.raise_if_cancelled()
+            self._event(
+                "job.completed",
+                {
+                    "job_id": job_id,
+                    "result": {
+                        "thumbnails": _json_value(results),
+                        "watchlist": _watchlist_data(watchlist),
+                    },
+                },
+            )
+        except WorkflowCancelled:
+            self._event("job.cancelled", {"job_id": job_id})
         except Exception as exc:
             self._event(
                 "job.failed",
@@ -347,7 +435,7 @@ class NativeGuiServer:
                 )
                 result = {
                     "summary": _json_value(summary),
-                    "watchlist": self.repository.load().to_dict(),
+                    "watchlist": _watchlist_data(self.repository.load(), request),
                 }
             else:
                 result = self._run_item_action(
@@ -429,7 +517,10 @@ class NativeGuiServer:
         ):
             playlist.processed_video_ids.append(item.video_id)
         self.repository.save(watchlist)
-        return {"action": _json_value(action_result), "watchlist": watchlist.to_dict()}
+        return {
+            "action": _json_value(action_result),
+            "watchlist": _watchlist_data(watchlist, request),
+        }
 
     def _request_decision(
         self,
@@ -604,6 +695,31 @@ def _path(value: Any, default: Path) -> Path:
         if isinstance(value, str) and value.strip()
         else default
     )
+
+
+def _watchlist_data(
+    watchlist: Any, request: WorkflowRequest | None = None
+) -> dict[str, Any]:
+    request = request or WorkflowRequest("", DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR)
+    data = watchlist.to_dict()
+    for playlist, playlist_data in zip(
+        watchlist.playlists, data["playlists"], strict=True
+    ):
+        for item, item_data in zip(playlist.items, playlist_data["items"], strict=True):
+            cached = cached_thumbnail_path(item.video_id) if item.video_id else None
+            item_data["thumbnail_path"] = str(cached) if cached else None
+            item_data["summary"] = item_summary_state(item)
+            action, label = primary_item_action(item)
+            item_data["primary_action"] = (
+                {"action": action.value, "label": label} if action else None
+            )
+            item_data["actions"] = {
+                action.value: _json_value(
+                    item_action_availability(item, action, request=request)
+                )
+                for action in ItemAction
+            }
+    return data
 
 
 def _required_string(params: dict[str, Any], name: str) -> str:
