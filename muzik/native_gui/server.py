@@ -98,6 +98,11 @@ class NativeGuiServer:
         self._cancellation: CancellationToken | None = None
         self._decisions: dict[str, tuple[Event, list[Any]]] = {}
         self._reconcile_worker: Thread | None = None
+        self._thumbnail_lock = Lock()
+        self._thumbnail_pending: set[str] = set()
+        self._thumbnail_pool = ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="muzik-thumbnail-cache"
+        )
 
     def _write(self, record: dict[str, Any]) -> None:
         line = json.dumps(_json_value(record), ensure_ascii=False, allow_nan=False)
@@ -186,6 +191,7 @@ class NativeGuiServer:
                     self._job.join(timeout=5)
                 if self._reconcile_worker is not None:
                     self._reconcile_worker.join(timeout=5)
+                self._thumbnail_pool.shutdown(wait=True)
 
     def dispatch(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
         if command == "hello":
@@ -421,58 +427,87 @@ class NativeGuiServer:
             )
 
     def _start_thumbnail_cache(self, video_ids: set[str]) -> dict[str, Any]:
-        with self._job_lock:
-            self._require_idle()
-            job_id = uuid4().hex
-            token = CancellationToken()
-            self._job_id = job_id
-            self._cancellation = token
-            self._job = Thread(
-                target=self._run_thumbnail_cache,
-                args=(job_id, token, video_ids),
-                name="muzik-thumbnail-cache",
-                daemon=True,
-            )
-            self._job.start()
-        return {"job_id": job_id}
+        with self._thumbnail_lock:
+            new_ids = video_ids - self._thumbnail_pending
+            if new_ids:
+                self._thumbnail_pending.update(new_ids)
+                try:
+                    self._thumbnail_pool.submit(self._run_thumbnail_cache, new_ids)
+                except Exception:
+                    self._thumbnail_pending.difference_update(new_ids)
+                    raise
+        return {"queued": len(new_ids)}
 
-    def _run_thumbnail_cache(
-        self, job_id: str, cancellation: CancellationToken, video_ids: set[str]
-    ) -> None:
+    def _run_thumbnail_cache(self, video_ids: set[str]) -> None:
         try:
             watchlist = self.repository.load()
-            requests = {
-                item.video_id: ThumbnailRequest(item.video_id, item.thumbnail_url)
+            items = {
+                item.video_id: item
                 for playlist in watchlist.playlists
                 for item in playlist.items
                 if item.video_id in video_ids
-                and item.thumbnail_url
-                and cached_thumbnail_path(item.video_id) is None
             }
-            results = asyncio.run(
-                cache_thumbnails(requests.values(), cancellation=cancellation)
-            )
-            cancellation.raise_if_cancelled()
-            self._event(
-                "job.completed",
-                {
-                    "job_id": job_id,
-                    "result": {
-                        "thumbnails": _json_value(results),
-                        "watchlist": _watchlist_data(watchlist),
+            requests: list[ThumbnailRequest] = []
+            updates: dict[str, dict[str, str | None]] = {}
+            for video_id in sorted(video_ids):
+                item = items.get(video_id)
+                if item is None:
+                    updates[video_id] = {
+                        "video_id": video_id,
+                        "path": None,
+                        "error": "The item is no longer in the watchlist.",
+                    }
+                    continue
+                cached = cached_thumbnail_path(video_id)
+                if cached is not None:
+                    updates[video_id] = {
+                        "video_id": video_id,
+                        "path": str(cached),
+                        "error": None,
+                    }
+                elif item.thumbnail_url:
+                    requests.append(ThumbnailRequest(video_id, item.thumbnail_url))
+                else:
+                    updates[video_id] = {
+                        "video_id": video_id,
+                        "path": None,
+                        "error": "The item has no thumbnail URL.",
+                    }
+            if requests:
+                for result in asyncio.run(cache_thumbnails(requests)):
+                    updates[result.video_id] = {
+                        "video_id": result.video_id,
+                        "path": str(result.path) if result.path else None,
+                        "error": result.error,
+                    }
+            for request in requests:
+                updates.setdefault(
+                    request.video_id,
+                    {
+                        "video_id": request.video_id,
+                        "path": None,
+                        "error": "The thumbnail download returned no result.",
                     },
+                )
+            self._event(
+                "thumbnails.updated",
+                {
+                    "thumbnails": [updates[video_id] for video_id in sorted(video_ids)],
                 },
             )
-        except WorkflowCancelled:
-            self._event("job.cancelled", {"job_id": job_id})
         except Exception as exc:
             self._event(
-                "job.failed",
+                "thumbnails.updated",
                 {
-                    "job_id": job_id,
-                    "error": {"code": _error_code(exc), "message": str(exc)},
+                    "thumbnails": [
+                        {"video_id": video_id, "path": None, "error": str(exc)}
+                        for video_id in sorted(video_ids)
+                    ],
                 },
             )
+        finally:
+            with self._thumbnail_lock:
+                self._thumbnail_pending.difference_update(video_ids)
 
     def _start_job(
         self,

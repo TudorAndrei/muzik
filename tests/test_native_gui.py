@@ -19,6 +19,7 @@ from muzik.core.watchlist import (
 )
 from muzik.core.sources.spotify_api import SpotifyPlaylistRef
 from muzik.core.sources.base import ResolvedTrack
+from muzik.core.thumbnails import ThumbnailResult
 from muzik.core.workflow.item_actions import ItemAction, ItemActionOperations
 from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.workflow.events import MessageEvent
@@ -600,19 +601,109 @@ def test_thumbnail_command_fetches_only_requested_cards(monkeypatch, tmp_path) -
     )
     fetched: list[str] = []
 
-    async def cache(requests, *, cancellation):
+    async def cache(requests):
         fetched.extend(request.video_id for request in requests)
-        return []
+        return [
+            ThumbnailResult(video_id=request.video_id, path=tmp_path / "image.jpg")
+            for request in requests
+        ]
 
     monkeypatch.setattr("muzik.native_gui.server.cache_thumbnails", cache)
     monkeypatch.setattr("muzik.native_gui.server.cached_thumbnail_path", lambda _: None)
-    server = NativeGuiServer(StringIO(), StringIO(), repository=repository)
-    server.dispatch("thumbnails.cache", {"video_ids": ["oHg5SJYRHA0"]})
-    assert server._job is not None
-    server._job.join(timeout=2)
+    writer = StringIO()
+    server = NativeGuiServer(StringIO(), writer, repository=repository)
+    assert server.dispatch("thumbnails.cache", {"video_ids": ["oHg5SJYRHA0"]}) == {
+        "queued": 1
+    }
+    server._thumbnail_pool.shutdown(wait=True)
     assert fetched == ["oHg5SJYRHA0"]
+    assert _records(writer) == [
+        {
+            "type": "event",
+            "event": "thumbnails.updated",
+            "data": {
+                "thumbnails": [
+                    {
+                        "video_id": "oHg5SJYRHA0",
+                        "path": str(tmp_path / "image.jpg"),
+                        "error": None,
+                    }
+                ]
+            },
+        }
+    ]
     with pytest.raises(ValueError, match="video_ids"):
         server.dispatch("thumbnails.cache", {"video_ids": "all"})
+
+
+def test_thumbnail_cache_runs_during_workflow_and_reports_errors(
+    monkeypatch, tmp_path
+) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.save(
+        Watchlist(
+            playlists=[
+                WatchlistPlaylist(
+                    playlist_id="PL123456789012345",
+                    url="https://www.youtube.com/playlist?list=PL123456789012345",
+                    items=[
+                        WatchlistItem(
+                            position=1,
+                            title="Track",
+                            video_id="dQw4w9WgXcQ",
+                            thumbnail_url="https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg",
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+    workflow_started = Event()
+    release_workflow = Event()
+
+    def run(request, options, *, operations, events, cancellation):
+        workflow_started.set()
+        assert release_workflow.wait(5)
+
+    async def cache(requests):
+        return [
+            ThumbnailResult(request.video_id, None, error="Image download failed")
+            for request in requests
+        ]
+
+    monkeypatch.setattr(
+        "muzik.native_gui.server.build_workflow_operations", lambda **kwargs: object()
+    )
+    monkeypatch.setattr("muzik.native_gui.server.run_workflow", run)
+    monkeypatch.setattr("muzik.native_gui.server.cache_thumbnails", cache)
+    monkeypatch.setattr("muzik.native_gui.server.cached_thumbnail_path", lambda _: None)
+    writer = StringIO()
+    server = NativeGuiServer(StringIO(), writer, repository=repository)
+    try:
+        job_id = server.dispatch("workflow.start", {"raw": "example"})["job_id"]
+        assert workflow_started.wait(2)
+        assert server.dispatch("thumbnails.cache", {"video_ids": ["dQw4w9WgXcQ"]}) == {
+            "queued": 1
+        }
+        updated = _wait_for_record(
+            server, writer, lambda record: record.get("event") == "thumbnails.updated"
+        )
+        assert updated["data"] == {
+            "thumbnails": [
+                {
+                    "video_id": "dQw4w9WgXcQ",
+                    "path": None,
+                    "error": "Image download failed",
+                }
+            ]
+        }
+        assert server._job is not None and server._job.is_alive()
+        assert server.dispatch("job.cancel", {"job_id": job_id})["cancel_requested"]
+    finally:
+        release_workflow.set()
+        if server._job is not None:
+            server._job.join(timeout=2)
+        server._thumbnail_pool.shutdown(wait=True)
 
 
 def test_library_scan_reports_file_details_and_total_size(tmp_path) -> None:
