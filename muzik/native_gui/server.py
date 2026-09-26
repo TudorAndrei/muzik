@@ -254,7 +254,14 @@ class NativeGuiServer:
                 "watchlist": _watchlist_data(self.repository.load()),
             }
         if command == "thumbnails.cache":
-            return self._start_thumbnail_cache()
+            video_ids = params.get("video_ids")
+            if (
+                not isinstance(video_ids, list)
+                or len(video_ids) > 16
+                or any(not isinstance(video_id, str) for video_id in video_ids)
+            ):
+                raise ValueError("video_ids must be a list of at most 16 IDs.")
+            return self._start_thumbnail_cache(set(video_ids))
         if command in {"workflow.start", "watchlist.refresh", "watchlist.action"}:
             request, options = _request_options(params)
             if command == "workflow.start" and not request.raw:
@@ -360,7 +367,7 @@ class NativeGuiServer:
                 },
             )
 
-    def _start_thumbnail_cache(self) -> dict[str, Any]:
+    def _start_thumbnail_cache(self, video_ids: set[str]) -> dict[str, Any]:
         with self._job_lock:
             self._require_idle()
             job_id = uuid4().hex
@@ -369,7 +376,7 @@ class NativeGuiServer:
             self._cancellation = token
             self._job = Thread(
                 target=self._run_thumbnail_cache,
-                args=(job_id, token),
+                args=(job_id, token, video_ids),
                 name="muzik-thumbnail-cache",
                 daemon=True,
             )
@@ -377,7 +384,7 @@ class NativeGuiServer:
         return {"job_id": job_id}
 
     def _run_thumbnail_cache(
-        self, job_id: str, cancellation: CancellationToken
+        self, job_id: str, cancellation: CancellationToken, video_ids: set[str]
     ) -> None:
         try:
             watchlist = self.repository.load()
@@ -385,7 +392,7 @@ class NativeGuiServer:
                 item.video_id: ThumbnailRequest(item.video_id, item.thumbnail_url)
                 for playlist in watchlist.playlists
                 for item in playlist.items
-                if item.video_id
+                if item.video_id in video_ids
                 and item.thumbnail_url
                 and cached_thumbnail_path(item.video_id) is None
             }

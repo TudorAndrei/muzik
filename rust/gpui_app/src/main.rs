@@ -601,6 +601,27 @@ impl Muzik {
         self.watchlist = incoming;
     }
 
+    fn visible_thumbnail_ids(&self) -> Vec<String> {
+        self.watchlist["playlists"][self.selected_playlist]["items"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                self.filter == 0
+                    || item["summary"]
+                        .as_str()
+                        .or_else(|| item["status"].as_str())
+                        .map(|state| state.eq_ignore_ascii_case(FILTERS[self.filter]))
+                        .unwrap_or(false)
+            })
+            .skip(self.watch_page * WATCH_PAGE_SIZE)
+            .take(WATCH_PAGE_SIZE)
+            .filter(|item| item["thumbnail_path"].is_null())
+            .filter(|item| item["thumbnail_url"].is_string())
+            .filter_map(|item| item["video_id"].as_str().map(str::to_owned))
+            .collect()
+    }
+
     fn reply(&mut self, value: Value, cx: &mut Context<Self>) {
         if let Some(decision) = self.decision.take() {
             self.chapter_rows.clear();
@@ -930,7 +951,17 @@ impl Muzik {
                     Button::new("cache-thumbnails")
                         .label("Load thumbnails")
                         .on_click(cx.listener(|view, _, _, cx| {
-                            view.start_job("thumbnails.cache", json!({}), cx)
+                            let video_ids = view.visible_thumbnail_ids();
+                            if video_ids.is_empty() {
+                                view.status = "No missing thumbnails on this page".into();
+                                cx.notify();
+                            } else {
+                                view.start_job(
+                                    "thumbnails.cache",
+                                    json!({"video_ids":video_ids}),
+                                    cx,
+                                );
+                            }
                         })),
                 ),
         );

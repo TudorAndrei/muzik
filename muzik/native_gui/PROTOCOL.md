@@ -30,7 +30,7 @@ records can arrive before the response to a start command.
 | `watchlist.add` | `url` | `playlist`, `watchlist` |
 | `watchlist.rename` | `playlist_id`, `title` | `renamed`, `watchlist` |
 | `watchlist.remove` | `playlist_id` | `removed`, `watchlist` |
-| `thumbnails.cache` | none | `job_id` |
+| `thumbnails.cache` | `video_ids` array of at most 16 IDs | `job_id` |
 | `watchlist.refresh` | optional launcher fields | `job_id` |
 | `watchlist.action` | `playlist_id`, `position`, `video_id`, `action`, optional launcher fields | `job_id` |
 | `decision.reply` | `decision_id`, `value` | `decision_id` |
@@ -50,7 +50,8 @@ playlist link, a Spotify album link, or `liked`. Each item in a returned
 `watchlist` has `summary`, `thumbnail_path`, `primary_action`, and `actions`.
 `primary_action` has an `action` and a `label`, or it is `null`. `actions` maps
 each action name to `enabled` and `reason`. A `thumbnail_path` is a local path
-or `null`. `thumbnails.cache` downloads missing YouTube card images. Its
+or `null`. `thumbnails.cache` downloads missing card images for the requested
+IDs. The app sends IDs from the current watchlist page. Its
 `job.completed` result has `thumbnails` and the updated `watchlist`.
 
 ## Events

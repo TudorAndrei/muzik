@@ -346,3 +346,43 @@ def test_watchlist_load_returns_before_reconcile_and_keeps_newer_write(
     assert repository.load().playlists[0].title == "New name"
     assert calls == ["old", "New name"]
     assert _records(writer)[-1]["event"] == "watchlist.updated"
+
+
+def test_thumbnail_command_fetches_only_requested_cards(monkeypatch, tmp_path) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.save(
+        Watchlist(
+            playlists=[
+                WatchlistPlaylist(
+                    playlist_id="PL123456789012345",
+                    url="https://www.youtube.com/playlist?list=PL123456789012345",
+                    items=[
+                        WatchlistItem(
+                            position=position,
+                            title=f"Track {position}",
+                            video_id=video_id,
+                            thumbnail_url=f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+                        )
+                        for position, video_id in enumerate(
+                            ("dQw4w9WgXcQ", "oHg5SJYRHA0"), start=1
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+    fetched: list[str] = []
+
+    async def cache(requests, *, cancellation):
+        fetched.extend(request.video_id for request in requests)
+        return []
+
+    monkeypatch.setattr("muzik.native_gui.server.cache_thumbnails", cache)
+    monkeypatch.setattr("muzik.native_gui.server.cached_thumbnail_path", lambda _: None)
+    server = NativeGuiServer(StringIO(), StringIO(), repository=repository)
+    server.dispatch("thumbnails.cache", {"video_ids": ["oHg5SJYRHA0"]})
+    assert server._job is not None
+    server._job.join(timeout=2)
+    assert fetched == ["oHg5SJYRHA0"]
+    with pytest.raises(ValueError, match="video_ids"):
+        server.dispatch("thumbnails.cache", {"video_ids": "all"})
