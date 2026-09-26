@@ -54,7 +54,10 @@ python-source = "."
 module-name = "muzik._seakarr"
 include = [
     { path = "muzik/bin/muzik-gpui", format = "wheel" },
-    { path = "rust/gpui_app/**", format = "sdist" },
+    { path = "rust/gpui_app/Cargo.toml", format = "sdist" },
+    { path = "rust/gpui_app/Cargo.lock", format = "sdist" },
+    { path = "rust/gpui_app/src/*.rs", format = "sdist" },
+    { path = "scripts/build-native-gui.sh", format = "sdist" },
 ]
 
 [dependency-groups]

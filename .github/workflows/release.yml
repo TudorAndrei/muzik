@@ -156,6 +156,8 @@ jobs:
         with:
           command: sdist
           args: --out dist
+      - name: Check native source in sdist
+        run: python scripts/check-native-sdist.py
       - uses: actions/upload-artifact@v4
         with:
           name: sdist
