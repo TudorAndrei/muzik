@@ -8,7 +8,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::tag::Tag;
+use gpui_kit::component::tag::{Tag, TagVariant};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -153,6 +153,7 @@ struct Muzik {
     selected_playlist: usize,
     filter: usize,
     watch_page: usize,
+    expanded_item_actions: Option<String>,
     thumbnail_attempted: HashSet<String>,
     library: Value,
     services: Value,
@@ -245,6 +246,7 @@ impl Muzik {
             selected_playlist: 0,
             filter: 0,
             watch_page: 0,
+            expanded_item_actions: None,
             thumbnail_attempted: HashSet::new(),
             library: Value::Null,
             services: Value::Null,
@@ -1555,21 +1557,36 @@ impl Muzik {
             .or_else(|| playlist["playlist_id"].as_str())
             .unwrap_or("")
             .to_string();
+        let item_key = format!("{playlist_id}:{position}:{video_id}");
+        let actions_open = self.expanded_item_actions.as_deref() == Some(item_key.as_str());
+        let summary = item["summary"]
+            .as_str()
+            .or_else(|| item["status"].as_str())
+            .unwrap_or("Pending");
+        let summary_variant = match summary.to_ascii_lowercase().as_str() {
+            "processed" => TagVariant::Success,
+            "failed" => TagVariant::Danger,
+            "processing" => TagVariant::Info,
+            "unavailable" => TagVariant::Warning,
+            _ => TagVariant::Secondary,
+        };
         let mut card = div()
             .v_flex()
-            .gap_2()
-            .p_3()
+            .gap_3()
+            .p_4()
             .border_1()
-            .border_color(rgb(0xcbd5e1))
+            .border_color(rgb(0xe2e8f0))
             .rounded_md()
-            .child(div().font_semibold().child(title.to_string()))
-            .child(format!(
-                "Status: {}",
-                item["summary"]
-                    .as_str()
-                    .or_else(|| item["status"].as_str())
-                    .unwrap_or("Pending")
-            ));
+            .bg(rgb(0xffffff))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().font_semibold().child(title.to_string()))
+                    .child(Tag::new().with_variant(summary_variant).child(summary.to_string())),
+            );
         let source_label = if item["kind"] == "spotify" {
             "Spotify ID"
         } else {
@@ -1590,14 +1607,6 @@ impl Muzik {
                     .child(error.to_string()),
             );
         }
-        if let Some(url) = item["video_url"].as_str() {
-            let url = url.to_string();
-            card = card.child(
-                Button::new(("open-item", position))
-                    .label("Open item link")
-                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
-            );
-        }
         if let Some(path) = item["thumbnail_path"].as_str() {
             card = card.child(
                 img(PathBuf::from(path))
@@ -1606,14 +1615,34 @@ impl Muzik {
                     .object_fit(ObjectFit::Cover),
             );
         }
-        let mut stages = div().flex().gap_2();
-        for stage in ["download", "quality", "parse", "split", "organize"] {
+        let mut stages = div().flex().flex_wrap().gap_2();
+        for (stage, label) in [
+            ("download", "Download"),
+            ("quality", "Quality"),
+            ("parse", "Parse"),
+            ("split", "Split"),
+            ("organize", "Organize"),
+        ] {
             let status = item["stages"][stage]["status"]
                 .as_str()
-                .unwrap_or("Not started");
-            stages = stages.child(div().text_sm().child(format!("{stage}: {status}")));
+                .unwrap_or("not_started");
+            let (variant, state) = match status {
+                "running" => (TagVariant::Info, "Running"),
+                "complete" => (TagVariant::Success, "Complete"),
+                "failed" => (TagVariant::Danger, "Failed"),
+                "skipped" => (TagVariant::Secondary, "Skipped"),
+                "stale" => (TagVariant::Warning, "Stale"),
+                _ => (TagVariant::Secondary, "Not started"),
+            };
+            stages = stages.child(
+                Tag::new()
+                    .with_variant(variant)
+                    .outline()
+                    .child(format!("{label}: {state}")),
+            );
         }
         card = card.child(stages);
+        let mut action_row = div().flex().flex_wrap().gap_2();
         if let (Some(action), Some(label)) = (
             item["primary_action"]["action"].as_str(),
             item["primary_action"]["label"].as_str(),
@@ -1628,7 +1657,7 @@ impl Muzik {
             params.insert("position".into(), json!(position));
             params.insert("video_id".into(), json!(video_id));
             params.insert("action".into(), json!(action));
-            card = card.child(
+            action_row = action_row.child(
                 Button::new(("primary-action", position))
                     .primary()
                     .label(label.to_string())
@@ -1638,12 +1667,46 @@ impl Muzik {
                     })),
             );
         }
-        let mut actions = div().flex().flex_wrap().gap_1();
+        let toggle_key = item_key.clone();
+        action_row = action_row.child(
+            Button::new(("item-more", position))
+                .label(if actions_open { "Close actions" } else { "More actions" })
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.expanded_item_actions = if view.expanded_item_actions.as_deref()
+                        == Some(toggle_key.as_str())
+                    {
+                        None
+                    } else {
+                        Some(toggle_key.clone())
+                    };
+                    cx.notify();
+                })),
+        );
+        card = card.child(action_row);
+        if !actions_open {
+            return card.into_any_element();
+        }
+        let mut actions = div()
+            .v_flex()
+            .gap_2()
+            .pt_3()
+            .border_t_1()
+            .border_color(rgb(0xe2e8f0))
+            .child(div().font_semibold().child("Commands"));
+        if let Some(url) = item["video_url"].as_str() {
+            let url = url.to_string();
+            actions = actions.child(
+                Button::new(("open-item", position))
+                    .label(if item["kind"] == "spotify" {
+                        "Open in Spotify"
+                    } else {
+                        "Open on YouTube"
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+            );
+        }
         for (action, label) in ITEM_ACTIONS {
             let action = *action;
-            if matches!(action, "run" | "retry") {
-                continue;
-            }
             let label = *label;
             let item_title = title.to_string();
             let availability = &item["actions"][action];
@@ -1654,7 +1717,7 @@ impl Muzik {
             params.insert("position".into(), json!(position));
             params.insert("video_id".into(), json!(video_id));
             params.insert("action".into(), json!(action));
-            actions = actions.child(
+            let mut action_row = div().v_flex().gap_1().child(
                 Button::new((
                     "item-action",
                     position * ITEM_ACTIONS.len()
@@ -1666,6 +1729,7 @@ impl Muzik {
                 .label(label)
                 .disabled(!enabled)
                 .on_click(cx.listener(move |view, _, _, cx| {
+                    view.expanded_item_actions = None;
                     let params = Value::Object(params.clone());
                     if matches!(
                         action,
@@ -1688,11 +1752,18 @@ impl Muzik {
             );
             if !enabled {
                 if let Some(reason) = availability["reason"].as_str() {
-                    actions = actions.child(div().text_sm().child(format!("{label}: {reason}")));
+                    action_row = action_row.child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0x64748b))
+                            .child(reason.to_string()),
+                    );
                 }
             }
+            actions = actions.child(action_row);
         }
-        card.child(actions).into_any_element()
+        card.child(GroupBox::new().id(("item-commands", position)).outline().child(actions))
+            .into_any_element()
     }
 
     fn library(&self, cx: &mut Context<Self>) -> AnyElement {
