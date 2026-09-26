@@ -108,6 +108,7 @@ struct Muzik {
     confirmation: Option<PendingAction>,
     bridge: Option<Bridge>,
     pending: HashMap<String, String>,
+    latest_reads: HashMap<String, String>,
     status: String,
     error: Option<String>,
     job_id: Option<String>,
@@ -177,6 +178,7 @@ impl Muzik {
             confirmation: None,
             bridge: None,
             pending: HashMap::new(),
+            latest_reads: HashMap::new(),
             status: String::new(),
             error: None,
             job_id: None,
@@ -219,12 +221,30 @@ impl Muzik {
     }
 
     fn send(&mut self, command: &str, params: Value) {
+        if matches!(
+            command,
+            "spotify.set_client_id" | "spotify.logout" | "spotify.login"
+        ) {
+            self.latest_reads.remove("spotify.status");
+            self.latest_reads.remove("spotify.playlists");
+            if let Some(spotify) = self.spotify.as_object_mut() {
+                spotify.remove("playlists");
+            }
+        } else if command == "spotify.status" {
+            self.latest_reads.remove("spotify.playlists");
+        }
         match self
             .bridge
             .as_mut()
             .map(|bridge| bridge.send(command, params))
         {
             Some(Ok(id)) => {
+                if matches!(
+                    command,
+                    "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
+                ) {
+                    self.latest_reads.insert(command.into(), id.clone());
+                }
                 self.pending.insert(id, command.into());
                 self.status = format!("{command} requested");
             }
@@ -395,6 +415,15 @@ impl Muzik {
             "response" => {
                 let id = message["id"].as_str().unwrap_or_default();
                 let command = self.pending.remove(id).unwrap_or_default();
+                if matches!(
+                    command.as_str(),
+                    "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
+                ) {
+                    if self.latest_reads.get(&command).map(String::as_str) != Some(id) {
+                        return;
+                    }
+                    self.latest_reads.remove(&command);
+                }
                 if !message["ok"].as_bool().unwrap_or(false) {
                     self.status = message["error"]["message"]
                         .as_str()
@@ -444,7 +473,6 @@ impl Muzik {
                     | "spotify.logout"
                     | "spotify.playlists" => {
                         if command == "spotify.status" {
-                            let playlists = self.spotify["playlists"].clone();
                             self.spotify = result.clone();
                             if self.spotify_client_id.read(_cx).value().is_empty() {
                                 if let Some(client_id) = result["client_id"].as_str() {
@@ -453,16 +481,13 @@ impl Muzik {
                                     });
                                 }
                             }
-                            if !playlists.is_null() && self.spotify["connected"] == true {
-                                self.spotify["playlists"] = playlists;
-                            }
-                            if self.spotify["connected"] == true
-                                && self.spotify["playlists"].is_null()
-                            {
+                            if self.spotify["connected"] == true {
                                 self.send("spotify.playlists", json!({}));
                             }
                         } else if command == "spotify.playlists" {
-                            self.spotify["playlists"] = result["playlists"].clone();
+                            if self.spotify["connected"] == true {
+                                self.spotify["playlists"] = result["playlists"].clone();
+                            }
                         } else {
                             self.send("spotify.status", json!({}));
                         }
@@ -831,15 +856,21 @@ impl Muzik {
             ));
         }
         if let Some(decision) = &self.decision {
-            panel = panel
+            let mut review = div()
+                .v_flex()
+                .gap_2()
+                .max_h(px(440.))
+                .overflow_y_scrollbar()
                 .child(div().font_semibold().child(format!(
                     "Choose: {}",
                     decision["kind"].as_str().unwrap_or("decision")
-                )))
-                .child(describe(&decision["payload"]));
+                )));
+            for detail in decision_details(decision) {
+                review = review.child(div().text_sm().child(detail));
+            }
             for (index, (label, value)) in decision_choices(decision).into_iter().enumerate() {
-                panel =
-                    panel.child(Button::new(("decision", index)).label(label).on_click(
+                review =
+                    review.child(Button::new(("decision", index)).label(label).on_click(
                         cx.listener(move |view, _, _, cx| view.reply(value.clone(), cx)),
                     ));
             }
@@ -863,7 +894,7 @@ impl Muzik {
                             .child(Input::new(&chapter.title)),
                     );
                 }
-                panel = panel
+                review = review
                     .child(div().text_sm().child(
                         "Index, start seconds, end seconds, title. Leave the last end blank.",
                     ))
@@ -875,6 +906,7 @@ impl Muzik {
                             .on_click(cx.listener(|view, _, _, cx| view.submit_chapters(cx))),
                     );
             }
+            panel = panel.child(review);
         }
         let mut log = div().v_flex().gap_1().overflow_y_scrollbar().flex_1();
         for (index, line) in self.logs.iter().rev().take(100).enumerate() {
@@ -1587,6 +1619,103 @@ fn watch_page_count(playlist: &Value, filter: usize) -> usize {
     matches.div_ceil(WATCH_PAGE_SIZE).max(1)
 }
 
+fn decision_details(decision: &Value) -> Vec<String> {
+    let payload = &decision["payload"];
+    match decision["kind"].as_str().unwrap_or("") {
+        "soulseek_candidate" => payload["candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(index, candidate)| {
+                format!(
+                    "{}. {} · score {:.0} · {} · {} · {} files · {}",
+                    index + 1,
+                    candidate["title"].as_str().unwrap_or("Candidate"),
+                    candidate["score"].as_f64().unwrap_or(0.0),
+                    candidate["user"].as_str().unwrap_or("Unknown user"),
+                    candidate["quality"]["format"]
+                        .as_str()
+                        .unwrap_or("Unknown format"),
+                    candidate["files"].as_array().map_or(0, Vec::len),
+                    candidate["path"]
+                        .as_str()
+                        .or_else(|| candidate["source_id"].as_str())
+                        .unwrap_or("")
+                )
+            })
+            .collect(),
+        "chapter_review" | "chapter_edit" => {
+            let mut details = Vec::new();
+            if let Some(source) = payload["source"].as_str() {
+                details.push(format!("Source: {source}"));
+            }
+            if let Some(chapters) = payload["chapters"].as_array() {
+                for chapter in chapters {
+                    details.push(format!(
+                        "{}. {} s to {} s · {}",
+                        chapter["index"].as_u64().unwrap_or(0),
+                        chapter["start"].as_u64().unwrap_or(0),
+                        chapter["end"]
+                            .as_u64()
+                            .map_or_else(|| "end".to_string(), |value| value.to_string()),
+                        chapter["title"].as_str().unwrap_or("Untitled")
+                    ));
+                }
+            }
+            details
+        }
+        "quality_replacement" => vec![
+            format!(
+                "Current file: {}",
+                payload["current"].as_str().unwrap_or("")
+            ),
+            format!(
+                "Candidate: {} · {} · {} kbps",
+                payload["candidate"]["title"]
+                    .as_str()
+                    .unwrap_or("Audio file"),
+                payload["candidate"]["quality"]["format"]
+                    .as_str()
+                    .unwrap_or("Unknown format"),
+                payload["candidate"]["quality"]["bitrate"]
+                    .as_u64()
+                    .map_or_else(|| "?".to_string(), |value| value.to_string())
+            ),
+        ],
+        "beets_match" | "beets_duplicate" => {
+            let task = &payload["task"];
+            let mut details = vec![format!(
+                "Current tags: {} · {} · {}",
+                task["current_artist"].as_str().unwrap_or("Unknown artist"),
+                task["current_album"].as_str().unwrap_or("Unknown album"),
+                task["current_year"].as_str().unwrap_or("Unknown year")
+            )];
+            if let Some(paths) = task["paths"].as_array() {
+                details.extend(
+                    paths
+                        .iter()
+                        .filter_map(|path| path.as_str().map(str::to_owned)),
+                );
+            }
+            if decision["kind"] == "beets_duplicate" {
+                if let Some(duplicates) = payload["duplicates"].as_array() {
+                    details.extend(duplicates.iter().map(|duplicate| {
+                        format!(
+                            "Existing: {} · {} · {}",
+                            duplicate["artist"].as_str().unwrap_or("Unknown artist"),
+                            duplicate["album"].as_str().unwrap_or("Unknown album"),
+                            duplicate["path"].as_str().unwrap_or("No path")
+                        )
+                    }));
+                }
+            }
+            details
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
     let payload = &decision["payload"];
     match decision["kind"].as_str().unwrap_or("") {
@@ -1614,7 +1743,7 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             .map(|value| (value.to_string(), json!(value)))
             .collect(),
         "chapter_edit" => vec![
-            ("Keep these chapters".into(), payload["chapters"].clone()),
+            ("Keep original chapters".into(), payload["chapters"].clone()),
             ("Cancel chapter edit".into(), Value::Null),
         ],
         "quality_replacement" => vec![
@@ -1630,12 +1759,15 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
                     candidate["candidate_id"].as_str().map(|id| {
                         (
                             format!(
-                                "{} — {}",
+                                "{} — {} · distance {}",
                                 candidate["artist"].as_str().unwrap_or("Unknown artist"),
                                 candidate["album"]
                                     .as_str()
                                     .or_else(|| candidate["title"].as_str())
-                                    .unwrap_or("Unknown release")
+                                    .unwrap_or("Unknown release"),
+                                candidate["distance"]
+                                    .as_f64()
+                                    .map_or_else(|| "?".to_string(), |value| format!("{value:.3}"))
                             ),
                             json!(id),
                         )
@@ -1706,4 +1838,42 @@ fn check_backend() -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(25));
     }
     Err("Python service did not answer hello within 5 seconds".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decision_choices, decision_details};
+    use serde_json::json;
+
+    #[test]
+    fn soulseek_review_shows_candidate_quality_and_selects_its_index() {
+        let decision = json!({
+            "kind": "soulseek_candidate",
+            "payload": {"candidates": [{
+                "title": "Album", "score": 91.0, "user": "listener",
+                "quality": {"format": "FLAC"}, "files": [{"name": "track.flac"}],
+                "path": "Music/Album"
+            }]}
+        });
+        let details = decision_details(&decision);
+        assert!(details[0].contains("91"));
+        assert!(details[0].contains("FLAC"));
+        assert!(details[0].contains("Music/Album"));
+        assert_eq!(decision_choices(&decision)[0].1, json!(0));
+    }
+
+    #[test]
+    fn beets_duplicate_review_shows_existing_file_and_reply_options() {
+        let decision = json!({
+            "kind": "beets_duplicate",
+            "payload": {
+                "task": {"current_artist": "Artist", "current_album": "Album", "paths": ["new.flac"]},
+                "duplicates": [{"artist": "Artist", "album": "Album", "path": "old.flac"}]
+            }
+        });
+        let details = decision_details(&decision);
+        assert!(details.iter().any(|line| line.contains("old.flac")));
+        assert!(details.iter().any(|line| line.contains("new.flac")));
+        assert_eq!(decision_choices(&decision).len(), 4);
+    }
 }
