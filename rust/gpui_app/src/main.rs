@@ -5,9 +5,11 @@ use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::*;
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -52,6 +54,28 @@ struct PendingAction {
     title: String,
     command: &'static str,
     params: Value,
+}
+
+#[derive(Default)]
+struct ActivityProgress {
+    description: String,
+    task_id: String,
+    completed: f64,
+    total: Option<f64>,
+}
+
+impl ActivityProgress {
+    fn percentage(&self) -> f32 {
+        self.total.filter(|total| *total > 0.).map_or(0., |total| {
+            (self.completed / total * 100.).clamp(0., 100.) as f32
+        })
+    }
+}
+
+struct ActivitySection {
+    title: &'static str,
+    count: usize,
+    rows: Vec<String>,
 }
 
 const CHOICES: &[(&str, &str, &[&str])] = &[
@@ -120,6 +144,8 @@ struct Muzik {
     completed_jobs: HashSet<String>,
     job_status: String,
     progress: String,
+    progress_state: ActivityProgress,
+    activity_sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Value>,
     watchlist: Value,
@@ -210,6 +236,8 @@ impl Muzik {
             completed_jobs: HashSet::new(),
             job_status: "Ready".into(),
             progress: String::new(),
+            progress_state: ActivityProgress::default(),
+            activity_sections: Vec::new(),
             logs: Vec::new(),
             decision: None,
             watchlist: Value::Null,
@@ -341,10 +369,139 @@ impl Muzik {
         self.job_status = "Starting".into();
         self.job_kind = Some(command.to_string());
         self.progress.clear();
+        self.progress_state = ActivityProgress::default();
+        self.activity_sections.clear();
         self.logs.clear();
         self.decision = None;
         self.send(command, params);
         cx.notify();
+    }
+
+    fn record_job_event(&mut self, kind: &str, payload: &Value) {
+        let line = match kind {
+            "progress_started" => {
+                let progress = &mut self.progress_state;
+                progress.task_id = describe(&payload["task_id"]);
+                progress.description = describe(&payload["description"]);
+                progress.completed = 0.;
+                progress.total = payload["total"].as_f64().filter(|total| *total > 0.);
+                self.job_status = progress.description.clone();
+                progress.description.clone()
+            }
+            "progress_advanced" => {
+                let progress = &mut self.progress_state;
+                if payload["task_id"].as_str() != Some(progress.task_id.as_str()) {
+                    return;
+                }
+                if let Some(total) = payload["total"].as_f64().filter(|total| *total > 0.) {
+                    progress.total = Some(total);
+                }
+                progress.completed = payload["completed"]
+                    .as_f64()
+                    .unwrap_or(progress.completed + payload["advance"].as_f64().unwrap_or(1.));
+                String::new()
+            }
+            "progress_finished" => {
+                let progress = &mut self.progress_state;
+                if payload["task_id"].as_str() != Some(progress.task_id.as_str()) {
+                    return;
+                }
+                if let Some(total) = progress.total {
+                    progress.completed = total;
+                }
+                format!("{} finished", progress.description)
+            }
+            "step_started" => {
+                self.job_status = describe(&payload["name"]);
+                format!("Started {}", self.job_status)
+            }
+            "step_finished" => {
+                let progress = &mut self.progress_state;
+                if progress.total.is_some() {
+                    progress.completed += 1.;
+                }
+                format!(
+                    "{} {}",
+                    describe(&payload["name"]),
+                    if payload["success"] == false {
+                        "failed"
+                    } else {
+                        "finished"
+                    }
+                )
+            }
+            "message" | "beets_log" => {
+                let message = describe(&payload["message"]);
+                self.job_status = message.clone();
+                message
+            }
+            "error" | "beets_error" => {
+                let message = describe(&payload["message"]);
+                self.error = Some(message.clone());
+                format!("Error: {message}")
+            }
+            "candidates_found" => {
+                self.set_activity_section(activity_section(
+                    "Source candidates",
+                    &payload["candidates"],
+                    candidate_summary,
+                ));
+                format!(
+                    "{} {} candidates found",
+                    self.activity_sections
+                        .iter()
+                        .find(|section| section.title == "Source candidates")
+                        .map_or(0, |section| section.count),
+                    payload["source"].as_str().unwrap_or("source")
+                )
+            }
+            "chapter_review_requested" => {
+                self.set_activity_section(activity_section(
+                    "Chapters",
+                    &payload["chapters"],
+                    chapter_summary,
+                ));
+                format!("Chapter review: {}", describe(&payload["source"]))
+            }
+            "beets_task" => {
+                self.set_activity_section(activity_section(
+                    "Beets matches",
+                    &payload["task"]["matches"],
+                    beets_match_summary,
+                ));
+                let task = &payload["task"];
+                format!(
+                    "Beets: {} · {}",
+                    task["current_artist"].as_str().unwrap_or("Unknown artist"),
+                    task["current_album"].as_str().unwrap_or("Unknown album")
+                )
+            }
+            "beets_import_started" => "Beets import started".into(),
+            "beets_import_finished" => "Beets import finished".into(),
+            _ => kind.replace('_', " "),
+        };
+        self.progress = match self.progress_state.total {
+            Some(total) => format!("{:.0} / {:.0}", self.progress_state.completed, total),
+            None if !self.progress_state.description.is_empty() => {
+                format!("{:.0} complete", self.progress_state.completed)
+            }
+            None => String::new(),
+        };
+        if !line.is_empty() {
+            self.logs.push(short_text(&line, 180));
+        }
+    }
+
+    fn set_activity_section(&mut self, section: ActivitySection) {
+        if let Some(existing) = self
+            .activity_sections
+            .iter_mut()
+            .find(|existing| existing.title == section.title)
+        {
+            *existing = section;
+        } else {
+            self.activity_sections.push(section);
+        }
     }
 
     fn request_action(
@@ -552,9 +709,7 @@ impl Muzik {
                     "job.event" => {
                         let kind = data["event"].as_str().unwrap_or("Update");
                         let payload = &data["data"];
-                        self.job_status = kind.into();
-                        self.progress = describe(payload);
-                        self.logs.push(format!("{kind}: {}", describe(payload)));
+                        self.record_job_event(kind, payload);
                         if self.logs.len() > 300 {
                             self.logs.drain(..100);
                         }
@@ -610,8 +765,7 @@ impl Muzik {
                         } else {
                             None
                         };
-                        self.logs
-                            .push(format!("{}: {}", self.job_status, describe(data)));
+                        self.logs.push(format!("Job {}", self.job_status));
                         self.send("watchlist.load", self.launcher_params(_cx));
                         if self.job_kind.as_deref() == Some("spotify.login") {
                             self.send("spotify.status", json!({}));
@@ -923,6 +1077,7 @@ impl Muzik {
             .p_6()
             .w(px(320.))
             .h_full()
+            .overflow_y_scrollbar()
             .border_l_1()
             .border_color(rgb(0xe2e8f0))
             .bg(rgb(0xf8fafc))
@@ -934,7 +1089,21 @@ impl Muzik {
                         .gap_2()
                         .child(div().text_sm().text_color(rgb(0x64748b)).child("STATUS"))
                         .child(div().font_semibold().child(self.job_status.clone()))
-                        .child(self.progress.clone()),
+                        .child(div().text_sm().child(self.progress.clone()))
+                        .when(
+                            self.job_kind.is_some() || !self.progress_state.description.is_empty(),
+                            |this| {
+                                this.child(
+                                    Progress::new("activity-progress")
+                                        .value(self.progress_state.percentage())
+                                        .loading(
+                                            self.progress_state.total.is_none()
+                                                && self.job_kind.is_some(),
+                                        )
+                                        .accessibility_label("Workflow progress"),
+                                )
+                            },
+                        ),
                 ),
             );
         if let Some(id) = &self.job_id {
@@ -999,7 +1168,46 @@ impl Muzik {
             }
             panel = panel.child(review);
         }
-        let mut log = div().v_flex().gap_2().overflow_y_scrollbar().flex_1();
+        for (index, section) in self.activity_sections.iter().enumerate() {
+            let mut summary = div().v_flex().gap_1().child(
+                div()
+                    .text_sm()
+                    .font_semibold()
+                    .child(format!("{} ({})", section.title, section.count)),
+            );
+            if section.rows.is_empty() {
+                summary = summary.child(div().text_sm().child("No results"));
+            }
+            for (row_index, row) in section.rows.iter().enumerate() {
+                summary = summary.child(
+                    div()
+                        .id(("activity-row", index * 10 + row_index))
+                        .text_sm()
+                        .text_color(rgb(0x475569))
+                        .child(row.clone()),
+                );
+            }
+            if section.count > section.rows.len() {
+                summary = summary.child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x64748b))
+                        .child(format!("{} more", section.count - section.rows.len())),
+                );
+            }
+            panel = panel.child(
+                GroupBox::new()
+                    .id(("activity-section", index))
+                    .outline()
+                    .child(summary),
+            );
+        }
+        let mut log = div()
+            .v_flex()
+            .gap_2()
+            .min_h(px(120.))
+            .max_h(px(220.))
+            .overflow_y_scrollbar();
         if self.logs.is_empty() {
             log = log.child(
                 div()
@@ -1714,6 +1922,62 @@ impl Render for Muzik {
     }
 }
 
+fn short_text(value: &str, limit: usize) -> String {
+    let mut chars = value.chars();
+    let text: String = chars.by_ref().take(limit).collect();
+    if chars.next().is_some() {
+        format!("{text}…")
+    } else {
+        text
+    }
+}
+
+fn activity_section(
+    title: &'static str,
+    items: &Value,
+    summary: fn(&Value) -> String,
+) -> ActivitySection {
+    let items = items.as_array();
+    ActivitySection {
+        title,
+        count: items.map_or(0, Vec::len),
+        rows: items
+            .into_iter()
+            .flatten()
+            .take(4)
+            .map(|item| short_text(&summary(item), 120))
+            .collect(),
+    }
+}
+
+fn candidate_summary(candidate: &Value) -> String {
+    let title = candidate["title"].as_str().unwrap_or("Unknown title");
+    let format = candidate["quality"]["format"]
+        .as_str()
+        .unwrap_or("Unknown format");
+    let user = candidate["user"].as_str().unwrap_or("Unknown user");
+    format!("{title} · {format} · {user}")
+}
+
+fn chapter_summary(chapter: &Value) -> String {
+    let index = chapter["index"].as_u64().unwrap_or(0);
+    let start = chapter["start"].as_u64().unwrap_or(0);
+    let title = chapter["title"].as_str().unwrap_or("Untitled");
+    format!("{index}. {title} · {start} s")
+}
+
+fn beets_match_summary(candidate: &Value) -> String {
+    let artist = candidate["artist"].as_str().unwrap_or("Unknown artist");
+    let album = candidate["album"]
+        .as_str()
+        .or_else(|| candidate["title"].as_str())
+        .unwrap_or("Unknown album");
+    match candidate["distance"].as_f64() {
+        Some(distance) => format!("{artist} — {album} · difference {distance:.3}"),
+        None => format!("{artist} — {album}"),
+    }
+}
+
 fn describe(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -1987,7 +2251,10 @@ fn check_backend() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decision_choices, decision_details, merge_thumbnail_paths};
+    use super::{
+        activity_section, candidate_summary, decision_choices, decision_details,
+        merge_thumbnail_paths, ActivityProgress,
+    };
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -2041,5 +2308,30 @@ mod tests {
             "/cache/visible.jpg"
         );
         assert!(watchlist["playlists"][0]["items"][1]["thumbnail_path"].is_null());
+    }
+
+    #[test]
+    fn activity_summary_keeps_count_and_bounds_visible_rows() {
+        let candidates = json!((0..6)
+            .map(|index| json!({
+                "title": format!("Album {index}"),
+                "quality": {"format": "FLAC"},
+                "user": "listener"
+            }))
+            .collect::<Vec<_>>());
+        let section = activity_section("Source candidates", &candidates, candidate_summary);
+        assert_eq!(section.count, 6);
+        assert_eq!(section.rows.len(), 4);
+        assert_eq!(section.rows[0], "Album 0 · FLAC · listener");
+    }
+
+    #[test]
+    fn activity_progress_clamps_value_for_late_events() {
+        let progress = ActivityProgress {
+            completed: 12.,
+            total: Some(10.),
+            ..ActivityProgress::default()
+        };
+        assert_eq!(progress.percentage(), 100.);
     }
 }
