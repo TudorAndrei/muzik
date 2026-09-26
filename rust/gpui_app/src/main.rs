@@ -634,7 +634,7 @@ impl Muzik {
                     }
                     "watchlist.load" | "watchlist.add" | "watchlist.remove"
                     | "watchlist.rename" => {
-                        self.replace_watchlist(result["watchlist"].clone());
+                        self.replace_watchlist(result["watchlist"].clone(), window, _cx);
                         self.cache_visible_thumbnails(_cx);
                         if command != "watchlist.load" {
                             self.send("watchlist.load", self.launcher_params(_cx));
@@ -693,7 +693,7 @@ impl Muzik {
                 let data = &message["data"];
                 match event {
                     "watchlist.updated" => {
-                        self.replace_watchlist(data["watchlist"].clone());
+                        self.replace_watchlist(data["watchlist"].clone(), window, _cx);
                         self.cache_visible_thumbnails(_cx);
                         self.status = "Watchlist updated".into();
                     }
@@ -791,10 +791,13 @@ impl Muzik {
         }
     }
 
-    fn replace_watchlist(&mut self, incoming: Value) {
+    fn replace_watchlist(&mut self, incoming: Value, window: &mut Window, cx: &mut Context<Self>) {
         let old_id = self.watchlist["playlists"][self.selected_playlist]["playlist_id"]
             .as_str()
             .map(str::to_owned);
+        let old_title = self.watchlist["playlists"][self.selected_playlist]["title"]
+            .as_str()
+            .unwrap_or("");
         let playlists = incoming["playlists"].as_array();
         let count = playlists.map_or(0, Vec::len);
         let selected = old_id
@@ -811,6 +814,18 @@ impl Muzik {
             .unwrap_or(1);
         self.selected_playlist = selected;
         self.watch_page = self.watch_page.min(page_count - 1);
+        let name = playlists
+            .and_then(|all| all.get(selected))
+            .and_then(|playlist| playlist["title"].as_str())
+            .unwrap_or("");
+        let selected_id = playlists
+            .and_then(|all| all.get(selected))
+            .and_then(|playlist| playlist["playlist_id"].as_str());
+        if old_id.as_deref() != selected_id || old_title != name {
+            self.playlist_name.update(cx, |state, cx| {
+                state.set_value(name.to_string(), window, cx)
+            });
+        }
         self.watchlist = incoming;
     }
 
@@ -1231,18 +1246,21 @@ impl Muzik {
             .or_else(|| self.watchlist.as_array());
         let mut rail = div()
             .v_flex()
-            .gap_2()
-            .p_4()
-            .w(px(240.))
+            .gap_3()
+            .p_5()
+            .w(px(260.))
             .h_full()
-            .bg(rgb(0xf1f5f9))
-            .child(div().text_lg().font_semibold().child("Playlists"));
+            .border_r_1()
+            .border_color(rgb(0xe2e8f0))
+            .bg(rgb(0xffffff))
+            .child(div().text_lg().font_semibold().child("Sources"));
         if let Some(playlists) = playlists {
             for (index, playlist) in playlists.iter().enumerate() {
                 let title = playlist["title"]
                     .as_str()
-                    .or_else(|| playlist["name"].as_str())
+                    .or_else(|| playlist["playlist_id"].as_str())
                     .unwrap_or("Playlist");
+                let rename_title = playlist["title"].as_str().unwrap_or("").to_string();
                 let detail = format!(
                     "{} · {} items · {}",
                     playlist["kind"].as_str().unwrap_or("source"),
@@ -1257,9 +1275,12 @@ impl Muzik {
                     .child(
                         Button::new(("playlist", index))
                             .label(title.to_string())
-                            .on_click(cx.listener(move |view, _, _, cx| {
+                            .on_click(cx.listener(move |view, _, window, cx| {
                                 view.selected_playlist = index;
                                 view.watch_page = 0;
+                                view.playlist_name.update(cx, |state, cx| {
+                                    state.set_value(rename_title.clone(), window, cx)
+                                });
                                 view.cache_visible_thumbnails(cx);
                                 cx.notify();
                             })),
@@ -1296,6 +1317,19 @@ impl Muzik {
             .max_w(px(1060.))
             .overflow_y_scrollbar()
             .child(div().text_2xl().font_semibold().child("Watchlist"));
+        if playlists.is_none_or(Vec::is_empty) {
+            let loading = self
+                .pending
+                .values()
+                .any(|command| command == "watchlist.load");
+            content = content.child(GroupBox::new().id("watchlist-empty").outline().child(
+                if loading {
+                    "Loading sources…"
+                } else {
+                    "Add a YouTube or Spotify playlist link to start."
+                },
+            ));
+        }
         let refresh = self.launcher_params(cx);
         content = content.child(
             div()
@@ -1344,7 +1378,7 @@ impl Muzik {
                     .to_string();
                 let title = playlist["title"]
                     .as_str()
-                    .or_else(|| playlist["name"].as_str())
+                    .or_else(|| playlist["playlist_id"].as_str())
                     .unwrap_or("Playlist");
                 let remove_title = title.to_string();
                 let source_url = playlist["url"].as_str().unwrap_or("").to_string();
@@ -1405,16 +1439,24 @@ impl Muzik {
                             })),
                     );
                 let items = playlist["items"].as_array();
-                content = content.child(
-                    Button::new("filter")
-                        .label(format!("Filter: {}", FILTERS[self.filter]))
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.filter = (view.filter + 1) % FILTERS.len();
-                            view.watch_page = 0;
-                            view.cache_visible_thumbnails(cx);
-                            cx.notify();
-                        })),
-                );
+                let mut filters = div().flex().flex_wrap().gap_1();
+                for (index, label) in FILTERS.iter().enumerate() {
+                    let button =
+                        Button::new(("filter", index))
+                            .label(*label)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.filter = index;
+                                view.watch_page = 0;
+                                view.cache_visible_thumbnails(cx);
+                                cx.notify();
+                            }));
+                    filters = filters.child(if self.filter == index {
+                        button.primary()
+                    } else {
+                        button
+                    });
+                }
+                content = content.child(filters);
                 if let Some(items) = items {
                     let filtered: Vec<(usize, &Value)> = items
                         .iter()
@@ -1430,6 +1472,31 @@ impl Muzik {
                         .collect();
                     let page_count = filtered.len().div_ceil(WATCH_PAGE_SIZE).max(1);
                     let current = self.watch_page.min(page_count - 1);
+                    if filtered.is_empty() {
+                        let message = if playlist["kind"] == "spotify" && items.is_empty() {
+                            "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Workflow to get audio."
+                                .to_string()
+                        } else if items.is_empty() {
+                            if playlist["last_checked_at"].is_null() {
+                                "This playlist has not been checked. Select Refresh to read it."
+                                    .to_string()
+                            } else {
+                                "This playlist has no videos. Refresh it to check again."
+                                    .to_string()
+                            }
+                        } else {
+                            format!(
+                                "No items have the {} status. Select All to see every item.",
+                                FILTERS[self.filter]
+                            )
+                        };
+                        content = content.child(
+                            GroupBox::new()
+                                .id("watchlist-items-empty")
+                                .outline()
+                                .child(message),
+                        );
+                    }
                     for (_, item) in filtered
                         .into_iter()
                         .skip(current * WATCH_PAGE_SIZE)
@@ -1437,27 +1504,32 @@ impl Muzik {
                     {
                         content = content.child(self.watch_item(item, playlist, cx));
                     }
-                    content =
-                        content.child(
-                            div()
-                                .flex()
-                                .gap_2()
-                                .child(Button::new("previous").label("Previous").on_click(
-                                    cx.listener(|view, _, _, cx| {
+                    content = content.child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("previous")
+                                    .label("Previous")
+                                    .disabled(current == 0)
+                                    .on_click(cx.listener(|view, _, _, cx| {
                                         view.watch_page = view.watch_page.saturating_sub(1);
                                         view.cache_visible_thumbnails(cx);
                                         cx.notify();
-                                    }),
-                                ))
-                                .child(format!("Page {} of {}", current + 1, page_count))
-                                .child(Button::new("next").label("Next").on_click(cx.listener(
-                                    move |view, _, _, cx| {
+                                    })),
+                            )
+                            .child(format!("Page {} of {}", current + 1, page_count))
+                            .child(
+                                Button::new("next")
+                                    .label("Next")
+                                    .disabled(current + 1 >= page_count)
+                                    .on_click(cx.listener(move |view, _, _, cx| {
                                         view.watch_page = (view.watch_page + 1).min(page_count - 1);
                                         view.cache_visible_thumbnails(cx);
                                         cx.notify();
-                                    },
-                                ))),
-                        );
+                                    })),
+                            ),
+                    );
                 }
             }
         }
@@ -2128,25 +2200,29 @@ fn decision_details(decision: &Value) -> Vec<String> {
 fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
     let payload = &decision["payload"];
     match decision["kind"].as_str().unwrap_or("") {
-        "soulseek_candidate" => payload["candidates"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .enumerate()
-            .map(|(index, candidate)| {
-                (
-                    format!(
-                        "{}: {}",
-                        index + 1,
-                        candidate["title"]
-                            .as_str()
-                            .or_else(|| candidate["name"].as_str())
-                            .unwrap_or("Candidate")
-                    ),
-                    json!(index),
-                )
-            })
-            .collect(),
+        "soulseek_candidate" => {
+            let mut choices: Vec<(String, Value)> = payload["candidates"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+                .map(|(index, candidate)| {
+                    (
+                        format!(
+                            "{}: {}",
+                            index + 1,
+                            candidate["title"]
+                                .as_str()
+                                .or_else(|| candidate["name"].as_str())
+                                .unwrap_or("Candidate")
+                        ),
+                        json!(index),
+                    )
+                })
+                .collect();
+            choices.push(("Skip these candidates".into(), Value::Null));
+            choices
+        }
         "chapter_review" => ["accept", "edit", "reject"]
             .into_iter()
             .map(|value| (value.to_string(), json!(value)))
@@ -2273,6 +2349,7 @@ mod tests {
         assert!(details[0].contains("FLAC"));
         assert!(details[0].contains("Music/Album"));
         assert_eq!(decision_choices(&decision)[0].1, json!(0));
+        assert_eq!(decision_choices(&decision).last().unwrap().1, json!(null));
     }
 
     #[test]
