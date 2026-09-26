@@ -2,6 +2,7 @@
 
 from io import StringIO
 import json
+from pathlib import Path
 from queue import Queue
 from threading import Event, Thread
 import time
@@ -10,6 +11,8 @@ from typing import TextIO, cast
 
 import pytest
 
+from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+from muzik.core.quality import QualityPolicy
 from muzik.core.watchlist import (
     StageStatus,
     Watchlist,
@@ -24,9 +27,20 @@ from muzik.core.workflow.item_actions import ItemAction, ItemActionOperations
 from muzik.core.workflow.cancellation import CancellationToken
 from muzik.core.workflow.decisions import WorkflowDecisionError
 from muzik.core.workflow.events import MessageEvent
-from muzik.core.workflow.service import WorkflowOptions, WorkflowRequest
+from muzik.core.workflow.service import (
+    AudioFallback,
+    AudioSource,
+    MetadataSource,
+    WorkflowOptions,
+    WorkflowRequest,
+)
 from muzik.core.workflow.service import QualityUpgradeResult
-from muzik.native_gui.server import NativeGuiServer, _WorkflowDecisions, _watchlist_data
+from muzik.native_gui.server import (
+    NativeGuiServer,
+    _WorkflowDecisions,
+    _request_options,
+    _watchlist_data,
+)
 
 
 def _records(writer: StringIO) -> list[dict]:
@@ -58,6 +72,65 @@ def _wait_for_record(server: NativeGuiServer, writer: StringIO, predicate):
                 return record
         time.sleep(0.01)
     raise AssertionError(f"No matching response in {records!r}")
+
+
+def test_request_options_maps_every_workflow_field(tmp_path: Path) -> None:
+    params = {
+        "raw": "  https://example.test/album  ",
+        "output": str(tmp_path / "downloads"),
+        "splits": str(tmp_path / "splits"),
+        "review": True,
+        "no_split": True,
+        "no_organize": True,
+        "import_": True,
+        "tag_only": True,
+        "dry_run": True,
+        "jobs": 3,
+        "config": str(tmp_path / "beets.yaml"),
+        "keep_source": True,
+        "force": True,
+        "metadata_source": "musicbrainz",
+        "audio_source": "soulseek",
+        "prefer": "flac",
+        "fallback": "none",
+        "interactive": False,
+        "quality_policy": "ask",
+        "min_bitrate": 192,
+    }
+
+    request, options = _request_options(params)
+
+    assert request == WorkflowRequest(
+        "https://example.test/album", tmp_path / "downloads", tmp_path / "splits"
+    )
+    assert options == WorkflowOptions(
+        review=True,
+        no_split=True,
+        no_organize=True,
+        import_=True,
+        tag_only=True,
+        dry_run=True,
+        jobs=3,
+        config=tmp_path / "beets.yaml",
+        keep_source=True,
+        force=True,
+        metadata_source=MetadataSource.MUSICBRAINZ,
+        audio_source=AudioSource.SOULSEEK,
+        prefer="flac",
+        fallback=AudioFallback.NONE,
+        interactive=False,
+        quality_policy=QualityPolicy.ASK,
+        min_bitrate=192,
+    )
+
+
+def test_request_options_uses_workflow_defaults() -> None:
+    request, options = _request_options({"raw": " local.flac ", "config": ""})
+
+    assert request == WorkflowRequest(
+        "local.flac", DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+    )
+    assert options == WorkflowOptions()
 
 
 def test_process_round_trip_and_watchlist_storage(tmp_path) -> None:
