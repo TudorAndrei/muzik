@@ -1,0 +1,640 @@
+"""Transport and core adapters for a GPUI child process."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, fields, is_dataclass
+from enum import Enum
+import json
+from pathlib import Path
+import re
+import sys
+from threading import Event, Lock, Thread
+from typing import Any, TextIO
+from uuid import uuid4
+
+from muzik.config import (
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_SPLITS_DIR,
+    get_spotify_settings,
+    save_muzik_config_value,
+)
+from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
+from muzik.core.library import scan_downloads
+from muzik.core.services import check_services
+from muzik.core.sources.base import Candidate
+from muzik.core.sources.spotify_api import SpotifyClient
+from muzik.core.sources.spotify_auth import (
+    TokenStore,
+    login as spotify_login,
+    redirect_uri,
+)
+from muzik.core.watchlist import (
+    WatchlistError,
+    WatchlistRepository,
+    reconcile_watchlist,
+    refresh_watchlist,
+)
+from muzik.core.workflow.cancellation import CancellationToken, WorkflowCancelled
+from muzik.core.workflow.decisions import ChapterDecision, WorkflowDecisionError
+from muzik.core.workflow.events import WorkflowEvent
+from muzik.core.workflow.item_actions import (
+    ItemAction,
+    item_summary_state,
+    run_item_action,
+)
+from muzik.core.workflow.operations import (
+    build_item_action_operations,
+    build_workflow_operations,
+)
+from muzik.core.workflow.service import WorkflowOptions, WorkflowRequest, run_workflow
+
+
+def _json_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {key: _json_value(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _event_name(event: object) -> str:
+    name = type(event).__name__.removesuffix("Event")
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+class NativeGuiServer:
+    """Own one active workflow and write complete JSON records under a lock."""
+
+    def __init__(
+        self,
+        reader: TextIO,
+        writer: TextIO,
+        *,
+        repository: WatchlistRepository | None = None,
+    ) -> None:
+        self.reader = reader
+        self.writer = writer
+        self.repository = repository or WatchlistRepository()
+        self._write_lock = Lock()
+        self._job_lock = Lock()
+        self._job: Thread | None = None
+        self._job_id: str | None = None
+        self._cancellation: CancellationToken | None = None
+        self._decisions: dict[str, tuple[Event, list[Any]]] = {}
+
+    def _write(self, record: dict[str, Any]) -> None:
+        line = json.dumps(_json_value(record), ensure_ascii=False, allow_nan=False)
+        with self._write_lock:
+            self.writer.write(line + "\n")
+            self.writer.flush()
+
+    def _event(self, name: str, data: dict[str, Any]) -> None:
+        self._write({"type": "event", "event": name, "data": data})
+
+    def serve(self) -> None:
+        try:
+            for line in self.reader:
+                if not line.strip():
+                    continue
+                try:
+                    request = json.loads(line)
+                    if not isinstance(request, dict):
+                        raise ValueError("Request must be an object.")
+                    request_id = request.get("id")
+                    command = request.get("command")
+                    params = request.get("params", {})
+                    if not isinstance(command, str) or not isinstance(params, dict):
+                        raise ValueError("Request needs a command and object params.")
+                    result = self.dispatch(command, params)
+                    self._write(
+                        {
+                            "id": request_id,
+                            "type": "response",
+                            "ok": True,
+                            "result": result,
+                        }
+                    )
+                except Exception as exc:
+                    self._write(
+                        {
+                            "id": request.get("id")
+                            if isinstance(request, dict)
+                            else None,
+                            "type": "response",
+                            "ok": False,
+                            "error": {"code": _error_code(exc), "message": str(exc)},
+                        }
+                    )
+        finally:
+            self.cancel()
+            if self._job is not None:
+                self._job.join(timeout=5)
+
+    def dispatch(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
+        if command == "hello":
+            return {
+                "protocol_version": 1,
+                "defaults": {
+                    "output": str(DEFAULT_DOWNLOAD_DIR),
+                    "splits": str(DEFAULT_SPLITS_DIR),
+                    "audio_source": "youtube",
+                    "metadata_source": "auto",
+                    "prefer": "lossless",
+                    "fallback": "youtube",
+                    "quality_policy": "off",
+                    "min_bitrate": 256,
+                    "jobs": 0,
+                    "interactive": True,
+                },
+                "item_actions": [item.value for item in ItemAction],
+            }
+        if command == "job.cancel":
+            job_id = _required_string(params, "job_id")
+            if job_id != self._job_id or self._job is None or not self._job.is_alive():
+                raise ValueError("The job is not active.")
+            self.cancel()
+            return {"job_id": job_id, "cancel_requested": True}
+        if command == "decision.reply":
+            decision_id = _required_string(params, "decision_id")
+            with self._job_lock:
+                pending = self._decisions.pop(decision_id, None)
+            if pending is None:
+                raise ValueError("The decision is not pending.")
+            pending[1].append(params.get("value"))
+            pending[0].set()
+            return {"decision_id": decision_id}
+        if command == "services.check":
+            return {"services": _json_value(check_services())}
+        if command == "library.scan":
+            output = _path(params.get("output"), DEFAULT_DOWNLOAD_DIR)
+            return {"items": _json_value(scan_downloads(output))}
+        if command == "spotify.status":
+            settings = get_spotify_settings()
+            token_saved = TokenStore().load() is not None
+            result: dict[str, Any] = {
+                "client_id": settings.get("client_id", ""),
+                "redirect_uri": redirect_uri(
+                    int(settings.get("redirect_port", "8888") or "8888")
+                ),
+                "connected": token_saved,
+            }
+            if token_saved:
+                try:
+                    result["account_name"] = SpotifyClient().account_name()
+                except Exception as exc:
+                    result["connected"] = False
+                    result["error"] = str(exc)
+            return result
+        if command == "spotify.set_client_id":
+            save_muzik_config_value(
+                "spotify", "client_id", _required_string(params, "client_id")
+            )
+            return {"client_id": get_spotify_settings().get("client_id", "")}
+        if command == "spotify.logout":
+            return {"removed": TokenStore().clear()}
+        if command == "spotify.playlists":
+            return {"playlists": _json_value(SpotifyClient().list_playlists())}
+        if command == "spotify.login":
+            port = params.get("port")
+            if port is not None:
+                if not isinstance(port, int) or not 1 <= port <= 65535:
+                    raise ValueError("port must be an integer from 1 to 65535.")
+                save_muzik_config_value("spotify", "redirect_port", str(port))
+            return self._start_spotify_login()
+        if command == "watchlist.load":
+            request, options = _request_options(params)
+            watchlist = self.repository.load()
+            reconcile_watchlist(watchlist, request=request, options=options)
+            self.repository.save(watchlist)
+            return {"watchlist": watchlist.to_dict()}
+        if command == "watchlist.add":
+            playlist = self.repository.add(_required_string(params, "url"))
+            return {
+                "playlist": playlist.to_dict(),
+                "watchlist": self.repository.load().to_dict(),
+            }
+        if command == "watchlist.remove":
+            removed = self.repository.remove(_required_string(params, "playlist_id"))
+            return {"removed": removed, "watchlist": self.repository.load().to_dict()}
+        if command in {"workflow.start", "watchlist.refresh", "watchlist.action"}:
+            request, options = _request_options(params)
+            if command == "workflow.start" and not request.raw:
+                raise ValueError("Enter a URL or path.")
+            if command == "watchlist.refresh" and not self.repository.load().playlists:
+                raise ValueError("Add a playlist before you refresh.")
+            if command == "watchlist.action":
+                _required_string(params, "playlist_id")
+                if not isinstance(params.get("position"), int):
+                    raise ValueError("position must be an integer.")
+                ItemAction(_required_string(params, "action"))
+            return self._start_job(command, params, request, options)
+        raise ValueError(f"Unknown command: {command}")
+
+    def _start_spotify_login(self) -> dict[str, Any]:
+        with self._job_lock:
+            if self._job is not None and self._job.is_alive():
+                raise RuntimeError("A job is already active.")
+            job_id = uuid4().hex
+            self._job_id = job_id
+            self._cancellation = CancellationToken()
+            self._job = Thread(
+                target=self._run_spotify_login,
+                args=(job_id,),
+                name="muzik-spotify-login",
+                daemon=True,
+            )
+            self._job.start()
+        return {"job_id": job_id}
+
+    def _run_spotify_login(self, job_id: str) -> None:
+        try:
+            spotify_login()
+            self._event(
+                "job.completed",
+                {
+                    "job_id": job_id,
+                    "result": {"account_name": SpotifyClient().account_name()},
+                },
+            )
+        except Exception as exc:
+            self._event(
+                "job.failed",
+                {
+                    "job_id": job_id,
+                    "error": {"code": _error_code(exc), "message": str(exc)},
+                },
+            )
+
+    def _start_job(
+        self,
+        command: str,
+        params: dict[str, Any],
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+    ) -> dict[str, Any]:
+        with self._job_lock:
+            if self._job is not None and self._job.is_alive():
+                raise RuntimeError("A job is already active.")
+            job_id = uuid4().hex
+            cancellation = CancellationToken()
+            self._job_id = job_id
+            self._cancellation = cancellation
+            self._job = Thread(
+                target=self._run_job,
+                args=(job_id, command, params, request, options, cancellation),
+                name="muzik-native-gui-job",
+                daemon=True,
+            )
+            self._job.start()
+        return {"job_id": job_id}
+
+    def cancel(self) -> None:
+        if self._cancellation is not None:
+            self._cancellation.cancel()
+        with self._job_lock:
+            pending = list(self._decisions.values())
+            self._decisions.clear()
+        for gate, _ in pending:
+            gate.set()
+
+    def _run_job(
+        self,
+        job_id: str,
+        command: str,
+        params: dict[str, Any],
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+        cancellation: CancellationToken,
+    ) -> None:
+        emitter = _EventEmitter(self, job_id, "workflow")
+        beets_emitter = _EventEmitter(self, job_id, "beets")
+        decisions = _WorkflowDecisions(self, job_id, options.interactive, cancellation)
+        beets_decisions = _BeetsDecisions(
+            self, job_id, options.interactive, cancellation
+        )
+        try:
+            operations = build_workflow_operations(
+                splits=request.splits,
+                options=options,
+                decisions=decisions,
+                events=emitter,
+                beets_decisions=beets_decisions,
+                beets_events=beets_emitter,
+            )
+            if command == "workflow.start":
+                run_workflow(
+                    request,
+                    options,
+                    operations=operations,
+                    events=emitter,
+                    cancellation=cancellation,
+                )
+                result: dict[str, Any] = {}
+            elif command == "watchlist.refresh":
+                summary = refresh_watchlist(
+                    self.repository,
+                    request,
+                    options,
+                    operations=operations,
+                    events=emitter,
+                    cancellation=cancellation,
+                )
+                result = {
+                    "summary": _json_value(summary),
+                    "watchlist": self.repository.load().to_dict(),
+                }
+            else:
+                result = self._run_item_action(
+                    params,
+                    request,
+                    options,
+                    decisions,
+                    emitter,
+                    beets_decisions,
+                    beets_emitter,
+                    cancellation,
+                )
+            cancellation.raise_if_cancelled()
+            self._event("job.completed", {"job_id": job_id, "result": result})
+        except WorkflowCancelled:
+            self._event("job.cancelled", {"job_id": job_id})
+        except Exception as exc:
+            self._event(
+                "job.failed",
+                {
+                    "job_id": job_id,
+                    "error": {"code": _error_code(exc), "message": str(exc)},
+                },
+            )
+
+    def _run_item_action(
+        self,
+        params: dict[str, Any],
+        request: WorkflowRequest,
+        options: WorkflowOptions,
+        decisions: Any,
+        emitter: Any,
+        beets_decisions: Any,
+        beets_emitter: Any,
+        cancellation: CancellationToken,
+    ) -> dict[str, Any]:
+        watchlist = self.repository.load()
+        playlist = next(
+            (
+                entry
+                for entry in watchlist.playlists
+                if entry.playlist_id == params["playlist_id"]
+            ),
+            None,
+        )
+        if playlist is None:
+            raise WatchlistError("The selected playlist is no longer available.")
+        item = next(
+            (
+                entry
+                for entry in playlist.items
+                if entry.position == params["position"]
+                and entry.video_id == params.get("video_id")
+            ),
+            None,
+        )
+        if item is None:
+            raise WatchlistError("The selected video is no longer available.")
+        action = ItemAction(params["action"])
+        item_operations = build_item_action_operations(
+            decisions=decisions,
+            events=emitter,
+            beets_decisions=beets_decisions,
+            beets_events=beets_emitter,
+        )
+        action_result = run_item_action(
+            item,
+            action,
+            request=request,
+            options=options,
+            operations=item_operations,
+            cancellation=cancellation,
+            on_state_change=lambda: self.repository.save(watchlist),
+        )
+        if (
+            item.video_id
+            and item_summary_state(item) == "Processed"
+            and item.video_id not in playlist.processed_video_ids
+        ):
+            playlist.processed_video_ids.append(item.video_id)
+        self.repository.save(watchlist)
+        return {"action": _json_value(action_result), "watchlist": watchlist.to_dict()}
+
+    def _request_decision(
+        self,
+        job_id: str,
+        kind: str,
+        payload: dict[str, Any],
+        cancellation: CancellationToken,
+    ) -> Any:
+        cancellation.raise_if_cancelled()
+        decision_id = uuid4().hex
+        gate = Event()
+        result: list[Any] = []
+        with self._job_lock:
+            self._decisions[decision_id] = (gate, result)
+        self._event(
+            "decision.request",
+            {
+                "job_id": job_id,
+                "decision_id": decision_id,
+                "kind": kind,
+                "payload": payload,
+            },
+        )
+        while not gate.wait(0.1):
+            cancellation.raise_if_cancelled()
+        cancellation.raise_if_cancelled()
+        if not result:
+            raise WorkflowDecisionError("The decision has no response.")
+        return result[0]
+
+
+class _EventEmitter:
+    def __init__(self, server: NativeGuiServer, job_id: str, source: str) -> None:
+        self.server, self.job_id, self.source = server, job_id, source
+
+    def emit(self, event: WorkflowEvent | Any) -> None:
+        self.server._event(
+            "job.event",
+            {
+                "job_id": self.job_id,
+                "source": self.source,
+                "event": _event_name(event),
+                "data": _json_value(event),
+            },
+        )
+
+
+class _WorkflowDecisions:
+    def __init__(
+        self,
+        server: NativeGuiServer,
+        job_id: str,
+        interactive: bool,
+        cancellation: CancellationToken,
+    ) -> None:
+        self.server, self.job_id, self.interactive, self.cancellation = (
+            server,
+            job_id,
+            interactive,
+            cancellation,
+        )
+
+    def _ask(self, kind: str, payload: dict[str, Any]) -> Any:
+        return self.server._request_decision(
+            self.job_id, kind, payload, self.cancellation
+        )
+
+    def choose_soulseek_candidate(self, candidates: list[Candidate]) -> Candidate:
+        if not candidates:
+            raise WorkflowDecisionError("No Soulseek candidates available.")
+        if not self.interactive:
+            return candidates[0]
+        value = self._ask("soulseek_candidate", {"candidates": _json_value(candidates)})
+        index = value.get("index") if isinstance(value, dict) else value
+        if not isinstance(index, int) or not 0 <= index < len(candidates):
+            raise WorkflowDecisionError("Select a candidate index in range.")
+        return candidates[index]
+
+    def confirm_chapters(self, source: Path, chapters: list[Any]) -> ChapterDecision:
+        if not self.interactive:
+            return ChapterDecision.ACCEPT
+        return ChapterDecision(
+            self._ask(
+                "chapter_review",
+                {"source": str(source), "chapters": _json_value(chapters)},
+            )
+        )
+
+    def edit_chapters(self, chapters: list[Any]) -> list[Any] | None:
+        if not self.interactive:
+            return chapters
+        value = self._ask("chapter_edit", {"chapters": _json_value(chapters)})
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise WorkflowDecisionError("Edited chapters must be a list.")
+        from muzik.core.chapters import Chapter
+
+        allowed = {field.name for field in fields(Chapter)}
+        return [
+            Chapter(**{key: item[key] for key in allowed if key in item})
+            for item in value
+        ]
+
+    def confirm_quality_replacement(self, current: Path, candidate: Candidate) -> bool:
+        if not self.interactive:
+            return False
+        value = self._ask(
+            "quality_replacement",
+            {"current": str(current), "candidate": candidate.to_dict()},
+        )
+        if not isinstance(value, bool):
+            raise WorkflowDecisionError("Quality replacement needs a boolean reply.")
+        return value
+
+
+class _BeetsDecisions:
+    def __init__(
+        self,
+        server: NativeGuiServer,
+        job_id: str,
+        interactive: bool,
+        cancellation: CancellationToken,
+    ) -> None:
+        self.server, self.job_id, self.interactive, self.cancellation = (
+            server,
+            job_id,
+            interactive,
+            cancellation,
+        )
+
+    def should_resume_beets_import(self, path: Path) -> bool:
+        return False
+
+    def choose_beets_album_match(self, task: Any) -> str | BeetsMatchDecision | None:
+        return self._choose_match(task)
+
+    def choose_beets_track_match(self, task: Any) -> str | BeetsMatchDecision | None:
+        return self._choose_match(task)
+
+    def _choose_match(self, task: Any) -> str | BeetsMatchDecision | None:
+        if not self.interactive:
+            return BeetsMatchDecision.AS_IS
+        value = self.server._request_decision(
+            self.job_id, "beets_match", {"task": _json_value(task)}, self.cancellation
+        )
+        if value is None or value == "as_is":
+            return BeetsMatchDecision.AS_IS if value == "as_is" else None
+        if not isinstance(value, str) or value not in {
+            match.candidate_id for match in task.matches
+        }:
+            raise WorkflowDecisionError("Select a valid Beets match ID.")
+        return value
+
+    def resolve_beets_duplicate(
+        self, task: Any, duplicates: list[Any]
+    ) -> BeetsDuplicateDecision:
+        if not self.interactive:
+            return BeetsDuplicateDecision.SKIP
+        value = self.server._request_decision(
+            self.job_id,
+            "beets_duplicate",
+            {"task": _json_value(task), "duplicates": _json_value(duplicates)},
+            self.cancellation,
+        )
+        return BeetsDuplicateDecision(value)
+
+
+def _path(value: Any, default: Path) -> Path:
+    return (
+        Path(value).expanduser()
+        if isinstance(value, str) and value.strip()
+        else default
+    )
+
+
+def _required_string(params: dict[str, Any], name: str) -> str:
+    value = params.get(name)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string.")
+    return value.strip()
+
+
+def _request_options(params: dict[str, Any]) -> tuple[WorkflowRequest, WorkflowOptions]:
+    request = WorkflowRequest(
+        raw=str(params.get("raw", "")).strip(),
+        output=_path(params.get("output"), DEFAULT_DOWNLOAD_DIR),
+        splits=_path(params.get("splits"), DEFAULT_SPLITS_DIR),
+    )
+    option_names = {field.name for field in fields(WorkflowOptions)}
+    values = {name: params[name] for name in option_names if name in params}
+    if "config" in values:
+        values["config"] = (
+            _path(values["config"], Path("")) if values["config"] else None
+        )
+    return request, WorkflowOptions(**values)
+
+
+def _error_code(exc: Exception) -> str:
+    if isinstance(exc, (ValueError, TypeError)):
+        return "invalid_request"
+    if isinstance(exc, RuntimeError) and str(exc) == "A job is already active.":
+        return "job_active"
+    return "operation_failed"
+
+
+def main() -> None:
+    NativeGuiServer(sys.stdin, sys.stdout).serve()
