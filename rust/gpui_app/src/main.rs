@@ -1879,6 +1879,18 @@ impl Muzik {
             .filter_map(|playlist| playlist["playlist_id"].as_str())
             .collect();
         let liked_saved = saved_ids.contains("spotify:liked");
+        let connected = self.spotify["connected"] == true;
+        let has_client_id = self.spotify["client_id"]
+            .as_str()
+            .is_some_and(|id| !id.trim().is_empty());
+        let redirect = self.spotify["redirect_uri"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+        let checking = self
+            .pending
+            .values()
+            .any(|command| command == "spotify.status");
         let mut page = div()
             .v_flex()
             .gap_4()
@@ -1886,96 +1898,184 @@ impl Muzik {
             .w_full()
             .max_w(px(960.))
             .child(div().text_2xl().font_semibold().child("Spotify"))
-            .child("Set a Spotify application client ID, then connect your account.")
             .child(
-                Button::new("spotify-dashboard")
-                    .label("Open Spotify dashboard")
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        cx.open_url("https://developer.spotify.com/dashboard")
-                    })),
-            )
-            .child("Redirect URI:")
-            .child(
-                self.spotify["redirect_uri"]
-                    .as_str()
-                    .unwrap_or("")
-                    .to_string(),
-            )
-            .child(
-                Button::new("copy-redirect")
-                    .label("Copy redirect URI")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        let uri = view.spotify["redirect_uri"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_string();
-                        cx.write_to_clipboard(ClipboardItem::new_string(uri));
-                    })),
-            )
-            .child(Input::new(&self.spotify_client_id))
-            .child(
-                Button::new("spotify-save")
-                    .label("Save client ID")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        let client_id = view.spotify_client_id.read(cx).value().to_string();
-                        view.send("spotify.set_client_id", json!({"client_id":client_id}));
-                        cx.notify();
-                    })),
-            )
-            .child(
-                div()
-                    .flex()
-                    .gap_2()
+                GroupBox::new()
+                    .id("spotify-application")
+                    .title("YOUR SPOTIFY APPLICATION")
+                    .outline()
                     .child(
-                        Button::new("spotify-connect")
-                            .primary()
-                            .label("Connect")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.start_job("spotify.login", json!({}), cx);
-                                cx.notify();
+                        div().text_color(rgb(0x64748b)).child(
+                            "Create an application in Spotify, add this redirect URI, then save its client ID here.",
+                        ),
+                    )
+                    .child(
+                        Button::new("spotify-dashboard")
+                            .label("Open Spotify dashboard")
+                            .on_click(cx.listener(|_, _, _, cx| {
+                                cx.open_url("https://developer.spotify.com/dashboard")
                             })),
                     )
                     .child(
-                        Button::new("spotify-disconnect")
-                            .label("Disconnect")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.send("spotify.logout", json!({}));
-                                cx.notify();
-                            })),
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(div().text_sm().font_semibold().child("Client ID"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .max_w(px(500.))
+                                            .child(Input::new(&self.spotify_client_id)),
+                                    )
+                                    .child(
+                                        Button::new("spotify-save")
+                                            .label("Save client ID")
+                                            .on_click(cx.listener(|view, _, _, cx| {
+                                                let client_id = view
+                                                    .spotify_client_id
+                                                    .read(cx)
+                                                    .value()
+                                                    .to_string();
+                                                view.send(
+                                                    "spotify.set_client_id",
+                                                    json!({"client_id":client_id}),
+                                                );
+                                                cx.notify();
+                                            })),
+                                    ),
+                            ),
                     )
                     .child(
-                        Button::new("spotify-reload")
-                            .label("Reload playlists")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.send("spotify.playlists", json!({}));
-                                cx.notify();
-                            })),
+                        div()
+                            .v_flex()
+                            .gap_1()
+                            .child(div().text_sm().font_semibold().child("Redirect URI"))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().text_sm().child(redirect.clone()))
+                                    .child(
+                                        Button::new("copy-redirect")
+                                            .label("Copy")
+                                            .disabled(redirect.is_empty())
+                                            .on_click(cx.listener(move |_, _, _, cx| {
+                                                cx.write_to_clipboard(
+                                                    ClipboardItem::new_string(redirect.clone()),
+                                                );
+                                            })),
+                                    ),
+                            )
+                            .child(
+                                div().text_sm().text_color(rgb(0x64748b)).child(
+                                    "Use the exact URI. localhost and 127.0.0.1 are different.",
+                                ),
+                            ),
                     ),
             );
-        page = page.child(format!(
-            "Account: {}",
-            self.spotify["account_name"]
-                .as_str()
-                .unwrap_or("Not connected")
-        ));
+        if checking {
+            page = page.child("Checking account…");
+        }
+        if connected {
+            page = page.child(
+                GroupBox::new()
+                    .id("spotify-account")
+                    .title("CONNECTED ACCOUNT")
+                    .outline()
+                    .child(
+                        div().font_semibold().child(
+                            self.spotify["account_name"]
+                                .as_str()
+                                .unwrap_or("Spotify account")
+                                .to_string(),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                Button::new("spotify-disconnect")
+                                    .label("Disconnect")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.send("spotify.logout", json!({}));
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                Button::new("spotify-reload")
+                                    .label("Reload playlists")
+                                    .on_click(cx.listener(|view, _, _, cx| {
+                                        view.send("spotify.playlists", json!({}));
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        } else if has_client_id && !checking {
+            page = page
+                .child(
+                    Button::new("spotify-connect")
+                        .primary()
+                        .label("Connect to Spotify")
+                        .disabled(self.job_kind.is_some())
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.start_job("spotify.login", json!({}), cx);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .text_color(rgb(0x64748b))
+                        .child("muzik opens your browser. Approve access, then return here."),
+                );
+        } else if !checking {
+            page = page.child("Save a client ID to connect your account.");
+        }
         if let Some(error) = self.spotify["error"].as_str() {
             page = page.child(div().text_color(rgb(0xb91c1c)).child(error.to_string()));
         }
-        page = page.child(
-            Button::new("spotify-liked")
-                .primary()
-                .label(if liked_saved {
-                    "Liked Songs saved"
-                } else {
-                    "Add Liked Songs to watchlist"
-                })
-                .disabled(self.spotify["connected"] != true || liked_saved)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.send("watchlist.add", json!({"url":"liked"}));
-                    cx.notify();
-                })),
-        );
-        if let Some(playlists) = self.spotify["playlists"].as_array() {
+        if connected {
+            page = page.child(
+                Button::new("spotify-liked")
+                    .primary()
+                    .label(if liked_saved {
+                        "Liked Songs saved"
+                    } else {
+                        "Add Liked Songs to watchlist"
+                    })
+                    .disabled(
+                        liked_saved
+                            || self
+                                .pending
+                                .values()
+                                .any(|command| command == "watchlist.load"),
+                    )
+                    .on_click(cx.listener(|view, _, _, cx| {
+                        view.send("watchlist.add", json!({"url":"liked"}));
+                        cx.notify();
+                    })),
+            );
+        }
+        if connected
+            && self
+                .pending
+                .values()
+                .any(|command| command == "spotify.playlists")
+        {
+            page = page.child("Loading playlists…");
+        } else if connected
+            && self.spotify["playlists"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
+        {
+            page = page.child("No Spotify playlists were found.");
+        }
+        if let Some(playlists) = self.spotify["playlists"].as_array().filter(|_| connected) {
             for (index, playlist) in playlists.iter().enumerate() {
                 let name = playlist["name"].as_str().unwrap_or("Playlist");
                 let uri = playlist["uri"].as_str().unwrap_or("").to_string();
