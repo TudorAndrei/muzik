@@ -84,6 +84,7 @@ const FILTERS: &[&str] = &[
     "Processed",
     "Unavailable",
 ];
+const WATCH_PAGE_SIZE: usize = 8;
 const ITEM_ACTIONS: &[(&str, &str)] = &[
     ("run", "Run"),
     ("retry", "Retry"),
@@ -415,16 +416,10 @@ impl Muzik {
                     }
                     "watchlist.load" | "watchlist.add" | "watchlist.remove"
                     | "watchlist.rename" => {
-                        if command == "watchlist.load" {
-                            self.watchlist = result["watchlist"].clone();
-                        } else {
-                            self.watchlist = result["watchlist"].clone();
+                        self.replace_watchlist(result["watchlist"].clone());
+                        if command != "watchlist.load" {
                             self.send("watchlist.load", self.launcher_params(_cx));
                         }
-                        let count = self.watchlist["playlists"].as_array().map_or(0, Vec::len);
-                        self.selected_playlist =
-                            self.selected_playlist.min(count.saturating_sub(1));
-                        self.watch_page = 0;
                         self.status = "Watchlist ready".into();
                     }
                     "library.scan" => {
@@ -482,6 +477,18 @@ impl Muzik {
                 let event = message["event"].as_str().unwrap_or_default();
                 let data = &message["data"];
                 match event {
+                    "watchlist.updated" => {
+                        self.replace_watchlist(data["watchlist"].clone());
+                        self.status = "Watchlist updated".into();
+                    }
+                    "watchlist.error" => {
+                        self.error = Some(
+                            data["message"]
+                                .as_str()
+                                .unwrap_or("Watchlist check failed")
+                                .into(),
+                        );
+                    }
                     "job.event" => {
                         let kind = data["event"].as_str().unwrap_or("Update");
                         let payload = &data["data"];
@@ -569,6 +576,29 @@ impl Muzik {
             }
             _ => {}
         }
+    }
+
+    fn replace_watchlist(&mut self, incoming: Value) {
+        let old_id = self.watchlist["playlists"][self.selected_playlist]["playlist_id"]
+            .as_str()
+            .map(str::to_owned);
+        let playlists = incoming["playlists"].as_array();
+        let count = playlists.map_or(0, Vec::len);
+        let selected = old_id
+            .as_deref()
+            .and_then(|id| {
+                playlists?
+                    .iter()
+                    .position(|playlist| playlist["playlist_id"] == id)
+            })
+            .unwrap_or_else(|| self.selected_playlist.min(count.saturating_sub(1)));
+        let page_count = playlists
+            .and_then(|all| all.get(selected))
+            .map(|playlist| watch_page_count(playlist, self.filter))
+            .unwrap_or(1);
+        self.selected_playlist = selected;
+        self.watch_page = self.watch_page.min(page_count - 1);
+        self.watchlist = incoming;
     }
 
     fn reply(&mut self, value: Value, cx: &mut Context<Self>) {
@@ -996,9 +1026,13 @@ impl Muzik {
                                     .unwrap_or(false)
                         })
                         .collect();
-                    let page_count = filtered.len().div_ceil(6).max(1);
+                    let page_count = filtered.len().div_ceil(WATCH_PAGE_SIZE).max(1);
                     let current = self.watch_page.min(page_count - 1);
-                    for (_, item) in filtered.into_iter().skip(current * 6).take(6) {
+                    for (_, item) in filtered
+                        .into_iter()
+                        .skip(current * WATCH_PAGE_SIZE)
+                        .take(WATCH_PAGE_SIZE)
+                    {
                         content = content.child(self.watch_item(item, playlist, cx));
                     }
                     content =
@@ -1059,6 +1093,34 @@ impl Muzik {
                     .or_else(|| item["status"].as_str())
                     .unwrap_or("Pending")
             ));
+        let source_label = if item["kind"] == "spotify" {
+            "Spotify ID"
+        } else {
+            "YouTube ID"
+        };
+        let source_id = item["video_id"].as_str().unwrap_or("Unavailable");
+        card = card.child(
+            div()
+                .text_sm()
+                .text_color(rgb(0x64748b))
+                .child(format!("{source_label}: {source_id}")),
+        );
+        if let Some(error) = item["last_error"].as_str() {
+            card = card.child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xb91c1c))
+                    .child(error.to_string()),
+            );
+        }
+        if let Some(url) = item["video_url"].as_str() {
+            let url = url.to_string();
+            card = card.child(
+                Button::new(("open-item", position))
+                    .label("Open item link")
+                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
+            );
+        }
         if let Some(path) = item["thumbnail_path"].as_str() {
             card = card.child(
                 img(PathBuf::from(path))
@@ -1416,6 +1478,21 @@ fn describe(value: &Value) -> String {
         Value::Null => String::new(),
         _ => value.to_string(),
     }
+}
+
+fn watch_page_count(playlist: &Value, filter: usize) -> usize {
+    let matches = playlist["items"].as_array().map_or(0, |items| {
+        items
+            .iter()
+            .filter(|item| {
+                filter == 0
+                    || item["summary"]
+                        .as_str()
+                        .is_some_and(|status| status.eq_ignore_ascii_case(FILTERS[filter]))
+            })
+            .count()
+    });
+    matches.div_ceil(WATCH_PAGE_SIZE).max(1)
 }
 
 fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
