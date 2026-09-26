@@ -78,6 +78,22 @@ def save_muzik_config_value(
     )
 
 
+def save_muzik_config_section(
+    section: str,
+    values: dict,
+    *,
+    path: Path = MUZIK_CONFIG_FILE,
+) -> None:
+    """Replace one config section while preserving unrelated settings."""
+    data = load_muzik_config(path)
+    data[section] = values
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(data, default_flow_style=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+
 def _env_or_config(
     env: Mapping[str, str],
     env_name: str,

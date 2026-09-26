@@ -11,7 +11,11 @@ from typing import TextIO, cast
 
 import pytest
 
-from muzik.config import DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
+from muzik.config import (
+    DEFAULT_DOWNLOAD_DIR,
+    DEFAULT_SPLITS_DIR,
+    load_muzik_config,
+)
 from muzik.core.quality import QualityPolicy
 from muzik.core.watchlist import (
     StageStatus,
@@ -131,6 +135,99 @@ def test_request_options_uses_workflow_defaults() -> None:
         "local.flac", DEFAULT_DOWNLOAD_DIR, DEFAULT_SPLITS_DIR
     )
     assert options == WorkflowOptions()
+
+
+def test_gui_config_survives_server_restart_and_preserves_spotify(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("spotify:\n  client_id: test-client\n", encoding="utf-8")
+    server = NativeGuiServer(StringIO(), StringIO(), config_path=config_path)
+    initial = server.dispatch("config.get", {})["defaults"]
+    assert initial["output"] == str(DEFAULT_DOWNLOAD_DIR)
+    assert initial["splits"] == str(DEFAULT_SPLITS_DIR)
+    assert initial["review"] is False
+    assert initial["config"] == ""
+
+    saved = server.dispatch(
+        "config.save",
+        {
+            "output": str(tmp_path / "downloads"),
+            "splits": str(tmp_path / "splits"),
+            "config": str(tmp_path / "beets.yaml"),
+            "jobs": 3,
+            "min_bitrate": 192,
+            "audio_source": "soulseek",
+            "metadata_source": "musicbrainz",
+            "prefer": "flac",
+            "fallback": "none",
+            "quality_policy": "ask",
+            "review": True,
+            "no_split": True,
+            "no_organize": True,
+            "import_": True,
+            "tag_only": True,
+            "dry_run": True,
+            "keep_source": True,
+            "force": True,
+            "interactive": False,
+        },
+    )["defaults"]
+    assert "raw" not in saved
+    assert load_muzik_config(config_path)["spotify"]["client_id"] == "test-client"
+
+    restarted = NativeGuiServer(StringIO(), StringIO(), config_path=config_path)
+    assert restarted.dispatch("hello", {})["defaults"] == saved
+    assert restarted.dispatch("config.get", {})["defaults"] == saved
+    request, options = _request_options(
+        {**restarted.dispatch("config.get", {})["defaults"], "raw": "song.flac"}
+    )
+    assert request.output == tmp_path / "downloads"
+    assert request.splits == tmp_path / "splits"
+    assert options == WorkflowOptions(
+        review=True,
+        no_split=True,
+        no_organize=True,
+        import_=True,
+        tag_only=True,
+        dry_run=True,
+        jobs=3,
+        config=tmp_path / "beets.yaml",
+        keep_source=True,
+        force=True,
+        metadata_source="musicbrainz",
+        audio_source="soulseek",
+        prefer="flac",
+        fallback="none",
+        interactive=False,
+        quality_policy="ask",
+        min_bitrate=192,
+    )
+    started: list[tuple[WorkflowRequest, WorkflowOptions]] = []
+
+    def capture_job(command, params, request, options):
+        started.append((request, options))
+        return {"job_id": "test"}
+
+    monkeypatch.setattr(restarted, "_start_job", capture_job)
+    restarted.dispatch("workflow.start", {"raw": "song.flac"})
+    assert started == [(request, options)]
+
+
+def test_gui_config_rejects_invalid_values_without_writing(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    server = NativeGuiServer(StringIO(), StringIO(), config_path=config_path)
+    for params in (
+        {"raw": "song.flac"},
+        {"jobs": -1},
+        {"jobs": True},
+        {"review": "yes"},
+        {"audio_source": "unknown"},
+        {"output": ""},
+    ):
+        with pytest.raises(ValueError):
+            server.dispatch("config.save", params)
+    assert not config_path.exists()
 
 
 def test_process_round_trip_and_watchlist_storage(tmp_path) -> None:

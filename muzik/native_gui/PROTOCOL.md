@@ -27,6 +27,8 @@ order. Match each response to its request by `id`. A slow read does not hold up
 | Command | Params | Result |
 | --- | --- | --- |
 | `hello` | none | `protocol_version`, launcher `defaults`, `item_actions` |
+| `config.get` | none | saved launcher `defaults` |
+| `config.save` | launcher fields except `raw` | canonical saved launcher `defaults` |
 | `workflow.start` | `raw` and optional launcher fields | `job_id` |
 | `job.cancel` | `job_id` | `cancel_requested` |
 | `services.check` | none | `services` array with `name`, `available`, `detail`, `optional` |
@@ -49,8 +51,14 @@ Launcher fields match `WorkflowOptions`: `review`, `no_split`, `no_organize`,
 `import_`, `tag_only`, `dry_run`, `jobs`, `config`, `keep_source`, `force`,
 `metadata_source`, `audio_source`, `prefer`, `fallback`, `interactive`,
 `quality_policy`, and `min_bitrate`. `raw`, `output`, and `splits` form the
-workflow request. `hello` returns the main defaults. A missing optional field
-uses the Python core default. `watchlist.add` accepts a YouTube or Spotify
+workflow request. `hello` and `config.get` return the saved defaults. The
+service stores these values in the `native_gui` section of the usual muzik
+`config.yaml` file. `config.save` updates only that section. It accepts any
+subset of the launcher fields except `raw`; omitted fields keep their saved
+values. A missing launcher field uses the saved value when the service starts a
+workflow, refreshes the watchlist, or runs a watchlist item action. A field
+sent with a request overrides the saved value for that request only. `raw` is
+never saved. `watchlist.add` accepts a YouTube or Spotify
 playlist link, a Spotify album link, or `liked`. Each item in a returned
 `watchlist` has `summary`, `thumbnail_path`, `primary_action`, and `actions`.
 `primary_action` has an `action` and a `label`, or it is `null`. `actions` maps

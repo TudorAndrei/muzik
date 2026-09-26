@@ -18,7 +18,10 @@ from uuid import uuid4
 from muzik.config import (
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_SPLITS_DIR,
+    MUZIK_CONFIG_FILE,
     get_spotify_settings,
+    load_muzik_config,
+    save_muzik_config_section,
     save_muzik_config_value,
 )
 from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
@@ -87,10 +90,12 @@ class NativeGuiServer:
         writer: TextIO,
         *,
         repository: WatchlistRepository | None = None,
+        config_path: Path = MUZIK_CONFIG_FILE,
     ) -> None:
         self.reader = reader
         self.writer = writer
         self.repository = repository or WatchlistRepository()
+        self.config_path = config_path
         self._write_lock = Lock()
         self._job_lock = Lock()
         self._job: Thread | None = None
@@ -116,7 +121,9 @@ class NativeGuiServer:
     def _respond(self, request_id: Any, command: str, params: dict[str, Any]) -> None:
         try:
             if command == "watchlist.load":
-                request, options = _request_options(params)
+                request, options = _request_options(
+                    {**self._config_defaults(), **params}
+                )
                 watchlist = self.repository.load()
                 result = {"watchlist": _watchlist_data(watchlist, request)}
             else:
@@ -197,20 +204,15 @@ class NativeGuiServer:
         if command == "hello":
             return {
                 "protocol_version": 1,
-                "defaults": {
-                    "output": str(DEFAULT_DOWNLOAD_DIR),
-                    "splits": str(DEFAULT_SPLITS_DIR),
-                    "audio_source": "youtube",
-                    "metadata_source": "auto",
-                    "prefer": "lossless",
-                    "fallback": "youtube",
-                    "quality_policy": "off",
-                    "min_bitrate": 256,
-                    "jobs": 0,
-                    "interactive": True,
-                },
+                "defaults": self._config_defaults(),
                 "item_actions": [item.value for item in ItemAction],
             }
+        if command == "config.get":
+            return {"defaults": self._config_defaults()}
+        if command == "config.save":
+            defaults = _validate_gui_config({**self._config_defaults(), **params})
+            save_muzik_config_section("native_gui", defaults, path=self.config_path)
+            return {"defaults": defaults}
         if command == "job.cancel":
             job_id = _required_string(params, "job_id")
             if job_id != self._job_id or self._job is None or not self._job.is_alive():
@@ -229,7 +231,9 @@ class NativeGuiServer:
         if command == "services.check":
             return {"services": _json_value(check_services())}
         if command == "library.scan":
-            output = _path(params.get("output"), DEFAULT_DOWNLOAD_DIR)
+            output = _path(
+                params.get("output"), Path(self._config_defaults()["output"])
+            )
             items = scan_downloads(output)
             return {
                 "output": str(output),
@@ -279,7 +283,7 @@ class NativeGuiServer:
                 save_muzik_config_value("spotify", "redirect_port", str(port))
             return self._start_spotify_login()
         if command == "watchlist.load":
-            request, options = _request_options(params)
+            request, options = _request_options({**self._config_defaults(), **params})
             watchlist = self.repository.load()
             self._start_reconcile(request, options)
             return {"watchlist": _watchlist_data(watchlist, request)}
@@ -322,7 +326,7 @@ class NativeGuiServer:
                 raise ValueError("video_ids must be a list of at most 16 IDs.")
             return self._start_thumbnail_cache(set(video_ids))
         if command in {"workflow.start", "watchlist.refresh", "watchlist.action"}:
-            request, options = _request_options(params)
+            request, options = _request_options({**self._config_defaults(), **params})
             if command == "workflow.start" and not request.raw:
                 raise ValueError("Enter a URL or path.")
             if command == "watchlist.refresh" and not self.repository.load().playlists:
@@ -334,6 +338,15 @@ class NativeGuiServer:
                 ItemAction(_required_string(params, "action"))
             return self._start_job(command, params, request, options)
         raise ValueError(f"Unknown command: {command}")
+
+    def _config_defaults(self) -> dict[str, Any]:
+        config = load_muzik_config(self.config_path).get("native_gui")
+        if not isinstance(config, dict):
+            return _default_gui_config()
+        try:
+            return _validate_gui_config({**_default_gui_config(), **config})
+        except TypeError, ValueError:
+            return _default_gui_config()
 
     def _job_active(self) -> bool:
         return self._job is not None and self._job.is_alive()
@@ -849,6 +862,51 @@ def _path(value: Any, default: Path) -> Path:
         if isinstance(value, str) and value.strip()
         else default
     )
+
+
+def _default_gui_config() -> dict[str, Any]:
+    options = _json_value(WorkflowOptions())
+    options["config"] = ""
+    return {
+        "output": str(DEFAULT_DOWNLOAD_DIR),
+        "splits": str(DEFAULT_SPLITS_DIR),
+        **options,
+    }
+
+
+def _validate_gui_config(values: dict[str, Any]) -> dict[str, Any]:
+    defaults = _default_gui_config()
+    unknown = values.keys() - defaults.keys()
+    if unknown:
+        raise ValueError(f"Unknown config field: {sorted(unknown)[0]}.")
+    if values.keys() != defaults.keys():
+        raise ValueError("Config must include all fields.")
+    result: dict[str, Any] = {}
+    for name, default in defaults.items():
+        value = values[name]
+        if isinstance(default, bool):
+            if not isinstance(value, bool):
+                raise ValueError(f"{name} must be a boolean.")
+        elif isinstance(default, int):
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{name} must be a non-negative integer.")
+        elif not isinstance(value, str) or "\x00" in value:
+            raise ValueError(f"{name} must be a string without null bytes.")
+        elif name in {"output", "splits", "prefer"} and not value.strip():
+            raise ValueError(f"{name} must not be empty.")
+        result[name] = value
+    options = {
+        name: result[name] for name in result if name not in {"output", "splits"}
+    }
+    if options["config"]:
+        options["config"] = _path(options["config"], Path(""))
+    else:
+        options["config"] = None
+    WorkflowOptions(**options)
+    for name in ("output", "splits", "config"):
+        if result[name]:
+            result[name] = str(_path(result[name], Path("")))
+    return result
 
 
 def _watchlist_data(
