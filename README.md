@@ -114,12 +114,13 @@ already-organized tracks before it are not re-downloaded on the next run. See
 
 ## Install
 
-Install the GitHub release wheel as an isolated command-line tool:
+Download the wheel for your operating system and Python 3.14 from the
+[latest GitHub release](https://github.com/TudorAndrei/muzik/releases/latest).
+From the directory that contains the wheel, install it as an isolated tool:
 
 ```sh
-uv tool install \
-  https://github.com/TudorAndrei/muzik/releases/download/v0.2.0/muzik-0.2.0-py3-none-any.whl
-muzik --help
+uv tool install ./muzik-*.whl
+muzik gui
 ```
 
 Or install with Homebrew, which also pulls `ffmpeg` and `yt-dlp`:
