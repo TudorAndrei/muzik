@@ -19,10 +19,9 @@ HK_MISE = 1
 postinstall = "hk install --mise"
 
 [tasks.gui]
-description = "Build and run the GPUI Kit desktop interface"
+description = "Run the GPUI Kit desktop interface"
 run = """
-cargo build --manifest-path rust/gpui_app/Cargo.toml --locked
-MUZIK_GPUI_BIN="$PWD/rust/gpui_app/target/debug/muzik-gpui" uv run muzik gui
+MUZIK_PYTHON="$PWD/.venv/bin/python" cargo run --manifest-path rust/gpui_app/Cargo.toml --locked
 """
 
 [tasks.develop]
