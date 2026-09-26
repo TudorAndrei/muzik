@@ -8,6 +8,7 @@ use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -1695,32 +1696,48 @@ impl Muzik {
     }
 
     fn library(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut page = div()
-            .v_flex()
-            .gap_4()
-            .p_8()
-            .w_full()
-            .max_w(px(960.))
-            .child(div().text_2xl().font_semibold().child("Downloaded audio"))
-            .child(
-                Button::new("library-refresh")
-                    .label("Refresh")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.scan_library(cx);
-                        cx.notify();
-                    })),
-            );
+        let scanning = self
+            .pending
+            .values()
+            .any(|command| command == "library.scan");
+        let mut page = div().v_flex().gap_4().p_8().w_full().max_w(px(960.)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(div().text_2xl().font_semibold().child("Downloaded audio"))
+                .child(
+                    Button::new("library-refresh")
+                        .label("Refresh")
+                        .disabled(scanning)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.scan_library(cx);
+                            cx.notify();
+                        })),
+                ),
+        );
         let items = self.library["items"]
             .as_array()
             .or_else(|| self.library.as_array());
         if let Some(items) = items {
             page = page
-                .child(self.library["output"].as_str().unwrap_or("").to_string())
-                .child(format!(
-                    "{} files, {}",
-                    items.len(),
-                    self.library["total_size"].as_str().unwrap_or("0 B")
-                ));
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(rgb(0x64748b))
+                        .child(self.library["output"].as_str().unwrap_or("").to_string()),
+                )
+                .child(if scanning {
+                    "Scanning…".to_string()
+                } else if items.is_empty() {
+                    "No downloads found.".to_string()
+                } else {
+                    format!(
+                        "{} files, {}",
+                        items.len(),
+                        self.library["total_size"].as_str().unwrap_or("0 B")
+                    )
+                });
             for (index, item) in items.iter().enumerate() {
                 let title = item["title"].as_str().unwrap_or("Audio file");
                 let detail = format!(
@@ -1734,15 +1751,22 @@ impl Muzik {
                     div()
                         .id(("library-item", index))
                         .v_flex()
-                        .p_2()
-                        .border_b_1()
+                        .gap_1()
+                        .p_4()
+                        .border_1()
                         .border_color(rgb(0xe2e8f0))
-                        .child(title.to_string())
-                        .child(detail),
+                        .rounded_md()
+                        .bg(rgb(0xffffff))
+                        .child(div().font_semibold().child(title.to_string()))
+                        .child(div().text_sm().text_color(rgb(0x64748b)).child(detail)),
                 );
             }
         } else {
-            page = page.child("No downloads found.");
+            page = page.child(if scanning {
+                "Scanning…"
+            } else {
+                "No downloads found."
+            });
         }
         div()
             .flex()
@@ -1754,48 +1778,89 @@ impl Muzik {
     }
 
     fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut page = div()
-            .v_flex()
-            .gap_4()
-            .p_8()
-            .w_full()
-            .max_w(px(960.))
-            .child(
-                div()
-                    .text_2xl()
-                    .font_semibold()
-                    .child("Service availability"),
-            )
-            .child(
-                Button::new("service-refresh")
-                    .label("Re-check")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.send("services.check", json!({}));
-                        cx.notify();
-                    })),
-            );
+        let checking = self
+            .pending
+            .values()
+            .any(|command| command == "services.check");
+        let mut page = div().v_flex().gap_4().p_8().w_full().max_w(px(960.)).child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .text_2xl()
+                        .font_semibold()
+                        .child("Service availability"),
+                )
+                .child(
+                    Button::new("service-refresh")
+                        .label("Re-check")
+                        .disabled(checking)
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.send("services.check", json!({}));
+                            cx.notify();
+                        })),
+                ),
+        );
         let services = self.services["services"]
             .as_array()
             .or_else(|| self.services.as_array());
         if let Some(services) = services {
+            let missing = services
+                .iter()
+                .filter(|service| service["available"] == false && service["optional"] != true)
+                .count();
+            page = page.child(if checking {
+                "Checking…".to_string()
+            } else if missing == 0 {
+                "All required services are available.".to_string()
+            } else {
+                format!("{missing} required service(s) unavailable.")
+            });
             for (index, service) in services.iter().enumerate() {
-                page = page.child(
-                    div()
-                        .id(("service", index))
-                        .flex()
-                        .gap_4()
-                        .p_2()
-                        .border_b_1()
-                        .border_color(rgb(0xe2e8f0))
-                        .child(service["name"].as_str().unwrap_or("Service").to_string())
-                        .child(match service["available"].as_bool() {
-                            Some(true) => "Available",
-                            Some(false) => "Unavailable",
-                            None => "Not configured",
-                        })
-                        .child(service["detail"].as_str().unwrap_or("").to_string()),
-                );
+                let available = service["available"].as_bool();
+                let status = match available {
+                    Some(true) => Tag::success().child("Available").into_any_element(),
+                    Some(false) if service["optional"] == true => Tag::warning()
+                        .child("Optional · unavailable")
+                        .into_any_element(),
+                    Some(false) => Tag::danger().child("Unavailable").into_any_element(),
+                    None => Tag::secondary().child("Not configured").into_any_element(),
+                };
+                page =
+                    page.child(
+                        div()
+                            .id(("service", index))
+                            .flex()
+                            .items_center()
+                            .gap_4()
+                            .p_4()
+                            .border_1()
+                            .border_color(rgb(0xe2e8f0))
+                            .rounded_md()
+                            .bg(rgb(0xffffff))
+                            .child(
+                                div()
+                                    .v_flex()
+                                    .gap_1()
+                                    .flex_1()
+                                    .child(div().font_semibold().child(
+                                        service["name"].as_str().unwrap_or("Service").to_string(),
+                                    ))
+                                    .child(div().text_sm().text_color(rgb(0x64748b)).child(
+                                        service["detail"].as_str().unwrap_or("").to_string(),
+                                    )),
+                            )
+                            .child(status),
+                    );
             }
+        } else {
+            page = page.child(if checking {
+                "Checking…"
+            } else {
+                "No service checks are available."
+            });
         }
         div()
             .flex()
