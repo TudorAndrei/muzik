@@ -1,5 +1,5 @@
-"""DearPyGui desktop interface for muzik."""
+"""Keep the old GUI command import on the native launcher."""
 
-from muzik.gui.app import MuzikGuiApp, gui_cmd
+from muzik.commands.gui import gui_cmd
 
-__all__ = ["MuzikGuiApp", "gui_cmd"]
+__all__ = ["gui_cmd"]
