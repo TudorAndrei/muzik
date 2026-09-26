@@ -386,3 +386,19 @@ def test_thumbnail_command_fetches_only_requested_cards(monkeypatch, tmp_path) -
     assert fetched == ["oHg5SJYRHA0"]
     with pytest.raises(ValueError, match="video_ids"):
         server.dispatch("thumbnails.cache", {"video_ids": "all"})
+
+
+def test_library_scan_reports_file_details_and_total_size(tmp_path) -> None:
+    audio = tmp_path / "Track [dQw4w9WgXcQ].mp3"
+    audio.write_bytes(b"audio")
+    server = NativeGuiServer(
+        StringIO(),
+        StringIO(),
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    result = server.dispatch("library.scan", {"output": str(tmp_path)})
+    assert result["output"] == str(tmp_path)
+    assert result["total_size"] == "5.0 B"
+    assert result["items"][0]["size_label"] == "5.0 B"
+    assert result["items"][0]["youtube_id"] == "dQw4w9WgXcQ"
+    assert result["items"][0]["modified"]

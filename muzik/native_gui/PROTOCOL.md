@@ -25,7 +25,7 @@ records can arrive before the response to a start command.
 | `workflow.start` | `raw` and optional launcher fields | `job_id` |
 | `job.cancel` | `job_id` | `cancel_requested` |
 | `services.check` | none | `services` array with `name`, `available`, `detail`, `optional` |
-| `library.scan` | optional `output` path | `items` array |
+| `library.scan` | optional `output` path | `output`, `total_size`, `items` array with size and modified time |
 | `watchlist.load` | optional launcher fields | `watchlist` object |
 | `watchlist.add` | `url` | `playlist`, `watchlist` |
 | `watchlist.rename` | `playlist_id`, `title` | `renamed`, `watchlist` |

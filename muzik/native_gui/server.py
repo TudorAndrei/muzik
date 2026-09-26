@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, fields, is_dataclass
+from datetime import datetime
 from enum import Enum
 import json
 from pathlib import Path
@@ -20,7 +21,7 @@ from muzik.config import (
     save_muzik_config_value,
 )
 from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
-from muzik.core.library import scan_downloads
+from muzik.core.library import human_size, scan_downloads
 from muzik.core.services import check_services
 from muzik.core.sources.base import Candidate
 from muzik.core.sources.spotify_api import SpotifyClient
@@ -185,7 +186,21 @@ class NativeGuiServer:
             return {"services": _json_value(check_services())}
         if command == "library.scan":
             output = _path(params.get("output"), DEFAULT_DOWNLOAD_DIR)
-            return {"items": _json_value(scan_downloads(output))}
+            items = scan_downloads(output)
+            return {
+                "output": str(output),
+                "total_size": human_size(sum(item.size for item in items)),
+                "items": [
+                    {
+                        **_json_value(item),
+                        "size_label": human_size(item.size),
+                        "modified": datetime.fromtimestamp(item.mtime).strftime(
+                            "%Y-%m-%d %H:%M"
+                        ),
+                    }
+                    for item in items
+                ],
+            }
         if command == "spotify.status":
             settings = get_spotify_settings()
             token_saved = TokenStore().load() is not None

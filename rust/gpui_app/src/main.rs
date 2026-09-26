@@ -1269,14 +1269,21 @@ impl Muzik {
             .as_array()
             .or_else(|| self.library.as_array());
         if let Some(items) = items {
-            page = page.child(format!("{} files", items.len()));
+            page = page
+                .child(self.library["output"].as_str().unwrap_or("").to_string())
+                .child(format!(
+                    "{} files, {}",
+                    items.len(),
+                    self.library["total_size"].as_str().unwrap_or("0 B")
+                ));
             for (index, item) in items.iter().enumerate() {
                 let title = item["title"].as_str().unwrap_or("Audio file");
                 let detail = format!(
-                    "{}  •  {} bytes  •  {}",
+                    "{}  •  {}  •  {}  •  {}",
                     item["ext"].as_str().unwrap_or(""),
-                    item["size"].as_u64().unwrap_or(0),
-                    item["youtube_id"].as_str().unwrap_or("")
+                    item["size_label"].as_str().unwrap_or(""),
+                    item["modified"].as_str().unwrap_or(""),
+                    item["youtube_id"].as_str().unwrap_or("No YouTube ID")
                 );
                 page = page.child(
                     div()
@@ -1343,6 +1350,13 @@ impl Muzik {
     }
 
     fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
+        let saved_ids: HashSet<&str> = self.watchlist["playlists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|playlist| playlist["playlist_id"].as_str())
+            .collect();
+        let liked_saved = saved_ids.contains("spotify:liked");
         let mut page = div()
             .v_flex()
             .gap_3()
@@ -1428,8 +1442,12 @@ impl Muzik {
         page = page.child(
             Button::new("spotify-liked")
                 .primary()
-                .label("Add Liked Songs to watchlist")
-                .disabled(self.spotify["connected"] != true)
+                .label(if liked_saved {
+                    "Liked Songs saved"
+                } else {
+                    "Add Liked Songs to watchlist"
+                })
+                .disabled(self.spotify["connected"] != true || liked_saved)
                 .on_click(cx.listener(|view, _, _, cx| {
                     view.send("watchlist.add", json!({"url":"liked"}));
                     cx.notify();
@@ -1439,16 +1457,26 @@ impl Muzik {
             for (index, playlist) in playlists.iter().enumerate() {
                 let name = playlist["name"].as_str().unwrap_or("Playlist");
                 let uri = playlist["uri"].as_str().unwrap_or("").to_string();
+                if uri == "spotify:liked" {
+                    continue;
+                }
+                let saved = saved_ids.contains(uri.as_str());
+                let detail = format!(
+                    "{} · {} tracks",
+                    playlist["owner"].as_str().unwrap_or("Spotify"),
+                    playlist["total"].as_u64().unwrap_or(0)
+                );
                 page = page.child(
                     div()
                         .id(("spotify-playlist", index))
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(name.to_string())
+                        .child(div().v_flex().child(name.to_string()).child(detail))
                         .child(
                             Button::new(("spotify-add", index))
-                                .label("Add to watchlist")
+                                .label(if saved { "Saved" } else { "Add to watchlist" })
+                                .disabled(saved)
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.send("watchlist.add", json!({"url":uri}));
                                     cx.notify();
