@@ -17,6 +17,11 @@ The `id` is copied into the response. An error response has `ok:false` and an
 `job_active`, and `operation_failed`. One job can run at a time. Job event
 records can arrive before the response to a start command.
 
+The service runs `library.scan`, `services.check`, `spotify.status`, and
+`spotify.playlists` on read workers. Their responses can arrive out of request
+order. Match each response to its request by `id`. A slow read does not hold up
+`job.cancel` or `decision.reply`.
+
 ## Commands
 
 | Command | Params | Result |
@@ -73,7 +78,9 @@ check, the service saves the checked cards and sends `watchlist.updated` with
 `{ "watchlist": ... }`. If another process changed the file, the worker reads
 it again before it saves. If the check fails, the service sends
 `watchlist.error` with a `message`. A load during a job does not start this
-check. The service rejects add, rename, and remove commands until the job ends.
+check. For each `watchlist.load`, its response comes before any
+`watchlist.updated` event from the check it starts. The service rejects add,
+rename, and remove commands until the job ends.
 
 ## Blocking decisions
 

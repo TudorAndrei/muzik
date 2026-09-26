@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, fields, is_dataclass
 from datetime import datetime
 from enum import Enum
@@ -107,47 +108,84 @@ class NativeGuiServer:
     def _event(self, name: str, data: dict[str, Any]) -> None:
         self._write({"type": "event", "event": name, "data": data})
 
-    def serve(self) -> None:
+    def _respond(self, request_id: Any, command: str, params: dict[str, Any]) -> None:
         try:
-            for line in self.reader:
-                if not line.strip():
-                    continue
-                request: Any = None
-                try:
-                    request = json.loads(line)
-                    if not isinstance(request, dict):
-                        raise ValueError("Request must be an object.")
-                    request_id = request.get("id")
-                    command = request.get("command")
-                    params = request.get("params", {})
-                    if not isinstance(command, str) or not isinstance(params, dict):
-                        raise ValueError("Request needs a command and object params.")
-                    result = self.dispatch(command, params)
-                    self._write(
-                        {
-                            "id": request_id,
-                            "type": "response",
-                            "ok": True,
-                            "result": result,
-                        }
-                    )
-                except Exception as exc:
-                    self._write(
-                        {
-                            "id": request.get("id")
-                            if isinstance(request, dict)
-                            else None,
-                            "type": "response",
-                            "ok": False,
-                            "error": {"code": _error_code(exc), "message": str(exc)},
-                        }
-                    )
-        finally:
-            self.cancel()
-            if self._job is not None:
-                self._job.join(timeout=5)
-            if self._reconcile_worker is not None:
-                self._reconcile_worker.join(timeout=5)
+            if command == "watchlist.load":
+                request, options = _request_options(params)
+                watchlist = self.repository.load()
+                result = {"watchlist": _watchlist_data(watchlist, request)}
+            else:
+                result = self.dispatch(command, params)
+        except Exception as exc:
+            self._write(
+                {
+                    "id": request_id,
+                    "type": "response",
+                    "ok": False,
+                    "error": {"code": _error_code(exc), "message": str(exc)},
+                }
+            )
+            return
+        self._write(
+            {"id": request_id, "type": "response", "ok": True, "result": result}
+        )
+        if command == "watchlist.load":
+            # The checked state must not arrive before the saved-state response.
+            try:
+                self._start_reconcile(request, options)
+            except Exception as exc:
+                self._event("watchlist.error", {"message": str(exc)})
+
+    def serve(self) -> None:
+        with ThreadPoolExecutor(
+            max_workers=4, thread_name_prefix="muzik-native-read"
+        ) as reads:
+            try:
+                for line in self.reader:
+                    if not line.strip():
+                        continue
+                    request: Any = None
+                    try:
+                        request = json.loads(line)
+                        if not isinstance(request, dict):
+                            raise ValueError("Request must be an object.")
+                        request_id = request.get("id")
+                        command = request.get("command")
+                        params = request.get("params", {})
+                        if not isinstance(command, str) or not isinstance(params, dict):
+                            raise ValueError(
+                                "Request needs a command and object params."
+                            )
+                    except Exception as exc:
+                        self._write(
+                            {
+                                "id": request.get("id")
+                                if isinstance(request, dict)
+                                else None,
+                                "type": "response",
+                                "ok": False,
+                                "error": {
+                                    "code": _error_code(exc),
+                                    "message": str(exc),
+                                },
+                            }
+                        )
+                        continue
+                    if command in {
+                        "library.scan",
+                        "services.check",
+                        "spotify.status",
+                        "spotify.playlists",
+                    }:
+                        reads.submit(self._respond, request_id, command, params)
+                    else:
+                        self._respond(request_id, command, params)
+            finally:
+                self.cancel()
+                if self._job is not None:
+                    self._job.join(timeout=5)
+                if self._reconcile_worker is not None:
+                    self._reconcile_worker.join(timeout=5)
 
     def dispatch(self, command: str, params: dict[str, Any]) -> dict[str, Any]:
         if command == "hello":

@@ -2,9 +2,11 @@
 
 from io import StringIO
 import json
+from queue import Queue
 from threading import Event, Thread
 import time
 from types import SimpleNamespace
+from typing import TextIO, cast
 
 import pytest
 
@@ -27,6 +29,33 @@ from muzik.native_gui.server import NativeGuiServer, _watchlist_data
 
 def _records(writer: StringIO) -> list[dict]:
     return [json.loads(line) for line in writer.getvalue().splitlines()]
+
+
+class _RequestStream:
+    def __init__(self) -> None:
+        self.lines: Queue[str | None] = Queue()
+
+    def __iter__(self):
+        while (line := self.lines.get()) is not None:
+            yield line
+
+    def send(self, request: dict) -> None:
+        self.lines.put(json.dumps(request) + "\n")
+
+    def close(self) -> None:
+        self.lines.put(None)
+
+
+def _wait_for_record(server: NativeGuiServer, writer: StringIO, predicate):
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        with server._write_lock:
+            records = _records(writer)
+        for record in records:
+            if predicate(record):
+                return record
+        time.sleep(0.01)
+    raise AssertionError(f"No matching response in {records!r}")
 
 
 def test_process_round_trip_and_watchlist_storage(tmp_path) -> None:
@@ -242,7 +271,8 @@ def test_spotify_status_and_playlists_protocol(monkeypatch, tmp_path) -> None:
     NativeGuiServer(
         reader, writer, repository=WatchlistRepository(tmp_path / "watchlist.json")
     ).serve()
-    status, playlists = _records(writer)
+    records = {record["id"]: record for record in _records(writer)}
+    status, playlists = records["s"], records["p"]
     assert status["ok"] is True
     assert status["result"] == {
         "client_id": "app-id",
@@ -346,6 +376,203 @@ def test_watchlist_load_returns_before_reconcile_and_keeps_newer_write(
     assert repository.load().playlists[0].title == "New name"
     assert calls == ["old", "New name"]
     assert _records(writer)[-1]["event"] == "watchlist.updated"
+
+
+def test_watchlist_response_precedes_reconcile_event(monkeypatch, tmp_path) -> None:
+    repository = WatchlistRepository(tmp_path / "watchlist.json")
+    repository.add("https://www.youtube.com/playlist?list=PL123456789012345")
+
+    def reconcile(watchlist, *, request, options):
+        watchlist.playlists[0].title = "Checked title"
+
+    monkeypatch.setattr("muzik.native_gui.server.reconcile_watchlist", reconcile)
+    writer = StringIO()
+    server = NativeGuiServer(
+        StringIO('{"id":"load","command":"watchlist.load","params":{}}\n'),
+        writer,
+        repository=repository,
+    )
+    server.serve()
+    records = _records(writer)
+    assert records[0]["id"] == "load"
+    assert records[0]["result"]["watchlist"]["playlists"][0]["title"] is None
+    assert records[1]["event"] == "watchlist.updated"
+    assert records[1]["data"]["watchlist"]["playlists"][0]["title"] == "Checked title"
+
+
+def test_slow_read_does_not_delay_decision_reply(monkeypatch, tmp_path) -> None:
+    entered = Event()
+    release = Event()
+
+    def slow_check():
+        entered.set()
+        assert release.wait(2)
+        return []
+
+    monkeypatch.setattr("muzik.native_gui.server.check_services", slow_check)
+    reader = _RequestStream()
+    writer = StringIO()
+    server = NativeGuiServer(
+        cast(TextIO, reader),
+        writer,
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    serving = Thread(target=server.serve)
+    serving.start()
+    answer: list[object] = []
+    decision = Thread(
+        target=lambda: answer.append(
+            server._request_decision(
+                "job", "chapter_review", {"chapters": []}, CancellationToken()
+            )
+        )
+    )
+    decision.start()
+    try:
+        request = _wait_for_record(
+            server,
+            writer,
+            lambda record: record.get("event") == "decision.request",
+        )
+        reader.send({"id": "slow", "command": "services.check", "params": {}})
+        assert entered.wait(2)
+        reader.send(
+            {
+                "id": "reply",
+                "command": "decision.reply",
+                "params": {
+                    "decision_id": request["data"]["decision_id"],
+                    "value": "accept",
+                },
+            }
+        )
+        response = _wait_for_record(
+            server, writer, lambda record: record.get("id") == "reply"
+        )
+        assert response["ok"] is True
+        decision.join(timeout=2)
+        assert answer == ["accept"]
+        assert not any(record.get("id") == "slow" for record in _records(writer))
+    finally:
+        release.set()
+        reader.close()
+        decision.join(timeout=2)
+        serving.join(timeout=2)
+    assert not serving.is_alive()
+    assert any(record.get("id") == "slow" for record in _records(writer))
+
+
+def test_slow_read_does_not_delay_job_cancel(monkeypatch, tmp_path) -> None:
+    entered = Event()
+    release = Event()
+
+    def slow_scan(output):
+        entered.set()
+        assert release.wait(2)
+        return []
+
+    monkeypatch.setattr("muzik.native_gui.server.scan_downloads", slow_scan)
+    monkeypatch.setattr(
+        "muzik.native_gui.server.build_workflow_operations",
+        lambda **kwargs: SimpleNamespace(decisions=kwargs["decisions"]),
+    )
+
+    def run(request, options, *, operations, events, cancellation):
+        operations.decisions.confirm_chapters(tmp_path / "audio.m4a", [])
+
+    monkeypatch.setattr("muzik.native_gui.server.run_workflow", run)
+    reader = _RequestStream()
+    writer = StringIO()
+    server = NativeGuiServer(
+        cast(TextIO, reader),
+        writer,
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    serving = Thread(target=server.serve)
+    serving.start()
+    try:
+        reader.send(
+            {"id": "start", "command": "workflow.start", "params": {"raw": "example"}}
+        )
+        response = _wait_for_record(
+            server, writer, lambda record: record.get("id") == "start"
+        )
+        job_id = response["result"]["job_id"]
+        _wait_for_record(
+            server, writer, lambda record: record.get("event") == "decision.request"
+        )
+        reader.send(
+            {
+                "id": "scan",
+                "command": "library.scan",
+                "params": {"output": str(tmp_path)},
+            }
+        )
+        assert entered.wait(2)
+        reader.send(
+            {"id": "cancel", "command": "job.cancel", "params": {"job_id": job_id}}
+        )
+        cancelled = _wait_for_record(
+            server, writer, lambda record: record.get("id") == "cancel"
+        )
+        assert cancelled["ok"] is True
+        _wait_for_record(
+            server, writer, lambda record: record.get("event") == "job.cancelled"
+        )
+        with server._write_lock:
+            assert not any(record.get("id") == "scan" for record in _records(writer))
+    finally:
+        release.set()
+        reader.close()
+        serving.join(timeout=2)
+    assert not serving.is_alive()
+    assert any(record.get("id") == "scan" for record in _records(writer))
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["library.scan", "services.check", "spotify.status", "spotify.playlists"],
+)
+def test_read_response_keeps_its_id_when_later_command_finishes_first(
+    monkeypatch, tmp_path, command
+) -> None:
+    entered = Event()
+    release = Event()
+    reader = _RequestStream()
+    writer = StringIO()
+    server = NativeGuiServer(
+        cast(TextIO, reader),
+        writer,
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    dispatch = server.dispatch
+
+    def delayed(request_command, params):
+        if request_command == command:
+            entered.set()
+            assert release.wait(5)
+            return {"command": request_command}
+        return dispatch(request_command, params)
+
+    monkeypatch.setattr(server, "dispatch", delayed)
+    serving = Thread(target=server.serve)
+    serving.start()
+    try:
+        reader.send({"id": "slow", "command": command, "params": {}})
+        assert entered.wait(2)
+        reader.send({"id": "fast", "command": "hello", "params": {}})
+        fast = _wait_for_record(
+            server, writer, lambda record: record.get("id") == "fast"
+        )
+        assert fast["ok"] is True
+        assert not any(record.get("id") == "slow" for record in _records(writer))
+    finally:
+        release.set()
+        reader.close()
+        serving.join(timeout=2)
+    assert not serving.is_alive()
+    slow = next(record for record in _records(writer) if record.get("id") == "slow")
+    assert slow["result"] == {"command": command}
 
 
 def test_thumbnail_command_fetches_only_requested_cards(monkeypatch, tmp_path) -> None:
