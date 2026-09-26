@@ -121,6 +121,7 @@ struct Muzik {
     selected_playlist: usize,
     filter: usize,
     watch_page: usize,
+    thumbnail_attempted: HashSet<String>,
     library: Value,
     services: Value,
     spotify: Value,
@@ -189,6 +190,7 @@ impl Muzik {
             selected_playlist: 0,
             filter: 0,
             watch_page: 0,
+            thumbnail_attempted: HashSet::new(),
             library: Value::Null,
             services: Value::Null,
             spotify: Value::Null,
@@ -286,6 +288,11 @@ impl Muzik {
     }
 
     fn start_job(&mut self, command: &str, params: Value, cx: &mut Context<Self>) {
+        if self.job_kind.is_some() || self.job_id.is_some() {
+            self.status = "A job is already active".into();
+            cx.notify();
+            return;
+        }
         self.error = None;
         self.job_status = "Starting".into();
         self.job_kind = Some(command.to_string());
@@ -394,11 +401,9 @@ impl Muzik {
                         .unwrap_or("Request failed")
                         .into();
                     self.error = Some(self.status.clone());
-                    if command == "workflow.start"
-                        || command == "watchlist.refresh"
-                        || command == "watchlist.action"
-                    {
+                    if self.job_kind.as_deref() == Some(command.as_str()) {
                         self.job_status = self.status.clone();
+                        self.job_kind = None;
                     }
                     return;
                 }
@@ -420,6 +425,7 @@ impl Muzik {
                     "watchlist.load" | "watchlist.add" | "watchlist.remove"
                     | "watchlist.rename" => {
                         self.replace_watchlist(result["watchlist"].clone());
+                        self.cache_visible_thumbnails(_cx);
                         if command != "watchlist.load" {
                             self.send("watchlist.load", self.launcher_params(_cx));
                         }
@@ -482,6 +488,7 @@ impl Muzik {
                 match event {
                     "watchlist.updated" => {
                         self.replace_watchlist(data["watchlist"].clone());
+                        self.cache_visible_thumbnails(_cx);
                         self.status = "Watchlist updated".into();
                     }
                     "watchlist.error" => {
@@ -623,6 +630,22 @@ impl Muzik {
             .filter(|item| item["thumbnail_url"].is_string())
             .filter_map(|item| item["video_id"].as_str().map(str::to_owned))
             .collect()
+    }
+
+    fn cache_visible_thumbnails(&mut self, cx: &mut Context<Self>) {
+        if self.page != Page::Watchlist || self.job_kind.is_some() || self.job_id.is_some() {
+            return;
+        }
+        let video_ids: Vec<String> = self
+            .visible_thumbnail_ids()
+            .into_iter()
+            .filter(|id| !self.thumbnail_attempted.contains(id))
+            .collect();
+        if video_ids.is_empty() {
+            return;
+        }
+        self.thumbnail_attempted.extend(video_ids.iter().cloned());
+        self.start_job("thumbnails.cache", json!({"video_ids":video_ids}), cx);
     }
 
     fn reply(&mut self, value: Value, cx: &mut Context<Self>) {
@@ -895,6 +918,7 @@ impl Muzik {
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.selected_playlist = index;
                                 view.watch_page = 0;
+                                view.cache_visible_thumbnails(cx);
                                 cx.notify();
                             })),
                     )
@@ -959,6 +983,9 @@ impl Muzik {
                                 view.status = "No missing thumbnails on this page".into();
                                 cx.notify();
                             } else {
+                                for video_id in &video_ids {
+                                    view.thumbnail_attempted.insert(video_id.clone());
+                                }
                                 view.start_job(
                                     "thumbnails.cache",
                                     json!({"video_ids":video_ids}),
@@ -1044,6 +1071,7 @@ impl Muzik {
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.filter = (view.filter + 1) % FILTERS.len();
                             view.watch_page = 0;
+                            view.cache_visible_thumbnails(cx);
                             cx.notify();
                         })),
                 );
@@ -1077,6 +1105,7 @@ impl Muzik {
                                 .child(Button::new("previous").label("Previous").on_click(
                                     cx.listener(|view, _, _, cx| {
                                         view.watch_page = view.watch_page.saturating_sub(1);
+                                        view.cache_visible_thumbnails(cx);
                                         cx.notify();
                                     }),
                                 ))
@@ -1084,6 +1113,7 @@ impl Muzik {
                                 .child(Button::new("next").label("Next").on_click(cx.listener(
                                     move |view, _, _, cx| {
                                         view.watch_page = (view.watch_page + 1).min(page_count - 1);
+                                        view.cache_visible_thumbnails(cx);
                                         cx.notify();
                                     },
                                 ))),
