@@ -11,8 +11,8 @@ the existing workflow, Beets, watchlist, library, and Spotify services.
 mise run gui
 ```
 
-`mise run gui` builds the Rust app and starts that debug build through the
-`muzik gui` command. `./scripts/build-native-gui.sh` makes a release build and
+`mise run gui` runs `cargo run` for the Rust app with the local Python
+interpreter. `./scripts/build-native-gui.sh` makes a release build and
 copies the binary into `muzik/bin/` for a Python wheel. Release builds include
 the binary in the wheel. The script requires the Rust version in `mise.toml`.
 
