@@ -46,12 +46,11 @@ For each new tag, edit `Formula/muzik.rb` in the tap:
 
 ## Notes and caveats
 
-- **Compiles the native Soulseek module from source.** The formula depends on
-  `rust` (build-only) because the source archive has no prebuilt wheel — `pip`
-  compiles `muzik._seakarr` via Maturin during `brew install`, which also
-  needs network access to fetch the pinned `soulseek-rs-lib` git dependency.
+- **Compiles both Rust parts from source.** The formula builds the GPUI app
+  before `pip` builds `muzik._seakarr` with Maturin. It needs Rust and network
+  access to fetch the pinned `soulseek-rs-lib` git dependency.
 - **Dependencies come from PyPI at install time.** `pip` resolves the Python
-  dependencies (including the `dearpygui` cp314 wheel) while `brew install` runs.
+  dependencies while `brew install` runs.
   This reaches the network during the build step, so the formula is not
   reproducible and would not pass a `homebrew-core` audit. That is acceptable for a
   personal tap. A fully vendored, audit-clean formula becomes practical only if
