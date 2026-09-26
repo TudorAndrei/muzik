@@ -22,7 +22,7 @@ postinstall = "hk install --mise"
 description = "Build and run the GPUI Kit desktop interface"
 run = """
 cargo build --manifest-path rust/gpui_app/Cargo.toml --locked
-uv run muzik gui
+MUZIK_GPUI_BIN="$PWD/rust/gpui_app/target/debug/muzik-gpui" uv run muzik gui
 """
 
 [tasks.develop]
