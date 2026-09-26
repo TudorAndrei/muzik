@@ -265,7 +265,10 @@ impl Muzik {
             Page::Watchlist => self.send("watchlist.load", self.launcher_params(cx)),
             Page::Library => self.scan_library(cx),
             Page::Settings => self.send("services.check", json!({})),
-            Page::Spotify => self.send("spotify.status", json!({})),
+            Page::Spotify => {
+                self.send("watchlist.load", self.launcher_params(cx));
+                self.send("spotify.status", json!({}));
+            }
             Page::Workflow => {}
         }
         cx.notify();
