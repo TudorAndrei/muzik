@@ -1585,7 +1585,11 @@ impl Muzik {
                     .justify_between()
                     .gap_3()
                     .child(div().font_semibold().child(title.to_string()))
-                    .child(Tag::new().with_variant(summary_variant).child(summary.to_string())),
+                    .child(
+                        Tag::new()
+                            .with_variant(summary_variant)
+                            .child(summary.to_string()),
+                    ),
             );
         let source_label = if item["kind"] == "spotify" {
             "Spotify ID"
@@ -1670,15 +1674,18 @@ impl Muzik {
         let toggle_key = item_key.clone();
         action_row = action_row.child(
             Button::new(("item-more", position))
-                .label(if actions_open { "Close actions" } else { "More actions" })
+                .label(if actions_open {
+                    "Close actions"
+                } else {
+                    "More actions"
+                })
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    view.expanded_item_actions = if view.expanded_item_actions.as_deref()
-                        == Some(toggle_key.as_str())
-                    {
-                        None
-                    } else {
-                        Some(toggle_key.clone())
-                    };
+                    view.expanded_item_actions =
+                        if view.expanded_item_actions.as_deref() == Some(toggle_key.as_str()) {
+                            None
+                        } else {
+                            Some(toggle_key.clone())
+                        };
                     cx.notify();
                 })),
         );
@@ -1762,8 +1769,13 @@ impl Muzik {
             }
             actions = actions.child(action_row);
         }
-        card.child(GroupBox::new().id(("item-commands", position)).outline().child(actions))
-            .into_any_element()
+        card.child(
+            GroupBox::new()
+                .id(("item-commands", position))
+                .outline()
+                .child(actions),
+        )
+        .into_any_element()
     }
 
     fn library(&self, cx: &mut Context<Self>) -> AnyElement {
