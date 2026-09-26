@@ -66,10 +66,11 @@ The CLI can run without a display; the GPUI app needs a GPU and display.
 
 ## Release checks
 
-The release workflow sets one version in the Seakarr Cargo manifest, then
+The release workflow sets one version in both Rust Cargo manifests, then
 builds macOS and Linux wheels and a source archive. Each wheel job builds the
-GPUI binary first and checks that the wheel contains it. The normal check
-workflow runs Python and Rust checks on Linux and a GPUI build on macOS.
+GPUI binary first, installs the wheel, and checks the Python service link.
+The normal check workflow runs Python and Rust checks on Linux and a GPUI
+build on macOS. This service check does not open a window.
 
 Before publishing a desktop release, install each wheel in a clean environment
 and check `muzik gui`, the Python service link, keyboard input, focus, workflow
