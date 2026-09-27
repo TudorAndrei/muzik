@@ -1,5 +1,5 @@
 use muzik_library::query::Query;
-use muzik_library::Library;
+use muzik_library::{Album, Fields, Item, Library, SqlValue};
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -64,4 +64,40 @@ fn queries_album_fields() {
     let library = Library::open_read_only(&path).unwrap();
     assert_eq!(library.query_albums("album::^Alb").unwrap()[0].id, 1);
     assert!(library.query_albums("album:Other").unwrap().is_empty());
+}
+
+#[test]
+fn default_item_sort_uses_beets_artist_sort_field() {
+    let make_item = |id: i64, artist: &str, artist_sort: &str| Item {
+        id,
+        fields: Fields::from([
+            ("artist".into(), SqlValue::Text(artist.into())),
+            ("artist_sort".into(), SqlValue::Text(artist_sort.into())),
+        ]),
+        attributes: Fields::new(),
+    };
+    let mut items = vec![make_item(1, "Alpha", "Zulu"), make_item(2, "Zulu", "Alpha")];
+    Query::parse("").unwrap().sort_items(&mut items);
+    assert_eq!(items.iter().map(|item| item.id).collect::<Vec<_>>(), [2, 1]);
+
+    let make_album = |id: i64, artist: &str, artist_sort: &str| Album {
+        id,
+        fields: Fields::from([
+            ("albumartist".into(), SqlValue::Text(artist.into())),
+            (
+                "albumartist_sort".into(),
+                SqlValue::Text(artist_sort.into()),
+            ),
+        ]),
+        attributes: Fields::new(),
+    };
+    let mut albums = vec![
+        make_album(1, "Alpha", "Zulu"),
+        make_album(2, "Zulu", "Alpha"),
+    ];
+    Query::parse("").unwrap().sort_albums(&mut albums);
+    assert_eq!(
+        albums.iter().map(|album| album.id).collect::<Vec<_>>(),
+        [2, 1]
+    );
 }

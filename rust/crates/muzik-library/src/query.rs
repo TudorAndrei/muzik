@@ -313,8 +313,8 @@ fn compare_rows(
     sorts: &[Sort],
 ) -> Ordering {
     for sort in sorts {
-        let left = value(left_fields, left_attributes, &sort.field);
-        let right = value(right_fields, right_attributes, &sort.field);
+        let left = sort_value(left_fields, left_attributes, &sort.field);
+        let right = sort_value(right_fields, right_attributes, &sort.field);
         let order = compare_values(left, right);
         if order != Ordering::Equal {
             return if sort.ascending {
@@ -327,6 +327,18 @@ fn compare_rows(
     Ordering::Equal
 }
 
+fn sort_value<'a>(fields: &'a Fields, attributes: &'a Fields, field: &str) -> Option<&'a Value> {
+    if field == "artist" || field == "albumartist" {
+        let sort_field = format!("{field}_sort");
+        if let Some(value @ Value::Text(text)) = fields.get(&sort_field) {
+            if !text.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    value(fields, attributes, field)
+}
+
 fn compare_values(left: Option<&Value>, right: Option<&Value>) -> Ordering {
     match (left, right) {
         (None | Some(Value::Null), None | Some(Value::Null)) => Ordering::Equal,
@@ -335,7 +347,7 @@ fn compare_values(left: Option<&Value>, right: Option<&Value>) -> Ordering {
         (Some(Value::Integer(left)), Some(Value::Integer(right))) => left.cmp(right),
         (Some(Value::Real(left)), Some(Value::Real(right))) => left.total_cmp(right),
         (Some(left), Some(right)) => value_text(left)
-            .to_lowercase()
-            .cmp(&value_text(right).to_lowercase()),
+            .to_ascii_lowercase()
+            .cmp(&value_text(right).to_ascii_lowercase()),
     }
 }
