@@ -16,26 +16,26 @@
 
 ### Phase 2: Core types, config loading, license gate
 
-- [ ] `muzik-core` types and `BeetsConfig` layered load with `serde-saphyr`
-- [ ] Apache-2.0 `LICENSE`, `NOTICE`, `rust/deny.toml`; `cargo deny check licenses` in `mise run check`
-- [ ] `get_native_settings()` in `muzik/config.py`, all switches `beets`
-- [ ] Config fixture test passes
-- [ ] Commit: `feat(core): add muzik-core types and beets config loading`
+- [x] `muzik-core` types and `BeetsConfig` layered load with `serde-saphyr`
+- [x] Apache-2.0 `LICENSE`, `NOTICE`, `rust/deny.toml`; `cargo deny check licenses` in `mise run check`
+- [x] `get_native_settings()` in `muzik/config.py`, all switches `beets`
+- [x] Config fixture test passes
+- [x] Commit: `feat(core): add muzik-core types and beets config loading`
 
 ## Milestone 1: Matching (`muzik-match`)
 
 ### Phase 3: String distance
 
-- [ ] `scripts/beets_fixtures/match.py` writes `string_dist.json`
-- [ ] Port `string_dist`; fixture test with explicit allow list
-- [ ] Commit: `feat(match): port beets string distance`
+- [x] `scripts/beets_fixtures/match.py` writes `string_dist.json`
+- [x] Port `string_dist`; fixture test with explicit allow list
+- [x] Commit: `feat(match): port beets string distance`
 
 ### Phase 4: Track and album distance
 
-- [ ] Port `Distance`, `MatchConfig`, `track_distance`, album `distance`
-- [ ] Fixtures: preferred media/countries, `original_year`, length grace/max,
+- [x] Port `Distance`, `MatchConfig`, `track_distance`, album `distance`
+- [x] Fixtures: preferred media/countries, `original_year`, length grace/max,
   VA rules, missing and unmatched tracks
-- [ ] Commit: `feat(match): port track and album distance scoring`
+- [x] Commit: `feat(match): port track and album distance scoring`
 
 ### Phase 5: Assignment and ranking
 
@@ -63,10 +63,10 @@
 
 ### Phase 8: MusicBrainz client
 
-- [ ] `musicbrainz_rs` sync wrapper with `governor` and `backon`
-- [ ] Release search and lookup mapped to `ReleaseCandidate`
-- [ ] Recorded-response fixtures compared with beets `AlbumInfo`
-- [ ] Commit: `feat(metadata): add rate-limited MusicBrainz release client`
+- [x] `musicbrainz_rs` sync wrapper with `governor` and `backon`
+- [x] Release search and lookup mapped to `ReleaseCandidate`
+- [x] Recorded-response fixtures compared with beets `AlbumInfo`
+- [x] Commit: `feat(metadata): add rate-limited MusicBrainz release client`
 
 ### Phase 9: Replace musicbrainzngs
 
@@ -93,9 +93,9 @@
 
 ### Phase 12: Read the beets database
 
-- [ ] Item and album models with flexible attributes
-- [ ] `regexp`, `unidecode`, `bytelower` SQL functions
-- [ ] Commit: `feat(library): read beets library items and albums`
+- [x] Item and album models with flexible attributes
+- [x] `regexp`, `unidecode`, `bytelower` SQL functions
+- [x] Commit: `feat(library): read beets library items and albums`
 
 ### Phase 13: Query language
 
@@ -125,8 +125,8 @@
 
 ### Phase 17: File operations
 
-- [ ] Move, copy, link, hardlink, reflink, cross-device move, empty-folder prune
-- [ ] Commit: `feat(import): add file operations for library placement`
+- [x] Move, copy, link, hardlink, reflink, cross-device move, empty-folder prune
+- [x] Commit: `feat(import): add file operations for library placement`
 
 ### Phase 18: Import plan and apply
 
