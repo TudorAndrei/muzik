@@ -8,6 +8,18 @@ permissions:
   contents: read
 
 jobs:
+  commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: cocogitto hk
+      - run: cog check --from-latest-tag
+
   check:
     runs-on: ubuntu-latest
     steps:
@@ -41,4 +53,4 @@ jobs:
           install_args: rust hk
       - run: cargo test --manifest-path rust/gpui_app/Cargo.toml --locked
       - run: cargo build --manifest-path rust/gpui_app/Cargo.toml --locked
-      - run: rust/gpui_app/target/debug/muzik-gpui --version
+      - run: target/debug/muzik-gpui --version
