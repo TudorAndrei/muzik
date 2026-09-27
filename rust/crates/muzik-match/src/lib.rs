@@ -1,8 +1,6 @@
 //! Music matching primitives compatible with beets.
 
 mod distance;
-#[allow(non_snake_case, clippy::all)]
-mod lsap;
 mod ranking;
 mod string_distance;
 

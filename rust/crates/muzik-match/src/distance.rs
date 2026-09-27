@@ -25,7 +25,7 @@ pub enum Error {
     #[error("item or track index is outside the supplied album")]
     InvalidPair,
     #[error("track assignment failed: {0}")]
-    Assignment(&'static str),
+    Assignment(#[from] lsap::LSAPError),
 }
 
 /// The fields in a local beets Item that affect matching.

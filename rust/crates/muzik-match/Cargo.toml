@@ -8,6 +8,7 @@ description = "Beets-compatible music matching primitives"
 
 [dependencies]
 deunicode = "1.6"
+lsap = "=1.0.2"
 muzik-core = { path = "../muzik-core" }
 regex = "1.12"
 serde = { version = "1", features = ["derive"] }

@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use crate::distance::{
     album_distance, track_distance, Distance, Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack,
 };
-use crate::lsap;
 
 /// Track mapping and items left after minimum-cost assignment.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -26,8 +25,7 @@ pub fn assign_items(
             costs.push(track_distance(item, track, false, config)?.score(config)?);
         }
     }
-    let (rows, columns) =
-        lsap::solve(items.len(), tracks.len(), &costs, false).map_err(Error::Assignment)?;
+    let (rows, columns) = lsap::solve(items.len(), tracks.len(), &costs, false)?;
     let mut pairs: Vec<_> = rows.into_iter().zip(columns).collect();
     // beets builds its mapping by track order, even when LAP returns row order.
     pairs.sort_by_key(|pair| pair.1);
