@@ -1,6 +1,7 @@
 """Read a beets fixture database through the native library switch."""
 
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -8,6 +9,7 @@ from beets.library import Library
 
 from muzik.commands import soulseek
 from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
+from muzik.core.beets import importer
 from muzik.core.native_library import (
     NativeLibrary,
     ShadowLibrary,
@@ -78,3 +80,27 @@ def test_soulseek_check_selects_native_library(monkeypatch, tmp_path: Path) -> N
         limit=10,
         config=None,
     )
+
+
+def test_native_prune_checks_fraction_and_backs_up_database(
+    monkeypatch, tmp_path: Path
+) -> None:
+    database = tmp_path / "library.db"
+    shutil.copyfile(FIXTURE_DB, database)
+    config = tmp_path / "beets.yaml"
+    config.write_text(
+        f"library: {database}\ndirectory: {tmp_path / 'music'}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MUZIK_NATIVE_LIBRARY", "native")
+
+    try:
+        importer.prune_missing_items(config)
+    except importer.PruneAborted as error:
+        assert (error.missing, error.total) == (2, 2)
+    else:
+        raise AssertionError("unsafe prune did not abort")
+
+    assert importer.prune_missing_items(config, safety_fraction=1.0) == 2
+    assert NativeLibrary(config).items() == []
+    assert (tmp_path / "library.db.native-backup").exists()

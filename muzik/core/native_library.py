@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -47,7 +48,7 @@ class NativeAlbum:
 
 class NativeLibrary:
     def __init__(self, config_path: Path | None = None) -> None:
-        from muzik import _native
+        _native = importlib.import_module("muzik._native")
 
         self._reader = _native.NativeLibrary(str(config_path or BEETS_CONFIG))
         self.directory: str = self._reader.directory
@@ -57,6 +58,11 @@ class NativeLibrary:
 
     def albums(self, query: str = "") -> list[NativeAlbum]:
         return [NativeAlbum(data, self) for data in self._reader.albums(query)]
+
+    def prune_missing_items(
+        self, safety_fraction: float = 0.5
+    ) -> tuple[int, tuple[int, int] | None]:
+        return self._reader.prune_missing_items(safety_fraction)
 
 
 class ShadowLibrary:

@@ -2,15 +2,18 @@
 
 mod functions;
 pub mod query;
+mod write;
 
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::path::PathBuf;
 use thiserror::Error;
 
 pub use functions::register_functions;
 pub use rusqlite::types::Value as SqlValue;
+pub use write::LibraryWrite;
 use SqlValue as Value;
 
 #[derive(Debug, Error)]
@@ -21,6 +24,18 @@ pub enum Error {
     MissingId { table: &'static str },
     #[error("invalid beets query: {0}")]
     InvalidQuery(String),
+    #[error("library is read only")]
+    ReadOnly,
+    #[error("invalid {table} field: {field}")]
+    InvalidField { table: &'static str, field: String },
+    #[error("beets {table} row {id} does not exist")]
+    MissingRow { table: &'static str, id: i64 },
+    #[error("invalid prune safety fraction: {0}")]
+    InvalidSafetyFraction(f64),
+    #[error("prune aborted: {missing}/{total} items are missing")]
+    PruneAborted { missing: usize, total: usize },
+    #[error("library path has no parent: {0}")]
+    InvalidPath(PathBuf),
 }
 
 pub type Fields = BTreeMap<String, Value>;
@@ -68,6 +83,8 @@ impl Album {
 
 pub struct Library {
     connection: Connection,
+    path: PathBuf,
+    writable: bool,
 }
 
 impl Library {
@@ -76,7 +93,11 @@ impl Library {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         register_functions(&connection)?;
         tracing::debug!(path = %path.display(), "opened beets library");
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            path: path.to_path_buf(),
+            writable: false,
+        })
     }
 
     pub fn connection(&self) -> &Connection {

@@ -246,6 +246,15 @@ def prune_missing_items(
     more than ``safety_fraction`` of items look missing.
     """
     with _IMPORT_LOCK:
+        if get_native_settings()["library"] == "native":
+            from muzik.core.native_library import NativeLibrary
+
+            removed, aborted = NativeLibrary(config_path).prune_missing_items(
+                safety_fraction
+            )
+            if aborted is not None:
+                raise PruneAborted(*aborted)
+            return removed
         lib = open_library(config_path)
         directory = os.fsdecode(lib.directory)
         items = list(lib.items())

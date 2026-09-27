@@ -63,6 +63,7 @@ fn beets_path(raw: &str, config_path: &Path) -> PathBuf {
 #[pyclass(name = "NativeLibrary")]
 struct PyNativeLibrary {
     inner: Mutex<RustLibrary>,
+    library_path: PathBuf,
     directory: String,
 }
 
@@ -86,6 +87,7 @@ impl PyNativeLibrary {
         let inner = RustLibrary::open_read_only(&library_path).map_err(library_error)?;
         Ok(Self {
             inner: Mutex::new(inner),
+            library_path,
             directory: directory.to_string_lossy().into_owned(),
         })
     }
@@ -140,6 +142,24 @@ impl PyNativeLibrary {
             list.append(library_row(py, item.id, &item.fields, &item.attributes)?)?;
         }
         Ok(list.into())
+    }
+
+    #[pyo3(signature = (safety_fraction=0.5))]
+    fn prune_missing_items(
+        &self,
+        py: Python<'_>,
+        safety_fraction: f64,
+    ) -> PyResult<(usize, Option<(usize, usize)>)> {
+        py.detach(|| {
+            let mut library = RustLibrary::open_read_write(&self.library_path).map_err(library_error)?;
+            match library.prune_missing_items(Path::new(&self.directory), safety_fraction) {
+                Ok(removed) => Ok((removed, None)),
+                Err(muzik_library::Error::PruneAborted { missing, total }) => {
+                    Ok((0, Some((missing, total))))
+                }
+                Err(error) => Err(library_error(error)),
+            }
+        })
     }
 }
 
