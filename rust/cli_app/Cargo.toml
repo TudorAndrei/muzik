@@ -29,6 +29,8 @@ muzik-metadata = { path = "../crates/muzik-metadata" }
 muzik-tags = { path = "../crates/muzik-tags" }
 muzik-soulseek = { path = "../crates/muzik-soulseek" }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 serde-pickle = "1.2"
 serde-saphyr = "1.3"
 tokio = { version = "1", features = ["macros", "rt"] }

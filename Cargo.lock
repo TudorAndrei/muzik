@@ -4589,9 +4589,11 @@ dependencies = [
  "muzik-metadata",
  "muzik-soulseek",
  "muzik-tags",
+ "serde",
  "serde-pickle",
  "serde-saphyr",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "usage-rs",
@@ -4720,6 +4722,7 @@ version = "0.1.0"
 name = "muzik-soulseek"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "soulseek-rs-lib",
  "thiserror 2.0.21",

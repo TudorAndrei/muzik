@@ -183,7 +183,7 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik downloaded` | List audio already in the output folder |
 | `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
-| `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
+| `muzik soulseek download <query>` | Search Soulseek, download a selected result, and import its audio |
 | `muzik soulseek check-library` | Measure audio quality in the music library and suggest Soulseek replacements |
 | `muzik spotify set-client-id <id>` | Save the client ID of your own Spotify application |
 | `muzik spotify login` \| `logout` \| `status` | Connect, disconnect, and check the Spotify account |

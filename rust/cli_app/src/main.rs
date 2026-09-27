@@ -45,7 +45,7 @@ enum Command {
     Import(Import),
     /// Manage a Spotify account.
     Spotify(Spotify),
-    /// Check Soulseek or search its audio files.
+    /// Check, search, and download from Soulseek.
     Soulseek(Soulseek),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
@@ -306,6 +306,8 @@ enum SoulseekCommand {
     Check,
     /// Search peer audio files and rank the results.
     Search(SoulseekSearch),
+    /// Download a Soulseek result and organize its audio files.
+    Download(SoulseekDownload),
 }
 
 #[derive(Args)]
@@ -322,6 +324,40 @@ struct SoulseekSearch {
     /// Maximum number of results to show.
     #[usage(long, short = 'n', default = "20")]
     limit: usize,
+    /// Print structured JSON results.
+    #[usage(long)]
+    json: bool,
+}
+
+#[derive(Args)]
+struct SoulseekDownload {
+    /// Search text. Use --candidate to select a saved search result.
+    query: Option<String>,
+    /// Candidate ID shown by `muzik soulseek search`.
+    #[usage(long)]
+    candidate: Option<String>,
+    /// Preferred audio quality for a new search.
+    #[usage(
+        long,
+        default = "lossless",
+        choices("flac", "lossless", "mp3-320", "any")
+    )]
+    prefer: String,
+    /// Maximum number of results to consider.
+    #[usage(long, short = 'n', default = "10")]
+    limit: usize,
+    /// Root directory for Soulseek downloads.
+    #[usage(long, short = 'o')]
+    output: Option<PathBuf>,
+    /// Select the highest-ranked result without a prompt.
+    #[usage(long)]
+    no_interactive: bool,
+    /// Keep downloaded files out of the music library.
+    #[usage(long)]
+    no_organize: bool,
+    /// Show the selected result without downloading.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
 }
 
 #[derive(Args)]
@@ -370,8 +406,9 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Soulseek(args) => match args.command {
             SoulseekCommand::Check => soulseek::check(),
             SoulseekCommand::Search(args) => {
-                soulseek::search(&args.query, &args.prefer, args.limit)
+                soulseek::search(&args.query, &args.prefer, args.limit, args.json)
             }
+            SoulseekCommand::Download(args) => soulseek::download(&args),
         },
         Command::Validate(args) => validate::run(&args),
     }

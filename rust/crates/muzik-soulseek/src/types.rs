@@ -2,6 +2,7 @@
 //! conversions from `soulseek_rs` wire types. Kept free of PyO3 so this
 //! module is unit-testable without a Python interpreter.
 
+use serde::{Deserialize, Serialize};
 use soulseek_rs::types::{Download as WireDownload, DownloadStatus as WireDownloadStatus};
 use soulseek_rs::{File as WireFile, SearchResult as WireSearchResult};
 
@@ -14,7 +15,7 @@ const ATTRIB_VBR: u32 = 2;
 const ATTRIB_SAMPLE_RATE_HZ: u32 = 4;
 const ATTRIB_BIT_DEPTH: u32 = 5;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub size: u64,
@@ -39,7 +40,7 @@ impl From<&WireFile> for FileEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Candidate {
     pub username: String,
     pub slots: u8,
