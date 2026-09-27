@@ -6,10 +6,13 @@
 //! client in an `Arc`, and spawns one plain OS thread per job — no async
 //! runtime is needed because `soulseek_rs` itself is synchronous.
 
+use std::env;
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+
+use serde_json::Value;
 
 use soulseek_rs::types::DownloadMetadata;
 use soulseek_rs::{Client, ClientSettings, PeerAddress};
@@ -25,6 +28,48 @@ pub struct SessionSettings {
     pub server_port: Option<u16>,
     pub enable_listen: Option<bool>,
     pub listen_port: Option<u16>,
+}
+
+impl SessionSettings {
+    /// Read the settings used by both native apps. Missing credentials leave
+    /// Soulseek unconfigured rather than attempting a network connection.
+    pub fn configured(config: &Value) -> Option<Self> {
+        let username = setting(config, "MUZIK_SOULSEEK_USERNAME", "username")?;
+        let password = setting(config, "MUZIK_SOULSEEK_PASSWORD", "password")?;
+        let host = setting(config, "MUZIK_SOULSEEK_SERVER_HOST", "server_host")
+            .unwrap_or_else(|| "server.slsknet.org".into());
+        let port = setting(config, "MUZIK_SOULSEEK_SERVER_PORT", "server_port")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(2416);
+        let listen_port = setting(config, "MUZIK_SOULSEEK_LISTEN_PORT", "listen_port")
+            .and_then(|value| value.parse::<u16>().ok());
+        Some(Self {
+            username,
+            password,
+            server_host: Some(host),
+            server_port: Some(port),
+            enable_listen: None,
+            listen_port,
+        })
+    }
+}
+
+pub fn setting(config: &Value, environment: &str, key: &str) -> Option<String> {
+    env::var(environment)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            config
+                .get("soulseek")?
+                .get(key)
+                .and_then(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .or_else(|| value.as_u64().map(|number| number.to_string()))
+                })
+                .filter(|value| !value.trim().is_empty())
+        })
 }
 
 pub struct Session {

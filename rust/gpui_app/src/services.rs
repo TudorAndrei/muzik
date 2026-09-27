@@ -4,7 +4,6 @@ use muzik_core::app_config;
 use muzik_soulseek::session::{Session, SessionSettings};
 use serde::Serialize;
 use serde_json::Value;
-use std::env;
 use std::process::Command;
 
 #[derive(Debug, Serialize)]
@@ -69,29 +68,19 @@ fn check_binary(
 
 fn check_soulseek() -> ServiceStatus {
     let config = app_config::load(&app_config::path()).unwrap_or(Value::Null);
-    let username = setting(&config, "MUZIK_SOULSEEK_USERNAME", "username").unwrap_or_default();
-    let password = setting(&config, "MUZIK_SOULSEEK_PASSWORD", "password").unwrap_or_default();
-    if username.is_empty() || password.is_empty() {
+    let Some(settings) = SessionSettings::configured(&config) else {
         return ServiceStatus {
             name: "Soulseek",
             available: None,
             detail: "Not configured (set Soulseek username and password).".into(),
             optional: true,
         };
-    }
-    let host = setting(&config, "MUZIK_SOULSEEK_SERVER_HOST", "server_host")
-        .unwrap_or_else(|| "server.slsknet.org".into());
-    let port = setting(&config, "MUZIK_SOULSEEK_SERVER_PORT", "server_port")
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or(2416);
-    let settings = SessionSettings {
-        username,
-        password,
-        server_host: Some(host.clone()),
-        server_port: Some(port),
-        enable_listen: None,
-        listen_port: None,
     };
+    let host = settings
+        .server_host
+        .clone()
+        .unwrap_or_else(|| "server.slsknet.org".into());
+    let port = settings.server_port.unwrap_or(2416);
     match Session::connect(settings) {
         Ok(session) => {
             session.close();
@@ -109,24 +98,6 @@ fn check_soulseek() -> ServiceStatus {
             optional: true,
         },
     }
-}
-
-fn setting(config: &Value, environment: &str, key: &str) -> Option<String> {
-    env::var(environment)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            config
-                .get("soulseek")
-                .and_then(|settings| settings.get(key))
-                .and_then(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .or_else(|| value.as_u64().map(|number| number.to_string()))
-                })
-                .filter(|value| !value.trim().is_empty())
-        })
 }
 
 #[cfg(test)]

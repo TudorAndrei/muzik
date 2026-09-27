@@ -27,6 +27,7 @@ muzik-library = { path = "../crates/muzik-library" }
 muzik-match = { path = "../crates/muzik-match" }
 muzik-metadata = { path = "../crates/muzik-metadata" }
 muzik-tags = { path = "../crates/muzik-tags" }
+muzik-soulseek = { path = "../crates/muzik-soulseek" }
 serde_json = "1"
 serde-pickle = "1.2"
 serde-saphyr = "1.3"

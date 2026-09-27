@@ -8,6 +8,7 @@ mod downloaded;
 mod gui;
 mod import;
 mod init;
+mod soulseek;
 mod spotify;
 use muzik_core::paths;
 mod validate;
@@ -44,6 +45,8 @@ enum Command {
     Import(Import),
     /// Manage a Spotify account.
     Spotify(Spotify),
+    /// Check the Soulseek connection.
+    Soulseek(Soulseek),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
 }
@@ -292,6 +295,18 @@ struct SpotifyWatch {
 }
 
 #[derive(Args)]
+struct Soulseek {
+    #[usage(subcommand)]
+    command: SoulseekCommand,
+}
+
+#[derive(Subcommands)]
+enum SoulseekCommand {
+    /// Check the Soulseek account and server connection.
+    Check,
+}
+
+#[derive(Args)]
 struct SetSpotifyClientId {
     /// Client ID of your Spotify application.
     client_id: String,
@@ -333,6 +348,9 @@ async fn run(command: Command) -> Result<(), String> {
             SpotifyCommand::Watch(args) => spotify::watch(&args.reference),
             SpotifyCommand::SetClientId(args) => spotify::set_client_id(&args.client_id),
             SpotifyCommand::Logout => spotify::logout(),
+        },
+        Command::Soulseek(args) => match args.command {
+            SoulseekCommand::Check => soulseek::check(),
         },
         Command::Validate(args) => validate::run(&args),
     }
