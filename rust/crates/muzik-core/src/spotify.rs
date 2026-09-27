@@ -14,6 +14,8 @@ mod login;
 pub use login::login;
 mod api;
 pub use api::{list_playlists, PlaylistRef};
+mod reader;
+pub use reader::load_playlist_document;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Tokens {
@@ -142,6 +144,15 @@ fn get_json(
     tokens: &mut Tokens,
     url: &str,
 ) -> Result<Value, String> {
+    get_json_optional(settings, path, tokens, url)?.ok_or("Spotify resource was not found".into())
+}
+
+fn get_json_optional(
+    settings: &Settings,
+    path: &Path,
+    tokens: &mut Tokens,
+    url: &str,
+) -> Result<Option<Value>, String> {
     if expired(tokens) {
         *tokens = refresh_tokens(settings, path, tokens)?;
     }
@@ -171,6 +182,9 @@ fn get_json(
             std::thread::sleep(Duration::from_secs(seconds));
             continue;
         }
+        if response.status().as_u16() == 404 {
+            return Ok(None);
+        }
         if !response.status().is_success() {
             return Err(format!(
                 "Spotify rejected the request ({})",
@@ -184,7 +198,7 @@ fn get_json(
         if !document.is_object() {
             return Err("Spotify returned an invalid response".into());
         }
-        return Ok(document);
+        return Ok(Some(document));
     }
     Err("Spotify did not accept the refreshed token".into())
 }

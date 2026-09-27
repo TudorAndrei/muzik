@@ -1,4 +1,5 @@
 use muzik_core::{app_config, spotify};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
 pub fn set_client_id(client_id: &str) -> Result<(), String> {
@@ -54,6 +55,30 @@ pub fn playlists() -> Result<(), String> {
             .total
             .map_or_else(|| "?".to_owned(), |total| total.to_string());
         println!("{}\t{}\t{}", playlist.name, total, playlist.uri);
+    }
+    Ok(())
+}
+
+pub fn export(uri: &str, output: Option<&Path>) -> Result<(), String> {
+    let document =
+        spotify::load_playlist_document(&app_config::path(), &spotify::token_path(), uri)?;
+    let mut bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    if let Some(path) = output {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
+        }
+        std::fs::write(path, bytes)
+            .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    } else {
+        print!(
+            "{}",
+            String::from_utf8(bytes).map_err(|error| error.to_string())?
+        );
     }
     Ok(())
 }
