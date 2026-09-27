@@ -1,15 +1,20 @@
-"""MusicBrainz lookup helpers (uses musicbrainzngs).
+"""MusicBrainz lookup helpers.
 
 Used as a fallback when an audio file has no chapter markers but appears to be
 an album (long duration, artist/album identifiable from filename or info.json).
 """
 
+import logging
 import re
-from typing import Optional
+from typing import Any, Optional
 
 import musicbrainzngs
 
 from muzik.core.chapters import Chapter
+from muzik.config import get_native_settings
+
+
+_LOG = logging.getLogger(__name__)
 
 
 _YEAR_BRACKET = re.compile(r"\s*[\(\[](?:19|20)\d{2}[\)\]]")
@@ -64,7 +69,17 @@ MIN_ALBUM_DURATION = 8 * 60  # 8 minutes
 # ---------------------------------------------------------------------------
 
 
-def search_releases(
+def _load_native_module() -> Any:
+    from muzik import _native
+
+    return _native
+
+
+def _release_summary(rows: list[dict]) -> list[tuple]:
+    return [(row.get("id"), row.get("title"), row.get("score", 0)) for row in rows]
+
+
+def _search_releases_beets(
     artist: str,
     album: str,
     year: Optional[str] = None,
@@ -92,7 +107,33 @@ def search_releases(
     return releases
 
 
-def get_tracklist(release_id: str) -> list[dict]:
+def search_releases(
+    artist: str,
+    album: str,
+    year: Optional[str] = None,
+    limit: int = 5,
+) -> list[dict]:
+    """Search releases through the selected metadata client."""
+    mode = get_native_settings()["metadata"]
+    if mode == "native":
+        return _load_native_module().search_musicbrainz_releases(
+            artist, album, None if year == "Unknown" else year, limit
+        )
+
+    releases = _search_releases_beets(artist, album, year, limit)
+    if mode == "shadow":
+        try:
+            native = _load_native_module().search_musicbrainz_releases(
+                artist, album, None if year == "Unknown" else year, limit
+            )
+            if _release_summary(releases) != _release_summary(native):
+                _LOG.warning("native MusicBrainz release search differs from beets")
+        except Exception as exc:
+            _LOG.warning("native MusicBrainz release search failed: %s", exc)
+    return releases
+
+
+def _get_tracklist_beets(release_id: str) -> list[dict]:
     """Fetch full track listing for a MusicBrainz *release_id*.
 
     Each returned dict has: ``title`` (str), ``position`` (int),
@@ -113,6 +154,23 @@ def get_tracklist(release_id: str) -> list[dict]:
                     "length": int(length) if length else None,
                 }
             )
+    return tracks
+
+
+def get_tracklist(release_id: str) -> list[dict]:
+    """Fetch a release track list through the selected metadata client."""
+    mode = get_native_settings()["metadata"]
+    if mode == "native":
+        return _load_native_module().get_musicbrainz_tracklist(release_id)
+
+    tracks = _get_tracklist_beets(release_id)
+    if mode == "shadow":
+        try:
+            native = _load_native_module().get_musicbrainz_tracklist(release_id)
+            if tracks != native:
+                _LOG.warning("native MusicBrainz track list differs from beets")
+        except Exception as exc:
+            _LOG.warning("native MusicBrainz track lookup failed: %s", exc)
     return tracks
 
 

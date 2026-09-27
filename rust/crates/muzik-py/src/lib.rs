@@ -11,15 +11,78 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use muzik_metadata::{MetadataClient, ReleaseSearch};
 use muzik_soulseek::error::BridgeError;
 use muzik_soulseek::job::{JobHandle, JobOutcome, JobState};
 use muzik_soulseek::session::{Session, SessionSettings};
 use muzik_soulseek::types::{Candidate, DownloadProgress};
 
 create_exception!(_native, SeakarrError, PyException);
+create_exception!(_native, MetadataError, PyException);
+
+const MUSICBRAINZ_USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
 fn soulseek_error(error: BridgeError) -> PyErr {
     SeakarrError::new_err(error.to_string())
+}
+
+fn metadata_error(error: muzik_metadata::Error) -> PyErr {
+    MetadataError::new_err(error.to_string())
+}
+
+#[pyfunction]
+#[pyo3(signature = (artist, album, year=None, limit=5))]
+fn search_musicbrainz_releases(
+    py: Python<'_>,
+    artist: String,
+    album: String,
+    year: Option<String>,
+    limit: u8,
+) -> PyResult<Py<PyAny>> {
+    let releases = py
+        .detach(move || {
+            MetadataClient::new(MUSICBRAINZ_USER_AGENT).search_releases(
+                &ReleaseSearch {
+                    release: album,
+                    artist: Some(artist),
+                    year,
+                    ..ReleaseSearch::default()
+                },
+                limit,
+            )
+        })
+        .map_err(metadata_error)?;
+    let output = PyList::empty(py);
+    for release in releases {
+        let row = PyDict::new(py);
+        row.set_item("id", release.id.0)?;
+        row.set_item("title", release.title)?;
+        row.set_item("artist", release.artist)?;
+        row.set_item("score", release.score.unwrap_or(0))?;
+        output.append(row)?;
+    }
+    Ok(output.into())
+}
+
+#[pyfunction]
+fn get_musicbrainz_tracklist(py: Python<'_>, release_id: String) -> PyResult<Py<PyAny>> {
+    let release = py
+        .detach(move || MetadataClient::new(MUSICBRAINZ_USER_AGENT).lookup_release(&release_id))
+        .map_err(metadata_error)?;
+    let output = PyList::empty(py);
+    for track in release.tracks {
+        let row = PyDict::new(py);
+        row.set_item("title", track.title)?;
+        row.set_item("position", track.medium_index)?;
+        row.set_item(
+            "length",
+            track
+                .length_seconds
+                .map(|seconds| (seconds * 1000.0).round() as u64),
+        )?;
+        output.append(row)?;
+    }
+    Ok(output.into())
 }
 
 /// `SeakarrSession.connect(...)` — logs into the Soulseek server and starts
@@ -189,5 +252,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySeakarrSession>()?;
     m.add_class::<PySeakarrJob>()?;
     m.add("SeakarrError", m.py().get_type::<SeakarrError>())?;
+    m.add("MetadataError", m.py().get_type::<MetadataError>())?;
+    m.add_function(wrap_pyfunction!(search_musicbrainz_releases, m)?)?;
+    m.add_function(wrap_pyfunction!(get_musicbrainz_tracklist, m)?)?;
     Ok(())
 }
