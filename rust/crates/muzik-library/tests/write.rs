@@ -78,7 +78,10 @@ fn failed_group_write_rolls_back_all_rows() {
         )?;
         Ok(())
     });
-    assert!(matches!(result, Err(Error::InvalidField { .. })), "{result:?}");
+    assert!(
+        matches!(result, Err(Error::InvalidField { .. })),
+        "{result:?}"
+    );
     assert_eq!(library.albums().unwrap().len(), before);
 }
 
