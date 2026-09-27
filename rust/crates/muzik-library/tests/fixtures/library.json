@@ -1,0 +1,13 @@
+{
+  "album_attribute": "album-flex",
+  "album_id": 1,
+  "album_title": "Album",
+  "beets_version": "2.13.1",
+  "first_id": 1,
+  "first_length": 183.5,
+  "first_source_id": "video-123",
+  "first_title": "Track",
+  "second_id": 2,
+  "second_source_id": "video-456",
+  "second_title": "Single"
+}
