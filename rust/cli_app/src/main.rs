@@ -3,6 +3,7 @@
 mod bandcamp;
 mod cache;
 mod config;
+mod desktop;
 mod download;
 mod downloaded;
 mod gui;
@@ -41,6 +42,8 @@ enum Command {
     Gui,
     /// Create app directories and library defaults.
     Init,
+    /// Install the macOS desktop app bundle.
+    InstallApp(InstallApp),
     /// Import audio into a beets-compatible library.
     Import(Import),
     /// Manage a Spotify account.
@@ -91,6 +94,13 @@ struct Import {
     /// Beets-compatible library config file.
     #[usage(long, short = 'c')]
     config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct InstallApp {
+    /// Install to ~/Applications instead of /Applications.
+    #[usage(long)]
+    user: bool,
 }
 
 #[derive(Args)]
@@ -393,6 +403,7 @@ async fn run(command: Command) -> Result<(), String> {
         }
         Command::Gui => gui::open().map_err(|error| error.to_string()),
         Command::Init => init::run().map_err(|error| error.to_string()),
+        Command::InstallApp(args) => desktop::install(args.user).map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
         Command::Spotify(args) => match args.command {
             SpotifyCommand::Login(args) => spotify::login(args.port),
