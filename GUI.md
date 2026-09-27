@@ -2,9 +2,10 @@
 
 `muzik gui` starts the Rust desktop app in `rust/gpui_app/`. The app uses GPUI
 Kit 0.6.6. Startup, config, download inventory, service checks, Spotify status,
-settings, login, logout, playlist listing, watchlist edits, and thumbnail caching run in Rust. The app
+settings, login, logout, playlist listing, watchlist reads and local checks,
+watchlist edits, and thumbnail caching run in Rust. The app
 starts `python -m muzik.native_gui` when a remaining command needs it. The
-Python process still handles workflow, watchlist refresh and actions, and
+Python process still handles workflow, remote watchlist refresh and actions, and
 Spotify playlist track reads.
 
 ## Run from a source checkout
@@ -42,8 +43,8 @@ its view on the event loop.
 - **Config** is a tab for output paths, source choices, quality policy, and
   processing options. Save them in `config.yaml` once for later runs.
 - **Watchlist** shows saved YouTube and Spotify sources, item states, thumbnails,
-  filters, and item commands. Rust adds, renames, and removes sources in the
-  existing watchlist file. The Python service reads the file and checks item state.
+  filters, and item commands. Rust reads and edits the existing watchlist file.
+  It checks saved item state against local files and the beets library.
 - **Library** lists audio files in the selected download directory.
 - **Settings** checks external services.
 - **Spotify** stores a client ID, starts login, shows account state, and adds
@@ -58,8 +59,8 @@ resolve a duplicate.
 ## Watchlist state
 
 The app reads a saved watchlist before it asks YouTube or Spotify for new data.
-The service reconciles saved items with local downloads, split files, and the
-Beets library. Refresh checks the remote source and saves each completed item.
+Rust checks saved items against local downloads, split files, and the beets
+library. The Python refresh job checks the remote source and saves each completed item.
 Spotify supplies track metadata only. Soulseek supplies audio for Spotify
 tracks.
 

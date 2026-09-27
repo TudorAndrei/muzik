@@ -2,6 +2,7 @@ mod bridge;
 mod native;
 mod services;
 mod thumbnails;
+mod watchlist;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;
@@ -263,7 +264,11 @@ impl Muzik {
             Some(Ok(id)) => {
                 if matches!(
                     command,
-                    "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
+                    "library.scan"
+                        | "services.check"
+                        | "spotify.status"
+                        | "spotify.playlists"
+                        | "watchlist.load"
                 ) {
                     self.latest_reads.insert(command.into(), id.clone());
                 }
@@ -579,7 +584,11 @@ impl Muzik {
                 let command = self.pending.remove(id).unwrap_or_default();
                 if matches!(
                     command.as_str(),
-                    "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
+                    "library.scan"
+                        | "services.check"
+                        | "spotify.status"
+                        | "spotify.playlists"
+                        | "watchlist.load"
                 ) {
                     if self.latest_reads.get(&command).map(String::as_str) != Some(id) {
                         return;

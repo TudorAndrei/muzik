@@ -1,11 +1,11 @@
 //! JSON-lines link for commands still served by the Python workflow process.
-use crate::{native, thumbnails};
-use muzik_core::{app_config, spotify};
+use crate::{native, thumbnails, watchlist};
+use muzik_core::{app_config, spotify, watchlist::Repository};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -16,12 +16,28 @@ pub struct Bridge {
     native_output: Sender<Value>,
     thumbnail_pending: Arc<Mutex<HashSet<String>>>,
     login: Arc<Mutex<Option<NativeLogin>>>,
+    python_job: Arc<Mutex<PythonJob>>,
+    watchlist_generation: Arc<AtomicU64>,
+    watchlist_gate: Arc<Mutex<()>>,
     next_id: u64,
 }
 
 struct NativeLogin {
     job_id: String,
     cancel: Arc<AtomicBool>,
+}
+
+#[derive(Default)]
+struct PythonJob {
+    pending: HashSet<String>,
+    running: HashSet<String>,
+    completed_before_response: HashSet<String>,
+}
+
+impl PythonJob {
+    fn active(&self) -> bool {
+        !self.pending.is_empty() || !self.running.is_empty()
+    }
 }
 
 impl Bridge {
@@ -33,6 +49,9 @@ impl Bridge {
             native_output: events,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             login: Arc::new(Mutex::new(None)),
+            python_job: Arc::new(Mutex::new(PythonJob::default())),
+            watchlist_generation: Arc::new(AtomicU64::new(0)),
+            watchlist_gate: Arc::new(Mutex::new(())),
             next_id: 1,
         })
     }
@@ -50,6 +69,7 @@ impl Bridge {
         let stdout = child.stdout.take().ok_or("Cannot open Python output")?;
         let (input, commands) = mpsc::channel::<Value>();
         let events = self.native_output.clone();
+        let job = Arc::clone(&self.python_job);
         thread::spawn(move || {
             while let Ok(command) = commands.recv() {
                 if writeln!(stdin, "{command}").is_err() || stdin.flush().is_err() {
@@ -62,6 +82,7 @@ impl Bridge {
                 match line {
                     Ok(line) => match serde_json::from_str::<Value>(&line) {
                         Ok(message) => {
+                            update_python_job(&job, &message);
                             if events.send(message).is_err() {
                                 break;
                             }
@@ -76,6 +97,7 @@ impl Bridge {
                     }
                 }
             }
+            update_python_job(&job, &json!({"type":"transport.closed"}));
             let _ = events.send(json!({"type":"transport.closed"}));
             let _ = child.wait();
         });
@@ -149,6 +171,63 @@ impl Bridge {
             }
             return Ok(id);
         }
+        if command == "watchlist.load" {
+            let _gate = self
+                .watchlist_gate
+                .lock()
+                .map_err(|_| "Watchlist state is unavailable")?;
+            let generation = self.watchlist_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let response_id = id.clone();
+            let sender = self.native_output.clone();
+            let job = Arc::clone(&self.python_job);
+            let login = Arc::clone(&self.login);
+            let latest = Arc::clone(&self.watchlist_generation);
+            let gate = Arc::clone(&self.watchlist_gate);
+            let repository = Repository::new(Repository::default_path());
+            thread::spawn(move || {
+                load_watchlist(WatchlistLoad {
+                    sender,
+                    id: response_id,
+                    params,
+                    repository,
+                    job,
+                    login,
+                    latest,
+                    gate,
+                    generation,
+                });
+            });
+            return Ok(id);
+        }
+        if matches!(
+            command,
+            "watchlist.add" | "watchlist.rename" | "watchlist.remove"
+        ) {
+            let _gate = self
+                .watchlist_gate
+                .lock()
+                .map_err(|_| "Watchlist state is unavailable")?;
+            let job = self
+                .python_job
+                .lock()
+                .map_err(|_| "Python job state is unavailable")?;
+            let login = self
+                .login
+                .lock()
+                .map_err(|_| "Spotify login state is unavailable")?;
+            let response = if job.active() || login.is_some() {
+                json!({"id":id,"type":"response","ok":false,"error":{"code":"job_active","message":"A job is already active."}})
+            } else {
+                native_response(&id, command, &params)
+            };
+            if response["ok"] == true {
+                self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
+            }
+            self.native_output
+                .send(response)
+                .map_err(|_| "Rust backend is not available".to_owned())?;
+            return Ok(id);
+        }
         if native::handles(command) {
             if matches!(
                 command,
@@ -172,11 +251,34 @@ impl Bridge {
         if self.input.is_none() {
             self.start_python()?;
         }
-        self.input
+        let starts_job = matches!(
+            command,
+            "workflow.start" | "watchlist.refresh" | "watchlist.action"
+        );
+        if starts_job {
+            let _gate = self
+                .watchlist_gate
+                .lock()
+                .map_err(|_| "Watchlist state is unavailable")?;
+            self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
+            let mut job = self
+                .python_job
+                .lock()
+                .map_err(|_| "Python job state is unavailable")?;
+            job.pending.insert(id.clone());
+        }
+        let send_result = self
+            .input
             .as_ref()
             .ok_or("Python service is not available")?
             .send(json!({"id":id,"command":command,"params":params}))
-            .map_err(|_| "Python service is not available".to_string())?;
+            .map_err(|_| "Python service is not available".to_string());
+        if send_result.is_err() && starts_job {
+            if let Ok(mut job) = self.python_job.lock() {
+                job.pending.remove(&id);
+            }
+        }
+        send_result?;
         Ok(id)
     }
 
@@ -256,6 +358,133 @@ impl Bridge {
     }
 }
 
+struct WatchlistLoad {
+    sender: Sender<Value>,
+    id: String,
+    params: Value,
+    repository: Repository,
+    job: Arc<Mutex<PythonJob>>,
+    login: Arc<Mutex<Option<NativeLogin>>>,
+    latest: Arc<AtomicU64>,
+    gate: Arc<Mutex<()>>,
+    generation: u64,
+}
+
+fn load_watchlist(load: WatchlistLoad) {
+    let options = match watchlist::Options::from_params(&load.params) {
+        Ok(options) => options,
+        Err(message) => {
+            let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}));
+            return;
+        }
+    };
+    let saved = match options.saved(&load.repository) {
+        Ok(saved) => saved,
+        Err(message) => {
+            let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}}));
+            return;
+        }
+    };
+    if load
+        .sender
+        .send(json!({"id":load.id,"type":"response","ok":true,"result":{"watchlist":saved}}))
+        .is_err()
+    {
+        return;
+    }
+    if let Err(message) = reconcile_watchlist(&load, &options) {
+        if load.generation == load.latest.load(Ordering::SeqCst) {
+            let _ = load
+                .sender
+                .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
+        }
+    }
+}
+
+fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Result<(), String> {
+    for _ in 0..3 {
+        if load
+            .job
+            .lock()
+            .map_err(|_| "Python job state is unavailable")?
+            .active()
+            || load
+                .login
+                .lock()
+                .map_err(|_| "Spotify login state is unavailable")?
+                .is_some()
+            || load.generation != load.latest.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let path = load.repository.path();
+        let stamp = watchlist::stamp(path)?;
+        let checked = options.checked(&load.repository)?;
+        let job = load
+            .job
+            .lock()
+            .map_err(|_| "Python job state is unavailable")?;
+        if job.active()
+            || load
+                .login
+                .lock()
+                .map_err(|_| "Spotify login state is unavailable")?
+                .is_some()
+            || load.generation != load.latest.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        if watchlist::stamp(path)? != stamp {
+            continue;
+        }
+        load.repository.save(checked.clone())?;
+        drop(job);
+        let visible = options.view(checked)?;
+        let _gate = load
+            .gate
+            .lock()
+            .map_err(|_| "Watchlist state is unavailable")?;
+        if load.generation == load.latest.load(Ordering::SeqCst) {
+            let _ = load.sender.send(
+                json!({"type":"event","event":"watchlist.updated","data":{"watchlist":visible}}),
+            );
+        }
+        return Ok(());
+    }
+    Err("The watchlist changed during the local check. Reload it.".into())
+}
+
+fn update_python_job(state: &Arc<Mutex<PythonJob>>, message: &Value) {
+    let Ok(mut job) = state.lock() else {
+        return;
+    };
+    if message["type"] == "response" {
+        if let Some(id) = message["id"].as_str() {
+            if job.pending.remove(id) && message["ok"] == true {
+                if let Some(job_id) = message["result"]["job_id"].as_str() {
+                    if !job.completed_before_response.remove(job_id) {
+                        job.running.insert(job_id.to_owned());
+                    }
+                }
+            }
+        }
+    } else if message["type"] == "event"
+        && matches!(
+            message["event"].as_str(),
+            Some("job.completed" | "job.failed" | "job.cancelled")
+        )
+    {
+        if let Some(job_id) = message["data"]["job_id"].as_str() {
+            job.running.remove(job_id);
+            if !job.pending.is_empty() {
+                job.completed_before_response.insert(job_id.to_owned());
+            }
+        }
+    } else if message["type"] == "transport.closed" {
+        *job = PythonJob::default();
+    }
+}
+
 fn native_response(id: &str, command: &str, params: &Value) -> Value {
     match native::dispatch(command, params) {
         Ok(result) => json!({"id": id, "type":"response", "ok":true, "result":result}),
@@ -272,11 +501,12 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Bridge, NativeLogin};
+    use super::{load_watchlist, update_python_job, Bridge, NativeLogin, PythonJob, WatchlistLoad};
+    use muzik_core::watchlist::Repository;
     use serde_json::{json, Value};
     use std::collections::HashSet;
     use std::fs;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -294,6 +524,9 @@ mod tests {
             native_output,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             login: Arc::new(Mutex::new(None)),
+            python_job: Arc::new(Mutex::new(PythonJob::default())),
+            watchlist_generation: Arc::new(AtomicU64::new(0)),
+            watchlist_gate: Arc::new(Mutex::new(())),
             next_id: 1,
         };
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
@@ -355,6 +588,102 @@ mod tests {
         assert_eq!(response["result"]["cancel_requested"], true);
         assert!(cancel.load(Ordering::Relaxed));
         assert!(bridge.input.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn watchlist_load_sends_saved_cards_before_local_check(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let repository = Repository::new(dir.path().join("watchlist.json"));
+        repository
+            .add("https://www.youtube.com/playlist?list=PLnative123")
+            .map_err(std::io::Error::other)?;
+        let (sender, receiver) = mpsc::channel();
+        let request = WatchlistLoad {
+            sender,
+            id: "load-1".into(),
+            params: json!({"output": dir.path().join("downloads"), "splits": dir.path().join("splits"), "quality_policy":"off", "no_split":false, "no_organize":false}),
+            repository,
+            job: Arc::new(Mutex::new(PythonJob::default())),
+            login: Arc::new(Mutex::new(None)),
+            latest: Arc::new(AtomicU64::new(1)),
+            gate: Arc::new(Mutex::new(())),
+            generation: 1,
+        };
+        load_watchlist(request);
+        let saved = receiver.recv()?;
+        let checked = receiver.recv()?;
+        assert_eq!(saved["id"], "load-1");
+        assert_eq!(
+            saved["result"]["watchlist"]["playlists"][0]["playlist_id"],
+            "PLnative123"
+        );
+        assert_eq!(checked["event"], "watchlist.updated");
+        assert_eq!(
+            checked["data"]["watchlist"]["playlists"][0]["playlist_id"],
+            "PLnative123"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn watchlist_edit_waits_for_an_active_workflow() -> Result<(), Box<dyn std::error::Error>> {
+        let mut bridge = Bridge::start()?;
+        bridge
+            .python_job
+            .lock()
+            .map_err(|_| "job lock failed")?
+            .running
+            .insert("running-job".into());
+        let id = bridge.send("watchlist.add", json!({"url":"liked"}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(response["error"]["code"], "job_active");
+        Ok(())
+    }
+
+    #[test]
+    fn a_rejected_start_keeps_the_first_job_active() -> Result<(), Box<dyn std::error::Error>> {
+        let state = Arc::new(Mutex::new(PythonJob::default()));
+        state
+            .lock()
+            .map_err(|_| "job lock failed")?
+            .pending
+            .insert("start-1".into());
+        update_python_job(
+            &state,
+            &json!({"type":"response","id":"start-1","ok":true,"result":{"job_id":"job-1"}}),
+        );
+        state
+            .lock()
+            .map_err(|_| "job lock failed")?
+            .pending
+            .insert("start-2".into());
+        update_python_job(
+            &state,
+            &json!({"type":"response","id":"start-2","ok":false,"error":{"code":"job_active"}}),
+        );
+        assert!(state.lock().map_err(|_| "job lock failed")?.active());
+        update_python_job(
+            &state,
+            &json!({"type":"event","event":"job.completed","data":{"job_id":"job-1"}}),
+        );
+        assert!(!state.lock().map_err(|_| "job lock failed")?.active());
+        state
+            .lock()
+            .map_err(|_| "job lock failed")?
+            .pending
+            .insert("start-3".into());
+        update_python_job(
+            &state,
+            &json!({"type":"event","event":"job.completed","data":{"job_id":"job-3"}}),
+        );
+        update_python_job(
+            &state,
+            &json!({"type":"response","id":"start-3","ok":true,"result":{"job_id":"job-3"}}),
+        );
+        assert!(!state.lock().map_err(|_| "job lock failed")?.active());
         Ok(())
     }
 }
