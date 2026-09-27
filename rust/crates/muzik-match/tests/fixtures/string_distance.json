@@ -1,0 +1,230 @@
+{
+  "beets_version": "2.13.1",
+  "cases": [
+    {
+      "left": null,
+      "right": null,
+      "distance": 0.0
+    },
+    {
+      "left": null,
+      "right": "Song",
+      "distance": 1.0
+    },
+    {
+      "left": "Song",
+      "right": null,
+      "distance": 1.0
+    },
+    {
+      "left": "",
+      "right": "",
+      "distance": 0.0
+    },
+    {
+      "left": "",
+      "right": "!!!",
+      "distance": 0.0
+    },
+    {
+      "left": "",
+      "right": "Song",
+      "distance": 1.0
+    },
+    {
+      "left": "Song",
+      "right": "Song",
+      "distance": 0.0
+    },
+    {
+      "left": "SONG",
+      "right": "song",
+      "distance": 0.0
+    },
+    {
+      "left": "A B-C!",
+      "right": "abc",
+      "distance": 0.0
+    },
+    {
+      "left": "The Cure",
+      "right": "Cure, The",
+      "distance": 0.0
+    },
+    {
+      "left": "A Tribe Called Quest",
+      "right": "Tribe Called Quest, A",
+      "distance": 0.0
+    },
+    {
+      "left": "An Artist",
+      "right": "Artist, An",
+      "distance": 0.0
+    },
+    {
+      "left": "The The",
+      "right": "The, The",
+      "distance": 0.0
+    },
+    {
+      "left": "The Album",
+      "right": "Album",
+      "distance": 0.037500000000000006
+    },
+    {
+      "left": "The Album",
+      "right": "Album, The",
+      "distance": 0.0
+    },
+    {
+      "left": "Simon & Garfunkel",
+      "right": "Simon and Garfunkel",
+      "distance": 0.0
+    },
+    {
+      "left": "Rock & Roll",
+      "right": "Rock and Roll",
+      "distance": 0.0
+    },
+    {
+      "left": "Single",
+      "right": "",
+      "distance": 0.0
+    },
+    {
+      "left": "Song (Single)",
+      "right": "Song",
+      "distance": 0.0
+    },
+    {
+      "left": "Song [EP]",
+      "right": "Song",
+      "distance": 0.0
+    },
+    {
+      "left": "Song EP",
+      "right": "Song",
+      "distance": 0.0
+    },
+    {
+      "left": "Song (feat. Guest)",
+      "right": "Song",
+      "distance": 0.06923076923076923
+    },
+    {
+      "left": "Song featuring Guest",
+      "right": "Song",
+      "distance": 0.07777777777777778
+    },
+    {
+      "left": "Song ft: Guest",
+      "right": "Song",
+      "distance": 0.06363636363636364
+    },
+    {
+      "left": "Song (live)",
+      "right": "Song",
+      "distance": 0.15
+    },
+    {
+      "left": "Song [remaster]",
+      "right": "Song",
+      "distance": 0.19999999999999998
+    },
+    {
+      "left": "Song (live) [remaster]",
+      "right": "Song",
+      "distance": 0.225
+    },
+    {
+      "left": "Song, pt. 2",
+      "right": "Song",
+      "distance": 0.08571428571428572
+    },
+    {
+      "left": "Song part two",
+      "right": "Song",
+      "distance": 0.1272727272727273
+    },
+    {
+      "left": "Song (feat. Guest)",
+      "right": "Song [live]",
+      "distance": 0.16153846153846155
+    },
+    {
+      "left": "Song (Acoustic)",
+      "right": "Song (Live)",
+      "distance": 0.19999999999999998
+    },
+    {
+      "left": "Beyoncé",
+      "right": "Beyonce",
+      "distance": 0.0
+    },
+    {
+      "left": "Sigur Rós",
+      "right": "Sigur Ros",
+      "distance": 0.0
+    },
+    {
+      "left": "Mötley Crüe",
+      "right": "Motley Crue",
+      "distance": 0.0
+    },
+    {
+      "left": "São Paulo",
+      "right": "Sao Paulo",
+      "distance": 0.0
+    },
+    {
+      "left": "東京",
+      "right": "Dong Jing",
+      "distance": 0.0
+    },
+    {
+      "left": "Москва",
+      "right": "Moskva",
+      "distance": 0.0
+    },
+    {
+      "left": "Ελλάδα",
+      "right": "Ellada",
+      "distance": 0.0
+    },
+    {
+      "left": "Straße",
+      "right": "Strasse",
+      "distance": 0.0
+    },
+    {
+      "left": "Æther",
+      "right": "Aether",
+      "distance": 0.0
+    },
+    {
+      "left": "ø",
+      "right": "o",
+      "distance": 0.0
+    },
+    {
+      "left": "🎵",
+      "right": "",
+      "distance": 0.0
+    },
+    {
+      "left": "Line\nBreak",
+      "right": "Line Break",
+      "distance": 0.0
+    },
+    {
+      "left": "(intro)",
+      "right": "",
+      "distance": 0.3
+    },
+    {
+      "left": "[EP] (live)",
+      "right": "",
+      "distance": 1.0
+    }
+  ]
+}

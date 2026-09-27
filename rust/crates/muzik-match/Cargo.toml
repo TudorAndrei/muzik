@@ -1,0 +1,16 @@
+[package]
+name = "muzik-match"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Beets-compatible music matching primitives"
+
+[dependencies]
+deunicode = "1.6"
+regex = "1.12"
+strsim = "0.11"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
