@@ -45,7 +45,7 @@ enum Command {
     Import(Import),
     /// Manage a Spotify account.
     Spotify(Spotify),
-    /// Check the Soulseek connection.
+    /// Check Soulseek or search its audio files.
     Soulseek(Soulseek),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
@@ -304,6 +304,24 @@ struct Soulseek {
 enum SoulseekCommand {
     /// Check the Soulseek account and server connection.
     Check,
+    /// Search peer audio files and rank the results.
+    Search(SoulseekSearch),
+}
+
+#[derive(Args)]
+struct SoulseekSearch {
+    /// Artist, album, or track search text.
+    query: String,
+    /// Preferred audio quality.
+    #[usage(
+        long,
+        default = "lossless",
+        choices("flac", "lossless", "mp3-320", "any")
+    )]
+    prefer: String,
+    /// Maximum number of results to show.
+    #[usage(long, short = 'n', default = "20")]
+    limit: usize,
 }
 
 #[derive(Args)]
@@ -351,6 +369,9 @@ async fn run(command: Command) -> Result<(), String> {
         },
         Command::Soulseek(args) => match args.command {
             SoulseekCommand::Check => soulseek::check(),
+            SoulseekCommand::Search(args) => {
+                soulseek::search(&args.query, &args.prefer, args.limit)
+            }
         },
         Command::Validate(args) => validate::run(&args),
     }

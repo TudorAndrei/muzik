@@ -57,12 +57,18 @@ impl JobHandle {
 
     #[must_use]
     pub fn snapshot(&self) -> JobState {
-        self.state.lock().expect("job state mutex poisoned").clone()
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Record the job's terminal state, unless it is already terminal.
     pub fn finish(&self, state: JobState) {
-        let mut guard = self.state.lock().expect("job state mutex poisoned");
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if matches!(*guard, JobState::Running) {
             *guard = state;
         }

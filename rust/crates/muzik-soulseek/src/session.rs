@@ -109,7 +109,11 @@ impl Session {
         let worker = Arc::clone(&handle);
         let client = Arc::clone(&self.client);
         thread::spawn(move || {
-            let timeout = Duration::from_secs_f64(timeout_secs.max(0.0));
+            let timeout = if timeout_secs.is_finite() && timeout_secs >= 0.0 {
+                Duration::from_secs_f64(timeout_secs.min(3_600.0))
+            } else {
+                Duration::from_secs(15)
+            };
             match client.search_with_cancel(&query, timeout, Some(cancel)) {
                 Ok(results) if worker.is_cancelled() => {
                     worker.finish(JobState::Cancelled);
@@ -203,7 +207,9 @@ fn finish_from_progress(worker: &JobHandle, progress: DownloadProgress) {
         DownloadProgress::Queued
         | DownloadProgress::InProgress { .. }
         | DownloadProgress::Paused { .. } => {
-            unreachable!("finish_from_progress is only called when is_finished() is true")
+            worker.finish(JobState::Failed(
+                "download stopped without a final status".into(),
+            ));
         }
     }
 }
