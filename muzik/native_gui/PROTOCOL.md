@@ -1,6 +1,7 @@
 # Native GUI protocol
 
-The GPUI app starts `python -m muzik.native_gui` as a child process. It writes
+The GPUI app starts `python -m muzik.native_gui` for commands that still need
+the Python backend. It handles `library.scan` in Rust. The app writes
 one UTF-8 JSON object per line to standard input. The service writes one JSON
 object per line to standard output. Only protocol records go to standard
 output. The service ends when standard input closes.
@@ -17,8 +18,8 @@ The `id` is copied into the response. An error response has `ok:false` and an
 `job_active`, and `operation_failed`. One job can run at a time. Job event
 records can arrive before the response to a start command.
 
-The service runs `library.scan`, `services.check`, `spotify.status`, and
-`spotify.playlists` on read workers. Their responses can arrive out of request
+The service runs `services.check`, `spotify.status`, and `spotify.playlists` on
+read workers. The Rust app runs `library.scan` on a worker. Their responses can arrive out of request
 order. Match each response to its request by `id`. A slow read does not hold up
 `job.cancel` or `decision.reply`.
 

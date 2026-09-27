@@ -1,0 +1,59 @@
+//! Rust handlers for GPUI requests that no longer need the Python service.
+
+use chrono::{DateTime, Local};
+use muzik_core::downloads::{human_size, scan};
+use muzik_core::paths;
+use serde_json::{json, Value};
+use std::path::Path;
+
+pub fn library_scan(params: &Value) -> Result<Value, String> {
+    let output = params
+        .get("output")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(paths::download_dir, |value| Path::new(value).to_path_buf());
+    let path = output.as_path();
+    let items = scan(path).map_err(|error| error.to_string())?;
+    let total = items
+        .iter()
+        .fold(0_u64, |size, item| size.saturating_add(item.size));
+    let items = items
+        .into_iter()
+        .map(|item| {
+            let modified: DateTime<Local> = item.modified_at.into();
+            let size_label = human_size(item.size);
+            let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
+            let fields = value
+                .as_object_mut()
+                .ok_or("invalid audio inventory item")?;
+            fields.insert("size_label".into(), json!(size_label));
+            fields.insert(
+                "modified".into(),
+                json!(modified.format("%Y-%m-%d %H:%M").to_string()),
+            );
+            Ok(value)
+        })
+        .collect::<Result<Vec<Value>, String>>()?;
+    Ok(json!({"output": output, "total_size": human_size(total), "items": items}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::library_scan;
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn library_scan_reports_existing_audio() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
+        let result = library_scan(&json!({"output": dir.path()})).map_err(std::io::Error::other)?;
+        assert_eq!(result["total_size"], "5.0 B");
+        assert_eq!(result["items"][0]["title"], "Track");
+        assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");
+        assert!(result["items"][0]["modified"]
+            .as_str()
+            .is_some_and(|date| !date.is_empty()));
+        Ok(())
+    }
+}

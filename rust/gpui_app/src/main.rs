@@ -1,4 +1,5 @@
 mod bridge;
+mod native;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;
