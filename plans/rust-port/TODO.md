@@ -39,25 +39,25 @@
 
 ### Phase 5: Assignment and ranking
 
-- [ ] Vendor `lsap` with MIT notice
-- [ ] Port `assign_items`, `_recommendation`, candidate sort as `rank_albums`
-- [ ] Fixtures: more files than tracks, more tracks than files, multi-disc, ties
-- [ ] Commit: `feat(match): add track assignment and candidate ranking`
+- [x] Vendor `lsap` with MIT notice
+- [x] Port `assign_items`, `_recommendation`, candidate sort as `rank_albums`
+- [x] Fixtures: more files than tracks, more tracks than files, multi-disc, ties
+- [x] Commit: `feat(match): add track assignment and candidate ranking`
 
 ### Phase 6: Binding and shadow mode
 
-- [ ] `rank_album_candidates` in `muzik-py`
-- [ ] `muzik/core/matching.py` task conversion
-- [ ] Shadow comparison in `MuzikImportSession.choose_match`
-- [ ] Tests: divergence warning, no divergence, Rust error does not stop import
-- [ ] Commit: `feat(import): compare native album ranking in shadow mode`
+- [x] `rank_album_candidates` in `muzik-py`
+- [x] `muzik/core/matching.py` task conversion
+- [x] Shadow comparison in `MuzikImportSession.choose_match`
+- [x] Tests: divergence warning, no divergence, Rust error does not stop import
+- [x] Commit: `feat(import): compare native album ranking in shadow mode`
 
 ### Phase 7: Native ranking
 
-- [ ] `task_view` uses native order and distances at `native`
-- [ ] `resolve_choice` returns the beets candidate object
-- [ ] Tests for `AgentBeetsDecisions` and `NonInteractiveBeetsDecisions`
-- [ ] Commit: `feat(import): rank beets candidates with the native matcher`
+- [x] `task_view` uses native order and distances at `native`
+- [x] `resolve_choice` returns the beets candidate object
+- [x] Tests for `AgentBeetsDecisions` and `NonInteractiveBeetsDecisions`
+- [x] Commit: `feat(import): rank beets candidates with the native matcher`
 
 ## Milestone 2: Metadata (`muzik-metadata`)
 
@@ -70,17 +70,17 @@
 
 ### Phase 9: Replace musicbrainzngs
 
-- [ ] `muzik/core/musicbrainz.py` uses the native client behind `native.metadata`
-- [ ] `tests/test_musicbrainz_lookup.py` passes in both modes
-- [ ] Commit: `feat(metadata): look up chapter tracklists with the native client`
+- [x] `muzik/core/musicbrainz.py` uses the native client behind `native.metadata`
+- [x] `tests/test_musicbrainz_lookup.py` passes in both modes
+- [x] Commit: `feat(metadata): look up chapter tracklists with the native client`
 
 ## Milestone 3: Tags (`muzik-tags`)
 
 ### Phase 10: Tag read/write
 
-- [ ] mediafile field table on `lofty`, custom keys per format
-- [ ] Cross fixtures (mediafile ↔ Rust) for MP3, FLAC, M4A, Opus, OGG
-- [ ] Commit: `feat(tags): read and write beets-compatible tags with lofty`
+- [x] mediafile field table on `lofty`, custom keys per format
+- [x] Cross fixtures (mediafile ↔ Rust) for MP3, FLAC, M4A, Opus, OGG
+- [x] Commit: `feat(tags): read and write beets-compatible tags with lofty`
 
 ### Phase 11: Probe and cover art
 
@@ -99,20 +99,20 @@
 
 ### Phase 13: Query language
 
-- [ ] Parser for fields, regex, ranges, negation, quotes, OR groups, sort
-- [ ] Fixtures against beets `parse_query_string` and matched IDs
-- [ ] Commit: `feat(library): parse and run beets queries`
+- [x] Parser for fields, regex, ranges, negation, quotes, OR groups, sort
+- [x] Fixtures against beets `parse_query_string` and matched IDs
+- [x] Commit: `feat(library): parse and run beets queries`
 
 ### Phase 14: Replace library reads
 
-- [ ] `lookup.py`, `watchlist.py`, `commands/soulseek.py` behind `native.library`
-- [ ] Commit: `feat(library): serve library lookups from the native reader`
+- [x] `lookup.py`, `watchlist.py`, `commands/soulseek.py` behind `native.library`
+- [x] Commit: `feat(library): serve library lookups from the native reader`
 
 ### Phase 15: Library writes
 
-- [ ] Add, update, remove in transactions
-- [ ] Port `prune_missing_items` with the safety fraction
-- [ ] Commit: `feat(library): write items and albums to the beets database`
+- [x] Add, update, remove in transactions
+- [x] Port `prune_missing_items` with the safety fraction
+- [x] Commit: `feat(library): write items and albums to the beets database`
 
 ## Milestone 5: Import (`muzik-import`)
 

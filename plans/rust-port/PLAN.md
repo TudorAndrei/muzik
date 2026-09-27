@@ -90,6 +90,8 @@ Code with no crate, which we write: template parser and functions, query parser,
 `rust/deny.toml` (`cargo-deny`) allows MIT, Apache-2.0,
 Apache-2.0 WITH LLVM-exception (required by PyO3's `target-lexicon`),
 BSD-3-Clause, Unicode-3.0, and Zlib, and fails on GPL and AGPL.
+It has crate-specific ISC exceptions for `ring`, `rustls-webpki`, and
+`untrusted`, and a CDLA-Permissive-2.0 exception for `webpki-roots`.
 
 ### Compatibility with the current beets setup
 
