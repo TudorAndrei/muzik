@@ -20,6 +20,7 @@ pub fn handles(command: &str) -> bool {
             | "spotify.set_client_id"
             | "spotify.logout"
             | "spotify.status"
+            | "spotify.playlists"
     )
 }
 
@@ -48,6 +49,8 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         }
         "spotify.logout" => Ok(json!({"removed": spotify::clear_tokens(&spotify::token_path())?})),
         "spotify.status" => spotify::status(&path, &spotify::token_path()),
+        "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
+            .map(|playlists| json!({"playlists": playlists})),
         _ => Err(format!("unknown command: {command}")),
     }
 }

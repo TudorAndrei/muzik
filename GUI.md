@@ -2,10 +2,10 @@
 
 `muzik gui` starts the Rust desktop app in `rust/gpui_app/`. The app uses GPUI
 Kit 0.6.6. Startup, config, download inventory, service checks, Spotify status,
-settings, login, logout, and thumbnail caching run in Rust. The app
+settings, login, logout, playlist listing, and thumbnail caching run in Rust. The app
 starts `python -m muzik.native_gui` when a remaining command needs it. The
 Python process still handles workflow, watchlist refresh and actions, and
-Spotify playlist reads.
+Spotify playlist track reads.
 
 ## Run from a source checkout
 

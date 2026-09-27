@@ -12,6 +12,8 @@ const PROFILE_URL: &str = "https://api.spotify.com/v1/me";
 
 mod login;
 pub use login::login;
+mod api;
+pub use api::{list_playlists, PlaylistRef};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Tokens {
@@ -126,12 +128,26 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
 }
 
 fn account_name(settings: &Settings, path: &Path, mut tokens: Tokens) -> Result<String, String> {
-    if expired(&tokens) {
-        tokens = refresh_tokens(settings, path, &tokens)?;
+    let profile = get_json(settings, path, &mut tokens, PROFILE_URL)?;
+    Ok(profile["display_name"]
+        .as_str()
+        .or_else(|| profile["id"].as_str())
+        .unwrap_or("")
+        .to_owned())
+}
+
+fn get_json(
+    settings: &Settings,
+    path: &Path,
+    tokens: &mut Tokens,
+    url: &str,
+) -> Result<Value, String> {
+    if expired(tokens) {
+        *tokens = refresh_tokens(settings, path, tokens)?;
     }
     let mut refreshed = false;
     for attempt in 0..3 {
-        let mut response = ureq::get(PROFILE_URL)
+        let mut response = ureq::get(url)
             .header("Authorization", format!("Bearer {}", tokens.access_token))
             .config()
             .timeout_global(Some(Duration::from_secs(30)))
@@ -140,7 +156,7 @@ fn account_name(settings: &Settings, path: &Path, mut tokens: Tokens) -> Result<
             .call()
             .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
         if response.status().as_u16() == 401 && !refreshed {
-            tokens = refresh_tokens(settings, path, &tokens)?;
+            *tokens = refresh_tokens(settings, path, tokens)?;
             refreshed = true;
             continue;
         }
@@ -157,22 +173,18 @@ fn account_name(settings: &Settings, path: &Path, mut tokens: Tokens) -> Result<
         }
         if !response.status().is_success() {
             return Err(format!(
-                "Spotify rejected the profile request ({})",
+                "Spotify rejected the request ({})",
                 response.status()
             ));
         }
-        let profile: Value = response
+        let document: Value = response
             .body_mut()
             .read_json()
-            .map_err(|error| format!("Spotify returned an invalid profile: {error}"))?;
-        if !profile.is_object() {
-            return Err("Spotify returned an invalid profile".into());
+            .map_err(|error| format!("Spotify returned an invalid response: {error}"))?;
+        if !document.is_object() {
+            return Err("Spotify returned an invalid response".into());
         }
-        return Ok(profile["display_name"]
-            .as_str()
-            .or_else(|| profile["id"].as_str())
-            .unwrap_or("")
-            .to_owned());
+        return Ok(document);
     }
     Err("Spotify did not accept the refreshed token".into())
 }

@@ -48,6 +48,16 @@ pub fn status() -> Result<(), String> {
     }
 }
 
+pub fn playlists() -> Result<(), String> {
+    for playlist in spotify::list_playlists(&app_config::path(), &spotify::token_path())? {
+        let total = playlist
+            .total
+            .map_or_else(|| "?".to_owned(), |total| total.to_string());
+        println!("{}\t{}\t{}", playlist.name, total, playlist.uri);
+    }
+    Ok(())
+}
+
 pub fn login(port: Option<u16>) -> Result<(), String> {
     let config = app_config::path();
     if let Some(port) = port {

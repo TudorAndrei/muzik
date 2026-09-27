@@ -257,6 +257,8 @@ enum SpotifyCommand {
     Login(SpotifyLogin),
     /// Show the Spotify client ID, redirect URI, and account connection.
     Status,
+    /// List Liked Songs and your Spotify playlists.
+    Playlists,
     /// Save the client ID of your Spotify application.
     SetClientId(SetSpotifyClientId),
     /// Remove saved Spotify tokens.
@@ -307,6 +309,7 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Spotify(args) => match args.command {
             SpotifyCommand::Login(args) => spotify::login(args.port),
             SpotifyCommand::Status => spotify::status(),
+            SpotifyCommand::Playlists => spotify::playlists(),
             SpotifyCommand::SetClientId(args) => spotify::set_client_id(&args.client_id),
             SpotifyCommand::Logout => spotify::logout(),
         },

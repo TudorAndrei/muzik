@@ -5,7 +5,7 @@ is at the repository root. It contains the library crates, the CLI app in
 `rust/cli_app`, and the GPUI app in `rust/gpui_app`.
 
 No release workflow runs now. The GPUI app starts the Python service in
-`muzik/native_gui` for workflow, watchlist, and Spotify playlist reads. Spotify status, client ID changes, login, and logout run in Rust. The Rust CLI does not yet have all commands from the Python
+`muzik/native_gui` for workflow, watchlist, and Spotify playlist track reads. Spotify status, playlist listing, client ID changes, login, and logout run in Rust. The Rust CLI does not yet have all commands from the Python
 CLI. A Rust-only release needs both ports to be complete and checked.
 
 Cocogitto reads conventional commits and controls version tags. Its version

@@ -152,7 +152,7 @@ impl Bridge {
         if native::handles(command) {
             if matches!(
                 command,
-                "library.scan" | "services.check" | "spotify.status"
+                "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
             ) {
                 let sender = self.native_output.clone();
                 let response_id = id.clone();
