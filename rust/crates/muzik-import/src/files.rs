@@ -2,24 +2,11 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use thiserror::Error;
 use tracing::debug;
 
-#[derive(Debug, Error)]
-pub enum FileError {
-    #[error("source is not a regular file: {0}")]
-    InvalidSource(PathBuf),
-    #[error("destination exists: {0}")]
-    DestinationExists(PathBuf),
-    #[error("path is outside the prune root: {0}")]
-    OutsideRoot(PathBuf),
-    #[error("file operation failed: {0}")]
-    Io(#[from] io::Error),
-    #[error("trash operation failed: {0}")]
-    Trash(#[from] trash::Error),
-}
+pub use crate::Error as FileError;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Placement {

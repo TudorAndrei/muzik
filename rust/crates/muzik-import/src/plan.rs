@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub use crate::Error as ImportError;
 use muzik_core::ReleaseCandidate;
 use muzik_library::{Library, SqlValue};
 use muzik_match::{
@@ -11,23 +12,6 @@ use muzik_match::{
 };
 use muzik_metadata::{MetadataClient, ReleaseSearch, ReleaseSearchHit};
 use muzik_tags::TagData;
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum ImportError {
-    #[error("cannot read import path: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("cannot read audio tags: {0}")]
-    Tags(#[from] muzik_tags::TagsError),
-    #[error("cannot read library: {0}")]
-    Library(#[from] muzik_library::Error),
-    #[error("MusicBrainz request failed: {0}")]
-    Metadata(#[from] muzik_metadata::Error),
-    #[error("cannot score album: {0}")]
-    Match(#[from] muzik_match::Error),
-    #[error("no audio files were found")]
-    NoAudio,
-}
 
 pub trait ReleaseProvider {
     fn search_releases(
@@ -114,8 +98,14 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             let mut items = Vec::new();
             for source in paths {
                 let tags = muzik_tags::read(&source, &[])?;
-                let match_item = match_item(&tags);
-                let source_id = read_source_id(&source)?;
+                let sidecar = read_sidecar(&source)?;
+                let mut match_item = match_item(&tags);
+                fill_from_sidecar(&mut match_item, sidecar.as_ref(), &source);
+                let source_id = sidecar
+                    .as_ref()
+                    .and_then(|data| data.get("source_id"))
+                    .and_then(|value| value.as_str())
+                    .map(str::to_owned);
                 items.push(PlanItem {
                     source,
                     tags,
@@ -184,21 +174,32 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
     }
 }
 
-fn group_audio_paths(paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Vec<PathBuf>>, std::io::Error> {
-    fn visit(path: &Path, found: &mut BTreeSet<PathBuf>) -> Result<(), std::io::Error> {
-        let metadata = fs::symlink_metadata(path)?;
+fn group_audio_paths(paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Vec<PathBuf>>, ImportError> {
+    fn visit(
+        path: &Path,
+        found: &mut BTreeSet<PathBuf>,
+        visited_dirs: &mut BTreeSet<PathBuf>,
+        supplied: bool,
+    ) -> Result<(), ImportError> {
+        let metadata = fs::metadata(path)?;
         if metadata.is_dir() {
+            if !visited_dirs.insert(path.canonicalize()?) {
+                return Ok(());
+            }
             for entry in fs::read_dir(path)? {
-                visit(&entry?.path(), found)?;
+                visit(&entry?.path(), found, visited_dirs, false)?;
             }
         } else if metadata.is_file() && is_audio(path) {
             found.insert(path.canonicalize()?);
+        } else if metadata.is_file() && supplied {
+            return Err(ImportError::UnsupportedAudio(path.to_owned()));
         }
         Ok(())
     }
     let mut found = BTreeSet::new();
+    let mut visited_dirs = BTreeSet::new();
     for path in paths {
-        visit(path, &mut found)?;
+        visit(path, &mut found, &mut visited_dirs, true)?;
     }
     let mut groups: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for path in found {
@@ -213,8 +214,11 @@ fn is_audio(path: &Path) -> bool {
     path.extension()
         .and_then(|value| value.to_str())
         .is_some_and(|extension| {
-            ["mp3", "flac", "m4a", "mp4", "opus", "ogg"]
-                .contains(&extension.to_ascii_lowercase().as_str())
+            [
+                "mp3", "flac", "m4a", "mp4", "opus", "ogg", "wav", "aiff", "aif", "ape", "wv",
+                "aac", "alac", "mpc", "spx",
+            ]
+            .contains(&extension.to_ascii_lowercase().as_str())
         })
 }
 
@@ -296,7 +300,7 @@ fn plurality<'a>(items: &'a [MatchItem], get: impl Fn(&'a MatchItem) -> &'a str)
     best
 }
 
-fn read_source_id(path: &Path) -> Result<Option<String>, ImportError> {
+fn read_sidecar(path: &Path) -> Result<Option<serde_json::Value>, ImportError> {
     for candidate in [
         path.with_extension("muzik.json"),
         path.parent().unwrap_or(Path::new(".")).join(".muzik.json"),
@@ -309,11 +313,86 @@ fn read_source_id(path: &Path) -> Result<Option<String>, ImportError> {
         let Ok(data) = serde_json::from_str::<serde_json::Value>(&contents) else {
             continue;
         };
-        if let Some(value) = data.get("source_id").and_then(|value| value.as_str()) {
-            return Ok(Some(value.to_owned()));
+        if data.is_object() {
+            return Ok(Some(data));
         }
     }
     Ok(None)
+}
+
+fn sidecar_value<'a>(data: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
+    [
+        data.get("resolved").and_then(|resolved| resolved.get(key)),
+        data.get("candidate")
+            .and_then(|candidate| candidate.get("metadata"))
+            .and_then(|metadata| metadata.get(key)),
+        data.get(key),
+        data.get("candidate")
+            .and_then(|candidate| candidate.get(key)),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|value| match value {
+        serde_json::Value::String(value) => !value.trim().is_empty(),
+        serde_json::Value::Number(value) => value.as_i64() != Some(0),
+        serde_json::Value::Bool(value) => *value,
+        serde_json::Value::Null => false,
+        _ => true,
+    })
+}
+
+fn sidecar_field<'a>(data: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    sidecar_value(data, key).and_then(|value| value.as_str())
+}
+
+fn fill_from_sidecar(item: &mut MatchItem, sidecar: Option<&serde_json::Value>, path: &Path) {
+    if let Some(data) = sidecar {
+        if item.title.is_empty() {
+            item.title = sidecar_field(data, "title")
+                .or_else(|| sidecar_field(data, "track"))
+                .unwrap_or_default()
+                .to_owned();
+        }
+        if item.artist.is_empty() {
+            item.artist = sidecar_field(data, "artist")
+                .or_else(|| sidecar_field(data, "uploader"))
+                .unwrap_or_default()
+                .to_owned();
+        }
+        if item.album.is_empty() {
+            item.album = sidecar_field(data, "album").unwrap_or_default().to_owned();
+        }
+        if item.year == 0 {
+            item.year = sidecar_value(data, "year")
+                .and_then(|year| {
+                    year.as_str()
+                        .and_then(|year| year.get(0..4))
+                        .and_then(|year| year.parse().ok())
+                        .or_else(|| year.as_i64().and_then(|year| i32::try_from(year).ok()))
+                })
+                .unwrap_or(0);
+        }
+        if item.length == 0.0 {
+            item.length = data
+                .get("resolved")
+                .and_then(|value| value.get("duration"))
+                .and_then(|value| value.as_f64())
+                .unwrap_or(0.0);
+        }
+    }
+    if item.title.is_empty() {
+        item.title = path
+            .file_stem()
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+    }
+    if item.album.is_empty() {
+        item.album = path
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .map(|value| value.to_string_lossy().into_owned())
+            .unwrap_or_default();
+    }
 }
 
 fn field_text<'a>(fields: &'a muzik_library::Fields, key: &str) -> Option<&'a str> {
@@ -380,4 +459,57 @@ fn find_duplicates(
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidecar_fills_missing_track_fields_in_source_order() {
+        let sidecar = serde_json::json!({
+            "source_id": "video-123",
+            "title": "top title",
+            "resolved": {"title": "resolved title", "album": "Night Lines", "year": 2021},
+            "candidate": {"metadata": {"artist": "Mara Vale", "album": "other album"}}
+        });
+        let mut item = MatchItem::default();
+        fill_from_sidecar(
+            &mut item,
+            Some(&sidecar),
+            Path::new("/source/02 untagged.flac"),
+        );
+        assert_eq!(item.title, "resolved title");
+        assert_eq!(item.artist, "Mara Vale");
+        assert_eq!(item.album, "Night Lines");
+        assert_eq!(item.year, 2021);
+    }
+
+    #[test]
+    fn supplied_non_audio_file_reports_unsupported_format() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("notes.txt");
+        fs::write(&path, "notes").unwrap();
+        assert!(matches!(
+            group_audio_paths(&[path]),
+            Err(ImportError::UnsupportedAudio(_))
+        ));
+    }
+
+    #[test]
+    fn candidate_metadata_fills_track_when_resolved_is_empty() {
+        let sidecar = serde_json::json!({
+            "resolved": {"track": ""},
+            "candidate": {"metadata": {
+                "track": "Second Song", "artist": "Mara Vale",
+                "album": "Night Lines", "year": 2020
+            }}
+        });
+        let mut item = MatchItem::default();
+        fill_from_sidecar(&mut item, Some(&sidecar), Path::new("/source/02.flac"));
+        assert_eq!(item.title, "Second Song");
+        assert_eq!(item.artist, "Mara Vale");
+        assert_eq!(item.album, "Night Lines");
+        assert_eq!(item.year, 2020);
+    }
 }
