@@ -13,8 +13,10 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::{json, Map, Value};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -160,10 +162,15 @@ struct Muzik {
     spotify: Value,
     defaults: Value,
     config_window: Option<WindowHandle<Root>>,
+    config_status: Rc<RefCell<String>>,
 }
 
 impl Muzik {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_bridge(window, cx, true)
+    }
+
+    fn new_with_bridge(window: &mut Window, cx: &mut Context<Self>, start_bridge: bool) -> Self {
         let fields = [
             ("raw", "URL or path", ""),
             ("output", "Downloads", ""),
@@ -254,13 +261,16 @@ impl Muzik {
             spotify: Value::Null,
             defaults: Value::Null,
             config_window: None,
+            config_status: Rc::new(RefCell::new(String::new())),
         };
-        match Bridge::start() {
-            Ok(bridge) => {
-                this.bridge = Some(bridge);
-                this.send("hello", json!({}));
+        if start_bridge {
+            match Bridge::start() {
+                Ok(bridge) => {
+                    this.bridge = Some(bridge);
+                    this.send("hello", json!({}));
+                }
+                Err(error) => this.status = error,
             }
-            Err(error) => this.status = error,
         }
         cx.spawn_in(window, async move |weak, cx| loop {
             cx.background_executor()
@@ -386,6 +396,7 @@ impl Muzik {
         }
         let main = cx.entity();
         let defaults = self.defaults.clone();
+        let status = self.config_status.clone();
         let bounds = WindowBounds::centered(size(px(920.), px(760.)), cx);
         match cx.open_window(
             WindowOptions {
@@ -394,7 +405,7 @@ impl Muzik {
                 ..Default::default()
             },
             move |window, cx| {
-                let view = cx.new(|cx| ConfigView::new(main, defaults, window, cx));
+                let view = cx.new(|cx| ConfigView::new(main, defaults, status, window, cx));
                 cx.new(|cx| Root::new(view, window, cx))
             },
         ) {
@@ -684,6 +695,9 @@ impl Muzik {
                         .unwrap_or("Request failed")
                         .into();
                     self.error = Some(self.status.clone());
+                    if command == "config.save" {
+                        *self.config_status.borrow_mut() = self.status.clone();
+                    }
                     if self.job_kind.as_deref() == Some(command.as_str()) {
                         self.job_status = self.status.clone();
                         self.job_kind = None;
@@ -697,6 +711,7 @@ impl Muzik {
                         if command == "config.save" {
                             self.status = "Config saved".into();
                             self.error = None;
+                            *self.config_status.borrow_mut() = self.status.clone();
                         }
                         self.apply_defaults(result["defaults"].clone(), window, _cx);
                     }
@@ -2289,13 +2304,14 @@ struct ConfigView {
     fields: Vec<Field>,
     choices: Vec<Choice>,
     switches: Vec<Switch>,
-    status: String,
+    status: Rc<RefCell<String>>,
 }
 
 impl ConfigView {
     fn new(
         main: Entity<Muzik>,
         defaults: Value,
+        status: Rc<RefCell<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -2377,7 +2393,7 @@ impl ConfigView {
             fields,
             choices,
             switches,
-            status: String::new(),
+            status,
         }
     }
 
@@ -2411,7 +2427,7 @@ impl ConfigView {
             let value = field.state.read(cx).value().to_string();
             if matches!(field.key, "jobs" | "min_bitrate") {
                 let Ok(number) = value.parse::<u64>() else {
-                    self.status = format!("Enter a number for {}", field.label);
+                    *self.status.borrow_mut() = format!("Enter a number for {}", field.label);
                     cx.notify();
                     return;
                 };
@@ -2431,7 +2447,7 @@ impl ConfigView {
             main.send("config.save", Value::Object(params));
             cx.notify();
         });
-        self.status = "Saving config".into();
+        *self.status.borrow_mut() = "Saving config".into();
         cx.notify();
     }
 }
@@ -2491,14 +2507,7 @@ impl Render for ConfigView {
                 ),
             );
         }
-        let main = self.main.read(cx);
-        let main_status = main.error.clone().unwrap_or_else(|| main.status.clone());
-        let status =
-            if self.status.is_empty() || main_status == "Config saved" || main.error.is_some() {
-                main_status
-            } else {
-                self.status.clone()
-            };
+        let status = self.status.borrow().clone();
         div()
             .v_flex()
             .size_full()
@@ -2951,10 +2960,48 @@ fn check_backend() -> Result<(), String> {
 mod tests {
     use super::{
         activity_section, candidate_summary, decision_choices, decision_details,
-        merge_thumbnail_paths, ActivityProgress,
+        merge_thumbnail_paths, ActivityProgress, Muzik, Root,
     };
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[gpui_kit::test]
+    fn config_window_can_observe_a_main_view_update(cx: &mut TestAppContext) {
+        let main = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut main = None;
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
+                main = Some(view.clone());
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .unwrap();
+            main.unwrap()
+        });
+        cx.update(|cx| {
+            main.update(cx, |view, cx| {
+                view.defaults = json!({
+                    "output": "/tmp/downloads", "splits": "/tmp/splits", "config": "",
+                    "jobs": 0, "min_bitrate": 256,
+                });
+                view.open_config(cx);
+            });
+        });
+        cx.update(|cx| {
+            main.update(cx, |view, cx| {
+                view.status = "Changed".into();
+                cx.notify();
+            });
+        });
+        let config = main.read_with(cx, |view, _| view.config_window.unwrap());
+        cx.update_window(config.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.click("save-config", cx);
+        })
+        .unwrap();
+    }
 
     #[test]
     fn soulseek_review_shows_candidate_quality_and_selects_its_index() {

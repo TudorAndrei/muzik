@@ -8,6 +8,9 @@ gpui-kit = "=0.6.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[dev-dependencies]
+gpui-kit = { version = "=0.6.6", features = ["test-support"] }
+
 [profile.release]
 strip = "symbols"
 opt-level = "z"
