@@ -4,8 +4,8 @@ The project is moving to a Rust CLI and a Rust GPUI app. The Cargo workspace
 is at the repository root. It contains the library crates, the CLI app in
 `rust/cli_app`, and the GPUI app in `rust/gpui_app`.
 
-No release workflow runs now. The GPUI app still starts the Python service in
-`muzik/native_gui`. The Rust CLI does not yet have all commands from the Python
+No release workflow runs now. The GPUI app starts the Python service in
+`muzik/native_gui` for workflow, watchlist, and Spotify commands. The Rust CLI does not yet have all commands from the Python
 CLI. A Rust-only release needs both ports to be complete and checked.
 
 Cocogitto reads conventional commits and controls version tags. Its version

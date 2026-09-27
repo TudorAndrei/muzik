@@ -1,10 +1,36 @@
 //! Rust handlers for GPUI requests that no longer need the Python service.
 
 use chrono::{DateTime, Local};
+use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths;
 use serde_json::{json, Value};
 use std::path::Path;
+
+pub fn handles(command: &str) -> bool {
+    matches!(
+        command,
+        "hello" | "config.get" | "config.save" | "library.scan"
+    )
+}
+
+pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
+    let path = app_config::path();
+    match command {
+        "hello" => Ok(json!({
+            "protocol_version": 1,
+            "defaults": app_config::load_gui_defaults(&path)?,
+            "item_actions": [
+                "run", "retry", "download_again", "check_quality_again",
+                "parse_again", "split_again", "organize_again", "run_all_again"
+            ]
+        })),
+        "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(&path)?})),
+        "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(&path, params)?})),
+        "library.scan" => library_scan(params),
+        _ => Err(format!("unknown command: {command}")),
+    }
+}
 
 pub fn library_scan(params: &Value) -> Result<Value, String> {
     let output = params

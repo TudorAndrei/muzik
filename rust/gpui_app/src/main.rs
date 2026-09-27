@@ -260,7 +260,7 @@ impl Muzik {
                 self.status = format!("{command} requested");
             }
             Some(Err(error)) => self.status = error,
-            None => self.status = "Python service is not available".into(),
+            None => self.status = "Backend is not available".into(),
         }
     }
 
@@ -2805,22 +2805,22 @@ fn check_backend() -> Result<(), String> {
     while std::time::Instant::now() < deadline {
         for message in bridge.drain() {
             if message["type"] == "transport.closed" {
-                return Err("Python service closed before hello".into());
+                return Err("Backend closed before hello".into());
             }
             if message["type"] == "response" && message["id"] == id {
                 if message["ok"] == true && message["result"]["protocol_version"] == 1 {
-                    println!("Python service ready (protocol 1)");
+                    println!("Rust backend ready (protocol 1)");
                     return Ok(());
                 }
                 return Err(format!(
-                    "Python service rejected hello: {}",
+                    "Rust backend rejected hello: {}",
                     describe(&message)
                 ));
             }
         }
         std::thread::sleep(Duration::from_millis(25));
     }
-    Err("Python service did not answer hello within 5 seconds".into())
+    Err("Rust backend did not answer hello within 5 seconds".into())
 }
 
 #[cfg(test)]

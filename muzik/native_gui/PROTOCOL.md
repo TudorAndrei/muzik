@@ -1,7 +1,8 @@
 # Native GUI protocol
 
-The GPUI app starts `python -m muzik.native_gui` for commands that still need
-the Python backend. It handles `library.scan` in Rust. The app writes
+The GPUI app starts `python -m muzik.native_gui` when a remaining command needs
+the Python backend. It handles `hello`, `config.get`, `config.save`, and
+`library.scan` in Rust. The app writes
 one UTF-8 JSON object per line to standard input. The service writes one JSON
 object per line to standard output. Only protocol records go to standard
 output. The service ends when standard input closes.
@@ -53,7 +54,7 @@ Launcher fields match `WorkflowOptions`: `review`, `no_split`, `no_organize`,
 `metadata_source`, `audio_source`, `prefer`, `fallback`, `interactive`,
 `quality_policy`, and `min_bitrate`. `raw`, `output`, and `splits` form the
 workflow request. `hello` and `config.get` return the saved defaults. The
-service stores these values in the `native_gui` section of the usual muzik
+Rust app stores these values in the `native_gui` section of the usual muzik
 `config.yaml` file. `config.save` updates only that section. It accepts any
 subset of the launcher fields except `raw`; omitted fields keep their saved
 values. A missing launcher field uses the saved value when the service starts a

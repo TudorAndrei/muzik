@@ -1,9 +1,9 @@
 # Desktop interface and workflow architecture
 
 `muzik gui` starts the Rust desktop app in `rust/gpui_app/`. The app uses GPUI
-Kit 0.6.6. It starts `python -m muzik.native_gui` as a child process and sets
-the Python path from the active `muzik` installation. The Python process owns
-the existing workflow, Beets, watchlist, library, and Spotify services.
+Kit 0.6.6. Startup, config, and the download inventory run in Rust. The app
+starts `python -m muzik.native_gui` when a remaining command needs it. The
+Python process still handles workflow, watchlist, and Spotify commands.
 
 ## Run from a source checkout
 
@@ -90,8 +90,7 @@ wait ends.
 ## Verification
 
 Run `mise run check` for Python and Rust checks. Run
-`target/debug/muzik-gpui --check-backend` with `MUZIK_PYTHON`
-set to the installed Python interpreter to check the live process link. A
+`target/debug/muzik-gpui --check-backend` to check the Rust startup path. A
 release check must open the installed native app and test input, focus,
 decisions, cancellation, resize, and the light and dark themes on each claimed
 platform.
