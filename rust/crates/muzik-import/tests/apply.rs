@@ -249,3 +249,65 @@ fn replace_removes_selected_duplicate_rows() {
         ))
     );
 }
+
+#[test]
+fn as_is_flac_matches_beets_path_and_library_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    let source_dir = temp.path().join("incoming");
+    fs::create_dir(&source_dir).unwrap();
+    let source = source_dir.join("02 Tide & Stone.flac");
+    fs::copy(
+        crates.join("muzik-tags/tests/fixtures/mediafile.flac"),
+        &source,
+    )
+    .unwrap();
+    let database = temp.path().join("library.db");
+    fs::copy(
+        crates.join("muzik-library/tests/fixtures/library.db"),
+        &database,
+    )
+    .unwrap();
+    let root = temp.path().join("music");
+    fs::create_dir(&root).unwrap();
+    let config = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner.plan(&[source]).unwrap();
+    let options = ApplyOptions::from_beets(&config, root.clone()).unwrap();
+
+    let result = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: None,
+        }],
+        &options,
+    )
+    .unwrap();
+
+    assert_eq!(
+        result.destinations[0],
+        root.join("Mara Vale/Night Lines/02 Tide & Stone.flac")
+    );
+    let item = library.item(result.item_ids[0]).unwrap().unwrap();
+    let album = library.album(result.album_ids[0]).unwrap().unwrap();
+    assert_eq!(item.field("comp"), Some(&SqlValue::Integer(0)));
+    assert_eq!(album.field("comp"), Some(&SqlValue::Integer(0)));
+    assert_eq!(item.field("month"), Some(&SqlValue::Integer(4)));
+    assert_eq!(item.field("day"), Some(&SqlValue::Integer(7)));
+    assert_eq!(item.field("original_year"), Some(&SqlValue::Integer(2019)));
+    assert_eq!(item.field("rg_track_gain"), Some(&SqlValue::Real(-5.25)));
+    let tags = muzik_tags::read(&result.destinations[0], &[]).unwrap();
+    assert_eq!(tags.fields.get("comp").map(String::as_str), Some("1"));
+}

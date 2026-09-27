@@ -9,6 +9,22 @@ use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
 
 struct FixtureProvider;
 
+struct FailingProvider;
+
+impl ReleaseProvider for FailingProvider {
+    fn search_releases(
+        &self,
+        _: &ReleaseSearch,
+        _: u8,
+    ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
+    }
+
+    fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
+        unreachable!()
+    }
+}
+
 impl ReleaseProvider for FixtureProvider {
     fn search_releases(
         &self,
@@ -98,4 +114,36 @@ fn groups_audio_and_ranks_release_with_source_sidecar() {
     assert_eq!(album.candidates[0].release.id.0, "release-1");
     assert_eq!(album.candidates[0].assignment.pairs, vec![(0, 0)]);
     assert_eq!(album.duplicates.len(), 1);
+}
+
+#[test]
+fn metadata_failure_keeps_as_is_import_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("Night Lines.flac");
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source).unwrap();
+    fs::write(
+        temp.path().join("Night Lines.muzik.json"),
+        r#"{"resolved":{"title":"Song","artist":"Mara Vale","album":"Night Lines"}}"#,
+    )
+    .unwrap();
+    let library =
+        Library::open_read_only(&crates.join("muzik-library/tests/fixtures/library.db")).unwrap();
+    let config = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FailingProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+
+    let plan = planner.plan(&[source]).unwrap();
+
+    assert_eq!(plan.albums.len(), 1);
+    assert!(plan.albums[0].candidates.is_empty());
+    assert_eq!(plan.albums[0].items[0].match_item.artist, "Mara Vale");
 }

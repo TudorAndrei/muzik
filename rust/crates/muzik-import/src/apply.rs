@@ -114,6 +114,7 @@ struct PreparedItem {
     source: PathBuf,
     destination: PathBuf,
     tags: TagData,
+    compilation: bool,
     source_id: Option<String>,
 }
 
@@ -200,8 +201,9 @@ pub fn apply(
             .items
             .iter()
             .map(|item| {
-                muzik_tags::probe(&item.destination)
-                    .map(|properties| item_fields(&item.tags, &item.destination, &properties))
+                muzik_tags::probe(&item.destination).map(|properties| {
+                    item_fields(&item.tags, item.compilation, &item.destination, &properties)
+                })
             })
             .collect::<Result<Vec<_>, _>>();
         let item_fields = match item_fields {
@@ -272,6 +274,13 @@ fn prepare(
         MatchDecision::AsIs => None,
         MatchDecision::Skip => unreachable!(),
     };
+    let compilation = candidate.is_some_and(|candidate| candidate.release.is_various_artists)
+        || (candidate.is_none()
+            && album
+                .items
+                .iter()
+                .skip(1)
+                .any(|item| item.match_item.artist != album.items[0].match_item.artist));
     let replace_ids = if decision.duplicate == Some(DuplicateDecision::Replace) {
         album
             .duplicates
@@ -358,9 +367,8 @@ fn prepare(
             if let Some(year) = release.year {
                 tags.fields.insert("date".into(), year.to_string());
             }
-            if release.is_various_artists {
-                tags.fields.insert("comp".into(), "1".into());
-            }
+            tags.fields
+                .insert("comp".into(), if compilation { "1" } else { "0" }.into());
             if let Some((_, track_index)) = candidate
                 .assignment
                 .pairs
@@ -383,7 +391,8 @@ fn prepare(
         let (title, artist) = ftclean::clean(&title, &artist);
         tags.fields.insert("title".into(), title);
         tags.fields.insert("artist".into(), artist);
-        let path_fields = path_fields(&tags);
+        let mut path_fields = path_fields(&tags);
+        path_fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
         if index == 0 {
             for key in [
                 "album",
@@ -405,8 +414,9 @@ fn prepare(
                 id: next_id,
                 fields: path_fields.clone(),
             });
+            insert_dates(&mut album_fields, &tags);
         }
-        let kind = if tags.fields.get("comp").is_some_and(|value| value == "1") {
+        let kind = if compilation {
             PathKind::Compilation
         } else {
             PathKind::Album
@@ -446,6 +456,7 @@ fn prepare(
             source: item.source.clone(),
             destination,
             tags,
+            compilation,
             source_id: item.source_id.clone(),
         });
     }
@@ -487,6 +498,7 @@ fn path_fields(tags: &TagData) -> BTreeMap<String, String> {
 
 fn item_fields(
     tags: &TagData,
+    compilation: bool,
     path: &Path,
     properties: &muzik_tags::AudioProperties,
 ) -> LibraryFields {
@@ -512,7 +524,6 @@ fn item_fields(
         "country",
         "media",
         "albumdisambig",
-        "comp",
         "rg_track_gain",
         "rg_track_peak",
         "rg_album_gain",
@@ -522,11 +533,8 @@ fn item_fields(
             fields.insert(key.into(), sql_scalar(key, value));
         }
     }
-    if let Some(date) = tags.fields.get("date")
-        && let Ok(year) = date.chars().take(4).collect::<String>().parse::<i64>()
-    {
-        fields.insert("year".into(), SqlValue::Integer(year));
-    }
+    fields.insert("comp".into(), SqlValue::Integer(i64::from(compilation)));
+    insert_dates(&mut fields, tags);
     fields.insert("path".into(), sql_path_value(path));
     fields.insert("format".into(), SqlValue::Text(properties.format.clone()));
     fields.insert("added".into(), SqlValue::Real(now()));
@@ -559,9 +567,29 @@ fn sql_scalar(key: &str, value: &str) -> SqlValue {
     ]
     .contains(&key)
     {
-        SqlValue::Real(value.parse().unwrap_or(0.0))
+        SqlValue::Real(
+            value
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .parse()
+                .unwrap_or(0.0),
+        )
     } else {
         SqlValue::Text(value.to_owned())
+    }
+}
+
+fn insert_dates(fields: &mut LibraryFields, tags: &TagData) {
+    for (tag_name, prefix) in [("date", ""), ("original_date", "original_")] {
+        let Some(value) = tags.fields.get(tag_name) else {
+            continue;
+        };
+        for (part, number) in ["year", "month", "day"].into_iter().zip(value.split('-')) {
+            if let Ok(number) = number.parse::<i64>() {
+                fields.insert(format!("{prefix}{part}"), SqlValue::Integer(number));
+            }
+        }
     }
 }
 

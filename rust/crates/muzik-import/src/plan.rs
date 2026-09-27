@@ -134,11 +134,21 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                     tracks: Some(items.len() as u32),
                     ..ReleaseSearch::default()
                 };
-                let hits = self
-                    .provider
-                    .search_releases(&criteria, self.search_limit)?;
+                let hits = match self.provider.search_releases(&criteria, self.search_limit) {
+                    Ok(hits) => hits,
+                    Err(error) => {
+                        tracing::warn!(path = %source_dir.display(), %error, "MusicBrainz search failed; import can continue as-is");
+                        Vec::new()
+                    }
+                };
                 for hit in hits {
-                    let release = self.provider.lookup_release(&hit.id.0)?;
+                    let release = match self.provider.lookup_release(&hit.id.0) {
+                        Ok(release) => release,
+                        Err(error) => {
+                            tracing::warn!(id = %hit.id.0, %error, "MusicBrainz release lookup failed; skip candidate");
+                            continue;
+                        }
+                    };
                     if !releases
                         .iter()
                         .any(|known: &ReleaseCandidate| known.id == release.id)
