@@ -8,9 +8,11 @@ description = "Beets-compatible music matching primitives"
 
 [dependencies]
 deunicode = "1.6"
+muzik-core = { path = "../muzik-core" }
 regex = "1.12"
-strsim = "0.11"
-
-[dev-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
+strsim = "0.11"
+thiserror = "2"
+tracing = "0.1"
+chrono = "0.4"

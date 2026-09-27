@@ -1,0 +1,498 @@
+{
+  "beets_version": "2.13.1",
+  "current_year": 2026,
+  "tracks": [
+    {
+      "name": "length within grace",
+      "item": {
+        "title": "Song",
+        "artist": "Band",
+        "length": 100.0
+      },
+      "track": {
+        "title": "Song",
+        "artist": "Band",
+        "length": 108.0
+      },
+      "include_artist": false,
+      "expected": {
+        "score": 0.0,
+        "penalties": {
+          "track_length": [
+            0.0
+          ],
+          "track_title": [
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "length above grace",
+      "item": {
+        "title": "Song",
+        "artist": "Band",
+        "length": 100.0
+      },
+      "track": {
+        "title": "Song",
+        "artist": "Band",
+        "length": 140.0
+      },
+      "include_artist": true,
+      "expected": {
+        "score": 0.2857142857142857,
+        "penalties": {
+          "track_length": [
+            1.0
+          ],
+          "track_title": [
+            0.0
+          ],
+          "track_artist": [
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "medium index accepted",
+      "item": {
+        "title": "Song",
+        "artist": "Band",
+        "track": 2,
+        "disc": 2
+      },
+      "track": {
+        "title": "Song",
+        "index": 12,
+        "medium_index": 2,
+        "medium": 2
+      },
+      "include_artist": false,
+      "expected": {
+        "score": 0.0,
+        "penalties": {
+          "track_title": [
+            0.0
+          ],
+          "track_index": [
+            0.0
+          ],
+          "medium": [
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "wrong index disc and ID",
+      "item": {
+        "title": "Song",
+        "artist": "Band",
+        "track": 3,
+        "disc": 1,
+        "mb_trackid": "old-id"
+      },
+      "track": {
+        "title": "Song",
+        "index": 2,
+        "medium_index": 2,
+        "medium": 2,
+        "track_id": "new-id"
+      },
+      "include_artist": false,
+      "expected": {
+        "score": 0.7,
+        "penalties": {
+          "track_title": [
+            0.0
+          ],
+          "track_index": [
+            1.0
+          ],
+          "track_id": [
+            1.0
+          ],
+          "medium": [
+            1.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "various artist local tag",
+      "item": {
+        "title": "Song",
+        "artist": "Various Artists"
+      },
+      "track": {
+        "title": "Song",
+        "artist": "Solo Singer"
+      },
+      "include_artist": true,
+      "expected": {
+        "score": 0.0,
+        "penalties": {
+          "track_title": [
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "featured artist",
+      "item": {
+        "title": "Song",
+        "artist": "Band"
+      },
+      "track": {
+        "title": "Song",
+        "artist": "Band feat. Guest"
+      },
+      "include_artist": true,
+      "expected": {
+        "score": 0.027692307692307693,
+        "penalties": {
+          "track_title": [
+            0.0
+          ],
+          "track_artist": [
+            0.06923076923076923
+          ]
+        }
+      }
+    },
+    {
+      "name": "data source mismatch",
+      "item": {
+        "title": "Song",
+        "artist": "Band",
+        "data_source": "Discogs"
+      },
+      "track": {
+        "title": "Song",
+        "data_source": "MusicBrainz"
+      },
+      "include_artist": false,
+      "expected": {
+        "score": 0.2,
+        "penalties": {
+          "track_title": [
+            0.0
+          ],
+          "data_source": [
+            0.5
+          ]
+        }
+      }
+    }
+  ],
+  "albums": [
+    {
+      "name": "preferred media and country",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record",
+          "media": "CD"
+        }
+      ],
+      "album": {
+        "album": "Record",
+        "artist": "Band",
+        "media": "2xVinyl",
+        "country": "GB",
+        "tracks": [
+          {
+            "title": "One",
+            "index": 1
+          }
+        ]
+      },
+      "pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "preferred": {
+        "media": [
+          "CD",
+          "Vinyl"
+        ],
+        "countries": [
+          "US",
+          "GB"
+        ]
+      },
+      "expected": {
+        "score": 0.07894736842105263,
+        "penalties": {
+          "artist": [
+            0.0
+          ],
+          "album": [
+            0.0
+          ],
+          "media": [
+            0.5
+          ],
+          "country": [
+            0.5
+          ],
+          "tracks": [
+            0.0
+          ]
+        },
+        "tracks": [
+          {
+            "score": 0.0,
+            "penalties": {
+              "track_title": [
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "original year preferred",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "album": {
+        "album": "Record",
+        "artist": "Band",
+        "year": 2000,
+        "original_year": 1990,
+        "tracks": [
+          {
+            "title": "One",
+            "index": 1
+          }
+        ]
+      },
+      "pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "preferred": {
+        "original_year": true
+      },
+      "expected": {
+        "score": 0.0308641975308642,
+        "penalties": {
+          "artist": [
+            0.0
+          ],
+          "album": [
+            0.0
+          ],
+          "year": [
+            0.2777777777777778
+          ],
+          "tracks": [
+            0.0
+          ]
+        },
+        "tracks": [
+          {
+            "score": 0.0,
+            "penalties": {
+              "track_title": [
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "various artists and missing track",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Singer",
+          "album": "Collection"
+        }
+      ],
+      "album": {
+        "album": "Collection",
+        "artist": "Various Artists",
+        "va": true,
+        "tracks": [
+          {
+            "title": "One",
+            "artist": "Singer",
+            "index": 1
+          },
+          {
+            "title": "Two",
+            "artist": "Other",
+            "index": 2
+          }
+        ]
+      },
+      "pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "expected": {
+        "score": 0.15254237288135591,
+        "penalties": {
+          "album": [
+            0.0
+          ],
+          "tracks": [
+            0.0
+          ],
+          "missing_tracks": [
+            1.0
+          ]
+        },
+        "tracks": [
+          {
+            "score": 0.0,
+            "penalties": {
+              "track_title": [
+                0.0
+              ],
+              "track_artist": [
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "unmatched local track",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Extra",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "album": {
+        "album": "Record",
+        "artist": "Band",
+        "tracks": [
+          {
+            "title": "One",
+            "index": 1
+          }
+        ]
+      },
+      "pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "expected": {
+        "score": 0.06976744186046512,
+        "penalties": {
+          "artist": [
+            0.0
+          ],
+          "album": [
+            0.0
+          ],
+          "tracks": [
+            0.0
+          ],
+          "unmatched_tracks": [
+            1.0
+          ]
+        },
+        "tracks": [
+          {
+            "score": 0.0,
+            "penalties": {
+              "track_title": [
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "album ID and disc total",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record",
+          "disctotal": 1,
+          "mb_albumid": "old-id"
+        }
+      ],
+      "album": {
+        "album": "Record",
+        "artist": "Band",
+        "album_id": "new-id",
+        "mediums": 2,
+        "tracks": [
+          {
+            "title": "One",
+            "index": 1
+          }
+        ]
+      },
+      "pairs": [
+        [
+          0,
+          0
+        ]
+      ],
+      "expected": {
+        "score": 0.42857142857142855,
+        "penalties": {
+          "artist": [
+            0.0
+          ],
+          "album": [
+            0.0
+          ],
+          "mediums": [
+            1.0
+          ],
+          "album_id": [
+            1.0
+          ],
+          "tracks": [
+            0.0
+          ]
+        },
+        "tracks": [
+          {
+            "score": 0.0,
+            "penalties": {
+              "track_title": [
+                0.0
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
