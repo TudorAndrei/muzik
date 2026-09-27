@@ -247,7 +247,7 @@ def test_process_audio_files_emits_organize_steps(
     ]
 
 
-def test_process_audio_files_rejects_beets_skip_as_organize_success(
+def test_process_audio_files_rejects_import_skip_as_organize_success(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -257,7 +257,7 @@ def test_process_audio_files_rejects_beets_skip_as_organize_success(
     audio.write_bytes(b"audio")
     events = RecordingWorkflowEventEmitter()
 
-    # A Beets Skip choice finishes the import session without an exception,
+    # A Skip choice finishes the import session without an exception,
     # but move mode leaves the source audio in place.
     monkeypatch.setattr(workflow, "organize_paths", lambda options, **kwargs: None)
 

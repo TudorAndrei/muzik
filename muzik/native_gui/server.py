@@ -564,9 +564,9 @@ class NativeGuiServer:
         cancellation: CancellationToken,
     ) -> None:
         emitter = _EventEmitter(self, job_id, "workflow")
-        beets_emitter = _EventEmitter(self, job_id, "native")
+        import_emitter = _EventEmitter(self, job_id, "native")
         decisions = _WorkflowDecisions(self, job_id, options.interactive, cancellation)
-        beets_decisions = _ImportDecisions(
+        import_decisions = _ImportDecisions(
             self, job_id, options.interactive, cancellation
         )
         try:
@@ -575,8 +575,8 @@ class NativeGuiServer:
                 options=options,
                 decisions=decisions,
                 events=emitter,
-                beets_decisions=beets_decisions,
-                beets_events=beets_emitter,
+                import_decisions=import_decisions,
+                import_events=import_emitter,
             )
             if command == "workflow.start":
                 run_workflow(
@@ -607,8 +607,8 @@ class NativeGuiServer:
                     options,
                     decisions,
                     emitter,
-                    beets_decisions,
-                    beets_emitter,
+                    import_decisions,
+                    import_emitter,
                     cancellation,
                 )
             cancellation.raise_if_cancelled()
@@ -631,8 +631,8 @@ class NativeGuiServer:
         options: WorkflowOptions,
         decisions: Any,
         emitter: Any,
-        beets_decisions: Any,
-        beets_emitter: Any,
+        import_decisions: Any,
+        import_emitter: Any,
         cancellation: CancellationToken,
     ) -> dict[str, Any]:
         watchlist = self.repository.load()
@@ -661,8 +661,8 @@ class NativeGuiServer:
         item_operations = build_item_action_operations(
             decisions=decisions,
             events=emitter,
-            beets_decisions=beets_decisions,
-            beets_events=beets_emitter,
+            import_decisions=import_decisions,
+            import_events=import_emitter,
         )
         action_result = run_item_action(
             item,
@@ -819,20 +819,11 @@ class _ImportDecisions:
             cancellation,
         )
 
-    def should_resume_beets_import(self, path: Path) -> bool:
-        return False
-
-    def choose_beets_album_match(self, task: Any) -> str | MatchDecision | None:
-        return self._choose_match(task)
-
-    def choose_beets_track_match(self, task: Any) -> str | MatchDecision | None:
-        return self._choose_match(task)
-
-    def _choose_match(self, task: Any) -> str | MatchDecision | None:
+    def choose_album_match(self, task: Any) -> str | MatchDecision | None:
         if not self.interactive:
             return MatchDecision.AS_IS
         value = self.server._request_decision(
-            self.job_id, "beets_match", {"task": _json_value(task)}, self.cancellation
+            self.job_id, "import_match", {"task": _json_value(task)}, self.cancellation
         )
         if value is None or value == "as_is":
             return MatchDecision.AS_IS if value == "as_is" else None
@@ -842,14 +833,12 @@ class _ImportDecisions:
             raise WorkflowDecisionError("Select a valid match ID.")
         return value
 
-    def resolve_beets_duplicate(
-        self, task: Any, duplicates: list[Any]
-    ) -> DuplicateDecision:
+    def resolve_duplicate(self, task: Any, duplicates: list[Any]) -> DuplicateDecision:
         if not self.interactive:
             return DuplicateDecision.SKIP
         value = self.server._request_decision(
             self.job_id,
-            "beets_duplicate",
+            "import_duplicate",
             {"task": _json_value(task), "duplicates": _json_value(duplicates)},
             self.cancellation,
         )

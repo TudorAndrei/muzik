@@ -112,8 +112,8 @@ The decision kinds and reply values are:
 | `chapter_review` | `accept`, `edit`, or `reject` |
 | `chapter_edit` | a list of chapters with `index`, `start`, `end`, and `title`; `null` cancels the edit |
 | `quality_replacement` | `true` or `false` |
-| `beets_match` | one `candidate_id`, `as_is`, or `null` |
-| `beets_duplicate` | `skip`, `keep_all`, `remove_old`, or `merge` |
+| `import_match` | one `candidate_id`, `as_is`, or `null` |
+| `import_duplicate` | `skip`, `keep_all`, or `remove_old` |
 
 `job.cancel` wakes a pending decision. Core operations check cancellation at
 safe points. Spotify login opens the browser and waits for its loopback

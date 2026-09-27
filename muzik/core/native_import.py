@@ -136,19 +136,6 @@ def preview_sync(config_path: Path, query: str) -> tuple[int, int]:
     return len(library.albums(query)), len(library.items(query))
 
 
-def preview_native_plan(
-    options: ImportOptions,
-    *,
-    factory: Callable[[Path, dict[str, Any]], Any] = _new_importer,
-) -> tuple[Any, list[dict[str, Any]]]:
-    """Get a plan for shadow comparison without changing files or the database."""
-    overrides = _overrides(options)
-    overrides["import"]["pretend"] = True
-    importer = factory(options.config_path or LIBRARY_CONFIG, overrides)
-    albums = _plan_paths(importer, options.paths)
-    return importer, albums
-
-
 def run_native_import(
     options: ImportOptions,
     decisions: ImportDecisions,
@@ -179,7 +166,7 @@ def run_native_import(
                 task = _task_view(index, album)
                 events.emit(TaskEvent(task))
                 choice, candidate_index = _choice(
-                    decisions.choose_beets_album_match(task), task
+                    decisions.choose_album_match(task), task
                 )
                 duplicate_choice = None
                 if choice != "skip" and album["duplicates"]:
@@ -206,7 +193,7 @@ def run_native_import(
                             )
                     else:
                         duplicate_choice = _duplicate_choice(
-                            decisions.resolve_beets_duplicate(task, duplicates)
+                            decisions.resolve_duplicate(task, duplicates)
                         )
                 choices.append((choice, candidate_index, duplicate_choice))
             result = importer.apply(choices)

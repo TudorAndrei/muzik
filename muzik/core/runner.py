@@ -1,8 +1,7 @@
 """Subprocess helpers for external tools.
 
-Three strategies:
+Two strategies:
 - run_streaming()   — yt-dlp: Popen + thread reader + Rich Live (last-line display)
-- run_passthrough() — beet import: inherit stdin/stdout so interactive prompts work
 - run_silent()      — ffprobe queries: capture all output, return CompletedProcess
 """
 
@@ -103,27 +102,6 @@ def run_streaming(
         t.join()
 
     return proc.returncode
-
-
-def run_passthrough(
-    cmd: list[str],
-    cwd: Optional[Path] = None,
-) -> int:
-    """Run *cmd* with stdin/stdout/stderr fully inherited.
-
-    Use this for beet import so interactive prompts reach the terminal.
-    Returns the process exit code.
-    """
-    try:
-        result = subprocess.run(cmd, cwd=cwd)
-        return result.returncode
-    except FileNotFoundError:
-        from muzik.ui.console import err
-
-        err(
-            f"[red]Command not found:[/red] [bold]{cmd[0]}[/bold] — is it installed and on PATH?"
-        )
-        return 127
 
 
 def run_silent(

@@ -764,7 +764,7 @@ def reconcile_watchlist(
     options: WorkflowOptions,
 ) -> None:
     """Update item stages from muzik records, local files, and the music library."""
-    beets_library = _open_beets_library(options.config)
+    music_library = _open_music_library(options.config)
     for playlist in watchlist.playlists:
         if playlist.source_kind is WatchlistSourceKind.SPOTIFY:
             _reconcile_spotify_playlist(playlist, options=options)
@@ -773,11 +773,11 @@ def reconcile_watchlist(
             playlist,
             request=request,
             options=options,
-            beets_library=beets_library,
+            music_library=music_library,
         )
 
 
-def _open_beets_library(
+def _open_music_library(
     config_path: Path | None,
 ) -> NativeLibrary | None:
     # Best-effort: an unconfigured or broken library must not break
@@ -824,7 +824,7 @@ def _reconcile_playlist(
     *,
     request: WorkflowRequest,
     options: WorkflowOptions,
-    beets_library: NativeLibrary | None = None,
+    music_library: NativeLibrary | None = None,
 ) -> None:
     playlist_state = load_playlist_state(playlist.playlist_id)
     for item in playlist.items:
@@ -869,10 +869,10 @@ def _reconcile_playlist(
                     status=StageStatus.COMPLETE,
                     path=str(local_files[0].resolve()),
                 )
-            elif beets_library is not None:
+            elif music_library is not None:
                 organized_path = find_path_by_source_id(
-                    video_id, beets_library
-                ) or find_organized_path(item.title, beets_library)
+                    video_id, music_library
+                ) or find_organized_path(item.title, music_library)
                 if organized_path is not None:
                     # No muzik record of this video exists, but its album is
                     # already in the music library — treat it the same as a

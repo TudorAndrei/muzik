@@ -1,4 +1,4 @@
-"""Import choices, views, and events shared by both import backends."""
+"""Import choices, views, and events for the native importer."""
 
 from __future__ import annotations
 
@@ -41,7 +41,6 @@ class DuplicateDecision(str, Enum):
     SKIP = "skip"
     KEEP_ALL = "keep_all"
     REMOVE_OLD = "remove_old"
-    MERGE = "merge"
 
 
 class MatchDecision(str, Enum):
@@ -50,13 +49,9 @@ class MatchDecision(str, Enum):
 
 
 class ImportDecisions(Protocol):
-    def should_resume_beets_import(self, path: Path) -> bool: ...
+    def choose_album_match(self, task: TaskView) -> Any: ...
 
-    def choose_beets_album_match(self, task: TaskView) -> Any: ...
-
-    def choose_beets_track_match(self, task: TaskView) -> Any: ...
-
-    def resolve_beets_duplicate(
+    def resolve_duplicate(
         self, task: TaskView, duplicates: list[DuplicateView]
     ) -> DuplicateDecision: ...
 
@@ -138,16 +133,10 @@ class NonInteractiveImportDecisions:
         self.quiet = quiet
         self.duplicate_decision = duplicate_decision
 
-    def should_resume_beets_import(self, path: Path) -> bool:
-        return False
-
-    def choose_beets_album_match(self, task: TaskView) -> MatchDecision:
+    def choose_album_match(self, task: TaskView) -> MatchDecision:
         return MatchDecision.SKIP if self.quiet else MatchDecision.AS_IS
 
-    def choose_beets_track_match(self, task: TaskView) -> MatchDecision:
-        return self.choose_beets_album_match(task)
-
-    def resolve_beets_duplicate(
+    def resolve_duplicate(
         self, task: TaskView, duplicates: list[DuplicateView]
     ) -> DuplicateDecision:
         return self.duplicate_decision

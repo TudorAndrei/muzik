@@ -27,10 +27,7 @@ def _config(tmp_path: Path) -> Path:
     return config
 
 
-def test_native_lookup_reads_beets_items_and_albums(
-    tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("MUZIK_NATIVE_LIBRARY", "native")
+def test_native_lookup_reads_beets_items_and_albums(tmp_path: Path) -> None:
     library = open_library_for_reads(_config(tmp_path))
     assert isinstance(library, NativeLibrary)
     assert [item.id for item in library.items("artist:Artist")] == [1]
@@ -42,7 +39,7 @@ def test_native_lookup_reads_beets_items_and_albums(
 def test_watchlist_selects_native_library(monkeypatch, tmp_path: Path) -> None:
     expected = object()
     monkeypatch.setattr(watchlist, "open_library_for_reads", lambda config: expected)
-    assert watchlist._open_beets_library(tmp_path / "beets.yaml") is expected
+    assert watchlist._open_music_library(tmp_path / "beets.yaml") is expected
 
 
 def test_soulseek_check_selects_native_library(monkeypatch, tmp_path: Path) -> None:
@@ -58,7 +55,7 @@ def test_soulseek_check_selects_native_library(monkeypatch, tmp_path: Path) -> N
 
 
 def test_native_prune_checks_fraction_and_backs_up_database(
-    monkeypatch, tmp_path: Path
+    tmp_path: Path,
 ) -> None:
     database = tmp_path / "library.db"
     shutil.copyfile(FIXTURE_DB, database)
@@ -67,8 +64,6 @@ def test_native_prune_checks_fraction_and_backs_up_database(
         f"library: {database}\ndirectory: {tmp_path / 'music'}\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("MUZIK_NATIVE_LIBRARY", "native")
-
     try:
         importer.prune_missing_items(config)
     except importer.PruneAborted as error:

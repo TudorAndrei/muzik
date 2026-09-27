@@ -7,7 +7,7 @@ from muzik.core.workflow.decisions import NonInteractiveWorkflowDecisions
 from muzik.core.workflow.service import WorkflowOptions, WorkflowServiceError
 
 
-def test_gui_workflow_keeps_beets_error_detail(tmp_path: Path, monkeypatch) -> None:
+def test_gui_workflow_keeps_import_error_detail(tmp_path: Path, monkeypatch) -> None:
     album = tmp_path / "splits" / "High-Flying"
     album.mkdir(parents=True)
 
@@ -23,12 +23,12 @@ def test_gui_workflow_keeps_beets_error_detail(tmp_path: Path, monkeypatch) -> N
 
     with pytest.raises(
         WorkflowServiceError,
-        match="Beets could not organize High-Flying: library database is locked",
+        match="Could not organize High-Flying: library database is locked",
     ):
         workflow_operations.process_audio([], [album])
 
 
-def test_gui_workflow_repairs_placeholder_tags_before_beets(
+def test_gui_workflow_repairs_placeholder_tags_before_import(
     tmp_path: Path, monkeypatch
 ) -> None:
     album = tmp_path / "splits" / "Kohsuke Mine - Sunshower (1976)"

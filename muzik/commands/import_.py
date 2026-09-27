@@ -106,7 +106,7 @@ def import_cmd(
 
     Run ``muzik init`` first to configure the music library.
     """
-    beets_cfg = config or LIBRARY_CONFIG
+    library_config = config or LIBRARY_CONFIG
     library = library if isinstance(library, str) else None
     agent = agent is True
 
@@ -124,9 +124,9 @@ def import_cmd(
         err(f"[red]Directory not found: {directory}[/red]")
         raise typer.Exit(1)
 
-    if not beets_cfg.exists():
+    if not library_config.exists():
         err(
-            f"[yellow]Music library config not found at {beets_cfg}.[/yellow] "
+            f"[yellow]Music library config not found at {library_config}.[/yellow] "
             "Run [bold]muzik init[/bold] to create one."
         )
 
@@ -134,7 +134,7 @@ def import_cmd(
     console.print(f"[bold]muzik import[/bold] {target}{' (agent)' if agent else ''}")
     if library and dry_run:
         try:
-            albums, items = preview_sync(beets_cfg, library)
+            albums, items = preview_sync(library_config, library)
         except Exception as exc:
             err(f"[red]Sync preview failed:[/red] {exc}")
             raise typer.Exit(1) from exc
@@ -156,7 +156,7 @@ def import_cmd(
             ImportOptions(
                 paths=[directory] if directory is not None else [],
                 query=library,
-                config_path=beets_cfg if beets_cfg.exists() else None,
+                config_path=library_config if library_config.exists() else None,
                 copy=copy,
                 link=link,
                 move=not copy and not link,
@@ -178,7 +178,9 @@ def import_cmd(
     moved = not copy and not link
     if moved and not dry_run and not no_prune:
         try:
-            pruned = prune_missing_items(beets_cfg if beets_cfg.exists() else None)
+            pruned = prune_missing_items(
+                library_config if library_config.exists() else None
+            )
             if pruned:
                 console.print(f"[dim]Pruned {pruned} item(s) orphaned by moves.[/dim]")
         except PruneAborted as exc:

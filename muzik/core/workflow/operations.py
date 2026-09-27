@@ -77,13 +77,13 @@ def build_workflow_operations(
     options: WorkflowOptions,
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter | None = None,
-    beets_decisions: ImportDecisions | None = None,
-    beets_events: ImportEventEmitter | None = None,
+    import_decisions: ImportDecisions | None = None,
+    import_events: ImportEventEmitter | None = None,
 ) -> WorkflowRunOperations:
     """Build concrete operations without binding to an interface toolkit."""
     events = events or NullWorkflowEventEmitter()
-    beets_decisions = beets_decisions or NonInteractiveImportDecisions()
-    beets_events = beets_events or NullImportEventEmitter()
+    import_decisions = import_decisions or NonInteractiveImportDecisions()
+    import_events = import_events or NullImportEventEmitter()
 
     def download_audio(
         url: str,
@@ -168,17 +168,17 @@ def build_workflow_operations(
                         duplicate_action="remove" if options.force else None,
                     ),
                     tag_only=options.tag_only,
-                    decisions=beets_decisions,
-                    events=beets_events,
+                    decisions=import_decisions,
+                    events=import_events,
                     tag_only_runner=write_library_tags if options.tag_only else None,
                 )
             except WorkflowCancelled:
                 raise
             except Exception as exc:
                 message = str(exc) or type(exc).__name__
-                beets_events.emit(ErrorEvent(message, context={"path": str(target)}))
+                import_events.emit(ErrorEvent(message, context={"path": str(target)}))
                 raise WorkflowServiceError(
-                    f"Beets could not organize {target.name}: {message}"
+                    f"Could not organize {target.name}: {message}"
                 ) from exc
             return True
 
@@ -241,8 +241,8 @@ def build_item_action_operations(
     *,
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter | None = None,
-    beets_decisions: ImportDecisions | None = None,
-    beets_events: ImportEventEmitter | None = None,
+    import_decisions: ImportDecisions | None = None,
+    import_events: ImportEventEmitter | None = None,
 ) -> ItemActionOperations:
     """Build targeted item actions from the normal workflow operations."""
     events = events or NullWorkflowEventEmitter()
@@ -257,8 +257,8 @@ def build_item_action_operations(
             options=options,
             decisions=decisions,
             events=events,
-            beets_decisions=beets_decisions,
-            beets_events=beets_events,
+            import_decisions=import_decisions,
+            import_events=import_events,
         )
         run_workflow(
             request,
@@ -309,8 +309,8 @@ def build_item_action_operations(
             options=options,
             decisions=decisions,
             events=events,
-            beets_decisions=beets_decisions,
-            beets_events=beets_events,
+            import_decisions=import_decisions,
+            import_events=import_events,
         )
         results = run_resolved_playlist_tracks(
             playlist,

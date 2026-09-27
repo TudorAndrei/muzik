@@ -709,7 +709,7 @@ def test_reconcile_watchlist_reads_playlist_state_and_download_folder(
     assert downloaded.stages["download"].path == str(local.resolve())
 
 
-def test_reconcile_watchlist_repairs_false_processed_beets_skip(
+def test_reconcile_watchlist_repairs_false_processed_import_skip(
     tmp_path: Path,
     monkeypatch,
 ) -> None:

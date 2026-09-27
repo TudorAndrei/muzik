@@ -96,16 +96,10 @@ class FakeImporter:
 
 
 class Decisions:
-    def should_resume_beets_import(self, path: Path) -> bool:
-        return False
-
-    def choose_beets_album_match(self, task: Any) -> str:
+    def choose_album_match(self, task: Any) -> str:
         return task.matches[0].candidate_id
 
-    def choose_beets_track_match(self, task: Any) -> str:
-        return self.choose_beets_album_match(task)
-
-    def resolve_beets_duplicate(self, task: Any, duplicates: Any) -> DuplicateDecision:
+    def resolve_duplicate(self, task: Any, duplicates: Any) -> DuplicateDecision:
         return DuplicateDecision.REMOVE_OLD
 
 
@@ -181,10 +175,10 @@ def test_native_import_reports_moved_sources_left_after_commit() -> None:
 
 def test_native_as_is_choice() -> None:
     class AsIsDecisions(Decisions):
-        def choose_beets_album_match(self, task: Any) -> Any:
+        def choose_album_match(self, task: Any) -> Any:
             return MatchDecision.AS_IS
 
-        def resolve_beets_duplicate(self, task: Any, duplicates: Any) -> Any:
+        def resolve_duplicate(self, task: Any, duplicates: Any) -> Any:
             return DuplicateDecision.KEEP_ALL
 
     native = FakeImporter()

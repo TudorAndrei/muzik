@@ -1,4 +1,4 @@
-"""Tests for the LLM-backed beets import decisions (no network)."""
+"""Tests for the LLM-backed import decisions (no network)."""
 
 from pathlib import Path
 
@@ -37,7 +37,7 @@ def _match(index: int, distance: float | None) -> MatchView:
 def test_no_candidates_skips() -> None:
     called = []
     dec = AgentImportDecisions(chooser=lambda task: called.append(task) or None)
-    assert dec.choose_beets_album_match(_task()) is None
+    assert dec.choose_album_match(_task()) is None
     assert called == []  # never consulted the agent
 
 
@@ -45,7 +45,7 @@ def test_strong_match_applies_without_agent() -> None:
     called = []
     dec = AgentImportDecisions(chooser=lambda task: called.append(task) or None)
     task = _task(_match(0, 0.05), _match(1, 0.4))
-    assert dec.choose_beets_album_match(task) == "t1:match:0"
+    assert dec.choose_album_match(task) == "t1:match:0"
     assert called == []  # strong match never calls the agent
 
 
@@ -53,35 +53,35 @@ def test_agent_pick_with_high_confidence_applies() -> None:
     decision = MatchDecision(action="pick", candidate_index=1, confidence=0.9)
     dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5), _match(1, 0.35))
-    assert dec.choose_beets_album_match(task) == "t1:match:1"
+    assert dec.choose_album_match(task) == "t1:match:1"
 
 
 def test_agent_pick_with_low_confidence_skips() -> None:
     decision = MatchDecision(action="pick", candidate_index=1, confidence=0.3)
     dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5), _match(1, 0.35))
-    assert dec.choose_beets_album_match(task) is None
+    assert dec.choose_album_match(task) is None
 
 
 def test_agent_invalid_index_skips() -> None:
     decision = MatchDecision(action="pick", candidate_index=9, confidence=0.99)
     dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
-    assert dec.choose_beets_album_match(task) is None
+    assert dec.choose_album_match(task) is None
 
 
 def test_agent_as_is_returns_as_is() -> None:
     decision = MatchDecision(action="as_is", confidence=0.8)
     dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
-    assert dec.choose_beets_album_match(task) is ImportMatchDecision.AS_IS
+    assert dec.choose_album_match(task) is ImportMatchDecision.AS_IS
 
 
 def test_agent_skip_returns_none() -> None:
     decision = MatchDecision(action="skip", confidence=0.2)
     dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
-    assert dec.choose_beets_album_match(task) is None
+    assert dec.choose_album_match(task) is None
 
 
 def test_agent_error_falls_back_to_skip() -> None:
@@ -90,7 +90,7 @@ def test_agent_error_falls_back_to_skip() -> None:
 
     dec = AgentImportDecisions(chooser=boom)
     task = _task(_match(0, 0.5))
-    assert dec.choose_beets_album_match(task) is None
+    assert dec.choose_album_match(task) is None
 
 
 def test_build_prompt_lists_candidates() -> None:

@@ -104,7 +104,7 @@ def test_soulseek_download_command_downloads_top_candidate(
             )
 
     def fail_organize_cmd(**kwargs):
-        raise AssertionError("--no-organize should skip beets")
+        raise AssertionError("--no-organize should skip import")
 
     monkeypatch.setattr(soulseek, "_source", FakeSource)
     monkeypatch.setattr(soulseek, "organize_cmd", fail_organize_cmd)

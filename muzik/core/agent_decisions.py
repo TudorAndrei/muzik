@@ -25,7 +25,6 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 from typing import Any, Literal
@@ -110,16 +109,10 @@ class AgentImportDecisions:
 
     # -- ImportDecisions protocol ------------------------------------------
 
-    def should_resume_beets_import(self, path: Path) -> bool:
-        return False
+    def choose_album_match(self, task: TaskView) -> Any:
+        return self._decide(task)
 
-    def choose_beets_album_match(self, task: TaskView) -> Any:
-        return self._decide(task, kind="album")
-
-    def choose_beets_track_match(self, task: TaskView) -> Any:
-        return self._decide(task, kind="track")
-
-    def resolve_beets_duplicate(
+    def resolve_duplicate(
         self,
         task: TaskView,
         duplicates: list[DuplicateView],
@@ -128,7 +121,7 @@ class AgentImportDecisions:
 
     # -- decision logic ---------------------------------------------------
 
-    def _decide(self, task: TaskView, *, kind: str) -> Any:
+    def _decide(self, task: TaskView) -> Any:
         label = _source_label(task)
         matches = task.matches
         if not matches:

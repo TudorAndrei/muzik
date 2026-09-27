@@ -17,6 +17,12 @@ from muzik.config import (
     load_muzik_config,
 )
 from muzik.core.quality import QualityPolicy
+from muzik.core.import_models import (
+    DuplicateDecision,
+    DuplicateView,
+    MatchDecision,
+    TaskView,
+)
 from muzik.core.watchlist import (
     StageStatus,
     Watchlist,
@@ -41,6 +47,7 @@ from muzik.core.workflow.service import (
 from muzik.core.workflow.service import QualityUpgradeResult
 from muzik.native_gui.server import (
     NativeGuiServer,
+    _ImportDecisions,
     _WorkflowDecisions,
     _request_options,
     _watchlist_data,
@@ -310,6 +317,29 @@ def test_decision_reply_unblocks_worker(tmp_path) -> None:
     worker.join(timeout=2)
     assert not worker.is_alive()
     assert answer == ["accept"]
+
+
+def test_import_decisions_use_current_gui_kinds(monkeypatch, tmp_path) -> None:
+    server = NativeGuiServer(
+        StringIO(),
+        StringIO(),
+        repository=WatchlistRepository(tmp_path / "watchlist.json"),
+    )
+    kinds: list[str] = []
+
+    def reply(job_id, kind, payload, cancellation):
+        kinds.append(kind)
+        return "as_is" if kind == "import_match" else "keep_all"
+
+    monkeypatch.setattr(server, "_request_decision", reply)
+    decisions = _ImportDecisions(server, "job", True, CancellationToken())
+    task = TaskView(task_id="one")
+    assert decisions.choose_album_match(task) is MatchDecision.AS_IS
+    assert (
+        decisions.resolve_duplicate(task, [DuplicateView()])
+        is DuplicateDecision.KEEP_ALL
+    )
+    assert kinds == ["import_match", "import_duplicate"]
 
 
 def test_skipping_soulseek_candidates_reports_clear_error(

@@ -335,8 +335,8 @@ def _process_audio_files(
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
     cancellation: CancellationToken | None = None,
-    beets_decisions: ImportDecisions | None = None,
-    beets_events: ImportEventEmitter | None = None,
+    import_decisions: ImportDecisions | None = None,
+    import_events: ImportEventEmitter | None = None,
 ) -> None:
     """Classify, split, and organize local audio files/directories."""
     audio_files = _find_audio_inputs(audio_inputs)
@@ -351,8 +351,8 @@ def _process_audio_files(
 
     decisions = decisions or CliWorkflowDecisions()
     events = events or NullWorkflowEventEmitter()
-    beets_decisions = beets_decisions or NonInteractiveImportDecisions()
-    beets_events = beets_events or NullImportEventEmitter()
+    import_decisions = import_decisions or NonInteractiveImportDecisions()
+    import_events = import_events or NullImportEventEmitter()
     options = WorkflowOptions(
         review=review,
         no_split=no_split,
@@ -397,8 +397,8 @@ def _process_audio_files(
                         incremental=not force,
                         duplicate_action="remove" if force else None,
                     ),
-                    decisions=beets_decisions,
-                    events=beets_events,
+                    decisions=import_decisions,
+                    events=import_events,
                 )
                 # The importer treats Skip as a clean session result. In move mode,
                 # imported audio leaves the source path. Remaining audio means

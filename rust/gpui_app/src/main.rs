@@ -388,12 +388,12 @@ impl Muzik {
                     }
                 )
             }
-            "message" | "log" | "beets_log" => {
+            "message" | "log" => {
                 let message = describe(&payload["message"]);
                 self.job_status = message.clone();
                 message
             }
-            "error" | "beets_error" => {
+            "error" => {
                 let message = describe(&payload["message"]);
                 self.error = Some(message.clone());
                 format!("Error: {message}")
@@ -421,11 +421,11 @@ impl Muzik {
                 ));
                 format!("Chapter review: {}", describe(&payload["source"]))
             }
-            "task" | "beets_task" => {
+            "task" => {
                 self.set_activity_section(activity_section(
                     "Album matches",
                     &payload["task"]["matches"],
-                    beets_match_summary,
+                    import_match_summary,
                 ));
                 let task = &payload["task"];
                 let message = format!(
@@ -436,11 +436,11 @@ impl Muzik {
                 self.job_status = message.clone();
                 message
             }
-            "import_started" | "beets_import_started" => {
+            "import_started" => {
                 self.job_status = "Import started".into();
                 self.job_status.clone()
             }
-            "import_finished" | "beets_import_finished" => {
+            "import_finished" => {
                 self.job_status = if payload["success"] == false {
                     "Import failed".into()
                 } else {
@@ -2535,7 +2535,7 @@ fn chapter_summary(chapter: &Value) -> String {
     format!("{index}. {title} · {start} s")
 }
 
-fn beets_match_summary(candidate: &Value) -> String {
+fn import_match_summary(candidate: &Value) -> String {
     let artist = candidate["artist"].as_str().unwrap_or("Unknown artist");
     let album = candidate["album"]
         .as_str()
@@ -2661,7 +2661,7 @@ fn decision_details(decision: &Value) -> Vec<String> {
                     .map_or_else(|| "?".to_string(), |value| value.to_string())
             ),
         ],
-        "beets_match" | "beets_duplicate" => {
+        "import_match" | "import_duplicate" => {
             let task = &payload["task"];
             let mut details = vec![format!(
                 "Current tags: {} · {} · {}",
@@ -2676,7 +2676,7 @@ fn decision_details(decision: &Value) -> Vec<String> {
                         .filter_map(|path| path.as_str().map(str::to_owned)),
                 );
             }
-            if decision["kind"] == "beets_duplicate" {
+            if decision["kind"] == "import_duplicate" {
                 if let Some(duplicates) = payload["duplicates"].as_array() {
                     details.extend(duplicates.iter().map(|duplicate| {
                         format!(
@@ -2732,7 +2732,7 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             ("Replace file".into(), json!(true)),
             ("Keep current file".into(), json!(false)),
         ],
-        "beets_match" => {
+        "import_match" => {
             let mut choices: Vec<(String, Value)> = payload["task"]["matches"]
                 .as_array()
                 .into_iter()
@@ -2760,7 +2760,7 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             choices.push(("Skip".into(), Value::Null));
             choices
         }
-        "beets_duplicate" => ["skip", "keep_all", "remove_old"]
+        "import_duplicate" => ["skip", "keep_all", "remove_old"]
             .into_iter()
             .map(|value| (value.replace('_', " "), json!(value)))
             .collect(),
@@ -2890,9 +2890,9 @@ mod tests {
     }
 
     #[test]
-    fn beets_duplicate_review_shows_existing_file_and_reply_options() {
+    fn import_duplicate_review_shows_existing_file_and_reply_options() {
         let decision = json!({
-            "kind": "beets_duplicate",
+            "kind": "import_duplicate",
             "payload": {
                 "task": {"current_artist": "Artist", "current_album": "Album", "paths": ["new.flac"]},
                 "duplicates": [{"artist": "Artist", "album": "Album", "path": "old.flac"}]
