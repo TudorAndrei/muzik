@@ -110,7 +110,7 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
     match native::dispatch(command, params) {
         Ok(result) => json!({"id": id, "type":"response", "ok":true, "result":result}),
         Err(message) => {
-            let code = if command == "config.save" {
+            let code = if matches!(command, "config.save" | "spotify.set_client_id") {
                 "invalid_request"
             } else {
                 "operation_failed"

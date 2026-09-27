@@ -8,6 +8,7 @@ mod downloaded;
 mod gui;
 mod import;
 mod init;
+mod spotify;
 use muzik_core::paths;
 mod validate;
 
@@ -41,6 +42,8 @@ enum Command {
     Init,
     /// Import audio into a beets-compatible library.
     Import(Import),
+    /// Manage a Spotify account.
+    Spotify(Spotify),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
 }
@@ -242,6 +245,26 @@ struct Bandcamp {
     force: bool,
 }
 
+#[derive(Args)]
+struct Spotify {
+    #[usage(subcommand)]
+    command: SpotifyCommand,
+}
+
+#[derive(Subcommands)]
+enum SpotifyCommand {
+    /// Save the client ID of your Spotify application.
+    SetClientId(SetSpotifyClientId),
+    /// Remove saved Spotify tokens.
+    Logout,
+}
+
+#[derive(Args)]
+struct SetSpotifyClientId {
+    /// Client ID of your Spotify application.
+    client_id: String,
+}
+
 async fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Bandcamp(args) => bandcamp::download(&args).map_err(|error| error.to_string()),
@@ -270,6 +293,10 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Gui => gui::open().map_err(|error| error.to_string()),
         Command::Init => init::run().map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
+        Command::Spotify(args) => match args.command {
+            SpotifyCommand::SetClientId(args) => spotify::set_client_id(&args.client_id),
+            SpotifyCommand::Logout => spotify::logout(),
+        },
         Command::Validate(args) => validate::run(&args),
     }
 }

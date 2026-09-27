@@ -5,13 +5,20 @@ use chrono::{DateTime, Local};
 use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths;
+use muzik_core::spotify;
 use serde_json::{json, Value};
 use std::path::Path;
 
 pub fn handles(command: &str) -> bool {
     matches!(
         command,
-        "hello" | "config.get" | "config.save" | "library.scan" | "services.check"
+        "hello"
+            | "config.get"
+            | "config.save"
+            | "library.scan"
+            | "services.check"
+            | "spotify.set_client_id"
+            | "spotify.logout"
     )
 }
 
@@ -30,6 +37,15 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(&path, params)?})),
         "library.scan" => library_scan(params),
         "services.check" => Ok(json!({"services": services::check()})),
+        "spotify.set_client_id" => {
+            let client_id = params
+                .get("client_id")
+                .and_then(Value::as_str)
+                .ok_or("client_id must be a non-empty string")?;
+            let client_id = spotify::set_client_id(&path, client_id)?;
+            Ok(json!({"client_id": client_id}))
+        }
+        "spotify.logout" => Ok(json!({"removed": spotify::clear_tokens(&spotify::token_path())?})),
         _ => Err(format!("unknown command: {command}")),
     }
 }

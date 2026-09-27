@@ -90,6 +90,48 @@ pub fn save_gui_defaults(path: &Path, params: &Value) -> Result<Value, String> {
     Ok(defaults)
 }
 
+pub fn save_section_string(
+    path: &Path,
+    section: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(format!("{key} must be a non-empty string"));
+    }
+    let mut config = load(path)?;
+    let root = config
+        .as_object_mut()
+        .ok_or("config file is not a mapping")?;
+    let section_value = root.entry(section).or_insert_with(|| json!({}));
+    if !section_value.is_object() {
+        *section_value = json!({});
+    }
+    section_value
+        .as_object_mut()
+        .ok_or("config section is not a mapping")?
+        .insert(key.to_owned(), json!(value));
+    let parent = path.parent().ok_or("config path has no parent")?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let yaml = serde_saphyr::to_string(&config).map_err(|error| error.to_string())?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".config.yaml.")
+        .tempfile_in(parent)
+        .map_err(|error| error.to_string())?;
+    use std::io::Write;
+    temporary
+        .write_all(yaml.as_bytes())
+        .map_err(|error| error.to_string())?;
+    temporary.flush().map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary.persist(path).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 fn validate(value: Value) -> Result<Value, String> {
     let standard = gui_defaults();
     let expected = standard
@@ -159,7 +201,7 @@ fn expand_home(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_gui_defaults, save_gui_defaults};
+    use super::{load, load_gui_defaults, save_gui_defaults, save_section_string};
     use serde_json::json;
     use std::fs;
 
@@ -204,6 +246,25 @@ mod tests {
         fs::write(&path, "spotify: [unfinished")?;
         assert!(save_gui_defaults(&path, &json!({"jobs": 2})).is_err());
         assert_eq!(fs::read_to_string(path)?, "spotify: [unfinished");
+        Ok(())
+    }
+
+    #[test]
+    fn saves_spotify_client_id_and_keeps_other_settings() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config/config.yaml");
+        fs::create_dir_all(path.parent().ok_or("config path has no parent")?)?;
+        fs::write(
+            &path,
+            "spotify:\n  redirect_port: '9000'\nsoulseek:\n  username: user\n",
+        )?;
+        save_section_string(&path, "spotify", "client_id", "  new-id  ")
+            .map_err(std::io::Error::other)?;
+        let config = load(&path).map_err(std::io::Error::other)?;
+        assert_eq!(config["spotify"]["client_id"], "new-id");
+        assert_eq!(config["spotify"]["redirect_port"], "9000");
+        assert_eq!(config["soulseek"]["username"], "user");
         Ok(())
     }
 }

@@ -4,6 +4,7 @@ pub mod app_config;
 mod config;
 pub mod downloads;
 pub mod paths;
+pub mod spotify;
 mod types;
 pub mod watchlist;
 
