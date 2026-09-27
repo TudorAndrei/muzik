@@ -352,6 +352,19 @@ file size and modification time. The source file hash did not change. A
 separate test selected the second of two releases and checked that a release
 difference was reported while the destination comparison remained equal.
 
+The final `mise run check` passed after the legacy package was removed: 415
+Python tests, all Rust workspace tests, the GPUI tests, format checks, Clippy,
+the release build, and the license check. The six reusable Rust crates have no
+PyO3 dependency. A source distribution build also passed.
+
+For the manual smoke test, `muzik download` saved the YouTube video "Me at the
+zoo" to a temporary directory and found three chapters. `muzik split` made
+three Opus tracks. The native importer placed all three tracks and cover art
+in a temporary library, and `beet ls` read its database. A separate beets
+import of the same split output produced the same three relative audio paths.
+Native tag reads found no field, list, or custom tag difference on those three
+tracks. The configured personal library was not changed.
+
 ## Open Questions
 
 None. Decided 2026-09-27: no crate is published to crates.io, and AcoustID and

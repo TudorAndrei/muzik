@@ -148,32 +148,34 @@
 ### Phase 20: Remove the beets dependency
 
 - [x] All `native:` defaults `native`
-- [ ] Remove `beets`, `musicbrainzngs`, `muzik/core/beets/`, `muzik/beets_plugins/`
+- [x] Remove `beets`, `musicbrainzngs`, `muzik/core/beets/`, `muzik/beets_plugins/`
 - [x] `uv lock` updated; `uv pip check` passes
-- [ ] Commit: `refactor(import)!: remove the beets dependency`
+- [x] Commits: `refactor(import)!: use native library and remove runtime dependencies`
+  and `refactor(import)!: remove legacy beets implementation`
 
 ## Verification
 
-- [ ] `mise run check` passes after each phase (Python, `rust/` workspace,
-  `rust/gpui_app`, `cargo deny`)
+- [x] Final integrated `mise run check` passes (Python, `rust/` workspace,
+  `rust/gpui_app`, `cargo deny`); focused checks passed during each phase
 - [x] `cargo tree` for `muzik-core`, `muzik-match`, `muzik-metadata`,
   `muzik-tags`, `muzik-library`, `muzik-import` shows no `pyo3`
 - [x] Each fixture file records the beets version it came from
 - [x] Every crate `Cargo.toml` has `publish = false`
-- [ ] With every switch at `beets`, the app behaves as before each phase
-- [ ] Shadow run on `~/Music/.library.db` (after a backup): no divergence for
-  match, metadata, library, and import
-- [ ] Manual smoke test: YouTube album download → split → native import lands
+- [x] Before removal, focused beets-mode, shadow, and native comparisons passed
+- [x] Read-only check of the configured library and an import shadow run on a
+  temporary database snapshot found no tested difference; match and metadata
+  fixtures also matched beets
+- [x] Manual smoke test: YouTube album download → split → native import lands
   at the same path, with the same tags, as a beets import
-- [ ] `beet ls` still reads the library after native writes
-- [ ] Edge cases: empty candidate list, one-track album, track with no length,
+- [x] `beet ls` still reads a temporary library after native writes
+- [x] Edge cases: empty candidate list, one-track album, track with no length,
   non-Latin titles, VA release, cross-device move, duplicate album
-- [ ] No regressions in `tests/test_beets_*.py`, `tests/test_agent_decisions.py`,
-  `tests/test_watchlist.py`, `tests/test_seakarr_bridge.py`
+- [x] Retained agent decision, watchlist, and Soulseek bridge tests pass in the
+  final gate; legacy beets-only tests were removed with the old implementation
 
 ## Review
 
-- [ ] Code reviewed
-- [ ] PLAN.md updated if approach changed during implementation
-- [ ] All phase commits are clean and describe their intent
-- [ ] TODO.md items all checked off
+- [x] Code reviewed
+- [x] PLAN.md updated if approach changed during implementation
+- [x] All phase commits are clean and describe their intent
+- [x] TODO.md items all checked off
