@@ -114,3 +114,31 @@ fn writes_tags_for_mediafile_to_read() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn partial_update_preserves_custom_keys() {
+    let root = std::env::temp_dir().join(format!("muzik-tags-preserve-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    for suffix in SUFFIXES {
+        let source = fixtures().join(format!("mediafile.{suffix}"));
+        let dest = root.join(format!("update.{suffix}"));
+        fs::copy(source, &dest).unwrap();
+        let data = TagData {
+            fields: BTreeMap::from([("title".into(), "Changed Title".into())]),
+            ..TagData::default()
+        };
+        write(&dest, &data).unwrap();
+        let reread = read(&dest, &["MUZIK_MOOD"]).unwrap();
+        assert_eq!(
+            reread.fields.get("title").map(String::as_str),
+            Some("Changed Title"),
+            "{suffix}"
+        );
+        assert_eq!(
+            reread.custom.get("MUZIK_MOOD").map(String::as_str),
+            Some("calm"),
+            "{suffix}"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}

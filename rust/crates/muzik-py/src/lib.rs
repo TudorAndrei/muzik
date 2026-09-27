@@ -25,6 +25,95 @@ create_exception!(_native, SeakarrError, PyException);
 create_exception!(_native, MetadataError, PyException);
 create_exception!(_native, MatchError, PyException);
 create_exception!(_native, LibraryError, PyException);
+create_exception!(_native, TagsError, PyException);
+
+fn tags_error(error: impl std::fmt::Display) -> PyErr {
+    TagsError::new_err(error.to_string())
+}
+
+#[pyfunction]
+fn probe_audio(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
+    let (properties, tags) = py.detach(|| {
+        let properties = muzik_tags::probe(&path).map_err(tags_error)?;
+        let tags = muzik_tags::read(&path, &[]).map_err(tags_error)?;
+        Ok::<_, PyErr>((properties, tags))
+    })?;
+    let result = PyDict::new(py);
+    result.set_item("format", properties.format)?;
+    result.set_item("codec", properties.codec)?;
+    result.set_item("duration", properties.duration_seconds)?;
+    result.set_item("bitrate_kbps", properties.bitrate_kbps)?;
+    result.set_item("sample_rate_hz", properties.sample_rate_hz)?;
+    result.set_item("bit_depth", properties.bit_depth)?;
+    result.set_item("channels", properties.channels)?;
+    result.set_item("size_bytes", properties.size_bytes)?;
+    result.set_item("tags", tags.fields)?;
+    Ok(result.into())
+}
+
+#[pyfunction]
+fn read_audio_tags(py: Python<'_>, path: String) -> PyResult<Py<PyAny>> {
+    let data = py.detach(|| muzik_tags::read(&path, &[]).map_err(tags_error))?;
+    let result = PyDict::new(py);
+    result.set_item("fields", data.fields)?;
+    result.set_item("lists", data.lists)?;
+    result.set_item("custom", data.custom)?;
+    Ok(result.into())
+}
+
+#[pyfunction]
+fn write_audio_tags(py: Python<'_>, path: String, data_json: String) -> PyResult<()> {
+    let data: serde_json::Value = serde_json::from_str(&data_json).map_err(tags_error)?;
+    let fields = serde_json::from_value(
+        data.get("fields")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(tags_error)?;
+    let lists = serde_json::from_value(
+        data.get("lists")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(tags_error)?;
+    let custom = serde_json::from_value(
+        data.get("custom")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    )
+    .map_err(tags_error)?;
+    py.detach(move || {
+        muzik_tags::write(
+            path,
+            &muzik_tags::TagData {
+                fields,
+                lists,
+                custom,
+            },
+        )
+        .map_err(tags_error)
+    })
+}
+
+#[pyfunction]
+fn find_audio_cover(directory: String) -> Option<String> {
+    muzik_tags::find_cover(directory).map(|path| path.to_string_lossy().into_owned())
+}
+
+#[pyfunction]
+fn embed_audio_cover(
+    py: Python<'_>,
+    path: String,
+    image: Vec<u8>,
+    mime_type: String,
+) -> PyResult<()> {
+    py.detach(move || muzik_tags::embed_cover(path, &image, &mime_type).map_err(tags_error))
+}
+
+#[pyfunction]
+fn audio_has_front_cover(py: Python<'_>, path: String) -> PyResult<bool> {
+    py.detach(move || muzik_tags::has_front_cover(path).map_err(tags_error))
+}
 
 const MUSICBRAINZ_USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
@@ -151,7 +240,8 @@ impl PyNativeLibrary {
         safety_fraction: f64,
     ) -> PyResult<(usize, Option<(usize, usize)>)> {
         py.detach(|| {
-            let mut library = RustLibrary::open_read_write(&self.library_path).map_err(library_error)?;
+            let mut library =
+                RustLibrary::open_read_write(&self.library_path).map_err(library_error)?;
             match library.prune_missing_items(Path::new(&self.directory), safety_fraction) {
                 Ok(removed) => Ok((removed, None)),
                 Err(muzik_library::Error::PruneAborted { missing, total }) => {
@@ -467,7 +557,14 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("MetadataError", m.py().get_type::<MetadataError>())?;
     m.add("MatchError", m.py().get_type::<MatchError>())?;
     m.add("LibraryError", m.py().get_type::<LibraryError>())?;
+    m.add("TagsError", m.py().get_type::<TagsError>())?;
     m.add_function(wrap_pyfunction!(rank_album_candidates, m)?)?;
+    m.add_function(wrap_pyfunction!(probe_audio, m)?)?;
+    m.add_function(wrap_pyfunction!(read_audio_tags, m)?)?;
+    m.add_function(wrap_pyfunction!(write_audio_tags, m)?)?;
+    m.add_function(wrap_pyfunction!(find_audio_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(embed_audio_cover, m)?)?;
+    m.add_function(wrap_pyfunction!(audio_has_front_cover, m)?)?;
     m.add_function(wrap_pyfunction!(search_musicbrainz_releases, m)?)?;
     m.add_function(wrap_pyfunction!(get_musicbrainz_tracklist, m)?)?;
     Ok(())

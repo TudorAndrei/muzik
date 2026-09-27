@@ -1,5 +1,10 @@
 //! Read and write the tag fields used by beets and mediafile.
 
+pub mod cover;
+pub mod probe;
+pub use cover::{embed_cover, find_cover, has_front_cover};
+pub use probe::{probe, AudioProperties};
+
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::Path;
@@ -12,6 +17,7 @@ use lofty::mp4::Mp4File;
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::mpeg::MpegFile;
 use lofty::ogg::tag::VorbisComments;
+use lofty::ogg::OggPictureStorage;
 use lofty::ogg::OpusFile;
 use lofty::ogg::VorbisFile;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
@@ -145,6 +151,8 @@ pub struct TagData {
 
 #[derive(Debug, Error)]
 pub enum TagsError {
+    #[error("cannot parse cover art: {0}")]
+    Picture(String),
     #[error("cannot open audio file: {0}")]
     Io(#[from] std::io::Error),
     #[error("cannot read tags: {0}")]
@@ -260,6 +268,7 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
         }
         TagType::VorbisComments => {
             let mut native = VorbisComments::from(tag);
+            merge_vorbis_existing(path, kind, &mut native)?;
             for (key, value) in &custom {
                 native.insert(key.clone(), value.clone());
             }
@@ -351,4 +360,47 @@ fn album_disambig_key(kind: FileType) -> Option<&'static str> {
         FileType::Flac | FileType::Opus | FileType::Vorbis => Some("MUSICBRAINZ_ALBUMCOMMENT"),
         _ => None,
     }
+}
+
+fn merge_vorbis_existing(
+    path: &Path,
+    kind: FileType,
+    native: &mut VorbisComments,
+) -> Result<(), TagsError> {
+    let mut reader = File::open(path)?;
+    let options = ParseOptions::default();
+    let existing = match kind {
+        FileType::Flac => FlacFile::read_from(&mut reader, options)?
+            .vorbis_comments()
+            .cloned(),
+        FileType::Opus => Some(
+            OpusFile::read_from(&mut reader, options)?
+                .vorbis_comments()
+                .clone(),
+        ),
+        FileType::Vorbis => Some(
+            VorbisFile::read_from(&mut reader, options)?
+                .vorbis_comments()
+                .clone(),
+        ),
+        _ => None,
+    };
+    if let Some(existing) = existing {
+        if native.vendor().is_empty() {
+            native.set_vendor(existing.vendor().to_owned());
+        }
+        for (key, value) in existing.items() {
+            if native.get(key).is_none() {
+                native.push(key.to_owned(), value.to_owned());
+            }
+        }
+        if native.pictures().is_empty() {
+            for (picture, info) in existing.pictures() {
+                native
+                    .insert_picture(picture.clone(), Some(*info))
+                    .map_err(|error| TagsError::Picture(error.to_string()))?;
+            }
+        }
+    }
+    Ok(())
 }

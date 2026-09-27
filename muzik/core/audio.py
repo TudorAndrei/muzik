@@ -1,10 +1,12 @@
 """ffprobe wrappers and audio metadata helpers."""
 
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Optional
 
+from muzik.config import get_native_settings
 from muzik.core.chapters import sidecar_path
 from muzik.core.metadata import find_muzik_metadata
 from muzik.core.musicbrainz import clean_album_name
@@ -32,7 +34,39 @@ def _parse_title(title: str) -> tuple[str, str, str]:
     return artist, clean_album_name(album), year
 
 
-def probe(path: Path) -> dict:
+_LOG = logging.getLogger(__name__)
+
+
+def _probe_native(path: Path) -> dict:
+    from muzik import _native
+
+    data = _native.probe_audio(str(path))
+    tags = data["tags"]
+    duration = data["duration"]
+    bitrate = data["bitrate_kbps"]
+    stream = {
+        "codec_type": "audio",
+        "codec_name": data["codec"],
+        "sample_rate": data["sample_rate_hz"],
+        "channels": data["channels"],
+        "bit_rate": bitrate * 1000 if bitrate is not None else None,
+        "bits_per_raw_sample": data["bit_depth"],
+        "duration": duration,
+        "tags": tags,
+    }
+    return {
+        "format": {
+            "duration": duration,
+            "bit_rate": stream["bit_rate"],
+            "size": data["size_bytes"],
+            "tags": tags,
+        },
+        "streams": [stream],
+        "chapters": [],
+    }
+
+
+def _probe_beets(path: Path) -> dict:
     """Run ffprobe on *path* and return parsed JSON.
 
     Raises ValueError if ffprobe fails.
@@ -53,6 +87,33 @@ def probe(path: Path) -> dict:
     if result.returncode != 0:
         raise ValueError(f"ffprobe failed for {path}: {result.stderr.strip()}")
     return json.loads(result.stdout)
+
+
+def probe(path: Path) -> dict:
+    """Probe an audio file through the selected tag backend."""
+    mode = get_native_settings()["tags"]
+    if mode == "native":
+        try:
+            return _probe_native(path)
+        except Exception as exc:
+            raise ValueError(f"native audio probe failed for {path}: {exc}") from exc
+    data = _probe_beets(path)
+    if mode == "shadow":
+        try:
+            native = _probe_native(path)
+            beets_stream = next(
+                (s for s in data.get("streams", []) if s.get("codec_type") == "audio"),
+                {},
+            )
+            native_stream = native["streams"][0]
+            if (beets_stream.get("sample_rate"), beets_stream.get("channels")) != (
+                str(native_stream["sample_rate"]),
+                native_stream["channels"],
+            ):
+                _LOG.warning("native audio probe differs from ffprobe for %s", path)
+        except Exception as exc:
+            _LOG.warning("native audio probe failed for %s: %s", path, exc)
+    return data
 
 
 def get_duration(path: Path) -> Optional[float]:
