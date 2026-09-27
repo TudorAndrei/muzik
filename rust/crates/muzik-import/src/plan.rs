@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::Error as ImportError;
-use muzik_core::ReleaseCandidate;
+use muzik_core::{ReleaseCandidate, TrackCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_match::{
     Assignment, MatchAlbum, MatchConfig, MatchItem, MatchTrack, Recommendation, rank_albums,
@@ -20,6 +20,7 @@ pub trait ReleaseProvider {
         limit: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error>;
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error>;
+    fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error>;
 }
 
 impl ReleaseProvider for MetadataClient {
@@ -33,6 +34,10 @@ impl ReleaseProvider for MetadataClient {
 
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
         self.lookup_release(id)
+    }
+
+    fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        self.lookup_recording(id)
     }
 }
 

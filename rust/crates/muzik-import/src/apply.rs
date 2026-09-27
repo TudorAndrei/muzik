@@ -108,6 +108,8 @@ pub struct ApplyResult {
     pub item_ids: Vec<i64>,
     pub destinations: Vec<PathBuf>,
     pub skipped_albums: usize,
+    /// Old files that remained after a successful database replacement.
+    pub cleanup_failed: Vec<PathBuf>,
 }
 
 struct PreparedItem {
@@ -241,11 +243,9 @@ pub fn apply(
                 fs::remove_file(&item.source)?;
             }
         }
-        for path in &prepared.old_paths {
-            if path.exists() {
-                files::move_to_trash(path)?;
-            }
-        }
+        result
+            .cleanup_failed
+            .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
         result.album_ids.push(album_id);
         result.item_ids.extend(item_ids);
         result.destinations.extend(
@@ -290,25 +290,7 @@ fn prepare(
     } else {
         Vec::new()
     };
-    let old_paths = if replace_ids.is_empty() {
-        Vec::new()
-    } else {
-        let mut paths = Vec::new();
-        for id in &replace_ids {
-            for item in library.items_for_album(*id)? {
-                if let Some(mut path) = item.fields.get("path").and_then(sql_path) {
-                    if path.is_relative() {
-                        path = options.library_root.join(path);
-                    }
-                    if !path.starts_with(&options.library_root) {
-                        return Err(ApplyError::UnsafeReplacePath(path));
-                    }
-                    paths.push(path);
-                }
-            }
-        }
-        paths
-    };
+    let mut old_paths = replacement_paths(library, &replace_ids, &options.library_root)?;
     let mut album_fields = LibraryFields::new();
     let mut prepared = Vec::new();
     let albums = library.albums()?;
@@ -383,6 +365,9 @@ fn prepare(
                 tags.fields.insert("disc".into(), track.medium.to_string());
                 if let Some(id) = &track.recording_id {
                     tags.fields.insert("mb_trackid".into(), id.0.clone());
+                }
+                if let Some(id) = &track.release_track_id {
+                    tags.fields.insert("mb_releasetrackid".into(), id.clone());
                 }
             }
         }
@@ -471,6 +456,12 @@ fn prepare(
         }
         album_fields.insert("artpath".into(), sql_path_value(destination));
     }
+    old_paths.retain(|old| {
+        !prepared.iter().any(|item| item.destination == *old)
+            && !cover
+                .as_ref()
+                .is_some_and(|(_, destination)| destination == old)
+    });
     album_fields.insert("added".into(), SqlValue::Real(now()));
     Ok(PreparedAlbum {
         items: prepared,
@@ -623,6 +614,43 @@ fn sql_path(value: &SqlValue) -> Option<PathBuf> {
     }
 }
 
+fn replacement_paths(
+    library: &Library,
+    album_ids: &[i64],
+    library_root: &Path,
+) -> Result<Vec<PathBuf>, ApplyError> {
+    let mut paths = BTreeSet::new();
+    for id in album_ids {
+        for item in library.items_for_album(*id)? {
+            if let Some(path) = item.fields.get("path").and_then(sql_path) {
+                paths.insert(safe_old_path(path, library_root)?);
+            }
+        }
+        if let Some(album) = library.album(*id)?
+            && let Some(path) = album.fields.get("artpath").and_then(sql_path)
+        {
+            paths.insert(safe_old_path(path, library_root)?);
+        }
+    }
+    Ok(paths.into_iter().collect())
+}
+
+fn safe_old_path(mut path: PathBuf, library_root: &Path) -> Result<PathBuf, ApplyError> {
+    if path
+        .components()
+        .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(ApplyError::UnsafeReplacePath(path));
+    }
+    if path.is_relative() {
+        path = library_root.join(path);
+    }
+    if !path.starts_with(library_root) {
+        return Err(ApplyError::UnsafeReplacePath(path));
+    }
+    Ok(path)
+}
+
 fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -634,5 +662,74 @@ fn rollback(paths: &[PathBuf]) {
         if let Err(error) = fs::remove_file(path) {
             tracing::warn!(path = %path.display(), %error, "cannot remove failed import file");
         }
+    }
+}
+
+fn cleanup_replaced(
+    paths: &[PathBuf],
+    mut send_to_trash: impl FnMut(&Path) -> Result<(), files::FileError>,
+) -> Vec<PathBuf> {
+    let mut failed = Vec::new();
+    for path in paths {
+        if path.exists()
+            && let Err(error) = send_to_trash(path)
+        {
+            tracing::warn!(path = %path.display(), %error, "old import file remains after replacement");
+            failed.push(path.clone());
+        }
+    }
+    failed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cleanup_replaced, replacement_paths};
+    use muzik_library::{Fields, Library, SqlValue};
+    use std::fs;
+    use std::io;
+
+    #[test]
+    fn failed_trash_cleanup_reports_the_remaining_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let old_cover = temp.path().join("cover.png");
+        fs::write(&old_cover, b"art").unwrap();
+        let failures = cleanup_replaced(std::slice::from_ref(&old_cover), |_| {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "trash unavailable").into())
+        });
+        assert_eq!(failures, vec![old_cover.clone()]);
+        assert!(old_cover.exists());
+    }
+
+    #[test]
+    fn replacement_collects_old_audio_and_cover() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../muzik-library/tests/fixtures/library.db");
+        let database = temp.path().join("library.db");
+        fs::copy(fixture, &database).unwrap();
+        let mut library = Library::open_read_write(&database).unwrap();
+        let root = temp.path().join("music");
+        fs::create_dir(&root).unwrap();
+        let mut album_fields = Fields::new();
+        album_fields.insert(
+            "artpath".into(),
+            SqlValue::Blob(b"Artist/Album/cover.png".to_vec()),
+        );
+        let album_id = library.insert_album(&album_fields, &Fields::new()).unwrap();
+        let mut item_fields = Fields::new();
+        item_fields.insert("album_id".into(), SqlValue::Integer(album_id));
+        item_fields.insert(
+            "path".into(),
+            SqlValue::Blob(b"Artist/Album/song.flac".to_vec()),
+        );
+        library.insert_item(&item_fields, &Fields::new()).unwrap();
+        let paths = replacement_paths(&library, &[album_id], &root).unwrap();
+        assert_eq!(
+            paths,
+            vec![
+                root.join("Artist/Album/cover.png"),
+                root.join("Artist/Album/song.flac")
+            ]
+        );
     }
 }

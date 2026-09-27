@@ -23,6 +23,10 @@ impl ReleaseProvider for FailingProvider {
     fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
         unreachable!()
     }
+
+    fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        unreachable!()
+    }
 }
 
 impl ReleaseProvider for FixtureProvider {
@@ -52,6 +56,7 @@ impl ReleaseProvider for FixtureProvider {
                 recording_id: Some(RecordingId(
                     "11111111-1111-4111-8111-111111111111".to_owned(),
                 )),
+                release_track_id: Some("release-track-1".into()),
                 title: "Tide & Stone".to_owned(),
                 artist: "Mara Vale".to_owned(),
                 length_seconds: None,
@@ -68,6 +73,10 @@ impl ReleaseProvider for FixtureProvider {
             disambiguation: None,
             is_various_artists: false,
         })
+    }
+
+    fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        unreachable!()
     }
 }
 

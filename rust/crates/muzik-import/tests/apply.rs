@@ -35,6 +35,7 @@ impl ReleaseProvider for FixtureProvider {
             artist: "Mara Vale".into(),
             tracks: vec![TrackCandidate {
                 recording_id: Some(RecordingId("recording-1".into())),
+                release_track_id: Some("release-track-1".into()),
                 title: "Song (feat. Guest)".into(),
                 artist: "Mara Vale".into(),
                 length_seconds: None,
@@ -51,6 +52,10 @@ impl ReleaseProvider for FixtureProvider {
             disambiguation: None,
             is_various_artists: false,
         })
+    }
+
+    fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        unreachable!()
     }
 }
 
@@ -207,7 +212,7 @@ fn replace_removes_selected_duplicate_rows() {
                 .to_vec(),
         ),
     );
-    library
+    let old_item_id = library
         .insert_item(&item_fields, &Default::default())
         .unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
@@ -222,7 +227,33 @@ fn replace_removes_selected_duplicate_rows() {
         .duplicates
         .retain(|duplicate| duplicate.album_id == old_id);
     assert_eq!(plan.albums[0].duplicates.len(), 1);
-    let options = ApplyOptions::from_beets(&config, root).unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+
+    options.dry_run = true;
+    let preview = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::Candidate(0),
+            duplicate: Some(DuplicateDecision::Replace),
+        }],
+        &options,
+    )
+    .unwrap();
+    options.dry_run = false;
+    let mut old_path = muzik_library::Fields::new();
+    old_path.insert(
+        "path".into(),
+        SqlValue::Blob(
+            preview.destinations[0]
+                .as_os_str()
+                .as_encoded_bytes()
+                .to_vec(),
+        ),
+    );
+    library
+        .update_item(old_item_id, &old_path, &Default::default())
+        .unwrap();
 
     let result = apply::apply(
         &mut library,
@@ -236,6 +267,8 @@ fn replace_removes_selected_duplicate_rows() {
     .unwrap();
 
     assert_eq!(result.album_ids.len(), 1);
+    assert!(result.destinations[0].exists());
+    assert!(result.cleanup_failed.is_empty());
     assert!(library.album(result.album_ids[0]).unwrap().is_some());
     let items = library.items_for_album(result.album_ids[0]).unwrap();
     assert_eq!(items.len(), 1);

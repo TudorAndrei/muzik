@@ -43,6 +43,7 @@ pub struct LocalTrack {
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct TrackCandidate {
     pub recording_id: Option<RecordingId>,
+    pub release_track_id: Option<String>,
     pub title: String,
     pub artist: String,
     pub length_seconds: Option<f64>,

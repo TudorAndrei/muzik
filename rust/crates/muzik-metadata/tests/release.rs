@@ -1,6 +1,8 @@
 use musicbrainz_rs::entity::release::Release;
 use muzik_core::ReleaseCandidate;
-use muzik_metadata::{release_candidate, release_candidate_with_options, ReleaseOptions};
+use muzik_metadata::{
+    recording_candidate, release_candidate, release_candidate_with_options, ReleaseOptions,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -33,4 +35,19 @@ fn recorded_release_matches_beets_album_info() {
     assert_eq!(fixture.beets_version, "2.13.1");
     let release: Release = serde_json::from_value(fixture.raw).unwrap();
     assert_eq!(release_candidate(&release), fixture.expected);
+}
+
+#[test]
+fn recorded_recording_maps_for_singleton_sync() {
+    let fixture: Fixture = serde_json::from_str(include_str!("fixtures/release.json")).unwrap();
+    let recording: musicbrainz_rs::entity::recording::Recording =
+        serde_json::from_value(fixture.raw["media"][0]["tracks"][0]["recording"].clone()).unwrap();
+    let mapped = recording_candidate(&recording);
+    assert_eq!(
+        mapped.recording_id.unwrap().0,
+        "b5d7d380-f43a-4c1f-a5de-694150b093ac"
+    );
+    assert_eq!(mapped.title, "Mysterons");
+    assert_eq!(mapped.artist, "Portishead");
+    assert!(mapped.release_track_id.is_none());
 }

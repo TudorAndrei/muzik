@@ -5612,7 +5612,8 @@
         "length_seconds": 306.2,
         "index": 1,
         "medium": 1,
-        "medium_index": 1
+        "medium_index": 1,
+        "release_track_id": "17f6c0af-4e48-3810-9d13-17ac5de492df"
       },
       {
         "recording_id": "1234a7ae-2af2-4291-aa84-bd0bafe291a1",
@@ -5621,7 +5622,8 @@
         "length_seconds": 254.0,
         "index": 2,
         "medium": 1,
-        "medium_index": 2
+        "medium_index": 2,
+        "release_track_id": "e2f611d3-0cc1-3ac2-ad90-d33a02b49c4c"
       },
       {
         "recording_id": "e97f805a-ab48-4c52-855e-07049142113d",
@@ -5630,7 +5632,8 @@
         "length_seconds": 238.0,
         "index": 3,
         "medium": 1,
-        "medium_index": 3
+        "medium_index": 3,
+        "release_track_id": "f280d32c-dfed-3be5-9906-91e00e348d1e"
       },
       {
         "recording_id": "c837f888-d471-4b07-bcbc-1b9f7406ec1a",
@@ -5639,7 +5642,8 @@
         "length_seconds": 259.973,
         "index": 4,
         "medium": 1,
-        "medium_index": 4
+        "medium_index": 4,
+        "release_track_id": "5dff6172-4275-3557-8e10-82d6bb8d4b22"
       },
       {
         "recording_id": "9170054a-8a9b-4f33-b31f-4ed58347154a",
@@ -5648,7 +5652,8 @@
         "length_seconds": 293.96,
         "index": 5,
         "medium": 1,
-        "medium_index": 5
+        "medium_index": 5,
+        "release_track_id": "ff4f3733-a46f-3aac-8df9-5985f8bf887e"
       },
       {
         "recording_id": "46d6ebba-8d3f-4600-a2a3-9eab4713458d",
@@ -5657,7 +5662,8 @@
         "length_seconds": 229.306,
         "index": 6,
         "medium": 1,
-        "medium_index": 6
+        "medium_index": 6,
+        "release_track_id": "07eb09c1-8a76-3111-bddb-ed1486195a9e"
       },
       {
         "recording_id": "977c23ba-10e0-4c03-a882-5896e58717ae",
@@ -5666,7 +5672,8 @@
         "length_seconds": 237.96,
         "index": 7,
         "medium": 1,
-        "medium_index": 7
+        "medium_index": 7,
+        "release_track_id": "3875c956-6a5e-3179-a4b7-506eb878105b"
       },
       {
         "recording_id": "8a49dba0-253a-4535-b87f-78bb035336ce",
@@ -5675,7 +5682,8 @@
         "length_seconds": 305.173,
         "index": 8,
         "medium": 1,
-        "medium_index": 8
+        "medium_index": 8,
+        "release_track_id": "4fa99ea3-ae31-3a2a-b4e0-ae8a76b911c1"
       },
       {
         "recording_id": "c7baf0bc-77ed-454e-92a0-687f6b70d612",
@@ -5684,7 +5692,8 @@
         "length_seconds": 221.0,
         "index": 9,
         "medium": 1,
-        "medium_index": 9
+        "medium_index": 9,
+        "release_track_id": "7a67d3db-6c7c-3ba9-85d1-357ddf825a7b"
       },
       {
         "recording_id": "5efc1689-a6e8-45d3-a481-774be58e8b59",
@@ -5693,7 +5702,8 @@
         "length_seconds": 304.093,
         "index": 10,
         "medium": 1,
-        "medium_index": 10
+        "medium_index": 10,
+        "release_track_id": "2d2c3253-8b61-3c02-b5e1-83be8ade482c"
       },
       {
         "recording_id": "145f5c43-0ac2-4886-8b09-63d0e92ded5d",
@@ -5702,7 +5712,8 @@
         "length_seconds": 305.573,
         "index": 11,
         "medium": 1,
-        "medium_index": 11
+        "medium_index": 11,
+        "release_track_id": "81489fd3-99de-3c50-b46c-6309fab8cf3f"
       }
     ]
   }

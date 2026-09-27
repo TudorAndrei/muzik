@@ -11,6 +11,7 @@ use musicbrainz_rs::api_bindium::ureq;
 use musicbrainz_rs::api_bindium::ApiRequestError;
 use musicbrainz_rs::client::MusicBrainzClient;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
+use musicbrainz_rs::entity::recording::Recording;
 use musicbrainz_rs::entity::release::Release;
 use musicbrainz_rs::prelude::*;
 use muzik_core::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
@@ -132,6 +133,32 @@ impl MetadataClient {
                 .map_err(Box::new)
         })?;
         Ok(release_candidate_with_options(&release, &self.options))
+    }
+
+    pub fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, Error> {
+        tracing::debug!(id, "look up MusicBrainz recording");
+        let recording = request_with_retry(|| {
+            Recording::fetch()
+                .id(id)
+                .with_artists()
+                .execute_with_client(&self.client)
+                .map_err(Box::new)
+        })?;
+        Ok(recording_candidate(&recording))
+    }
+}
+
+#[must_use]
+pub fn recording_candidate(recording: &Recording) -> TrackCandidate {
+    TrackCandidate {
+        recording_id: Some(RecordingId(recording.id.clone())),
+        release_track_id: None,
+        title: recording.title.clone(),
+        artist: artist_name(recording.artist_credit.as_deref().unwrap_or_default()),
+        length_seconds: recording.length.map(|length| f64::from(length) / 1000.0),
+        index: 0,
+        medium: 0,
+        medium_index: 0,
     }
 }
 
@@ -290,6 +317,7 @@ pub fn release_candidate_with_options(
                 .or_else(|| recording.and_then(|item| item.length));
             tracks.push(TrackCandidate {
                 recording_id: recording.map(|item| RecordingId(item.id.clone())),
+                release_track_id: Some(track.id.clone()),
                 title: track.title.clone(),
                 artist: artist_name(artist_credits),
                 length_seconds: length_ms.map(|length| f64::from(length) / 1000.0),

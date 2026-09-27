@@ -40,6 +40,7 @@ def main() -> None:
         "tracks": [
             {
                 "recording_id": track.track_id,
+                "release_track_id": track.release_track_id,
                 "title": track.title,
                 "artist": track.artist,
                 "length_seconds": track.length,
