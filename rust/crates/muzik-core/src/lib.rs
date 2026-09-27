@@ -5,6 +5,7 @@ mod config;
 pub mod downloads;
 pub mod paths;
 mod types;
+pub mod watchlist;
 
 pub use config::{default_config_path, BeetsConfig, Error as ConfigError};
 pub use types::{AlbumId, LocalTrack, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
