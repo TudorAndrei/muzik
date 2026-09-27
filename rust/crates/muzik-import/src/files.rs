@@ -13,8 +13,6 @@ pub enum FileError {
     InvalidSource(PathBuf),
     #[error("destination exists: {0}")]
     DestinationExists(PathBuf),
-    #[error("destination has no parent: {0}")]
-    NoParent(PathBuf),
     #[error("path is outside the prune root: {0}")]
     OutsideRoot(PathBuf),
     #[error("file operation failed: {0}")]
@@ -40,9 +38,7 @@ pub fn place(source: &Path, destination: &Path, mode: Placement) -> Result<(), F
     if destination.exists() || destination.symlink_metadata().is_ok() {
         return Err(FileError::DestinationExists(destination.to_owned()));
     }
-    let parent = destination
-        .parent()
-        .ok_or_else(|| FileError::NoParent(destination.to_owned()))?;
+    let parent = destination_parent(destination);
     fs::create_dir_all(parent)?;
     debug!(?mode, ?source, ?destination, "place import file");
     match mode {
@@ -57,6 +53,13 @@ pub fn place(source: &Path, destination: &Path, mode: Placement) -> Result<(), F
         }
     }
     Ok(())
+}
+
+fn destination_parent(destination: &Path) -> &Path {
+    destination
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
 }
 
 fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
