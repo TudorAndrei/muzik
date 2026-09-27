@@ -7,7 +7,7 @@ local linters = new Mapping<String, Step | Group> {
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["detect-private-key"] = Builtins.detect_private_key
     ["gitleaks"] = new Step {
-        check = "gitleaks git --staged --redact --no-banner"
+        check = "if git diff --cached --quiet; then gitleaks git --redact --no-banner --log-opts origin/main..HEAD; else gitleaks git --staged --redact --no-banner; fi"
     }
     ["actionlint"] = Builtins.actionlint
     ["zizmor"] = Builtins.zizmor
