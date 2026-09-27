@@ -1,6 +1,7 @@
 //! Read the fixed and flexible fields in a beets SQLite library.
 
 mod functions;
+pub mod query;
 
 use rusqlite::types::{Value, ValueRef};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
@@ -16,6 +17,8 @@ pub enum Error {
     Sqlite(#[from] rusqlite::Error),
     #[error("beets {table} row has no id")]
     MissingId { table: &'static str },
+    #[error("invalid beets query: {0}")]
+    InvalidQuery(String),
 }
 
 pub type Fields = BTreeMap<String, Value>;
@@ -152,6 +155,22 @@ impl Library {
             });
         }
         Ok(items)
+    }
+
+    pub fn query_items(&self, query_text: &str) -> Result<Vec<Item>, Error> {
+        let query = query::Query::parse(query_text)?;
+        let mut items = self.items()?;
+        items.retain(|item| query.matches_item(item));
+        query.sort_items(&mut items);
+        Ok(items)
+    }
+
+    pub fn query_albums(&self, query_text: &str) -> Result<Vec<Album>, Error> {
+        let query = query::Query::parse(query_text)?;
+        let mut albums = self.albums()?;
+        albums.retain(|album| query.matches_album(album));
+        query.sort_albums(&mut albums);
+        Ok(albums)
     }
 
     fn rows(&self, query: &str, table: &'static str) -> Result<Vec<(i64, Fields)>, Error> {

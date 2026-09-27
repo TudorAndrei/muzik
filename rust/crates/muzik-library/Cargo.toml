@@ -8,10 +8,12 @@ description = "Read beets SQLite libraries from Rust"
 
 [dependencies]
 deunicode = "1.6"
-fancy-regex = "0.17"
+fancy-regex = "0.19"
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
+shlex = "2"
 thiserror = "2"
 tracing = "0.1"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 serde_json = "1"

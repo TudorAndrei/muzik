@@ -1,0 +1,20 @@
+{
+  "beets_version": "2.13.1",
+  "cases": [
+    {"text":"artist:Artist","groups":[[{"field":"artist","kind":"Substring","pattern":"Artist","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"title::^T","groups":[[{"field":"title","kind":"Regexp","pattern":"^T","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"length:180..200","groups":[[{"field":"length","kind":"Numeric","pattern":"180..200","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"length:3:00..3:10","groups":[[{"field":"length","kind":"Numeric","pattern":"3:00..3:10","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"-artist:Artist","groups":[[{"field":"artist","kind":"Substring","pattern":"Artist","negated":true}]],"sorts":[],"item_ids":[2]},
+    {"text":"^artist:Artist","groups":[[{"field":"artist","kind":"Substring","pattern":"Artist","negated":true}]],"sorts":[],"item_ids":[2]},
+    {"text":"title:\"Track Name\"","groups":[[{"field":"title","kind":"Substring","pattern":"Track Name","negated":false}]],"sorts":[],"item_ids":[]},
+    {"text":"artist:Artist, artist:Solo","groups":[[{"field":"artist","kind":"Substring","pattern":"Artist","negated":false}],[{"field":"artist","kind":"Substring","pattern":"Solo","negated":false}]],"sorts":[],"item_ids":[1,2]},
+    {"text":"title-","groups":[[]],"sorts":[{"field":"title","ascending":false}],"item_ids":[1,2]},
+    {"text":"title+","groups":[[]],"sorts":[{"field":"title","ascending":true}],"item_ids":[2,1]},
+    {"text":"title:Track artist:Artist","groups":[[{"field":"title","kind":"Substring","pattern":"Track","negated":false},{"field":"artist","kind":"Substring","pattern":"Artist","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"title:=Track","groups":[[{"field":"title","kind":"Exact","pattern":"Track","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"Artist","groups":[[{"field":null,"kind":"Substring","pattern":"Artist","negated":false}]],"sorts":[],"item_ids":[1]},
+    {"text":"muzik_source_id:video-456","groups":[[{"field":"muzik_source_id","kind":"Substring","pattern":"video-456","negated":false}]],"sorts":[],"item_ids":[2]},
+    {"text":"album:Album","groups":[[{"field":"album","kind":"Substring","pattern":"Album","negated":false}]],"sorts":[],"item_ids":[1]}
+  ]
+}
