@@ -79,14 +79,14 @@ in its current watchlist.
 {"type":"event","event":"job.completed","data":{"job_id":"...","result":{}}}
 ```
 
-`job.event` carries a core event. `source` is `workflow` or `beets`. The event
+`job.event` carries a core event. `source` is `workflow` or `native`. The event
 name uses snake case without the Python `Event` suffix. Its `data` contains
 the public fields of that event. Paths become strings and enums become their
 values. Terminal events are `job.completed`, `job.failed`, and `job.cancelled`.
 A completed watchlist job includes the new `watchlist` object. `job.failed`
 has an `error` object. The GPUI app should reload the watchlist after a job
 that changes it. `watchlist.load` returns saved cards at once. A worker then
-checks local files and Beets. If the watchlist file did not change during that
+checks local files and the music library. If the watchlist file did not change during that
 check, the service saves the checked cards and sends `watchlist.updated` with
 `{ "watchlist": ... }`. If another process changed the file, the worker reads
 it again before it saves. If the check fails, the service sends

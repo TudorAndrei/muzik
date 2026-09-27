@@ -338,6 +338,20 @@ library show no divergence.
   `AlbumInfo` mapping have many details. Mitigation: recorded responses as
   fixtures and shadow comparison of candidate IDs.
 
+## Verification record
+
+On 2026-09-27, a read-only comparison with the configured beets database found
+1,370 items and 161 albums in both readers. The tested item and album queries
+had the same IDs and order. Five album lookups also matched. The database had
+no `muzik_source_id` values, so this check did not cover live source ID lookup.
+
+The import shadow run used one temporary FLAC group and a temporary snapshot of
+the configured library. It found no unmatched group, release difference, or
+destination difference. The real database stayed at 1,370 items, with the same
+file size and modification time. The source file hash did not change. A
+separate test selected the second of two releases and checked that a release
+difference was reported while the destination comparison remained equal.
+
 ## Open Questions
 
 None. Decided 2026-09-27: no crate is published to crates.io, and AcoustID and

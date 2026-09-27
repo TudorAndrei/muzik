@@ -84,10 +84,10 @@
 
 ### Phase 11: Probe and cover art
 
-- [ ] Probe replaces `ffprobe` in `muzik/core/audio.py` and `muzik/core/quality.py`
-- [ ] Filesystem cover search and embed
-- [ ] `tag_only_with_beet` replaced behind `native.tags`
-- [ ] Commit: `feat(tags): probe audio and embed cover art natively`
+- [x] Probe replaces `ffprobe` in `muzik/core/audio.py` and `muzik/core/quality.py`
+- [x] Filesystem cover search and embed
+- [x] `tag_only_with_beet` replaced behind `native.tags`
+- [x] Commit: `feat(tags): probe audio and embed cover art natively`
 
 ## Milestone 4: Library (`muzik-library`)
 
@@ -130,36 +130,36 @@
 
 ### Phase 18: Import plan and apply
 
-- [ ] `plan` groups albums, gets candidates, ranks, finds duplicates
-- [ ] `apply` writes tags, moves files, embeds art, stores items with
+- [x] `plan` groups albums, gets candidates, ranks, finds duplicates
+- [x] `apply` writes tags, moves files, embeds art, stores items with
   `muzik_source_id`, applies the `ftclean` rule
-- [ ] Python decisions drive `apply`
-- [ ] Port `mbsync` as `sync(query)`
-- [ ] Commit: `feat(import): plan and apply imports without beets`
+- [x] Python decisions drive `apply`
+- [x] Port `mbsync` as `sync(query)`
+- [x] Commit: `feat(import): plan and apply imports without beets`
 
 ### Phase 19: Switch the importer
 
-- [ ] Shadow compares destinations and releases with a beets dry run
-- [ ] `import_paths` uses the Rust importer at `native`
-- [ ] Commit: `feat(import): run imports through the native pipeline`
+- [x] Shadow compares destinations and releases with a beets dry run
+- [x] `import_paths` uses the Rust importer at `native`
+- [x] Commit: `feat(import): run imports through the native pipeline`
 
 ## Milestone 6: Remove beets
 
 ### Phase 20: Remove the beets dependency
 
-- [ ] All `native:` defaults `native`
+- [x] All `native:` defaults `native`
 - [ ] Remove `beets`, `musicbrainzngs`, `muzik/core/beets/`, `muzik/beets_plugins/`
-- [ ] `uv lock` updated; `uv pip check` passes
+- [x] `uv lock` updated; `uv pip check` passes
 - [ ] Commit: `refactor(import)!: remove the beets dependency`
 
 ## Verification
 
 - [ ] `mise run check` passes after each phase (Python, `rust/` workspace,
   `rust/gpui_app`, `cargo deny`)
-- [ ] `cargo tree` for `muzik-core`, `muzik-match`, `muzik-metadata`,
+- [x] `cargo tree` for `muzik-core`, `muzik-match`, `muzik-metadata`,
   `muzik-tags`, `muzik-library`, `muzik-import` shows no `pyo3`
-- [ ] Each fixture file records the beets version it came from
-- [ ] Every crate `Cargo.toml` has `publish = false`
+- [x] Each fixture file records the beets version it came from
+- [x] Every crate `Cargo.toml` has `publish = false`
 - [ ] With every switch at `beets`, the app behaves as before each phase
 - [ ] Shadow run on `~/Music/.library.db` (after a backup): no divergence for
   match, metadata, library, and import

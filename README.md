@@ -7,11 +7,11 @@ and Bandcamp.
 
 ---
 
-Wraps an embedded Soulseek client, **yt-dlp**, **ffmpeg**, and **beets** with
-better progress feedback and an interactive chapter editor. Soulseek is used
-for higher-quality audio acquisition when configured; yt-dlp remains
-available for YouTube metadata, playlist parsing, and fallback audio
-downloads. Chapter sidecars can come from `.chapters.txt`, yt-dlp
+Uses an embedded Soulseek client, **yt-dlp**, **ffmpeg**, and native Rust music
+library tools. It gives progress feedback and an interactive chapter editor.
+Soulseek is used for higher-quality audio acquisition when configured;
+yt-dlp remains available for YouTube metadata, playlist parsing, and fallback
+audio downloads. Chapter sidecars can come from `.chapters.txt`, yt-dlp
 `.info.json`, or album `.cue` sheets. Also downloads your full Bandcamp
 collection.
 
@@ -19,7 +19,7 @@ collection.
 
 - Python 3.14+
 - [`uv`](https://github.com/astral-sh/uv)
-- `yt-dlp`, `ffmpeg`, `ffprobe` on `$PATH`
+- `yt-dlp` and `ffmpeg` on `$PATH`
 - Optional for Soulseek: a Soulseek account (username/password) — the client
   is embedded, no separate server to run
 
@@ -28,7 +28,6 @@ Check external tools before running a full workflow:
 ```sh
 yt-dlp --version
 ffmpeg -version
-ffprobe -version
 uv run muzik soulseek check      # when using Soulseek
 uv run playwright install chromium
 ```
@@ -44,7 +43,6 @@ Install the required command-line tools and confirm that they are on `PATH`:
 ```sh
 brew install ffmpeg yt-dlp
 ffmpeg -version
-ffprobe -version
 yt-dlp --version
 ```
 
@@ -179,44 +177,44 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 
 | Command | Description |
 |---------|-------------|
-| `muzik init` | Create app directories and configure beets |
+| `muzik init` | Create app directories and configure the music library |
 | `muzik workflow <url-or-path>` | Full pipeline: acquire → split → organize |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik downloaded` | List audio already in the output folder |
 | `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
 | `muzik soulseek search <query>` | Search Soulseek and rank candidates |
 | `muzik soulseek download <query>` | Search Soulseek and enqueue a selected download |
-| `muzik soulseek check-library` | Measure real quality across the Beets library and suggest Soulseek replacements |
+| `muzik soulseek check-library` | Measure audio quality in the music library and suggest Soulseek replacements |
 | `muzik spotify set-client-id <id>` | Save the client ID of your own Spotify application |
 | `muzik spotify login` \| `logout` \| `status` | Connect, disconnect, and check the Spotify account |
 | `muzik spotify playlists` | List Liked Songs and your Spotify playlists |
 | `muzik spotify export <ref>` | Write one Spotify playlist as a metadata export |
 | `muzik spotify watch <ref>` | Add one Spotify playlist to the watchlist |
-| `muzik bandcamp` | Download Bandcamp collection and organize with beets |
+| `muzik bandcamp` | Download and organize a Bandcamp collection |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
-| `muzik organize <dir>` | Tag/import audio with beets |
-| `muzik import <dir>` | Import an existing music library into beets (`--agent` auto-tags) |
+| `muzik organize <dir>` | Tag or import audio |
+| `muzik import <dir>` | Import an existing music library (`--agent` selects tags) |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik gui` | Open the GPUI Kit desktop interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
-| `muzik config` | Manage beets configuration |
+| `muzik config` | Manage music library configuration |
 
 ## Agentic tagging
 
-`muzik import --agent` tags a library without prompts. For each album, beets
-finds candidate releases on MusicBrainz; the agent then chooses:
+`muzik import --agent` tags a library without prompts. For each album, the
+native importer finds candidate releases on MusicBrainz; the agent then chooses:
 
 - A **strong match** (distance ≤ 0.10) is applied at once, with no LLM call.
 - An **uncertain match** is sent to an LLM, which picks a candidate, keeps the
-  files as-is, or skips them. It only chooses from the candidates beets found;
+  files as-is, or skips them. It only chooses from the candidates found;
   it never invents tags.
 - **Confident picks are applied; the rest are skipped** for manual review.
 
 ```sh
 muzik import ~/Music --agent                     # tag untracked files
 muzik import --agent --library "mb_albumid::^$"  # re-tag unmatched albums
-muzik import ~/Music --agent --dry-run           # preview (beets shows nothing to apply)
+muzik import ~/Music --agent --dry-run           # preview planned destinations
 ```
 
 Files are moved and retagged, so keep a backup.
@@ -281,8 +279,8 @@ An installed release wheel includes the native desktop program. Run it with
 `./scripts/build-native-gui.sh` before the wheel build.
 
 The interface provides a workflow launcher, pipeline progress and logs, source
-candidate tables, chapter review and editing, and Beets match and duplicate
-decisions. It uses the same workflow and Beets service layer as the CLI. The
+candidate tables, chapter review and editing, and album match and duplicate
+decisions. It uses the same workflow and native import service as the CLI. The
 Rust window sends commands to a Python worker process. Cancel asks the worker
 to stop at the next safe point.
 
@@ -360,12 +358,12 @@ To override the skip and download again, use `--force` (`-f`) on the CLI, or the
 - Soulseek integration via the embedded [soulseek-rs](https://github.com/michel/soulseek-rs) client
 - YouTube metadata and fallback audio via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - Audio processing via [FFmpeg](https://ffmpeg.org/)
-- Music library management via [beets](https://beets.io/)
+- Music library management via the native Rust library and importer
 
 ## Quick start
 
 ```sh
-# Download, split by chapters, and import into beets
+# Download, split by chapters, and import into the music library
 muzik workflow "https://youtube.com/watch?v=..."
 
 # Search Soulseek for a FLAC/lossless album candidate
@@ -377,7 +375,7 @@ muzik soulseek download "Artist - Album" --prefer flac
 # Or download a candidate ID shown by `muzik soulseek search`
 muzik soulseek download --candidate <id>
 
-# Measure real quality across the Beets library and suggest replacements
+# Measure audio quality in the music library and suggest replacements
 # (read-only; scope it to one artist first with --query)
 muzik soulseek check-library --query "albumartist:Etnobotanika"
 muzik soulseek download --candidate <id>   # fetch a suggested replacement
@@ -398,6 +396,6 @@ muzik import ~/Music --copy
 Bandcamp setup stores the authenticated cookies and username in the app config
 directory. Cookie scope is preserved; use `muzik bandcamp --setup` to log in
 again after expiry. Only releases downloaded successfully in a run are sent to
-Beets for organization.
+the music library for organization.
 
 Only download music you are authorized to access.
