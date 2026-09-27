@@ -1,4 +1,4 @@
-"""muzik bandcamp — Bandcamp collection downloader + beets organize."""
+"""muzik bandcamp — Bandcamp collection downloader and music organizer."""
 
 import webbrowser
 from pathlib import Path
@@ -7,7 +7,7 @@ from typing import Optional
 import typer
 
 from muzik.commands.organize import organize_cmd
-from muzik.config import BEETS_CONFIG, DEFAULT_BANDCAMP_DIR, MUZIK_CONFIG_DIR
+from muzik.config import LIBRARY_CONFIG, DEFAULT_BANDCAMP_DIR, MUZIK_CONFIG_DIR
 from muzik.core.bandcamp import run as bc_run
 from muzik.ui.console import console, err
 
@@ -181,27 +181,27 @@ def bandcamp_cmd(
     no_organize: bool = typer.Option(
         False,
         "--no-organize",
-        help="Skip beets organization after downloading.",
+        help="Skip music library organization after downloading.",
     ),
     import_: bool = typer.Option(
         False,
         "--import",
         "-i",
-        help="Import files into beets library (moves files).",
+        help="Import files into the music library (moves files).",
     ),
     tag_only: bool = typer.Option(
         False,
         "--tag-only",
         "-t",
-        help="Only write tags with beets; do not move files.",
+        help="Only write tags with native tags; do not move files.",
     ),
     beets_config: Optional[Path] = typer.Option(
         None,
         "--beets-config",
-        help=f"Beets config file (default: {BEETS_CONFIG}).",
+        help=f"Music library config file (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Download your Bandcamp collection, then organize with beets.
+    """Download your Bandcamp collection, then organize with native tags.
 
     On first run, opens a browser window for you to log in to Bandcamp.
     Cookies and username are captured automatically and stored in
@@ -231,10 +231,10 @@ def bandcamp_cmd(
         return
 
     console.print(
-        f"\n[bold]Organize[/bold] — {len(successful_dirs)} director(ies) via beets"
+        f"\n[bold]Organize[/bold] — {len(successful_dirs)} director(ies) with muzik"
     )
     for d in successful_dirs:
-        console.print(f"  beet import [dim]{d}[/dim]")
+        console.print(f"  muzik import [dim]{d}[/dim]")
         try:
             organize_cmd(
                 directory=d,
@@ -245,6 +245,6 @@ def bandcamp_cmd(
             )
         except (SystemExit, typer.Exit) as exc:
             if getattr(exc, "code", 0) != 0:
-                err(f"  [red]beet failed for {d.name}[/red]")
+                err(f"  [red]Import failed for {d.name}[/red]")
 
     console.print("[bold green]Bandcamp workflow complete.[/bold green]")

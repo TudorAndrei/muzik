@@ -16,11 +16,10 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from muzik.config import BEETS_CONFIG, DEFAULT_SOULSEEK_DIR, get_native_settings
+from muzik.config import LIBRARY_CONFIG, DEFAULT_SOULSEEK_DIR
 from muzik.commands.organize import organize_cmd
 import muzik.core.cache as cache_mod
-from muzik.core.beets.config import open_library
-from muzik.core.beets.lookup import resolve_item_path
+from muzik.core.library_lookup import resolve_item_path
 from muzik.core.native_library import open_library_for_reads
 from muzik.core.quality import measure_quality, quality_score
 from muzik.core.sources.base import (
@@ -204,19 +203,19 @@ def download_cmd(
     no_organize: bool = typer.Option(
         False,
         "--no-organize",
-        help="Skip beets organization after downloading.",
+        help="Skip music library organization after downloading.",
     ),
     import_: bool = typer.Option(
         False,
         "--import",
         "-i",
-        help="Import to beets library (moves files).",
+        help="Import to the music library (moves files).",
     ),
     tag_only: bool = typer.Option(
         False,
         "--tag-only",
         "-t",
-        help="Only tag files with beets, do not move.",
+        help="Only tag files with native tags, do not move.",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -302,7 +301,7 @@ def download_cmd(
             )
         except (SystemExit, typer.Exit) as exc:
             if getattr(exc, "code", 0) != 0:
-                err(f"[red]beet failed for {target}[/red]")
+                err(f"[red]Import failed for {target}[/red]")
                 raise
 
 
@@ -312,7 +311,7 @@ def check_library_cmd(
         None,
         "--query",
         "-q",
-        help="Beets query to scope the scan (e.g. 'albumartist:Etnobotanika'). "
+        help="Library query to scope the scan (e.g. 'albumartist:Etnobotanika'). "
         "Without it, the whole library is scanned.",
     ),
     min_bitrate: int = typer.Option(
@@ -335,22 +334,18 @@ def check_library_cmd(
         None,
         "--config",
         "-c",
-        help=f"Beets config file (default: {BEETS_CONFIG}).",
+        help=f"Music library config file (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Measure real quality across the Beets library and suggest Soulseek replacements.
+    """Measure real quality across the music library and suggest Soulseek replacements.
 
     Read-only: nothing is downloaded or changed. A printed candidate's ID
     works with `muzik soulseek download --candidate <id>` to fetch it.
     """
     try:
-        library = (
-            open_library(config)
-            if get_native_settings()["library"] == "beets"
-            else open_library_for_reads(config)
-        )
+        library = open_library_for_reads(config)
     except Exception as exc:
-        err(f"[red]Could not open the Beets library:[/red] {exc}")
+        err(f"[red]Could not open the music library:[/red] {exc}")
         raise typer.Exit(1) from exc
 
     directory = os.fsdecode(library.directory)
@@ -423,7 +418,7 @@ def check_library_cmd(
                 artist=str(item.artist) if item.artist else None,
                 album=str(item.album) if item.album else None,
                 duration=float(item.length) if item.length else None,
-                source="beets",
+                source="native",
             )
             try:
                 candidates = source.search(track, prefer=prefer, limit=10)

@@ -18,7 +18,7 @@ import re
 import subprocess
 from pydantic import BaseModel, ValidationError
 
-from muzik.core.beets.agent_decisions import (
+from muzik.core.agent_decisions import (
     DEFAULT_BACKEND,
     DEFAULT_CODEX_MODEL,
     DEFAULT_OPENCODE_MODEL,

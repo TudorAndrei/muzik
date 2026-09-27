@@ -1,4 +1,4 @@
-"""music config [show|set-library|edit] — manage beets config."""
+"""music config [show|set-library|edit] — manage music library config."""
 
 import os
 import subprocess
@@ -12,14 +12,14 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from muzik.config import (
-    BEETS_CONFIG,
+    LIBRARY_CONFIG,
     DEFAULT_SOULSEEK_DIR,
     MUZIK_CONFIG_FILE,
     get_seakarr_settings,
 )
 from muzik.ui.console import console
 
-app = typer.Typer(help="Manage beets configuration.")
+app = typer.Typer(help="Manage music library configuration.")
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +63,11 @@ def config_show(
         None,
         "--config",
         "-c",
-        help=f"Beets config file to read (default: {BEETS_CONFIG}).",
+        help=f"Music library config file to read (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Show current beets config path and key settings."""
-    cfg_path = config or BEETS_CONFIG
+    """Show current music library config path and key settings."""
+    cfg_path = config or LIBRARY_CONFIG
 
     table = Table(show_header=False, border_style="dim", box=None)
     table.add_column("Key", style="bold cyan", width=18)
@@ -127,20 +127,20 @@ def config_set_library(
     db: Optional[Path] = typer.Option(
         None,
         "--db",
-        help="Path for the beets SQLite database (default: <directory>/.library.db).",
+        help="Path for the music library SQLite database (default: <directory>/.library.db).",
     ),
     config: Optional[Path] = typer.Option(
         None,
         "--config",
         "-c",
-        help=f"Beets config file to update (default: {BEETS_CONFIG}).",
+        help=f"Music library config file to update (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Set the beets music library directory (and optionally the DB path).
+    """Set the music library directory (and optionally the DB path).
 
     Creates the config file if it doesn't exist yet.
     """
-    cfg_path = config or BEETS_CONFIG
+    cfg_path = config or LIBRARY_CONFIG
     lib_dir = directory.expanduser().resolve()
     db_path = db.expanduser().resolve() if db else lib_dir / ".library.db"
 
@@ -168,7 +168,7 @@ def config_set_library(
     # Create the library dir if needed
     lib_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"[bold]Beets config:[/bold] {cfg_path}")
+    console.print(f"[bold]Music library config:[/bold] {cfg_path}")
     if old_dir and old_dir != str(lib_dir):
         console.print(f"  [dim]directory:[/dim] {old_dir} → [green]{lib_dir}[/green]")
     else:
@@ -244,16 +244,16 @@ def config_edit(
         None,
         "--config",
         "-c",
-        help=f"Beets config file to edit (default: {BEETS_CONFIG}).",
+        help=f"Music library config file to edit (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Open the beets config file in $EDITOR (creates it if needed)."""
-    cfg_path = config or BEETS_CONFIG
+    """Open the music library config file in $EDITOR (creates it if needed)."""
+    cfg_path = config or LIBRARY_CONFIG
 
     if not cfg_path.exists():
         cfg_path.parent.mkdir(parents=True, exist_ok=True)
         cfg_path.write_text(
-            "# beets configuration\n"
+            "# Music library configuration (beets-compatible format)\n"
             "# See https://beets.readthedocs.io/en/stable/reference/config.html\n\n"
             "directory: ~/music\n"
             "library: ~/music/.library.db\n",

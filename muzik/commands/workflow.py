@@ -1,8 +1,8 @@
 """music workflow <url-or-path> — full pipeline: acquire → split → organize.
 
 Handles two scenarios automatically:
-  • Single track  — no chapter markers → goes straight to beets
-  • Album/chapters — has chapter markers → split first, then beets
+  • Single track  — no chapter markers → goes straight to import
+  • Album/chapters — has chapter markers → split first, then import
 
 For playlist URLs the pipeline runs per-video: each track is downloaded,
 classified, split (if needed), and organized before the next one starts,
@@ -18,7 +18,7 @@ from muzik.commands.download import _download_audio
 from muzik.commands.split import _split_audio
 from muzik.commands.organize import organize_cmd
 from muzik.config import (
-    BEETS_CONFIG,
+    LIBRARY_CONFIG,
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_SPLITS_DIR,
 )
@@ -57,10 +57,10 @@ from muzik.core.workflow.events import (
     WorkflowEventEmitter,
 )
 from muzik.core.workflow.cancellation import CancellationToken
-from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
-from muzik.core.beets.events import BeetsEventEmitter, NullBeetsEventEmitter
-from muzik.core.beets.importer import ImportOptions
-from muzik.core.beets.service import organize_paths
+from muzik.core.import_models import ImportDecisions, NonInteractiveImportDecisions
+from muzik.core.import_models import ImportEventEmitter, NullImportEventEmitter
+from muzik.core.import_models import ImportOptions
+from muzik.core.import_service import organize_paths
 from muzik.core.workflow.service import (
     WorkflowOptions,
     WorkflowRequest,
@@ -303,7 +303,7 @@ class _CliAudioProcessingHooks:
         if not self._organize_header_printed:
             console.print("\n[bold]Step 3 — Organize[/bold]")
             self._organize_header_printed = True
-        console.print(f"  beet import [dim]{target}[/dim]")
+        console.print(f"  muzik import [dim]{target}[/dim]")
 
     def complete(self, *, organized: bool) -> None:
         console.rule()
@@ -335,8 +335,8 @@ def _process_audio_files(
     decisions: WorkflowDecisions | None = None,
     events: WorkflowEventEmitter | None = None,
     cancellation: CancellationToken | None = None,
-    beets_decisions: BeetsDecisions | None = None,
-    beets_events: BeetsEventEmitter | None = None,
+    beets_decisions: ImportDecisions | None = None,
+    beets_events: ImportEventEmitter | None = None,
 ) -> None:
     """Classify, split, and organize local audio files/directories."""
     audio_files = _find_audio_inputs(audio_inputs)
@@ -351,8 +351,8 @@ def _process_audio_files(
 
     decisions = decisions or CliWorkflowDecisions()
     events = events or NullWorkflowEventEmitter()
-    beets_decisions = beets_decisions or NonInteractiveBeetsDecisions()
-    beets_events = beets_events or NullBeetsEventEmitter()
+    beets_decisions = beets_decisions or NonInteractiveImportDecisions()
+    beets_events = beets_events or NullImportEventEmitter()
     options = WorkflowOptions(
         review=review,
         no_split=no_split,
@@ -400,9 +400,9 @@ def _process_audio_files(
                     decisions=beets_decisions,
                     events=beets_events,
                 )
-                # Beets treats Skip as a clean session result. In move mode,
+                # The importer treats Skip as a clean session result. In move mode,
                 # imported audio leaves the source path. Remaining audio means
-                # that Beets did not import this target.
+                # that the importer did not add this target.
                 return not _find_audio_inputs([target])
             organize_cmd(
                 directory=target,
@@ -413,10 +413,10 @@ def _process_audio_files(
             )
         except (SystemExit, typer.Exit) as exc:
             if getattr(exc, "code", 0) != 0:
-                err(f"  [red]beet failed for {target}[/red]")
+                err(f"  [red]Import failed for {target}[/red]")
                 return False
         except Exception as exc:
-            err(f"  [red]beets failed for {target}: {exc}[/red]")
+            err(f"  [red]Import failed for {target}: {exc}[/red]")
             return False
         return True
 
@@ -545,19 +545,19 @@ def workflow_cmd(
     no_organize: bool = typer.Option(
         False,
         "--no-organize",
-        help="Skip beets organization.",
+        help="Skip music library organization.",
     ),
     import_: bool = typer.Option(
         False,
         "--import",
         "-i",
-        help="Import to beets library (moves files).",
+        help="Import to the music library (moves files).",
     ),
     tag_only: bool = typer.Option(
         False,
         "--tag-only",
         "-t",
-        help="Only tag files with beets, do not move.",
+        help="Only tag files with native tags, do not move.",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -575,7 +575,7 @@ def workflow_cmd(
         None,
         "--config",
         "-c",
-        help=f"Beets config file (default: {BEETS_CONFIG}).",
+        help=f"Music library config file (default: {LIBRARY_CONFIG}).",
     ),
     keep_source: bool = typer.Option(
         False,
@@ -640,8 +640,8 @@ def workflow_cmd(
 
     \b
     Scenarios detected automatically per downloaded file:
-      Album  — chapters found → split into tracks → beet import splits/
-      Single — no chapters    → beet import file directly (no splitting)
+      Album  — chapters found → split into tracks → muzik import splits/
+      Single — no chapters    → muzik import file directly (no splitting)
 
     \b
     Playlist URLs are processed per-video: each track is fully downloaded,

@@ -22,7 +22,7 @@ from muzik.core.metadata import find_muzik_metadata, write_muzik_metadata
 from muzik.core.workflow.cancellation import CancellationToken
 
 
-# beets files an album under "Various Artists" and sets its comp flag when the
+# the importer files an album under "Various Artists" and sets its comp flag when the
 # album artist is this name; used for compilations of per-track artists.
 VARIOUS_ARTISTS = "Various Artists"
 
@@ -51,7 +51,7 @@ def split_audio(
 
     When *compilation* is set, each track title is parsed as "Artist - Song";
     the per-track artist is kept, the album artist becomes "Various Artists",
-    and the track is marked a compilation so beets files it correctly.
+    and the track is marked a compilation so the importer files it correctly.
     """
     cancellation = cancellation or CancellationToken()
     cancellation.raise_if_cancelled()
@@ -136,7 +136,7 @@ _THUMB_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 def _place_cover(audio_path: Path, output: Path) -> None:
     """Copy a downloaded thumbnail into the album folder as cover art.
 
-    Beets' fetchart picks up a ``cover.*`` image on import, so the album gets a
+    The cover art import picks up a ``cover.*`` image on import, so the album gets a
     cover even when MusicBrainz has none.
     """
     for extension in _THUMB_EXTS:
@@ -170,7 +170,7 @@ def _split_track(
         albumartist = metadata["artist"]
 
     # Keep only the song name in the title; move a "feat." credit into the
-    # artist field as "Main feat. X", the form beets and MusicBrainz use.
+    # artist field as "Main feat. X", the form MusicBrainz uses.
     title, featured = strip_featured(title)
     if featured:
         artist = f"{artist} feat. {', '.join(featured)}"
@@ -211,7 +211,7 @@ def _split_track(
             f"date={metadata['year']}",
             "-metadata",
             f"track={chapter.index}/{track_count}",
-            # Mark a compilation so beets sets its comp flag and groups the
+            # Mark a compilation so the importer sets its comp flag and groups the
             # album under Various Artists despite the differing track artists.
             "-metadata",
             f"compilation={1 if compilation else 0}",
@@ -221,7 +221,7 @@ def _split_track(
     result = subprocess.run(command, capture_output=True)
     ok = result.returncode == 0
     if ok and source_id:
-        # The muzik_source beets plugin reads this at import time, before
+        # The importer reads this at import time, before
         # the file is moved into the library, to record an exact video-id
         # match for the Watchlist page instead of guessing from the title.
         write_muzik_metadata(output_path, {"source_id": source_id})

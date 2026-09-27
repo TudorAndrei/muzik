@@ -4,6 +4,7 @@ import pytest
 import typer
 
 from muzik.commands import import_ as import_command
+from muzik.core.import_models import LogEvent
 
 
 def test_import_uses_internal_import_with_default_move(
@@ -16,7 +17,7 @@ def test_import_uses_internal_import_with_default_move(
     config.write_text("directory: /tmp/music\n", encoding="utf-8")
     calls: list[tuple] = []
 
-    def fake_import_paths(options, *, decisions):
+    def fake_import_paths(options, *, decisions, events):
         calls.append((options, decisions))
 
     monkeypatch.setattr(import_command, "import_paths", fake_import_paths)
@@ -58,7 +59,7 @@ def test_import_preserves_copy_mode(
     monkeypatch.setattr(
         import_command,
         "import_paths",
-        lambda options, *, decisions: calls.append(options),
+        lambda options, *, decisions, events: calls.append(options),
     )
     monkeypatch.setattr(import_command, "_notify", lambda directory: None)
 
@@ -88,7 +89,7 @@ def test_import_preserves_link_mode(
     monkeypatch.setattr(
         import_command,
         "import_paths",
-        lambda options, *, decisions: calls.append(options),
+        lambda options, *, decisions, events: calls.append(options),
     )
     monkeypatch.setattr(import_command, "_notify", lambda directory: None)
 
@@ -96,7 +97,7 @@ def test_import_preserves_link_mode(
         directory=library,
         copy=False,
         link=True,
-        nowrite=False,
+        nowrite=True,
         quiet=False,
         dry_run=False,
         config=None,
@@ -105,6 +106,66 @@ def test_import_preserves_link_mode(
     assert calls[0].copy is False
     assert calls[0].link is True
     assert calls[0].move is False
+
+
+def test_import_link_requires_nowrite(tmp_path: Path) -> None:
+    library = tmp_path / "Library"
+    library.mkdir()
+    with pytest.raises(typer.Exit) as exc:
+        import_command.import_cmd(
+            directory=library,
+            copy=False,
+            link=True,
+            nowrite=False,
+            quiet=True,
+            dry_run=False,
+            config=None,
+        )
+    assert exc.value.exit_code == 2
+
+
+def test_query_dry_run_prints_selected_counts(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(import_command, "preview_sync", lambda path, query: (2, 5))
+    import_command.import_cmd(
+        directory=None,
+        library="artist:Example",
+        agent=False,
+        copy=False,
+        link=False,
+        nowrite=False,
+        quiet=True,
+        dry_run=True,
+        config=tmp_path / "missing.yaml",
+    )
+    assert "Sync preview: 2 albums and 5 items selected." in capsys.readouterr().err
+
+
+def test_directory_dry_run_prints_destinations(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+
+    def fake_import(options, *, decisions, events) -> None:
+        events.emit(LogEvent("Import preview: 1 groups and 1 destinations."))
+        events.emit(LogEvent("  /music/Artist/Track.flac"))
+
+    monkeypatch.setattr(import_command, "import_paths", fake_import)
+    import_command.import_cmd(
+        directory=source,
+        agent=False,
+        copy=False,
+        link=False,
+        nowrite=False,
+        quiet=True,
+        dry_run=True,
+        config=tmp_path / "missing.yaml",
+    )
+    output = capsys.readouterr().err
+    assert "Import preview: 1 groups and 1 destinations." in output
+    assert "/music/Artist/Track.flac" in output
 
 
 def test_import_preserves_nowrite_quiet_dry_run_and_config(
@@ -118,7 +179,7 @@ def test_import_preserves_nowrite_quiet_dry_run_and_config(
     calls: list[tuple] = []
     notifications = []
 
-    def fake_import_paths(options, *, decisions):
+    def fake_import_paths(options, *, decisions, events):
         calls.append((options, decisions))
 
     monkeypatch.setattr(import_command, "import_paths", fake_import_paths)
@@ -159,7 +220,7 @@ def test_import_notifies_for_non_quiet_internal_import(
     monkeypatch.setattr(
         import_command,
         "import_paths",
-        lambda options, *, decisions: None,
+        lambda options, *, decisions, events: None,
     )
     monkeypatch.setattr(
         import_command,
@@ -207,7 +268,7 @@ def test_import_missing_config_uses_default_beets_config(
     monkeypatch.setattr(
         import_command,
         "import_paths",
-        lambda options, *, decisions: calls.append(options),
+        lambda options, *, decisions, events: calls.append(options),
     )
     monkeypatch.setattr(import_command, "_notify", lambda directory: None)
 

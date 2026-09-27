@@ -1,16 +1,13 @@
-"""ffprobe wrappers and audio metadata helpers."""
+"""Audio probe and metadata helpers."""
 
 import json
-import logging
 import re
 from pathlib import Path
 from typing import Optional
 
-from muzik.config import get_native_settings
 from muzik.core.chapters import sidecar_path
 from muzik.core.metadata import find_muzik_metadata
 from muzik.core.musicbrainz import clean_album_name
-from muzik.core.runner import run_silent
 
 
 def _parse_title(title: str) -> tuple[str, str, str]:
@@ -32,9 +29,6 @@ def _parse_title(title: str) -> tuple[str, str, str]:
     else:
         album = title.strip()
     return artist, clean_album_name(album), year
-
-
-_LOG = logging.getLogger(__name__)
 
 
 def _probe_native(path: Path) -> dict:
@@ -66,54 +60,12 @@ def _probe_native(path: Path) -> dict:
     }
 
 
-def _probe_beets(path: Path) -> dict:
-    """Run ffprobe on *path* and return parsed JSON.
-
-    Raises ValueError if ffprobe fails.
-    """
-    result = run_silent(
-        [
-            "ffprobe",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "-show_chapters",
-            str(path),
-        ]
-    )
-    if result.returncode != 0:
-        raise ValueError(f"ffprobe failed for {path}: {result.stderr.strip()}")
-    return json.loads(result.stdout)
-
-
 def probe(path: Path) -> dict:
-    """Probe an audio file through the selected tag backend."""
-    mode = get_native_settings()["tags"]
-    if mode == "native":
-        try:
-            return _probe_native(path)
-        except Exception as exc:
-            raise ValueError(f"native audio probe failed for {path}: {exc}") from exc
-    data = _probe_beets(path)
-    if mode == "shadow":
-        try:
-            native = _probe_native(path)
-            beets_stream = next(
-                (s for s in data.get("streams", []) if s.get("codec_type") == "audio"),
-                {},
-            )
-            native_stream = native["streams"][0]
-            if (beets_stream.get("sample_rate"), beets_stream.get("channels")) != (
-                str(native_stream["sample_rate"]),
-                native_stream["channels"],
-            ):
-                _LOG.warning("native audio probe differs from ffprobe for %s", path)
-        except Exception as exc:
-            _LOG.warning("native audio probe failed for %s: %s", path, exc)
-    return data
+    """Probe an audio file with the native tag reader."""
+    try:
+        return _probe_native(path)
+    except Exception as exc:
+        raise ValueError(f"native audio probe failed for {path}: {exc}") from exc
 
 
 def get_duration(path: Path) -> Optional[float]:
@@ -131,7 +83,7 @@ def extract_metadata(path: Path) -> dict:
     Preference order:
     1. Source-neutral .muzik.json metadata
     2. Sidecar .info.json (yt-dlp metadata)
-    3. ffprobe embedded tags
+    3. Embedded tags
     4. Reasonable fallbacks
     """
     muzik_meta = find_muzik_metadata(path)
@@ -211,7 +163,7 @@ def extract_metadata(path: Path) -> dict:
         except Exception:
             pass
 
-    # Fallback: ffprobe embedded tags
+    # Fallback: embedded tags
     try:
         data = probe(path)
         tags: dict = {}
@@ -220,7 +172,7 @@ def extract_metadata(path: Path) -> dict:
                 tags.update(stream.get("tags", {}))
                 break
         tags.update(data.get("format", {}).get("tags", {}))
-        # ffprobe tags are case-insensitive in practice; normalise to lower
+        # Tag keys vary by format; normalize them to lower case.
         tags = {k.lower(): v for k, v in tags.items()}
         date_raw = tags.get("date", "")
         return {

@@ -1,4 +1,4 @@
-"""muzik import — import an existing music library into beets."""
+"""Import audio into the music library."""
 
 import asyncio
 from pathlib import Path
@@ -6,16 +6,18 @@ from typing import Optional
 
 import typer
 
-from muzik.config import BEETS_CONFIG
-from muzik.core.beets.agent_decisions import AgentBeetsDecisions
-from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
-from muzik.core.beets.importer import (
+from muzik.config import LIBRARY_CONFIG
+from muzik.core.agent_decisions import AgentImportDecisions
+from muzik.core.import_models import (
+    ImportDecisions,
     ImportOptions,
-    PruneAborted,
-    import_paths,
-    prune_missing_items,
+    NonInteractiveImportDecisions,
 )
+from muzik.core.import_service import import_paths
+from muzik.core.library_prune import PruneAborted, prune_missing_items
+from muzik.core.native_import import preview_sync
 from muzik.ui.console import console, err
+from muzik.ui.import_events import ConsoleImportEvents
 
 
 def _notify(directory: Path) -> None:
@@ -25,7 +27,7 @@ def _notify(directory: Path) -> None:
         async def _send() -> None:
             notifier = DesktopNotifier(app_name="muzik")
             await notifier.send(
-                title="beets needs your input",
+                title="muzik needs your input",
                 message=f"Importing: {directory.name}",
             )
 
@@ -46,20 +48,20 @@ def import_cmd(
     library: Optional[str] = typer.Option(
         None,
         "--library",
-        help="Re-tag existing library items matching this beets query "
+        help="Re-tag existing library items matching this query "
         '(instead of importing a directory), e.g. "mb_albumid::^$".',
     ),
     copy: bool = typer.Option(
         False,
         "--copy",
         "-C",
-        help="Copy files into the beets library directory (default: move).",
+        help="Copy files into the music library directory (default: move).",
     ),
     link: bool = typer.Option(
         False,
         "--link",
         "-L",
-        help="Symlink files instead of moving or copying.",
+        help="Symlink files instead of moving or copying (requires --nowrite).",
     ),
     nowrite: bool = typer.Option(
         False,
@@ -76,7 +78,7 @@ def import_cmd(
         False,
         "--dry-run",
         "-d",
-        help="Show what beets would do without making changes.",
+        help="Show the planned changes without applying them.",
     ),
     no_prune: bool = typer.Option(
         False,
@@ -87,28 +89,36 @@ def import_cmd(
         None,
         "--config",
         "-c",
-        help=f"Beets config file (default: {BEETS_CONFIG}).",
+        help=f"Music library config file (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
-    """Import an existing music library into beets.
+    """Import an existing music library.
 
-    Runs a beets import with ``--incremental`` so already-imported albums are
-    skipped.  By default files are **moved** into the beets library directory.
+    Uses incremental history so already-imported albums are skipped.
+    By default files are **moved** into the music library directory.
     Use ``--copy`` to keep originals in place, or ``--link`` to create symlinks.
 
     Pass ``--agent`` to let an LLM pick matches automatically: confident matches
-    are applied and uncertain ones are skipped. Pass ``--library`` with a beets
+    are applied and uncertain ones are skipped. Pass ``--library`` with a
     query to re-tag items already in the library instead of importing a
     directory (for example ``--library "mb_albumid::^$"`` for unmatched albums).
     Combine with ``--dry-run`` to preview without changing files.
 
-    Run ``muzik init`` first to make sure beets is configured.
+    Run ``muzik init`` first to configure the music library.
     """
-    beets_cfg = config or BEETS_CONFIG
+    beets_cfg = config or LIBRARY_CONFIG
+    library = library if isinstance(library, str) else None
+    agent = agent is True
 
     if directory is None and not library:
         err("[red]Give a DIRECTORY to import, or --library QUERY to re-tag.[/red]")
         raise typer.Exit(1)
+
+    if link and not nowrite:
+        err(
+            "[red]--link requires --nowrite because linked files cannot be tagged during import.[/red]"
+        )
+        raise typer.Exit(2)
 
     if directory is not None and not directory.exists():
         err(f"[red]Directory not found: {directory}[/red]")
@@ -116,22 +126,30 @@ def import_cmd(
 
     if not beets_cfg.exists():
         err(
-            f"[yellow]Beets config not found at {beets_cfg}.[/yellow] "
+            f"[yellow]Music library config not found at {beets_cfg}.[/yellow] "
             "Run [bold]muzik init[/bold] to create one."
         )
 
     target = str(directory) if directory is not None else f"library query {library!r}"
-    console.print(f"[bold]beet import[/bold] {target}{' (agent)' if agent else ''}")
+    console.print(f"[bold]muzik import[/bold] {target}{' (agent)' if agent else ''}")
+    if library and dry_run:
+        try:
+            albums, items = preview_sync(beets_cfg, library)
+        except Exception as exc:
+            err(f"[red]Sync preview failed:[/red] {exc}")
+            raise typer.Exit(1) from exc
+        console.print(f"Sync preview: {albums} albums and {items} items selected.")
+        return
     if not quiet and directory is not None:
         _notify(directory)
 
-    decisions: BeetsDecisions
+    decisions: ImportDecisions
     if agent:
-        decisions = AgentBeetsDecisions(
+        decisions = AgentImportDecisions(
             log=lambda message: console.print(f"[dim]agent:[/dim] {message}")
         )
     else:
-        decisions = NonInteractiveBeetsDecisions(quiet=quiet)
+        decisions = NonInteractiveImportDecisions(quiet=quiet)
 
     try:
         import_paths(
@@ -148,9 +166,10 @@ def import_cmd(
                 incremental=True,
             ),
             decisions=decisions,
+            events=ConsoleImportEvents(),
         )
     except Exception as exc:
-        err(f"[red]beets import failed:[/red] {exc}")
+        err(f"[red]Import failed:[/red] {exc}")
         raise typer.Exit(1) from exc
 
     # A move-mode re-tag can orphan the old entry; prune it so the library

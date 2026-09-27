@@ -3,17 +3,23 @@ from pathlib import Path
 
 import platformdirs
 import yaml
-from beets import config as beets_config
 
+from muzik import _native
 from muzik import config
 from muzik.commands import config as config_cmd
 
 
-def test_paths_use_platformdirs_and_beets_config_helper(
+def test_library_config_path_expands_beetsdir_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("BEETSDIR", "~/old-library")
+    assert Path(_native.library_config_path()) == tmp_path / "old-library/config.yaml"
+
+
+def test_paths_use_platformdirs_and_native_config_helper(
     tmp_path: Path, monkeypatch
 ) -> None:
     original_platform_dirs = platformdirs.PlatformDirs
-    original_beets_user_config_path = beets_config.user_config_path
+    original_library_config_path = _native.library_config_path
     calls = []
 
     class FakePlatformDirs:
@@ -25,8 +31,8 @@ def test_paths_use_platformdirs_and_beets_config_helper(
 
     monkeypatch.setattr(platformdirs, "PlatformDirs", FakePlatformDirs)
     monkeypatch.setattr(
-        beets_config,
-        "user_config_path",
+        _native,
+        "library_config_path",
         lambda: str(tmp_path / "beets" / "config.yaml"),
     )
 
@@ -42,7 +48,7 @@ def test_paths_use_platformdirs_and_beets_config_helper(
             reloaded.MUZIK_WATCHLIST_FILE
             == reloaded.MUZIK_CONFIG_DIR / "watchlist.json"
         )
-        assert reloaded.BEETS_CONFIG == tmp_path / "beets" / "config.yaml"
+        assert reloaded.LIBRARY_CONFIG == tmp_path / "beets" / "config.yaml"
         assert (
             reloaded.DEFAULT_DOWNLOAD_DIR == tmp_path / "data" / "muzik" / "downloads"
         )
@@ -52,7 +58,7 @@ def test_paths_use_platformdirs_and_beets_config_helper(
     finally:
         monkeypatch.setattr(platformdirs, "PlatformDirs", original_platform_dirs)
         monkeypatch.setattr(
-            beets_config, "user_config_path", original_beets_user_config_path
+            _native, "library_config_path", original_library_config_path
         )
         importlib.reload(config)
 
@@ -106,15 +112,15 @@ def test_seakarr_env_overrides_muzik_config(tmp_path: Path) -> None:
     assert settings["download_dir"] == str(tmp_path / "env-downloads")
 
 
-def test_native_settings_default_to_beets(tmp_path: Path) -> None:
+def test_native_settings_default_to_native(tmp_path: Path) -> None:
     assert config.get_native_settings(
         env={}, config_path=tmp_path / "missing.yaml"
     ) == {
-        "match": "beets",
-        "metadata": "beets",
-        "tags": "beets",
-        "library": "beets",
-        "import": "beets",
+        "match": "native",
+        "metadata": "native",
+        "tags": "native",
+        "library": "native",
+        "import": "native",
     }
 
 
@@ -126,7 +132,7 @@ def test_native_settings_read_config_and_environment(tmp_path: Path) -> None:
     )
     assert settings["match"] == "native"
     assert settings["tags"] == "native"
-    assert settings["library"] == "beets"
+    assert settings["library"] == "native"
 
 
 def test_config_set_soulseek_writes_muzik_config(

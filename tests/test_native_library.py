@@ -3,16 +3,11 @@
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
-from typing import Any, cast
-
-from beets.library import Library
-
 from muzik.commands import soulseek
-from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
-from muzik.core.beets import importer
+from muzik.core.library_lookup import find_organized_path, find_path_by_source_id
+from muzik.core import library_prune as importer
 from muzik.core.native_library import (
     NativeLibrary,
-    ShadowLibrary,
     open_library_for_reads,
 )
 from muzik.core import watchlist
@@ -44,35 +39,15 @@ def test_native_lookup_reads_beets_items_and_albums(
     assert find_organized_path("Artist - Album", library) == path
 
 
-def test_shadow_read_uses_beets_result_after_native_error(caplog) -> None:
-    expected = SimpleNamespace(id=1, path=b"Track.mp3", title="Track")
-    beets = SimpleNamespace(directory="/fixture/music", items=lambda query: [expected])
-
-    def fail(_query):
-        raise RuntimeError("native read failed")
-
-    native = SimpleNamespace(items=fail)
-    library = ShadowLibrary(cast(Library, beets), cast(NativeLibrary, native))
-    assert library.items("title:Track") == [expected]
-    assert "Native library item read failed" in caplog.text
-
-
 def test_watchlist_selects_native_library(monkeypatch, tmp_path: Path) -> None:
     expected = object()
-    monkeypatch.setattr(watchlist, "get_native_settings", lambda: {"library": "native"})
     monkeypatch.setattr(watchlist, "open_library_for_reads", lambda config: expected)
     assert watchlist._open_beets_library(tmp_path / "beets.yaml") is expected
 
 
 def test_soulseek_check_selects_native_library(monkeypatch, tmp_path: Path) -> None:
     native = SimpleNamespace(directory=str(tmp_path), items=lambda query: [])
-    monkeypatch.setattr(soulseek, "get_native_settings", lambda: {"library": "native"})
     monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: native)
-
-    def fail_beets(_config: Path | None) -> Any:
-        raise AssertionError("beets reader was called")
-
-    monkeypatch.setattr(soulseek, "open_library", fail_beets)
     soulseek.check_library_cmd(
         query=None,
         min_bitrate=256,

@@ -24,7 +24,7 @@ from muzik.config import (
     save_muzik_config_section,
     save_muzik_config_value,
 )
-from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
+from muzik.core.import_models import DuplicateDecision, MatchDecision
 from muzik.core.library import human_size, scan_downloads
 from muzik.core.services import check_services
 from muzik.core.sources.base import Candidate
@@ -564,9 +564,9 @@ class NativeGuiServer:
         cancellation: CancellationToken,
     ) -> None:
         emitter = _EventEmitter(self, job_id, "workflow")
-        beets_emitter = _EventEmitter(self, job_id, "beets")
+        beets_emitter = _EventEmitter(self, job_id, "native")
         decisions = _WorkflowDecisions(self, job_id, options.interactive, cancellation)
-        beets_decisions = _BeetsDecisions(
+        beets_decisions = _ImportDecisions(
             self, job_id, options.interactive, cancellation
         )
         try:
@@ -804,7 +804,7 @@ class _WorkflowDecisions:
         return value
 
 
-class _BeetsDecisions:
+class _ImportDecisions:
     def __init__(
         self,
         server: NativeGuiServer,
@@ -822,38 +822,38 @@ class _BeetsDecisions:
     def should_resume_beets_import(self, path: Path) -> bool:
         return False
 
-    def choose_beets_album_match(self, task: Any) -> str | BeetsMatchDecision | None:
+    def choose_beets_album_match(self, task: Any) -> str | MatchDecision | None:
         return self._choose_match(task)
 
-    def choose_beets_track_match(self, task: Any) -> str | BeetsMatchDecision | None:
+    def choose_beets_track_match(self, task: Any) -> str | MatchDecision | None:
         return self._choose_match(task)
 
-    def _choose_match(self, task: Any) -> str | BeetsMatchDecision | None:
+    def _choose_match(self, task: Any) -> str | MatchDecision | None:
         if not self.interactive:
-            return BeetsMatchDecision.AS_IS
+            return MatchDecision.AS_IS
         value = self.server._request_decision(
             self.job_id, "beets_match", {"task": _json_value(task)}, self.cancellation
         )
         if value is None or value == "as_is":
-            return BeetsMatchDecision.AS_IS if value == "as_is" else None
+            return MatchDecision.AS_IS if value == "as_is" else None
         if not isinstance(value, str) or value not in {
             match.candidate_id for match in task.matches
         }:
-            raise WorkflowDecisionError("Select a valid Beets match ID.")
+            raise WorkflowDecisionError("Select a valid match ID.")
         return value
 
     def resolve_beets_duplicate(
         self, task: Any, duplicates: list[Any]
-    ) -> BeetsDuplicateDecision:
+    ) -> DuplicateDecision:
         if not self.interactive:
-            return BeetsDuplicateDecision.SKIP
+            return DuplicateDecision.SKIP
         value = self.server._request_decision(
             self.job_id,
             "beets_duplicate",
             {"task": _json_value(task), "duplicates": _json_value(duplicates)},
             self.cancellation,
         )
-        return BeetsDuplicateDecision(value)
+        return DuplicateDecision(value)
 
 
 def _path(value: Any, default: Path) -> Path:

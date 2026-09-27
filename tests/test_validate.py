@@ -57,6 +57,7 @@ def test_validate_audio_reports_missing_metadata_warning(
 def test_validate_warns_when_album_sidecar_expects_more_files(
     tmp_path: Path,
     capsys,
+    monkeypatch,
 ) -> None:
     album = tmp_path / "Album"
     album.mkdir()
@@ -87,6 +88,12 @@ def test_validate_warns_when_album_sidecar_expects_more_files(
     assert validate._album_completeness_warnings(album / ".muzik.json", data) == [
         "album appears incomplete (1/2 audio files)"
     ]
+
+    monkeypatch.setattr(
+        validate,
+        "probe",
+        lambda path: {"format": {"duration": 1}, "streams": [{"codec_name": "flac"}]},
+    )
 
     validate.validate_cmd(album, verbose=True)
 

@@ -13,19 +13,12 @@ import re
 import tempfile
 from typing import Any, cast
 
-from beets.library import Library
-
-from muzik.config import MUZIK_WATCHLIST_FILE, get_native_settings
-from muzik.core.beets.config import open_library
-from muzik.core.beets.lookup import (
+from muzik.config import MUZIK_WATCHLIST_FILE
+from muzik.core.library_lookup import (
     find_organized_path,
     find_path_by_source_id,
 )
-from muzik.core.native_library import (
-    NativeLibrary,
-    ShadowLibrary,
-    open_library_for_reads,
-)
+from muzik.core.native_library import NativeLibrary, open_library_for_reads
 from muzik.core.quality import QualityPolicy
 from muzik.core.sources.base import ResolvedPlaylist, ResolvedTrack
 from muzik.core.sources.spotify import parse_link as parse_spotify_link
@@ -770,7 +763,7 @@ def reconcile_watchlist(
     request: WorkflowRequest,
     options: WorkflowOptions,
 ) -> None:
-    """Update item stages from muzik records, local files, and Beets."""
+    """Update item stages from muzik records, local files, and the music library."""
     beets_library = _open_beets_library(options.config)
     for playlist in watchlist.playlists:
         if playlist.source_kind is WatchlistSourceKind.SPOTIFY:
@@ -786,12 +779,10 @@ def reconcile_watchlist(
 
 def _open_beets_library(
     config_path: Path | None,
-) -> Library | NativeLibrary | ShadowLibrary | None:
-    # Best-effort: an unconfigured or broken Beets setup must not break
+) -> NativeLibrary | None:
+    # Best-effort: an unconfigured or broken library must not break
     # watchlist reconciliation, which already works fine without it.
     try:
-        if get_native_settings()["library"] == "beets":
-            return open_library(config_path)
         return open_library_for_reads(config_path)
     except Exception:
         return None
@@ -833,7 +824,7 @@ def _reconcile_playlist(
     *,
     request: WorkflowRequest,
     options: WorkflowOptions,
-    beets_library: Library | NativeLibrary | ShadowLibrary | None = None,
+    beets_library: NativeLibrary | None = None,
 ) -> None:
     playlist_state = load_playlist_state(playlist.playlist_id)
     for item in playlist.items:
@@ -884,7 +875,7 @@ def _reconcile_playlist(
                 ) or find_organized_path(item.title, beets_library)
                 if organized_path is not None:
                     # No muzik record of this video exists, but its album is
-                    # already in the Beets library — treat it the same as a
+                    # already in the music library — treat it the same as a
                     # real cache hit so the blocks below (and any future
                     # reconcile, via processed_video_ids) short-circuit too.
                     status = "organized"
@@ -939,7 +930,7 @@ def _mark_organize_failed(
     entry: dict[str, Any],
 ) -> None:
     updated_at = _now()
-    message = "Beets did not import this item. Select Retry."
+    message = "The music library did not import this item. Select Retry."
     audio_value = entry.get("audio_file")
     item.last_action = "refresh"
     item.last_error = message

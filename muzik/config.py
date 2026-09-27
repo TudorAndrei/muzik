@@ -9,9 +9,10 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-from beets import config as beets_config
 from platformdirs import PlatformDirs
 import yaml
+
+from muzik import _native
 
 
 # ---------------------------------------------------------------------------
@@ -24,8 +25,8 @@ CACHE_DIR = _APP_DIRS.user_cache_path
 # Bandcamp download-tracking cache (pipe-delimited, one entry per purchased item)
 BANDCAMP_CACHE_FILE = CACHE_DIR / "bandcamp.cache"
 
-# Default beets config location. Use beets' own helper so muzik matches beet.
-BEETS_CONFIG = Path(beets_config.user_config_path())
+# Keep the existing config file path for library and database compatibility.
+LIBRARY_CONFIG = Path(_native.library_config_path())
 
 # muzik config dir — stores per-service credentials (e.g. Bandcamp cookies)
 MUZIK_CONFIG_DIR = _APP_DIRS.user_config_path
@@ -176,7 +177,7 @@ def get_native_settings(
     env: Mapping[str, str] = os.environ,
     config_path: Path = MUZIK_CONFIG_FILE,
 ) -> dict[str, str]:
-    """Return the rollout mode for each native beets component."""
+    """Return the native mode for each library component."""
     config = load_muzik_config(config_path)
     settings = {}
     for component in ("match", "metadata", "tags", "library", "import"):
@@ -186,11 +187,11 @@ def get_native_settings(
             config,
             "native",
             component,
-            "beets",
+            "native",
         )
         if mode not in {"beets", "shadow", "native"}:
             raise ValueError(f"invalid native.{component} mode: {mode}")
-        settings[component] = mode
+        settings[component] = "native"
     return settings
 
 

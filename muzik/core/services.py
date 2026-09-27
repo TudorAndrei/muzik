@@ -33,7 +33,6 @@ def check_services() -> list[ServiceStatus]:
     """Check every external tool and service muzik uses."""
     return [
         _check_binary("ffmpeg", "ffmpeg", ["-version"]),
-        _check_binary("ffprobe", "ffprobe", ["-version"]),
         _check_binary("yt-dlp", "yt-dlp", ["--version"]),
         _check_chromium(),
         _check_soulseek(),

@@ -851,7 +851,9 @@ def test_acquire_track_from_soulseek_rejects_an_unsafe_candidate() -> None:
 
 def test_acquire_track_from_soulseek_downloads_the_safe_candidate(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     track = ResolvedTrack(title="One", artist="Artist", duration=180.0)
     audio = tmp_path / "One.flac"
     good = Candidate(

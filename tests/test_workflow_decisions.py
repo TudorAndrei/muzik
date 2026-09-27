@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from muzik.commands import workflow
+from muzik.core import cache as cache_mod
 from muzik.core.chapters import Chapter
 from muzik.core.sources.base import Candidate, DownloadResult, ResolvedRelease
 from muzik.core.workflow.decisions import (
@@ -160,6 +161,7 @@ def test_acquire_from_soulseek_emits_candidates_found(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     audio = tmp_path / "01 One.flac"
     audio.write_bytes(b"")
     candidate = _candidate("peer:/Album")

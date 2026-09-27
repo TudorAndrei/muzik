@@ -2,8 +2,8 @@
 
 from pathlib import Path
 
-from muzik.core.beets.agent_decisions import (
-    AgentBeetsDecisions,
+from muzik.core.agent_decisions import (
+    AgentImportDecisions,
     MatchDecision,
     _cli_chooser,
     build_prompt,
@@ -11,12 +11,12 @@ from muzik.core.beets.agent_decisions import (
     decision_from_text,
     extract_action_json,
 )
-from muzik.core.beets.decisions import BeetsMatchDecision
-from muzik.core.beets.views import BeetsMatchView, BeetsTaskView
+from muzik.core.import_models import MatchDecision as ImportMatchDecision
+from muzik.core.import_models import MatchView, TaskView
 
 
-def _task(*matches: BeetsMatchView) -> BeetsTaskView:
-    return BeetsTaskView(
+def _task(*matches: MatchView) -> TaskView:
+    return TaskView(
         task_id="t1",
         paths=[Path("/music/Some Artist - Album/01 One.flac")],
         is_album=True,
@@ -24,8 +24,8 @@ def _task(*matches: BeetsMatchView) -> BeetsTaskView:
     )
 
 
-def _match(index: int, distance: float | None) -> BeetsMatchView:
-    return BeetsMatchView(
+def _match(index: int, distance: float | None) -> MatchView:
+    return MatchView(
         candidate_id=f"t1:match:{index}",
         artist="Some Artist",
         album="Album",
@@ -36,14 +36,14 @@ def _match(index: int, distance: float | None) -> BeetsMatchView:
 
 def test_no_candidates_skips() -> None:
     called = []
-    dec = AgentBeetsDecisions(chooser=lambda task: called.append(task) or None)
+    dec = AgentImportDecisions(chooser=lambda task: called.append(task) or None)
     assert dec.choose_beets_album_match(_task()) is None
     assert called == []  # never consulted the agent
 
 
 def test_strong_match_applies_without_agent() -> None:
     called = []
-    dec = AgentBeetsDecisions(chooser=lambda task: called.append(task) or None)
+    dec = AgentImportDecisions(chooser=lambda task: called.append(task) or None)
     task = _task(_match(0, 0.05), _match(1, 0.4))
     assert dec.choose_beets_album_match(task) == "t1:match:0"
     assert called == []  # strong match never calls the agent
@@ -51,44 +51,44 @@ def test_strong_match_applies_without_agent() -> None:
 
 def test_agent_pick_with_high_confidence_applies() -> None:
     decision = MatchDecision(action="pick", candidate_index=1, confidence=0.9)
-    dec = AgentBeetsDecisions(chooser=lambda task: decision)
+    dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5), _match(1, 0.35))
     assert dec.choose_beets_album_match(task) == "t1:match:1"
 
 
 def test_agent_pick_with_low_confidence_skips() -> None:
     decision = MatchDecision(action="pick", candidate_index=1, confidence=0.3)
-    dec = AgentBeetsDecisions(chooser=lambda task: decision)
+    dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5), _match(1, 0.35))
     assert dec.choose_beets_album_match(task) is None
 
 
 def test_agent_invalid_index_skips() -> None:
     decision = MatchDecision(action="pick", candidate_index=9, confidence=0.99)
-    dec = AgentBeetsDecisions(chooser=lambda task: decision)
+    dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
     assert dec.choose_beets_album_match(task) is None
 
 
 def test_agent_as_is_returns_as_is() -> None:
     decision = MatchDecision(action="as_is", confidence=0.8)
-    dec = AgentBeetsDecisions(chooser=lambda task: decision)
+    dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
-    assert dec.choose_beets_album_match(task) is BeetsMatchDecision.AS_IS
+    assert dec.choose_beets_album_match(task) is ImportMatchDecision.AS_IS
 
 
 def test_agent_skip_returns_none() -> None:
     decision = MatchDecision(action="skip", confidence=0.2)
-    dec = AgentBeetsDecisions(chooser=lambda task: decision)
+    dec = AgentImportDecisions(chooser=lambda task: decision)
     task = _task(_match(0, 0.5))
     assert dec.choose_beets_album_match(task) is None
 
 
 def test_agent_error_falls_back_to_skip() -> None:
-    def boom(task: BeetsTaskView) -> MatchDecision:
+    def boom(task: TaskView) -> MatchDecision:
         raise RuntimeError("network down")
 
-    dec = AgentBeetsDecisions(chooser=boom)
+    dec = AgentImportDecisions(chooser=boom)
     task = _task(_match(0, 0.5))
     assert dec.choose_beets_album_match(task) is None
 

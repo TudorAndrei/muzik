@@ -4,6 +4,7 @@ import pytest
 import typer
 
 from muzik.commands import organize
+from muzik.core.import_models import LogEvent
 
 
 def test_organize_uses_internal_import_for_default_import(
@@ -64,23 +65,19 @@ def test_organize_preserves_dry_run_in_internal_import(
     assert calls[0].move is True
 
 
-def test_organize_uses_passthrough_for_tag_only(
+def test_organize_uses_native_service_for_tag_only(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     album = tmp_path / "Album"
     album.mkdir()
-    calls: list[list[str]] = []
-
-    def fake_run_passthrough(cmd):
-        calls.append(cmd)
-        return 0
-
-    monkeypatch.setattr(organize, "run_passthrough", fake_run_passthrough)
-    monkeypatch.setattr(organize, "_beet_bin", lambda: "beet")
-    # Isolate from any real beets config on the machine so the -c flag is
-    # driven by the test, not the developer's environment.
-    monkeypatch.setattr(organize, "BEETS_CONFIG", tmp_path / "no-config.yaml")
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        organize,
+        "organize_paths",
+        lambda options, **kwargs: calls.append((options, kwargs)),
+    )
+    monkeypatch.setattr(organize, "LIBRARY_CONFIG", tmp_path / "no-config.yaml")
 
     organize.organize_cmd(
         directory=album,
@@ -90,7 +87,26 @@ def test_organize_uses_passthrough_for_tag_only(
         config=None,
     )
 
-    assert calls == [["beet", "write", "--yes", str(album)]]
+    assert calls[0][0].paths == [album]
+    assert calls[0][1]["tag_only"] is True
+
+
+def test_tag_only_dry_run_prints_preview(tmp_path: Path, monkeypatch, capsys) -> None:
+    album = tmp_path / "Album"
+    album.mkdir()
+
+    def fake_organize(options, **kwargs) -> None:
+        kwargs["events"].emit(LogEvent("Tag preview: 2 library items under Album."))
+
+    monkeypatch.setattr(organize, "organize_paths", fake_organize)
+    organize.organize_cmd(
+        directory=album,
+        import_=False,
+        tag_only=True,
+        dry_run=True,
+        config=tmp_path / "missing.yaml",
+    )
+    assert "Tag preview: 2 library items" in capsys.readouterr().err
 
 
 def test_organize_rejects_missing_directory(tmp_path: Path) -> None:

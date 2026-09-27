@@ -1,7 +1,6 @@
-import os
 from pathlib import Path
 
-from beets.library import Item, Library
+from types import SimpleNamespace
 
 from muzik.commands import soulseek
 from muzik.core import cache as cache_mod
@@ -170,14 +169,23 @@ def test_soulseek_download_command_uses_cached_candidate(
     assert calls == [f"download:peer:/Music/Artist/Album:{tmp_path}:True"]
 
 
-def _beets_library(tmp_path: Path) -> tuple[Library, Path]:
+class FakeLibrary:
+    def __init__(self, music: Path) -> None:
+        self.directory = str(music)
+        self._items: list[SimpleNamespace] = []
+
+    def items(self, query=None):
+        return list(self._items)
+
+
+def _library(tmp_path: Path) -> tuple[FakeLibrary, Path]:
     music = tmp_path / "music"
     music.mkdir()
-    return Library(str(tmp_path / "lib.db"), str(music)), music
+    return FakeLibrary(music), music
 
 
 def _add_item(
-    lib: Library,
+    lib: FakeLibrary,
     path: Path,
     *,
     title: str,
@@ -186,16 +194,16 @@ def _add_item(
     length: float = 200.0,
 ) -> None:
     path.write_bytes(b"x")
-    item = Item(
-        path=os.fsencode(str(path)),
-        title=title,
-        artist=artist,
-        album=album,
-        albumartist=artist,
-        length=length,
+    lib._items.append(
+        SimpleNamespace(
+            path=str(path).encode(),
+            title=title,
+            artist=artist,
+            album=album,
+            albumartist=artist,
+            length=length,
+        )
     )
-    lib.add(item)
-    item.store()
 
 
 def _lossy_quality(bitrate: int = 128) -> QualityInfo:
@@ -226,9 +234,9 @@ def test_check_library_skips_tracks_already_at_or_above_the_threshold(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    lib, music = _beets_library(tmp_path)
+    lib, music = _library(tmp_path)
     _add_item(lib, music / "good.flac", title="Good", artist="Artist", album="Album")
-    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: lib)
     monkeypatch.setattr(
         soulseek,
         "measure_quality",
@@ -253,7 +261,7 @@ def test_check_library_reports_a_better_replacement(
     capsys,
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
-    lib, music = _beets_library(tmp_path)
+    lib, music = _library(tmp_path)
     _add_item(
         lib,
         music / "low.mp3",
@@ -262,7 +270,7 @@ def test_check_library_reports_a_better_replacement(
         album="Album",
         length=200.0,
     )
-    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: lib)
     monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
     candidate = _better_candidate(
         title="Low Quality", artist="Test Artist", duration=200.0
@@ -291,7 +299,7 @@ def test_check_library_reports_no_safe_match_for_a_wrong_recording(
     monkeypatch,
     capsys,
 ) -> None:
-    lib, music = _beets_library(tmp_path)
+    lib, music = _library(tmp_path)
     _add_item(
         lib,
         music / "low.mp3",
@@ -300,7 +308,7 @@ def test_check_library_reports_no_safe_match_for_a_wrong_recording(
         album="Album",
         length=200.0,
     )
-    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: lib)
     monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
     # Duration is far off and the text is unrelated — candidate_matches_track
     # must reject this, so it must not be reported as a replacement.
@@ -326,7 +334,8 @@ def test_check_library_reports_a_failed_search_and_keeps_scanning(
     monkeypatch,
     capsys,
 ) -> None:
-    lib, music = _beets_library(tmp_path)
+    monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
+    lib, music = _library(tmp_path)
     _add_item(
         lib,
         music / "one.mp3",
@@ -343,7 +352,7 @@ def test_check_library_reports_a_failed_search_and_keeps_scanning(
         album="Album",
         length=200.0,
     )
-    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: lib)
     monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
     good = _better_candidate(title="Two", artist="Artist Two", duration=200.0)
 
@@ -372,7 +381,7 @@ def test_check_library_limit_caps_searches_and_reports_the_remainder(
     monkeypatch,
     capsys,
 ) -> None:
-    lib, music = _beets_library(tmp_path)
+    lib, music = _library(tmp_path)
     for name in ("one", "two", "three"):
         _add_item(
             lib,
@@ -382,7 +391,7 @@ def test_check_library_limit_caps_searches_and_reports_the_remainder(
             album="Album",
             length=200.0,
         )
-    monkeypatch.setattr(soulseek, "open_library", lambda config: lib)
+    monkeypatch.setattr(soulseek, "open_library_for_reads", lambda config: lib)
     monkeypatch.setattr(soulseek, "measure_quality", lambda path: _lossy_quality(128))
     calls: list[str] = []
 

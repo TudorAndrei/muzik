@@ -5,7 +5,8 @@ use std::sync::Mutex;
 
 use muzik_core::BeetsConfig;
 use muzik_import::apply::{self, AlbumDecision, ApplyOptions, DuplicateDecision, MatchDecision};
-use muzik_import::plan::{AlbumPlan, ImportPlan, ImportPlanner};
+use muzik_import::history::IncrementalHistory;
+use muzik_import::plan::{AlbumPlan, ImportMode, ImportPlan, ImportPlanner, PlanOptions};
 use muzik_import::sync;
 use muzik_library::{Library, SqlValue};
 use muzik_match::MatchConfig;
@@ -24,6 +25,8 @@ pub(crate) struct PyNativeImporter {
     config: BeetsConfig,
     library_path: PathBuf,
     directory: PathBuf,
+    statefile: PathBuf,
+    seed_history: Mutex<Vec<Vec<PathBuf>>>,
     plan: Mutex<Option<ImportPlan>>,
 }
 
@@ -42,12 +45,37 @@ impl PyNativeImporter {
             .get(&["directory"])
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| import_error("beets config has no music directory"))?;
+        let raw_statefile = config
+            .get(&["statefile"])
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| import_error("library config has no state file path"))?;
         Ok(Self {
             library_path: beets_path(raw_library, config_path),
             directory: beets_path(raw_directory, config_path),
+            statefile: beets_path(raw_statefile, config_path),
+            seed_history: Mutex::new(Vec::new()),
             config,
             plan: Mutex::new(None),
         })
+    }
+
+    fn statefile_path(&self) -> String {
+        self.statefile.to_string_lossy().into_owned()
+    }
+
+    fn history_path(&self) -> String {
+        IncrementalHistory::path_for_statefile(&self.statefile)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn seed_incremental_history(&self, groups: Vec<Vec<String>>) -> PyResult<()> {
+        let groups = groups
+            .into_iter()
+            .map(|group| group.into_iter().map(PathBuf::from).collect())
+            .collect();
+        *self.seed_history.lock().map_err(import_error)? = groups;
+        Ok(())
     }
 
     fn plan(&self, py: Python<'_>, paths: Vec<String>) -> PyResult<Py<PyAny>> {
@@ -111,6 +139,20 @@ impl PyNativeImporter {
                 .collect::<Vec<_>>(),
         )?;
         output.set_item("skipped_albums", result.skipped_albums)?;
+        output.set_item("skipped_incremental", result.skipped_incremental)?;
+        output.set_item(
+            "history_failed",
+            result
+                .history_failed
+                .iter()
+                .map(|group| {
+                    group
+                        .iter()
+                        .map(|path| path.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>(),
+        )?;
         output.set_item(
             "cleanup_failed",
             result
@@ -176,11 +218,41 @@ impl PyNativeImporter {
                     .unwrap_or(5),
             };
             let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
-            if singletons {
-                planner.plan_singletons(&paths).map_err(import_error)
+            let history = if self
+                .config
+                .get(&["import", "incremental"])
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
+            {
+                let seed = self.seed_history.lock().map_err(import_error)?;
+                Some(
+                    IncrementalHistory::open_or_seed(&self.statefile, &seed)
+                        .map_err(import_error)?,
+                )
             } else {
-                planner.plan(&paths).map_err(import_error)
-            }
+                None
+            };
+            let options = PlanOptions {
+                autotag: self
+                    .config
+                    .get(&["import", "autotag"])
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(true),
+                history,
+                incremental_skip_later: self
+                    .config
+                    .get(&["import", "incremental_skip_later"])
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            };
+            let mode = if singletons {
+                ImportMode::Singleton
+            } else {
+                ImportMode::Album
+            };
+            planner
+                .plan_with_options(&paths, mode, options)
+                .map_err(import_error)
         })?;
         let list = PyList::empty(py);
         let library = Library::open_read_only(&self.library_path).map_err(import_error)?;

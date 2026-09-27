@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import re
 
-from mediafile import MediaFile, UnreadableFileError
-
+from muzik import _native
 from muzik.config import AUDIO_EXTENSIONS
 from muzik.core.audio import _parse_title
 
@@ -55,25 +55,26 @@ def repair_placeholder_album_tags(directory: Path) -> MetadataRepairResult:
         if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
             continue
         try:
-            media = MediaFile(path)
-        except OSError, UnreadableFileError:
+            media = _native.read_audio_tags(str(path))
+        except OSError, _native.TagsError:
             continue
 
+        fields = media["fields"]
         changed = False
-        if _is_placeholder(media.artist):
-            media.artist = artist
+        if _is_placeholder(fields.get("artist")):
+            fields["artist"] = artist
             changed = True
-        if _is_placeholder(media.albumartist):
-            media.albumartist = artist
+        if _is_placeholder(fields.get("albumartist")):
+            fields["albumartist"] = artist
             changed = True
-        if _is_placeholder(media.album):
-            media.album = album
+        if _is_placeholder(fields.get("album")):
+            fields["album"] = album
             changed = True
-        if year and _is_placeholder(media.year):
-            media.year = int(year)
+        if year and _is_placeholder(fields.get("date")):
+            fields["date"] = year
             changed = True
         if changed:
-            media.save()
+            _native.write_audio_tags(str(path), json.dumps(media))
             updated += 1
 
     return MetadataRepairResult(updated, artist, album, year)

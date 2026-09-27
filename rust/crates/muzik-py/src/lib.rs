@@ -15,7 +15,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
 use import::PyNativeImporter;
-use muzik_core::BeetsConfig;
+use muzik_core::{default_config_path, BeetsConfig};
+
+#[pyfunction]
+fn library_config_path() -> String {
+    default_config_path().to_string_lossy().into_owned()
+}
 use muzik_library::{Fields, Library as RustLibrary, SqlValue};
 use muzik_match::{rank_albums, MatchAlbum, MatchConfig, MatchItem};
 use muzik_metadata::{MetadataClient, ReleaseSearch};
@@ -554,6 +559,7 @@ fn download_progress_to_dict<'py>(
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(library_config_path, m)?)?;
     m.add_class::<PyNativeLibrary>()?;
     m.add_class::<PyNativeImporter>()?;
     m.add_class::<PySeakarrSession>()?;

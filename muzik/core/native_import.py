@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 from pathlib import Path
+import pickle
 from typing import TYPE_CHECKING, Any, Callable
 
-from muzik.config import BEETS_CONFIG
+from muzik.config import LIBRARY_CONFIG
 from muzik.core.import_models import (
     DuplicateDecision,
     DuplicateEvent,
@@ -29,7 +31,32 @@ if TYPE_CHECKING:
 
 def _new_importer(config_path: Path, overrides: dict[str, Any]) -> Any:
     native = importlib.import_module("muzik._native")
-    return native.NativeImporter(str(config_path), json.dumps(overrides))
+    importer = native.NativeImporter(str(config_path), json.dumps(overrides))
+    if overrides.get("import", {}).get("incremental"):
+        statefile = Path(importer.statefile_path())
+        history = Path(importer.history_path())
+        if statefile.is_file() and not history.exists():
+            importer.seed_incremental_history(_read_legacy_history(statefile))
+    return importer
+
+
+def _read_legacy_history(statefile: Path) -> list[list[str]]:
+    """Read the old import history once before native history exists."""
+    with statefile.open("rb") as stream:
+        state = pickle.load(stream)
+    if not isinstance(state, dict):
+        raise ValueError(f"invalid import state at {statefile}")
+    entries = state.get("taghistory", set())
+    if not isinstance(entries, set):
+        raise ValueError(f"invalid import history at {statefile}")
+    groups: list[list[str]] = []
+    for entry in entries:
+        if not isinstance(entry, tuple) or not entry:
+            raise ValueError(f"invalid import history entry at {statefile}")
+        if not all(isinstance(path, (bytes, str)) for path in entry):
+            raise ValueError(f"invalid import history path at {statefile}")
+        groups.append([os.fsdecode(path) for path in entry])
+    return groups
 
 
 def _overrides(options: ImportOptions) -> dict[str, Any]:
@@ -44,6 +71,15 @@ def _overrides(options: ImportOptions) -> dict[str, Any]:
             "autotag": options.autotag,
         }
     }
+
+
+def _plan_paths(importer: Any, paths: list[Path]) -> list[dict[str, Any]]:
+    files = [path.is_file() for path in paths]
+    if any(files):
+        if not all(files):
+            raise ValueError("cannot mix files and directories in one import")
+        return importer.plan_singletons([str(path) for path in paths])
+    return importer.plan([str(path) for path in paths])
 
 
 def _task_view(index: int, album: dict[str, Any]) -> TaskView:
@@ -92,6 +128,14 @@ def _duplicate_choice(value: DuplicateDecision) -> str:
         raise ValueError(f"native import cannot use duplicate action {value}") from exc
 
 
+def preview_sync(config_path: Path, query: str) -> tuple[int, int]:
+    """Count library records selected for sync without changing them."""
+    from muzik.core.native_library import NativeLibrary
+
+    library = NativeLibrary(config_path)
+    return len(library.albums(query)), len(library.items(query))
+
+
 def preview_native_plan(
     options: ImportOptions,
     *,
@@ -100,8 +144,8 @@ def preview_native_plan(
     """Get a plan for shadow comparison without changing files or the database."""
     overrides = _overrides(options)
     overrides["import"]["pretend"] = True
-    importer = factory(options.config_path or BEETS_CONFIG, overrides)
-    albums = importer.plan([str(path) for path in options.paths])
+    importer = factory(options.config_path or LIBRARY_CONFIG, overrides)
+    albums = _plan_paths(importer, options.paths)
     return importer, albums
 
 
@@ -113,15 +157,23 @@ def run_native_import(
     factory: Callable[[Path, dict[str, Any]], Any] = _new_importer,
 ) -> None:
     """Plan, choose, and apply an import with the native bridge."""
-    importer = factory(options.config_path or BEETS_CONFIG, _overrides(options))
+    importer = factory(options.config_path or LIBRARY_CONFIG, _overrides(options))
     events.emit(ImportStartedEvent(options.paths, dry_run=options.dry_run))
     try:
         if options.query is not None:
             if options.dry_run:
-                raise ValueError("native query sync does not support dry run")
-            importer.sync(str(options.query), not options.nowrite)
+                albums, items = preview_sync(
+                    options.config_path or LIBRARY_CONFIG, str(options.query)
+                )
+                events.emit(
+                    LogEvent(
+                        f"Sync preview: {albums} albums and {items} items selected."
+                    )
+                )
+            else:
+                importer.sync(str(options.query), not options.nowrite)
         else:
-            albums = importer.plan([str(path) for path in options.paths])
+            albums = _plan_paths(importer, options.paths)
             choices: list[tuple[str, int | None, str | None]] = []
             for index, album in enumerate(albums):
                 task = _task_view(index, album)
@@ -158,6 +210,16 @@ def run_native_import(
                         )
                 choices.append((choice, candidate_index, duplicate_choice))
             result = importer.apply(choices)
+            if options.dry_run:
+                destinations = result.get("destinations", [])
+                events.emit(
+                    LogEvent(
+                        f"Import preview: {len(albums)} groups and "
+                        f"{len(destinations)} destinations."
+                    )
+                )
+                for destination in destinations:
+                    events.emit(LogEvent(f"  {destination}"))
             cleanup_failed = result.get("cleanup_failed", [])
             if cleanup_failed:
                 events.emit(

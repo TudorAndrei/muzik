@@ -8,25 +8,11 @@ from mediafile import MediaFile
 import pytest
 
 from muzik.core import audio, quality
-from muzik.core.beets import service
-from muzik.core.beets.importer import ImportOptions
+from muzik.core import import_service as service
+from muzik.core.import_models import ImportOptions
+from muzik.core.import_models import LogEvent, RecordingImportEventEmitter
 
 FIXTURES = Path(__file__).resolve().parents[1] / "rust/crates/muzik-tags/tests/fixtures"
-
-
-def test_beets_probe_and_tag_service_keep_their_backend(tmp_path, monkeypatch) -> None:
-    path = tmp_path / "track.flac"
-    path.write_bytes(b"audio")
-    payload = {"format": {"duration": "3"}, "streams": []}
-    monkeypatch.setattr(audio, "get_native_settings", lambda: {"tags": "beets"})
-    monkeypatch.setattr(audio, "_probe_beets", lambda _: payload)
-    assert audio.probe(path) is payload
-
-    called = []
-    monkeypatch.setattr(service, "get_native_settings", lambda: {"tags": "beets"})
-    monkeypatch.setattr(service, "_tag_only_beet", lambda p, o: called.append(p))
-    service.tag_only_with_beet(path, ImportOptions(paths=[path]))
-    assert called == [path]
 
 
 def test_native_probe_quality_and_metadata(tmp_path, monkeypatch) -> None:
@@ -98,10 +84,10 @@ def test_native_tag_only_writes_library_fields_and_cover(tmp_path, monkeypatch) 
         "comp": False,
     }
     item = SimpleNamespace(path=str(path).encode(), get=values.get)
-    library = SimpleNamespace(items=lambda: [item])
+    library = SimpleNamespace(directory=str(tmp_path), items=lambda: [item])
     monkeypatch.setenv("MUZIK_NATIVE_TAGS", "native")
-    monkeypatch.setattr(service, "open_library", lambda _: library)
-    service.tag_only_with_beet(path, ImportOptions(paths=[path]))
+    monkeypatch.setattr(service, "NativeLibrary", lambda _: library)
+    service.write_library_tags(path, ImportOptions(paths=[path]))
 
     media = MediaFile(path)
     assert (media.title, media.artist, media.album) == (
@@ -122,7 +108,37 @@ def test_native_tag_only_dry_run_keeps_file(tmp_path, monkeypatch) -> None:
     item = SimpleNamespace(path=str(path).encode(), get={"title": "New Song"}.get)
     monkeypatch.setenv("MUZIK_NATIVE_TAGS", "native")
     monkeypatch.setattr(
-        service, "open_library", lambda _: SimpleNamespace(items=lambda: [item])
+        service,
+        "NativeLibrary",
+        lambda _: SimpleNamespace(directory=str(tmp_path), items=lambda: [item]),
     )
-    service.tag_only_with_beet(path, ImportOptions(paths=[path], dry_run=True))
+    service.write_library_tags(path, ImportOptions(paths=[path], dry_run=True))
     assert path.read_bytes() == before
+
+
+def test_tag_only_resolves_relative_item_path(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "track.flac"
+    shutil.copyfile(FIXTURES / "blank.flac", path)
+    item = SimpleNamespace(path=b"track.flac", get={"title": "New Song"}.get)
+    library = SimpleNamespace(directory=str(tmp_path), items=lambda: [item])
+    monkeypatch.setattr(service, "NativeLibrary", lambda _: library)
+    service.write_library_tags(path, ImportOptions(paths=[path]))
+    assert MediaFile(path).title == "New Song"
+
+
+def test_tag_only_dry_run_reports_selected_items(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "track.flac"
+    shutil.copyfile(FIXTURES / "blank.flac", path)
+    item = SimpleNamespace(path=b"track.flac", get={"title": "New Song"}.get)
+    library = SimpleNamespace(directory=str(tmp_path), items=lambda: [item])
+    monkeypatch.setattr(service, "NativeLibrary", lambda _: library)
+    events = RecordingImportEventEmitter()
+    service.organize_paths(
+        ImportOptions(paths=[path], dry_run=True),
+        tag_only=True,
+        events=events,
+    )
+    assert any(
+        isinstance(event, LogEvent) and "1 library items" in event.message
+        for event in events.events
+    )

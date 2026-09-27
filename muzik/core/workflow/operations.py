@@ -9,14 +9,14 @@ from typing import cast
 
 from muzik.core.audio import extract_metadata, get_duration
 from muzik.core.quality import QualityPolicy
-from muzik.core.beets.decisions import BeetsDecisions, NonInteractiveBeetsDecisions
-from muzik.core.beets.events import (
-    BeetsErrorEvent,
-    BeetsEventEmitter,
-    NullBeetsEventEmitter,
+from muzik.core.import_models import ImportDecisions, NonInteractiveImportDecisions
+from muzik.core.import_models import (
+    ErrorEvent,
+    ImportEventEmitter,
+    NullImportEventEmitter,
 )
-from muzik.core.beets.importer import ImportOptions
-from muzik.core.beets.service import organize_paths, tag_only_with_beet
+from muzik.core.import_models import ImportOptions
+from muzik.core.import_service import organize_paths, write_library_tags
 from muzik.core.chapters import (
     Chapter,
     find_chapters,
@@ -77,13 +77,13 @@ def build_workflow_operations(
     options: WorkflowOptions,
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter | None = None,
-    beets_decisions: BeetsDecisions | None = None,
-    beets_events: BeetsEventEmitter | None = None,
+    beets_decisions: ImportDecisions | None = None,
+    beets_events: ImportEventEmitter | None = None,
 ) -> WorkflowRunOperations:
     """Build concrete operations without binding to an interface toolkit."""
     events = events or NullWorkflowEventEmitter()
-    beets_decisions = beets_decisions or NonInteractiveBeetsDecisions()
-    beets_events = beets_events or NullBeetsEventEmitter()
+    beets_decisions = beets_decisions or NonInteractiveImportDecisions()
+    beets_events = beets_events or NullImportEventEmitter()
 
     def download_audio(
         url: str,
@@ -170,15 +170,13 @@ def build_workflow_operations(
                     tag_only=options.tag_only,
                     decisions=beets_decisions,
                     events=beets_events,
-                    tag_only_runner=tag_only_with_beet if options.tag_only else None,
+                    tag_only_runner=write_library_tags if options.tag_only else None,
                 )
             except WorkflowCancelled:
                 raise
             except Exception as exc:
                 message = str(exc) or type(exc).__name__
-                beets_events.emit(
-                    BeetsErrorEvent(message, context={"path": str(target)})
-                )
+                beets_events.emit(ErrorEvent(message, context={"path": str(target)}))
                 raise WorkflowServiceError(
                     f"Beets could not organize {target.name}: {message}"
                 ) from exc
@@ -243,8 +241,8 @@ def build_item_action_operations(
     *,
     decisions: WorkflowDecisions,
     events: WorkflowEventEmitter | None = None,
-    beets_decisions: BeetsDecisions | None = None,
-    beets_events: BeetsEventEmitter | None = None,
+    beets_decisions: ImportDecisions | None = None,
+    beets_events: ImportEventEmitter | None = None,
 ) -> ItemActionOperations:
     """Build targeted item actions from the normal workflow operations."""
     events = events or NullWorkflowEventEmitter()

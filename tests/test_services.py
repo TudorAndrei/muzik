@@ -86,7 +86,6 @@ def test_check_services_returns_all_service_names() -> None:
 
     assert {
         "ffmpeg",
-        "ffprobe",
         "yt-dlp",
         "Playwright Chromium",
         "Soulseek (Seakarr)",

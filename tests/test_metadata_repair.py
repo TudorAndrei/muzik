@@ -1,18 +1,27 @@
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from muzik.core import metadata_repair
 
 
-class FakeMediaFile:
-    def __init__(self) -> None:
-        self.artist = "Unknown Artist"
-        self.albumartist = "Unknown Artist"
-        self.album = "Unknown Album"
-        self.year = None
-        self.saved = False
+def _fake_tags(monkeypatch, tags: dict[Path, dict]) -> list[Path]:
+    saved: list[Path] = []
 
-    def save(self) -> None:
-        self.saved = True
+    def write(path: str, payload: str) -> None:
+        tags[Path(path)] = json.loads(payload)
+        saved.append(Path(path))
+
+    monkeypatch.setattr(
+        metadata_repair,
+        "_native",
+        SimpleNamespace(
+            read_audio_tags=lambda path: tags[Path(path)],
+            write_audio_tags=write,
+            TagsError=ValueError,
+        ),
+    )
+    return saved
 
 
 def test_repair_placeholder_album_tags_from_split_folder(
@@ -21,27 +30,39 @@ def test_repair_placeholder_album_tags_from_split_folder(
     album = tmp_path / "Kohsuke Mine - Sunshower (1976) (Full Album) [U3AXfrVMfbg]"
     album.mkdir()
     tracks = [album / f"{index:02d}-track.opus" for index in range(1, 5)]
-    media = {track: FakeMediaFile() for track in tracks}
+    tags = {
+        track: {
+            "fields": {
+                "artist": "Unknown Artist",
+                "albumartist": "Unknown Artist",
+                "album": "Unknown Album",
+            },
+            "lists": {},
+            "custom": {"source": "video"},
+        }
+        for track in tracks
+    }
     for track in tracks:
         track.write_bytes(b"audio")
-    monkeypatch.setattr(
-        metadata_repair,
-        "MediaFile",
-        lambda path: media[Path(path)],
-    )
+    saved = _fake_tags(monkeypatch, tags)
 
     result = metadata_repair.repair_placeholder_album_tags(album)
 
     assert result.updated_files == 4
-    assert result.artist == "Kohsuke Mine"
-    assert result.album == "Sunshower"
-    assert result.year == "1976"
-    for item in media.values():
-        assert item.artist == "Kohsuke Mine"
-        assert item.albumartist == "Kohsuke Mine"
-        assert item.album == "Sunshower"
-        assert item.year == 1976
-        assert item.saved is True
+    assert (result.artist, result.album, result.year) == (
+        "Kohsuke Mine",
+        "Sunshower",
+        "1976",
+    )
+    assert len(saved) == 4
+    for item in tags.values():
+        assert item["fields"] == {
+            "artist": "Kohsuke Mine",
+            "albumartist": "Kohsuke Mine",
+            "album": "Sunshower",
+            "date": "1976",
+        }
+        assert item["custom"] == {"source": "video"}
 
 
 def test_repair_placeholder_album_tags_keeps_real_tags(
@@ -51,14 +72,19 @@ def test_repair_placeholder_album_tags_keeps_real_tags(
     album.mkdir()
     track = album / "01-track.opus"
     track.write_bytes(b"audio")
-    item = FakeMediaFile()
-    item.artist = "Kohsuke Mine"
-    item.albumartist = "Kohsuke Mine"
-    item.album = "Sunshower"
-    item.year = 1976
-    monkeypatch.setattr(metadata_repair, "MediaFile", lambda path: item)
-
+    tags = {
+        track: {
+            "fields": {
+                "artist": "Kohsuke Mine",
+                "albumartist": "Kohsuke Mine",
+                "album": "Sunshower",
+                "date": "1976",
+            },
+            "lists": {},
+            "custom": {},
+        }
+    }
+    saved = _fake_tags(monkeypatch, tags)
     result = metadata_repair.repair_placeholder_album_tags(album)
-
     assert result.updated_files == 0
-    assert item.saved is False
+    assert saved == []

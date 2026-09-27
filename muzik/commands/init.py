@@ -1,10 +1,10 @@
-"""muzik init — create app directories and configure beets for use with muzik."""
+"""Create app directories and the music library config."""
 
 import re
 
 
 from muzik.config import (
-    BEETS_CONFIG,
+    LIBRARY_CONFIG,
     CACHE_DIR,
     DEFAULT_DOWNLOAD_DIR,
     DEFAULT_SOULSEEK_DIR,
@@ -16,7 +16,7 @@ from muzik.config import (
 from muzik.ui.console import console
 
 
-# The beets import setting muzik requires.
+# Import settings shared with existing library configs.
 _IMPORT_BLOCK = (
     "import:\n"
     "  move: yes\n"
@@ -27,17 +27,6 @@ _IMPORT_BLOCK = (
     "  medium_rec_thresh: 0.20\n"
 )
 
-# Album-art plugins. musicbrainz stays enabled (it is the default source);
-# fetchart picks up the cover.jpg the workflow drops beside split albums, and
-# embedart writes it into each track so it travels with the files.
-_PLUGINS_BLOCK = (
-    "plugins: musicbrainz fetchart embedart\n"
-    "fetchart:\n"
-    "  sources: filesystem\n"
-    "embedart:\n"
-    "  auto: yes\n"
-)
-
 
 def _ensure_dirs() -> None:
     dirs = {
@@ -45,7 +34,7 @@ def _ensure_dirs() -> None:
         "Soulseek ": DEFAULT_SOULSEEK_DIR,
         "Splits   ": DEFAULT_SPLITS_DIR,
         "Cache    ": CACHE_DIR,
-        "Beets cfg": BEETS_CONFIG.parent,
+        "Library cfg": LIBRARY_CONFIG.parent,
     }
     for label, d in dirs.items():
         existed = d.exists()
@@ -54,8 +43,8 @@ def _ensure_dirs() -> None:
         console.print(f"  {label}  {d}  {status}")
 
 
-def _configure_beets() -> None:
-    """Ensure BEETS_CONFIG contains muzik's required import defaults.
+def _configure_library() -> None:
+    """Ensure the library config contains import defaults.
 
     • If the config file doesn't exist yet, a minimal one is created.
     • If it already has the required import settings, nothing is changed.
@@ -63,17 +52,13 @@ def _configure_beets() -> None:
       right after ``import:``.
     • Otherwise the full ``import:`` block is appended.
     """
-    cfg = BEETS_CONFIG
+    cfg = LIBRARY_CONFIG
 
     if not cfg.exists():
         cfg.write_text(
-            "# beets config — created by muzik init\n"
-            "# See https://beets.readthedocs.io/en/stable/reference/config.html\n\n"
-            + _PLUGINS_BLOCK
-            + "\n"
-            + _IMPORT_BLOCK
+            "# Music library config created by muzik init\n\n" + _IMPORT_BLOCK
         )
-        console.print(f"  Beets cfg  {cfg}  [green]created[/green]")
+        console.print(f"  Library cfg  {cfg}  [green]created[/green]")
         return
 
     text = cfg.read_text()
@@ -86,22 +71,11 @@ def _configure_beets() -> None:
         text = _add_import_defaults(text)
         changed.append("import defaults")
 
-    # Album-art plugins. Only append when there is no plugins line to merge into.
-    if "fetchart" not in text or "embedart" not in text:
-        if re.search(r"^plugins\s*:", text, re.MULTILINE):
-            console.print(
-                "  [yellow]Add 'fetchart embedart' to your beets plugins line "
-                "for album art.[/yellow]"
-            )
-        else:
-            text = text.rstrip("\n") + "\n\n" + _PLUGINS_BLOCK
-            changed.append("art plugins")
-
     if not changed:
-        console.print(f"  Beets cfg  {cfg}  [dim]already set — skipped[/dim]")
+        console.print(f"  Library cfg  {cfg}  [dim]already set — skipped[/dim]")
         return
     cfg.write_text(text)
-    console.print(f"  Beets cfg  {cfg}  [green]added {', '.join(changed)}[/green]")
+    console.print(f"  Library cfg  {cfg}  [green]added {', '.join(changed)}[/green]")
 
 
 def _add_import_defaults(text: str) -> str:
@@ -126,7 +100,7 @@ def _add_import_defaults(text: str) -> str:
 
 
 def init_cmd() -> None:
-    """Set up muzik: create app directories and configure beets.
+    """Create app directories and configure the music library.
 
     \b
     Creates:
@@ -134,11 +108,11 @@ def init_cmd() -> None:
       platform user data dir/soulseek    — default Soulseek download directory
       platform user data dir/splits      — default splits directory
       platform user cache dir            — cache directory
-      platform beets config dir          — beets config directory
+      library config dir                 — music library config directory
 
     \b
-    Beets config changes:
-      Sets import.move = yes so imports move files into the beets library.
+    Library config changes:
+      Sets import.move = yes so imports move files into the music library.
       Sets import.duplicate_action = skip so that albums already present in
       the library are silently skipped on every workflow re-run.
       Existing settings are preserved; the file is only written if the
@@ -147,8 +121,8 @@ def init_cmd() -> None:
     console.print("[bold]Directories[/bold]")
     _ensure_dirs()
 
-    console.print("\n[bold]Beets configuration[/bold]")
-    _configure_beets()
+    console.print("\n[bold]Library configuration[/bold]")
+    _configure_library()
 
     console.print("\n[bold]Soulseek configuration[/bold]")
     console.print(f"  MUZIK_SOULSEEK_DOWNLOAD_DIR  [dim]{SEAKARR_DOWNLOAD_DIR}[/dim]")

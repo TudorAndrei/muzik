@@ -1,10 +1,9 @@
 from dataclasses import replace
 import json
-import os
 from pathlib import Path
 
 import pytest
-from beets.library import Item, Library
+from types import SimpleNamespace
 
 from muzik.core.watchlist import (
     DuplicatePlaylistError,
@@ -663,7 +662,7 @@ def test_reconcile_watchlist_reads_playlist_state_and_download_folder(
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(
-        "muzik.core.watchlist.open_library", lambda config_path=None: None
+        "muzik.core.watchlist.open_library_for_reads", lambda config_path=None: None
     )
     cache_mod.set_json(
         "playlist_PL_ONE",
@@ -716,7 +715,7 @@ def test_reconcile_watchlist_repairs_false_processed_beets_skip(
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(
-        "muzik.core.watchlist.open_library", lambda config_path=None: None
+        "muzik.core.watchlist.open_library_for_reads", lambda config_path=None: None
     )
     video_id = "-ON_sl7ZGdk"
     audio = tmp_path / "downloads" / f"Terrace Brothers + Asa [1997] [{video_id}].opus"
@@ -757,25 +756,47 @@ def test_reconcile_watchlist_repairs_false_processed_beets_skip(
     assert item.stages["split"].status is StageStatus.COMPLETE
     assert item.stages["split"].path == str(split_dir)
     assert item.stages["organize"].status is StageStatus.FAILED
-    assert item.last_error == "Beets did not import this item. Select Retry."
+    assert (
+        item.last_error == "The music library did not import this item. Select Retry."
+    )
 
 
-def _beets_library(tmp_path: Path) -> Library:
-    music = tmp_path / "beets-music"
+class FakeLibrary:
+    def __init__(self, music: Path) -> None:
+        self.directory = str(music)
+        self._items: list[SimpleNamespace] = []
+        self._albums: list[SimpleNamespace] = []
+
+    def items(self, query=None):
+        return list(self._items)
+
+    def albums(self, query=""):
+        return list(self._albums)
+
+
+def _library(tmp_path: Path) -> FakeLibrary:
+    music = tmp_path / "music"
     music.mkdir()
-    return Library(str(tmp_path / "beets-lib.db"), str(music))
+    return FakeLibrary(music)
 
 
-def _add_beets_album(lib: Library, path: Path, *, artist: str, album: str) -> None:
-    item = Item(
-        path=os.fsencode(str(path)),
+def _add_album(lib: FakeLibrary, path: Path, *, artist: str, album: str) -> None:
+    item = SimpleNamespace(
+        path=str(path).encode(),
         title="Track 1",
         artist=artist,
         album=album,
         albumartist=artist,
+        get=lambda key: None,
     )
-    lib.add(item)
-    lib.add_album([item])
+    lib._items.append(item)
+    lib._albums.append(
+        SimpleNamespace(
+            albumartist=artist,
+            album=album,
+            items=lambda: [item],
+        )
+    )
 
 
 def test_reconcile_watchlist_finds_an_already_organized_album_in_beets(
@@ -783,13 +804,13 @@ def test_reconcile_watchlist_finds_an_already_organized_album_in_beets(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
-    lib = _beets_library(tmp_path)
-    track = Path(lib.directory.decode()) / "Etnobotanika" / "01 Track 1.mp3"
+    lib = _library(tmp_path)
+    track = Path(lib.directory) / "Etnobotanika" / "01 Track 1.mp3"
     track.parent.mkdir(parents=True)
     track.write_bytes(b"audio")
-    _add_beets_album(lib, track, artist="Etnobotanika", album="Kosmobotanika")
+    _add_album(lib, track, artist="Etnobotanika", album="Kosmobotanika")
     monkeypatch.setattr(
-        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+        "muzik.core.watchlist.open_library_for_reads", lambda config_path=None: lib
     )
     video_id = "gZUPDL3RBYs"
     watchlist = Watchlist(
@@ -830,22 +851,21 @@ def test_reconcile_watchlist_finds_an_album_by_exact_source_id(
     # The title deliberately does not match the beets album at all — this
     # only passes if the exact source-id match is tried, not title parsing.
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
-    lib = _beets_library(tmp_path)
-    track = Path(lib.directory.decode()) / "Etnobotanika" / "01 Track 1.mp3"
+    lib = _library(tmp_path)
+    track = Path(lib.directory) / "Etnobotanika" / "01 Track 1.mp3"
     track.parent.mkdir(parents=True)
     track.write_bytes(b"audio")
-    item = Item(
-        path=os.fsencode(str(track)),
+    item = SimpleNamespace(
+        path=str(track).encode(),
         title="Track 1",
         artist="Etnobotanika",
         album="Kosmobotanika",
         albumartist="Etnobotanika",
+        get=lambda key: "gZUPDL3RBYs" if key == "muzik_source_id" else None,
     )
-    item.muzik_source_id = "gZUPDL3RBYs"
-    lib.add(item)
-    item.store()
+    lib._items.append(item)
     monkeypatch.setattr(
-        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+        "muzik.core.watchlist.open_library_for_reads", lambda config_path=None: lib
     )
     video_id = "gZUPDL3RBYs"
     watchlist = Watchlist(
@@ -871,18 +891,18 @@ def test_reconcile_watchlist_finds_an_album_by_exact_source_id(
     assert watchlist.playlists[0].processed_video_ids == [video_id]
 
 
-def test_reconcile_watchlist_ignores_an_unrelated_beets_library(
+def test_reconcile_watchlist_ignores_an_unrelated_library(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cache_mod, "CACHE_DIR", tmp_path / "cache")
-    lib = _beets_library(tmp_path)
-    track = Path(lib.directory.decode()) / "Other Artist" / "01 Track 1.mp3"
+    lib = _library(tmp_path)
+    track = Path(lib.directory) / "Other Artist" / "01 Track 1.mp3"
     track.parent.mkdir(parents=True)
     track.write_bytes(b"audio")
-    _add_beets_album(lib, track, artist="Other Artist", album="Other Album")
+    _add_album(lib, track, artist="Other Artist", album="Other Album")
     monkeypatch.setattr(
-        "muzik.core.watchlist.open_library", lambda config_path=None: lib
+        "muzik.core.watchlist.open_library_for_reads", lambda config_path=None: lib
     )
     video_id = "gZUPDL3RBYs"
     watchlist = Watchlist(

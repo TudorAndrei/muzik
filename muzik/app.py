@@ -25,16 +25,18 @@ app = typer.Typer(
         "Music organizer CLI — acquire, split, tag, and organize music.\n\n"
         "Supports YouTube, Soulseek, Bandcamp, local audio, and metadata-only "
         "Spotify playlist exports. Wraps yt-dlp, an embedded Soulseek client, "
-        "ffmpeg, and beets."
+        "ffmpeg, and the native music library."
     ),
     add_completion=False,
     no_args_is_help=True,
 )
 
 # Single-command subcommands registered directly on the root app
-app.command("init", help="Create app directories and configure beets.")(init_cmd)
-app.command("import", help="Import an existing music library into beets.")(import_cmd)
-app.command("bandcamp", help="Download a Bandcamp collection and organize with beets.")(
+app.command("init", help="Create app directories and configure the music library.")(
+    init_cmd
+)
+app.command("import", help="Import an existing music library.")(import_cmd)
+app.command("bandcamp", help="Download a Bandcamp collection and organize it.")(
     bandcamp_cmd
 )
 app.command("download", help="Download audio from YouTube via yt-dlp.")(download_cmd)
@@ -44,7 +46,7 @@ app.command("downloaded", help="List audio already in the output folder.")(
 app.command("split", help="Split audio file by chapters (with optional --review).")(
     split_cmd
 )
-app.command("organize", help="Tag/import audio with beets.")(organize_cmd)
+app.command("organize", help="Tag and import audio.")(organize_cmd)
 app.command("workflow", help="Full pipeline: acquire → split → organize.")(workflow_cmd)
 app.command("archive", help="Process existing downloaded files (split + organize).")(
     archive_cmd

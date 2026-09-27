@@ -7,7 +7,7 @@ import typer
 
 from muzik.commands.split import split_cmd
 from muzik.commands.organize import organize_cmd
-from muzik.config import AUDIO_EXTENSIONS, BEETS_CONFIG
+from muzik.config import AUDIO_EXTENSIONS, LIBRARY_CONFIG
 from muzik.core.chapters import find_chapters
 from muzik.ui.console import console, err
 
@@ -26,7 +26,7 @@ def archive_cmd(
         False,
         "--import",
         "-i",
-        help="Import split tracks into beets library.",
+        help="Import split tracks into the music library.",
     ),
     tag_only: bool = typer.Option(
         False,
@@ -43,12 +43,12 @@ def archive_cmd(
     skip_split: bool = typer.Option(
         False,
         "--skip-split",
-        help="Skip chapter splitting; go straight to beets.",
+        help="Skip chapter splitting; go straight to organization.",
     ),
     skip_organize: bool = typer.Option(
         False,
         "--skip-organize",
-        help="Skip beets organization after splitting.",
+        help="Skip music library organization after splitting.",
     ),
     jobs: int = typer.Option(
         0,
@@ -65,7 +65,7 @@ def archive_cmd(
         None,
         "--config",
         "-c",
-        help=f"Beets config file (default: {BEETS_CONFIG}).",
+        help=f"Music library config file (default: {LIBRARY_CONFIG}).",
     ),
 ) -> None:
     """Process existing downloaded audio files: split by chapters, then organize."""
@@ -131,14 +131,14 @@ def archive_cmd(
     if not skip_organize:
         if not output.exists() or not any(output.iterdir()):
             console.print(
-                f"[yellow]No split output found in {output}, skipping beets.[/yellow]"
+                f"[yellow]No split output found in {output}, skipping organization.[/yellow]"
             )
             raise typer.Exit(0)
 
         console.print(f"\n[bold]Organizing:[/bold] {output}")
 
         if dry_run:
-            console.print("[dim]  Would run beet (dry-run).[/dim]")
+            console.print("[dim]  Would organize audio (dry-run).[/dim]")
         else:
             try:
                 organize_cmd(
@@ -150,7 +150,7 @@ def archive_cmd(
                 )
             except SystemExit as exc:
                 if exc.code != 0:
-                    err("[red]beet organization failed.[/red]")
+                    err("[red]Organization failed.[/red]")
                     raise typer.Exit(1)
 
     console.print("\n[green]Archive processing complete.[/green]")

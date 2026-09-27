@@ -1,9 +1,62 @@
 use serde_json::Value;
+use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 const DEFAULTS: &str = include_str!("config_default.yaml");
+
+/// Find the existing library config at the legacy beets location.
+pub fn default_config_path() -> PathBuf {
+    if let Some(directory) = env::var_os("BEETSDIR") {
+        let path = PathBuf::from(directory);
+        let path = if path.starts_with("~") {
+            env::var_os("HOME")
+                .or_else(|| env::var_os("USERPROFILE"))
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(path.strip_prefix("~").unwrap_or(&path))
+        } else {
+            path
+        };
+        let path = if path.is_absolute() {
+            path
+        } else {
+            env::current_dir().unwrap_or_default().join(path)
+        };
+        return path.join("config.yaml");
+    }
+
+    let home = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let mut directories = vec![home.join(".config")];
+    if cfg!(target_os = "macos") {
+        directories.push(home.join("Library/Application Support"));
+    }
+    if cfg!(target_os = "windows") {
+        directories.push(home.join("AppData/Roaming"));
+        if let Some(appdata) = env::var_os("APPDATA") {
+            directories.push(PathBuf::from(appdata));
+        }
+    } else {
+        if let Some(xdg_home) = env::var_os("XDG_CONFIG_HOME") {
+            directories.push(PathBuf::from(xdg_home));
+        }
+        if let Some(xdg_dirs) = env::var_os("XDG_CONFIG_DIRS") {
+            directories.extend(env::split_paths(&xdg_dirs));
+        } else {
+            directories.push(PathBuf::from("/etc/xdg"));
+        }
+        directories.push(PathBuf::from("/etc"));
+    }
+    directories
+        .iter()
+        .map(|directory| directory.join("beets/config.yaml"))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| directories[0].join("beets/config.yaml"))
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
