@@ -1,0 +1,61 @@
+{
+  "beets_version": "2.13.1",
+  "cases": [
+    {
+      "name": "first",
+      "path_format": "default",
+      "album_id": 1,
+      "fields": {
+        "albumartist": "Portishead",
+        "artist": "Portishead",
+        "album": "Dummy",
+        "title": "Mysterons",
+        "track": "01",
+        "year": "1994"
+      },
+      "destination": "Portishead/Dummy [1994]/01 Mysterons.flac"
+    },
+    {
+      "name": "second",
+      "path_format": "default",
+      "album_id": 2,
+      "fields": {
+        "albumartist": "Portishead",
+        "artist": "Portishead",
+        "album": "Dummy",
+        "title": "Sour Times",
+        "track": "02",
+        "year": "2008"
+      },
+      "destination": "Portishead/Dummy [2008]/02 Sour Times.flac"
+    },
+    {
+      "name": "compilation",
+      "path_format": "comp",
+      "album_id": 3,
+      "fields": {
+        "albumartist": "Various Artists",
+        "artist": "Bj\u00f6rk",
+        "album": "Sampler",
+        "title": "Hidden Place",
+        "track": "01",
+        "year": ""
+      },
+      "destination": "Compilations/Sampler/01 Hidden Place.flac"
+    },
+    {
+      "name": "singleton",
+      "path_format": "singleton",
+      "album_id": null,
+      "fields": {
+        "albumartist": "",
+        "artist": "Bj\u00f6rk",
+        "album": "",
+        "title": "Hidden Place",
+        "track": "00",
+        "year": ""
+      },
+      "destination": "Non-Album/Bj\u00f6rk/Hidden Place.flac"
+    }
+  ]
+}
