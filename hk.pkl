@@ -6,7 +6,9 @@ local linters = new Mapping<String, Step | Group> {
     ["check-merge-conflict"] = Builtins.check_merge_conflict
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["detect-private-key"] = Builtins.detect_private_key
-    ["gitleaks"] = Builtins.gitleaks
+    ["gitleaks"] = new Step {
+        check = "gitleaks git --staged --redact --no-banner"
+    }
     ["actionlint"] = Builtins.actionlint
     ["zizmor"] = Builtins.zizmor
 
