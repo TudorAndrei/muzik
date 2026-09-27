@@ -1,0 +1,19 @@
+[package]
+name = "muzik-metadata"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "MusicBrainz release search and lookup for muzik"
+
+[dependencies]
+backon = "1.6"
+governor = "0.10"
+musicbrainz_rs = { version = "0.14", features = ["sync", "rustls"] }
+muzik-core = { path = "../muzik-core" }
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
