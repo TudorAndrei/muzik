@@ -39,7 +39,7 @@
         "album": "Sampler",
         "title": "Hidden Place",
         "track": "01",
-        "year": ""
+        "year": "0000"
       },
       "destination": "Compilations/Sampler/01 Hidden Place.flac"
     },
@@ -53,9 +53,26 @@
         "album": "",
         "title": "Hidden Place",
         "track": "00",
-        "year": ""
+        "year": "0000"
       },
       "destination": "Non-Album/Bj\u00f6rk/Hidden Place.flac"
+    }
+  ],
+  "sanitization": [
+    {
+      "subpath": "Artist/Bad: title?",
+      "extension": ".FLAC",
+      "destination": "Artist/Bad_ title_.flac"
+    },
+    {
+      "subpath": ".Hidden/ -track. ",
+      "extension": ".mp3",
+      "destination": "_Hidden/_track_.mp3"
+    },
+    {
+      "subpath": "Artist/Name\\slash",
+      "extension": ".ogg",
+      "destination": "Artist/Name_slash.ogg"
     }
   ]
 }

@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 import beets
-from beets import config
+from beets import config, util
 from beets.library import Item, Library
 
 
@@ -98,8 +98,29 @@ def main() -> None:
                 }
             )
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    sanitize = [
+        {
+            "subpath": subpath,
+            "extension": extension,
+            "destination": util.legalize_path(
+                subpath, Library.get_replacements(), extension
+            )[0],
+        }
+        for subpath, extension in [
+            ("Artist/Bad: title?", ".FLAC"),
+            (".Hidden/ -track. ", ".mp3"),
+            ("Artist/Name\\slash", ".ogg"),
+        ]
+    ]
     OUTPUT.write_text(
-        json.dumps({"beets_version": beets.__version__, "cases": cases}, indent=2)
+        json.dumps(
+            {
+                "beets_version": beets.__version__,
+                "cases": cases,
+                "sanitization": sanitize,
+            },
+            indent=2,
+        )
         + "\n",
         encoding="utf-8",
     )

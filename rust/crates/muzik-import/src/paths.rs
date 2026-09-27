@@ -2,7 +2,162 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use fancy_regex::Regex;
+
 pub type Fields = BTreeMap<String, String>;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PathKind {
+    Album,
+    Compilation,
+    Singleton,
+}
+
+/// The three path formats used by the current beets configuration.
+#[derive(Clone, Debug)]
+pub struct PathFormats {
+    pub default: String,
+    pub compilation: String,
+    pub singleton: String,
+}
+
+impl PathFormats {
+    /// Return a path relative to the music directory.
+    pub fn destination(
+        &self,
+        kind: PathKind,
+        context: &TemplateContext,
+        extension: &str,
+        sanitizer: &PathSanitizer,
+    ) -> Result<String, fancy_regex::Error> {
+        let template = match kind {
+            PathKind::Album => &self.default,
+            PathKind::Compilation => &self.compilation,
+            PathKind::Singleton => &self.singleton,
+        };
+        sanitizer.legalize(&context.render(template), extension)
+    }
+}
+
+/// One configured path replacement, applied to each path component.
+#[derive(Debug)]
+pub struct PathSanitizer {
+    replacements: Vec<(Regex, String)>,
+    max_component_bytes: usize,
+}
+
+impl PathSanitizer {
+    pub fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
+        let replacements = if replacements.is_empty() {
+            configured_default_replacements()
+        } else {
+            replacements
+                .iter()
+                .map(|(pattern, replacement)| {
+                    Regex::new(pattern).map(|regex| (regex, replacement.clone()))
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        Ok(Self {
+            replacements,
+            max_component_bytes: 255,
+        })
+    }
+
+    /// Apply the beets replacement and truncation stages, then append the suffix.
+    pub fn legalize(&self, subpath: &str, extension: &str) -> Result<String, fancy_regex::Error> {
+        let extension = extension.to_lowercase();
+        let (first, _) = self.stage(subpath, &extension, &self.replacements)?;
+        let stem = first.strip_suffix(&extension).unwrap_or(&first);
+        let (second, truncated_again) = self.stage(stem, &extension, &self.replacements)?;
+        if !truncated_again {
+            return Ok(second);
+        }
+        let defaults = fallback_replacements();
+        self.stage(stem, &extension, &defaults)
+            .map(|(path, _)| path)
+    }
+
+    fn stage(
+        &self,
+        path: &str,
+        extension: &str,
+        replacements: &[(Regex, String)],
+    ) -> Result<(String, bool), fancy_regex::Error> {
+        let mut parts = path
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                let mut part = part.to_owned();
+                for (pattern, replacement) in replacements {
+                    part = pattern
+                        .try_replacen(&part, 0, replacement.as_str())?
+                        .into_owned();
+                }
+                Ok(part)
+            })
+            .collect::<Result<Vec<_>, fancy_regex::Error>>()?;
+        if parts.is_empty() {
+            parts.push(String::new());
+        }
+        parts.last_mut().unwrap().push_str(extension);
+        let mut truncated = false;
+        let last = parts.len() - 1;
+        for (index, part) in parts.iter_mut().enumerate() {
+            let limit = self.max_component_bytes;
+            if part.len() > limit {
+                truncated = true;
+                if index == last {
+                    let stem_limit = limit.saturating_sub(extension.len());
+                    let stem = part.strip_suffix(extension).unwrap_or(part);
+                    *part = format!("{}{}", truncate_utf8(stem, stem_limit), extension);
+                } else {
+                    *part = truncate_utf8(part, limit).to_string();
+                }
+            }
+        }
+        Ok((parts.join("/"), truncated))
+    }
+}
+
+fn truncate_utf8(value: &str, limit: usize) -> &str {
+    let mut end = limit.min(value.len());
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    &value[..end]
+}
+
+fn configured_default_replacements() -> Vec<(Regex, String)> {
+    [
+        (r"[<>:\?\*\|]", "_"),
+        (r#"""#, "_"),
+        (r"[\\/]", "_"),
+        (r"^\.", "_"),
+        (r"\.$", "_"),
+        (r"[\x00-\x1f]", "_"),
+        (r"^-", "_"),
+        (r"\s+$", ""),
+        (r"^\s+", ""),
+    ]
+    .into_iter()
+    .map(|(pattern, replacement)| (Regex::new(pattern).unwrap(), replacement.to_owned()))
+    .collect()
+}
+
+fn fallback_replacements() -> Vec<(Regex, String)> {
+    [
+        (r"[\\/]", "_"),
+        (r"^\.", "_"),
+        (r"[\x00-\x1f]", ""),
+        (r#"[<>:"\?\*\|]"#, "_"),
+        (r"\.$", "_"),
+        (r"\s+$", ""),
+    ]
+    .into_iter()
+    .map(|(pattern, replacement)| (Regex::new(pattern).unwrap(), replacement.to_owned()))
+    .collect()
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct AlbumFields {
@@ -362,6 +517,12 @@ mod tests {
             .expect("valid fixture");
         assert_eq!(fixture["beets_version"], "2.13.1");
         let cases = fixture["cases"].as_array().unwrap();
+        let formats = PathFormats {
+            default: "$albumartist/$album%aunique{}/$track $title".into(),
+            compilation: "Compilations/$album%aunique{}/$track $title".into(),
+            singleton: "Non-Album/$artist/$title".into(),
+        };
+        let sanitizer = PathSanitizer::new(&[]).unwrap();
         let albums = cases
             .iter()
             .filter_map(|case| {
@@ -372,10 +533,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for case in cases {
-            let format = match case["path_format"].as_str().unwrap() {
-                "default" => "$albumartist/$album%aunique{}/$track $title",
-                "comp" => "Compilations/$album%aunique{}/$track $title",
-                "singleton" => "Non-Album/$artist/$title",
+            let kind = match case["path_format"].as_str().unwrap() {
+                "default" => PathKind::Album,
+                "comp" => PathKind::Compilation,
+                "singleton" => PathKind::Singleton,
                 other => panic!("unknown path format: {other}"),
             };
             let context = TemplateContext {
@@ -387,10 +548,23 @@ mod tests {
                 aunique_bracket: "[]".into(),
             };
             assert_eq!(
-                format!("{}.flac", context.render(format)),
+                formats
+                    .destination(kind, &context, ".flac", &sanitizer)
+                    .unwrap(),
                 case["destination"].as_str().unwrap(),
                 "{}",
                 case["name"]
+            );
+        }
+        for case in fixture["sanitization"].as_array().unwrap() {
+            assert_eq!(
+                sanitizer
+                    .legalize(
+                        case["subpath"].as_str().unwrap(),
+                        case["extension"].as_str().unwrap()
+                    )
+                    .unwrap(),
+                case["destination"].as_str().unwrap()
             );
         }
     }

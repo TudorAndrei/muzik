@@ -118,10 +118,10 @@
 
 ### Phase 16: Path formats
 
-- [ ] Template parser and functions including `%aunique`
-- [ ] `replace:` sanitizer
-- [ ] Fixtures against beets `Item.destination()` for the user's `paths:`
-- [ ] Commit: `feat(import): render beets path formats`
+- [x] Template parser and functions including `%aunique`
+- [x] `replace:` sanitizer
+- [x] Fixtures against beets `Item.destination()` for the user's `paths:`
+- [x] Commit: `feat(import): render beets path formats`
 
 ### Phase 17: File operations
 
