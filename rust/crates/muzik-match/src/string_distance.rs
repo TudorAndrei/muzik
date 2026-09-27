@@ -4,6 +4,7 @@ use regex::Regex;
 
 // Order matters: each successful reduction changes the baseline for the next.
 const SD_END_WORDS: &[&str] = &["the", "a", "an"];
+const SD_REPLACE: &[(&str, &str)] = &[("&", "and")];
 const SD_PATTERNS: &[(&str, f64)] = &[
     (r"^the ", 0.1),
     (r"[\[\(]?(ep|single)[\]\)]?", 0.0),
@@ -65,9 +66,10 @@ pub fn string_dist(left: Option<&str>, right: Option<&str>) -> f64 {
         }
     }
 
-    // SD_REPLACE in beets 2.13.1 contains only `&` -> `and`.
-    left = left.replace('&', "and");
-    right = right.replace('&', "and");
+    for (pattern, replacement) in SD_REPLACE {
+        left = left.replace(pattern, replacement);
+        right = right.replace(pattern, replacement);
+    }
 
     let mut base_distance = basic_distance(&left, &right);
     let mut penalty = 0.0;
