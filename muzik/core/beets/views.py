@@ -2,39 +2,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import replace
 import os
 from pathlib import Path
 from typing import Any, Sequence
 
-
-@dataclass(frozen=True, slots=True)
-class BeetsMatchView:
-    candidate_id: str
-    artist: str | None = None
-    album: str | None = None
-    title: str | None = None
-    distance: float | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class BeetsTaskView:
-    task_id: str
-    paths: list[Path] = field(default_factory=list)
-    is_album: bool = False
-    item_count: int = 0
-    current_artist: str | None = None
-    current_album: str | None = None
-    current_year: str | None = None
-    matches: list[BeetsMatchView] = field(default_factory=list)
-
-
-@dataclass(frozen=True, slots=True)
-class BeetsDuplicateView:
-    path: Path | None = None
-    artist: str | None = None
-    album: str | None = None
-    title: str | None = None
+from muzik.core.import_models import (
+    DuplicateView as BeetsDuplicateView,
+    MatchView as BeetsMatchView,
+    TaskView as BeetsTaskView,
+)
 
 
 def task_view(

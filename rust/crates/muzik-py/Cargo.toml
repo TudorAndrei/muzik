@@ -15,6 +15,7 @@ muzik-metadata = { path = "../muzik-metadata" }
 muzik-core = { path = "../muzik-core" }
 muzik-match = { path = "../muzik-match" }
 muzik-library = { path = "../muzik-library" }
+muzik-import = { path = "../muzik-import" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-tags = { path = "../muzik-tags" }
 pyo3 = "0.29"

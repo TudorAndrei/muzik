@@ -1,74 +1,15 @@
-"""Decision protocols for beets imports."""
+"""Compatibility names for import decisions."""
 
-from __future__ import annotations
+from muzik.core.import_models import (
+    DuplicateDecision as BeetsDuplicateDecision,
+    ImportDecisions as BeetsDecisions,
+    MatchDecision as BeetsMatchDecision,
+    NonInteractiveImportDecisions as NonInteractiveBeetsDecisions,
+)
 
-from enum import Enum
-from pathlib import Path
-from typing import Any, Protocol
-
-from beets import importer
-
-from muzik.core.beets.views import BeetsDuplicateView, BeetsTaskView
-
-
-class BeetsDuplicateDecision(str, Enum):
-    SKIP = "skip"
-    KEEP_ALL = "keep_all"
-    REMOVE_OLD = "remove_old"
-    MERGE = "merge"
-
-
-class BeetsMatchDecision(str, Enum):
-    """Non-candidate choices available when resolving a Beets match."""
-
-    AS_IS = "as_is"
-
-
-class BeetsDecisions(Protocol):
-    def should_resume_beets_import(self, path: Path) -> bool: ...
-
-    def choose_beets_album_match(self, task: BeetsTaskView) -> Any: ...
-
-    def choose_beets_track_match(self, task: BeetsTaskView) -> Any: ...
-
-    def resolve_beets_duplicate(
-        self,
-        task: BeetsTaskView,
-        duplicates: list[BeetsDuplicateView],
-    ) -> BeetsDuplicateDecision: ...
-
-
-class NonInteractiveBeetsDecisions:
-    """Conservative default decisions for unattended imports."""
-
-    def __init__(
-        self,
-        *,
-        quiet: bool = False,
-        duplicate_decision: BeetsDuplicateDecision = BeetsDuplicateDecision.SKIP,
-    ) -> None:
-        self.quiet = quiet
-        self.duplicate_decision = duplicate_decision
-
-    def should_resume_beets_import(self, path: Path) -> bool:
-        return False
-
-    def choose_beets_album_match(self, task: BeetsTaskView) -> Any:
-        return self._auto_choice(task)
-
-    def choose_beets_track_match(self, task: BeetsTaskView) -> Any:
-        return self._auto_choice(task)
-
-    def _auto_choice(self, task: BeetsTaskView) -> Any:
-        # Import as-is: keep the tags already on the files (the split step wrote
-        # correct titles from the chapters) and just organize them. Applying
-        # beets' best candidate non-interactively would silently retag a beat
-        # tape to a wrong fuzzy match. Use --agent for MusicBrainz matching.
-        return importer.Action.SKIP if self.quiet else importer.Action.ASIS
-
-    def resolve_beets_duplicate(
-        self,
-        task: BeetsTaskView,
-        duplicates: list[BeetsDuplicateView],
-    ) -> BeetsDuplicateDecision:
-        return self.duplicate_decision
+__all__ = [
+    "BeetsDecisions",
+    "BeetsDuplicateDecision",
+    "BeetsMatchDecision",
+    "NonInteractiveBeetsDecisions",
+]

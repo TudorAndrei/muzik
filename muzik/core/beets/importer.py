@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import replace
 import os
 from pathlib import Path
+import sqlite3
+import tempfile
 from threading import Lock
 from typing import Any
+from urllib.parse import quote
 
 from beets import config as beets_config
 from beets import importer
+from beets import plugins as beets_plugins
+from beets.library import Library as BeetsLibrary
 from requests.exceptions import RequestException
 
 from muzik.config import get_native_settings
+from muzik.core.import_models import ImportOptions
 from muzik.core.matching import NativeRanking, rank_album_candidates
-from muzik.core.beets.config import open_library
+from muzik.core.beets.config import load_config, open_library
 from muzik.core.beets.decisions import (
     BeetsDecisions,
     BeetsDuplicateDecision,
@@ -66,7 +72,7 @@ class BeetsImporterAdapter:
         return view
 
     def resolve_choice(self, task: Any, choice: Any) -> Any:
-        if choice is None:
+        if choice is None or choice == BeetsMatchDecision.SKIP:
             return importer.Action.SKIP
         if choice == BeetsMatchDecision.AS_IS:
             return importer.Action.ASIS
@@ -79,45 +85,6 @@ class BeetsImporterAdapter:
             return self._candidates[task_id][choice]
         except KeyError as exc:
             raise ValueError(f"Unknown Beets candidate ID: {choice}") from exc
-
-
-@dataclass(frozen=True, slots=True)
-class ImportOptions:
-    paths: list[Path]
-    config_path: Path | None = None
-    query: Any = None
-    copy: bool = False
-    link: bool = False
-    move: bool = True
-    nowrite: bool = False
-    quiet: bool = False
-    dry_run: bool = False
-    incremental: bool = True
-    autotag: bool = True
-    # When set, override the config's duplicate_action (e.g. "remove" so a
-    # re-download replaces the existing library album instead of being skipped).
-    duplicate_action: str | None = None
-
-    def normalized(self) -> "ImportOptions":
-        copy = self.copy
-        link = self.link
-        move = self.move
-        if copy or link:
-            move = False
-        return ImportOptions(
-            paths=list(self.paths),
-            config_path=self.config_path,
-            query=self.query,
-            copy=copy,
-            link=link,
-            move=move,
-            nowrite=self.nowrite,
-            quiet=self.quiet,
-            dry_run=self.dry_run,
-            incremental=self.incremental,
-            autotag=self.autotag,
-            duplicate_action=self.duplicate_action,
-        )
 
 
 def apply_import_options(options: ImportOptions) -> None:
@@ -145,12 +112,14 @@ class MuzikImportSession(importer.ImportSession):
         query: Any,
         decisions: BeetsDecisions,
         events: BeetsEventEmitter | None = None,
+        shadow: NativeShadowComparison | None = None,
     ) -> None:
         super().__init__(lib, loghandler, [os.fsencode(path) for path in paths], query)
         self.decisions = decisions
         self.events = events or NullBeetsEventEmitter()
         self.adapter = BeetsImporterAdapter()
         self.match_mode = get_native_settings()["match"]
+        self.shadow = shadow
 
     def should_resume(self, path: bytes) -> bool:
         return self.decisions.should_resume_beets_import(Path(os.fsdecode(path)))
@@ -176,9 +145,12 @@ class MuzikImportSession(importer.ImportSession):
                     )
                 )
         self.events.emit(BeetsTaskEvent(view))
-        return self.adapter.resolve_choice(
+        choice = self.adapter.resolve_choice(
             task, self.decisions.choose_beets_album_match(view)
         )
+        if self.shadow is not None:
+            self.shadow.observe(task, choice)
+        return choice
 
     def choose_item(self, task: Any) -> Any:
         view = self.adapter.view_for(task)
@@ -193,6 +165,120 @@ class MuzikImportSession(importer.ImportSession):
         self.events.emit(BeetsDuplicateEvent(view, duplicates))
         decision = self.decisions.resolve_beets_duplicate(view, duplicates)
         apply_duplicate_decision(task, decision)
+
+
+class NativeShadowComparison:
+    """Compare native plans with beets results in a temporary database."""
+
+    def __init__(self, native: Any, albums: list[dict[str, Any]]) -> None:
+        self.native = native
+        self.albums = albums
+        self.groups = {
+            frozenset(Path(path).resolve() for path in album["paths"]): index
+            for index, album in enumerate(albums)
+        }
+        self.observed: dict[int, Any] = {}
+        self.compared = 0
+        self.release_differences = 0
+        self.destination_differences = 0
+        self.unmatched = 0
+
+    def observe(self, task: Any, choice: Any) -> None:
+        paths = frozenset(Path(os.fsdecode(path)).resolve() for path in task.paths)
+        index = self.groups.get(paths)
+        if index is None:
+            self.unmatched += 1
+            return
+        self.observed[index] = choice
+        album = self.albums[index]
+        self.compared += 1
+        native_candidates = album["candidates"]
+        beets_candidates = list(getattr(task, "candidates", []) or [])
+        native_top = native_candidates[0]["id"] if native_candidates else None
+        beets_top = (
+            getattr(getattr(beets_candidates[0], "info", None), "album_id", None)
+            if beets_candidates
+            else None
+        )
+        selected_id = getattr(getattr(choice, "info", None), "album_id", None)
+        if native_top != beets_top or (
+            selected_id is not None and selected_id != native_top
+        ):
+            self.release_differences += 1
+
+    def compare_destinations(self, library: Any, original_ids: set[int]) -> None:
+        imported = [item for item in library.items() if item.id not in original_ids]
+        choices: list[tuple[str, int | None, str | None]] = []
+        actual_by_group: dict[int, list[Path]] = {}
+        for index, album in enumerate(self.albums):
+            sources = {Path(path).resolve() for path in album["paths"]}
+            rows = [
+                item
+                for item in imported
+                if Path(os.fsdecode(item.path)).resolve() in sources
+            ]
+            if not rows:
+                choices.append(("skip", None, None))
+                continue
+            if index not in self.observed:
+                self.observed[index] = importer.Action.ASIS
+                self.compared += 1
+            actual_by_group[index] = [
+                Path(os.fsdecode(item.destination())) for item in rows
+            ]
+            chosen = self.observed.get(index)
+            if chosen is None or chosen == importer.Action.ASIS:
+                choice = ("as_is", None, "keep" if album["duplicates"] else None)
+            else:
+                release_id = getattr(getattr(chosen, "info", None), "album_id", None)
+                candidate_index = next(
+                    (
+                        candidate_index
+                        for candidate_index, candidate in enumerate(album["candidates"])
+                        if candidate["id"] == release_id
+                    ),
+                    None,
+                )
+                if candidate_index is None:
+                    self.release_differences += 1
+                    choice = ("skip", None, None)
+                else:
+                    choice = (
+                        "candidate",
+                        candidate_index,
+                        "keep" if album["duplicates"] else None,
+                    )
+            choices.append(choice)
+        result = self.native.apply(choices)
+        offset = 0
+        for index, (album, choice) in enumerate(zip(self.albums, choices)):
+            if choice[0] == "skip":
+                continue
+            count = len(album["paths"])
+            expected = [
+                Path(path) for path in result["destinations"][offset : offset + count]
+            ]
+            offset += count
+            if sorted(expected) != sorted(actual_by_group.get(index, [])):
+                self.destination_differences += 1
+
+    def report(self, events: BeetsEventEmitter) -> None:
+        unmatched = self.unmatched + len(self.albums) - len(self.observed)
+        severity = (
+            "warning"
+            if unmatched or self.release_differences or self.destination_differences
+            else "info"
+        )
+        events.emit(
+            BeetsLogEvent(
+                "Native import shadow: "
+                f"{self.compared} groups compared, "
+                f"{unmatched} unmatched, "
+                f"{self.release_differences} release differences, "
+                f"{self.destination_differences} destination differences.",
+                severity=severity,
+            )
+        )
 
 
 def _ranking_differs(view: BeetsTaskView, ranking: NativeRanking) -> bool:
@@ -270,6 +356,106 @@ def prune_missing_items(
     return len(missing)
 
 
+def _run_shadow_import(
+    options: ImportOptions,
+    decisions: BeetsDecisions,
+    events: BeetsEventEmitter,
+) -> None:
+    """Run beets against a database snapshot with file writes disabled."""
+    from muzik.core.native_import import preview_native_plan
+
+    load_config(options.config_path)
+    beets_plugins.load_plugins()
+    source = Path(beets_config["library"].as_filename())
+    directory = beets_config["directory"].as_filename()
+    shadow = None
+    if options.query is None:
+        try:
+            native, albums = preview_native_plan(options)
+            shadow = NativeShadowComparison(native, albums)
+        except Exception as exc:
+            events.emit(
+                BeetsLogEvent(
+                    f"Native import shadow plan failed: {type(exc).__name__}",
+                    severity="warning",
+                )
+            )
+    else:
+        events.emit(
+            BeetsLogEvent(
+                "Native import shadow comparison is unavailable for query sync.",
+                severity="warning",
+            )
+        )
+    events.emit(BeetsImportStartedEvent(options.paths, dry_run=True))
+    with tempfile.TemporaryDirectory(
+        prefix="muzik-import-shadow-", dir="/private/tmp"
+    ) as name:
+        snapshot = Path(name) / "library.db"
+        uri = "file:" + quote(str(source), safe="/") + "?mode=ro"
+        with sqlite3.connect(uri, uri=True) as original:
+            with sqlite3.connect(snapshot) as target:
+                original.backup(target)
+        library = BeetsLibrary(str(snapshot), directory)
+        original_ids = {item.id for item in library.items() if item.id is not None}
+        safe_options = replace(
+            options,
+            copy=False,
+            link=False,
+            move=False,
+            nowrite=True,
+            dry_run=False,
+            incremental=False,
+        )
+        old_import = beets_config["import"].get()
+        old_state = beets_config["statefile"].get()
+        old_stages = beets_plugins.import_stages
+        old_early_stages = beets_plugins.early_import_stages
+        old_send = beets_plugins.send
+        try:
+            apply_import_options(safe_options)
+            beets_config["statefile"] = str(Path(name) / "state.pickle")
+            beets_config["import"]["hardlink"] = False
+            beets_config["import"]["reflink"] = False
+            setattr(beets_plugins, "import_stages", lambda: [])
+            setattr(beets_plugins, "early_import_stages", lambda: [])
+
+            def safe_send(event: str, **arguments: Any) -> list[Any]:
+                if event == "import_task_created":
+                    return old_send(event, **arguments)
+                return []
+
+            setattr(beets_plugins, "send", safe_send)
+            session = MuzikImportSession(
+                library, None, options.paths, options.query, decisions, events, shadow
+            )
+            session.run()
+            if shadow is not None:
+                try:
+                    shadow.compare_destinations(library, original_ids)
+                except Exception as exc:
+                    events.emit(
+                        BeetsLogEvent(
+                            "Native import shadow destination comparison failed: "
+                            f"{type(exc).__name__}",
+                            severity="warning",
+                        )
+                    )
+                shadow.report(events)
+        except Exception:
+            events.emit(BeetsImportFinishedEvent(options.paths, success=False))
+            raise
+        else:
+            events.emit(BeetsImportFinishedEvent(options.paths))
+        finally:
+            setattr(beets_plugins, "import_stages", old_stages)
+            setattr(beets_plugins, "early_import_stages", old_early_stages)
+            setattr(beets_plugins, "send", old_send)
+            beets_config["import"] = old_import
+            beets_config["statefile"] = old_state
+            library._close()
+
+
 def import_paths(
     options: ImportOptions,
     *,
@@ -280,6 +466,15 @@ def import_paths(
     decisions = decisions or NonInteractiveBeetsDecisions(quiet=options.quiet)
     events = events or NullBeetsEventEmitter()
     with _IMPORT_LOCK:
+        import_mode = get_native_settings()["import"]
+        if import_mode == "native":
+            from muzik.core.native_import import run_native_import
+
+            run_native_import(options, decisions, events)
+            return
+        if import_mode == "shadow":
+            _run_shadow_import(options, decisions, events)
+            return
         lib = open_library(options.config_path)
         apply_import_options(options)
 

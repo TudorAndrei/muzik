@@ -4,6 +4,8 @@
 //! names, sizes, queue state, transfer progress, error text) — never a
 //! `soulseek_rs` connection, channel, or internal reference.
 
+mod import;
+
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -12,6 +14,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 
+use import::PyNativeImporter;
 use muzik_core::BeetsConfig;
 use muzik_library::{Fields, Library as RustLibrary, SqlValue};
 use muzik_match::{rank_albums, MatchAlbum, MatchConfig, MatchItem};
@@ -25,6 +28,7 @@ create_exception!(_native, SeakarrError, PyException);
 create_exception!(_native, MetadataError, PyException);
 create_exception!(_native, MatchError, PyException);
 create_exception!(_native, LibraryError, PyException);
+create_exception!(_native, ImportError, PyException);
 create_exception!(_native, TagsError, PyException);
 
 fn tags_error(error: impl std::fmt::Display) -> PyErr {
@@ -129,7 +133,7 @@ fn library_error(error: impl std::fmt::Display) -> PyErr {
     LibraryError::new_err(error.to_string())
 }
 
-fn beets_path(raw: &str, config_path: &Path) -> PathBuf {
+pub(crate) fn beets_path(raw: &str, config_path: &Path) -> PathBuf {
     let expanded = if raw == "~" || raw.starts_with("~/") {
         std::env::var_os("HOME")
             .map(|home| {
@@ -551,12 +555,14 @@ fn download_progress_to_dict<'py>(
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNativeLibrary>()?;
+    m.add_class::<PyNativeImporter>()?;
     m.add_class::<PySeakarrSession>()?;
     m.add_class::<PySeakarrJob>()?;
     m.add("SeakarrError", m.py().get_type::<SeakarrError>())?;
     m.add("MetadataError", m.py().get_type::<MetadataError>())?;
     m.add("MatchError", m.py().get_type::<MatchError>())?;
     m.add("LibraryError", m.py().get_type::<LibraryError>())?;
+    m.add("ImportError", m.py().get_type::<ImportError>())?;
     m.add("TagsError", m.py().get_type::<TagsError>())?;
     m.add_function(wrap_pyfunction!(rank_album_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(probe_audio, m)?)?;
