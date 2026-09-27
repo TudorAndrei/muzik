@@ -90,7 +90,7 @@ wait ends.
 ## Verification
 
 Run `mise run check` for Python and Rust checks. Run
-`rust/gpui_app/target/debug/muzik-gpui --check-backend` with `MUZIK_PYTHON`
+`target/debug/muzik-gpui --check-backend` with `MUZIK_PYTHON`
 set to the installed Python interpreter to check the live process link. A
 release check must open the installed native app and test input, focus,
 decisions, cancellation, resize, and the light and dark themes on each claimed

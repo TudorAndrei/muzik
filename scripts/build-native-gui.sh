@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 manifest="$repo_root/rust/gpui_app/Cargo.toml"
-target_dir="$repo_root/rust/gpui_app/target"
+target_dir="$repo_root/target"
 
 if [[ -n "${MUZIK_NATIVE_TARGET:-}" ]]; then
   target_dir="$target_dir/$MUZIK_NATIVE_TARGET"

@@ -1,3 +1,6 @@
 Copyright (c) 2026 TudorAndrei
 
 All rights reserved.
+
+Exception: The Rust CLI in rust/crates/muzik-cli is licensed under
+GPL-3.0-only. Its license text is in rust/crates/muzik-cli/LICENSE.

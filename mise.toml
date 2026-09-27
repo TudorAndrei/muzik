@@ -12,6 +12,7 @@ zizmor = "latest"
 rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] }
 "pipx:maturin" = "latest"
 "cargo:cargo-deny" = "latest"
+cocogitto = "7"
 
 [env]
 HK_MISE = 1
@@ -38,12 +39,9 @@ uv run ruff check .
 uv run ty check . --ignore unresolved-import
 uv run pytest -q
 uv pip check
-cargo fmt --manifest-path rust/Cargo.toml --all --check
-cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
-cargo test --manifest-path rust/Cargo.toml --workspace
-cargo build --manifest-path rust/Cargo.toml --workspace --release
-cargo deny --manifest-path rust/Cargo.toml check licenses
-cargo fmt --manifest-path rust/gpui_app/Cargo.toml --check
-cargo clippy --manifest-path rust/gpui_app/Cargo.toml --all-targets --locked -- -D warnings
-cargo test --manifest-path rust/gpui_app/Cargo.toml --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --workspace --release --locked
+cargo deny check licenses
 """

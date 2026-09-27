@@ -1,0 +1,9 @@
+[workspace]
+members = ["rust/crates/*", "rust/gpui_app"]
+resolver = "2"
+
+[profile.release]
+strip = "symbols"
+opt-level = "z"
+lto = true
+codegen-units = 1
