@@ -46,6 +46,8 @@ pub enum Error {
     InvalidDestination,
     #[error("old album path is outside the library root: {0}")]
     UnsafeReplacePath(PathBuf),
+    #[error("cannot restore replaced file after failed import: {0}")]
+    RestoreFailed(PathBuf),
     #[error("item {0} has no audio path")]
     MissingPath(i64),
 }

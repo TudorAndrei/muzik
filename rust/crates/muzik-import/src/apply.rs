@@ -147,6 +147,7 @@ struct PreparedAlbum {
     cover: Option<(PathBuf, PathBuf)>,
     replace_ids: Vec<i64>,
     old_paths: Vec<PathBuf>,
+    occupied_paths: Vec<PathBuf>,
 }
 
 pub fn apply(
@@ -193,15 +194,19 @@ pub fn apply(
                 .extend(prepared.items.into_iter().map(|item| item.destination));
             continue;
         }
+        let staged = StagedReplacement::new(&prepared.occupied_paths, &options.library_root)?;
         let mut created = Vec::new();
         let placed = (|| -> Result<(), ApplyError> {
             for item in &prepared.items {
-                let mode = if options.placement == Placement::Move {
+                let source = staged.source_for(&item.source);
+                let mode = if options.placement == Placement::Move
+                    || (options.placement == Placement::Symlink && source != item.source)
+                {
                     Placement::Copy
                 } else {
                     options.placement
                 };
-                files::place(&item.source, &item.destination, mode)?;
+                files::place(source, &item.destination, mode)?;
                 created.push(item.destination.clone());
                 if options.write_tags {
                     muzik_tags::write(&item.destination, &item.tags)?;
@@ -228,7 +233,7 @@ pub fn apply(
             Ok(())
         })();
         if let Err(error) = placed {
-            rollback(&created);
+            staged.restore(&created)?;
             return Err(error);
         }
         let item_fields = prepared
@@ -243,7 +248,7 @@ pub fn apply(
         let item_fields = match item_fields {
             Ok(fields) => fields,
             Err(error) => {
-                rollback(&created);
+                staged.restore(&created)?;
                 return Err(error.into());
             }
         };
@@ -272,7 +277,7 @@ pub fn apply(
         let (album_id, item_ids) = match database {
             Ok(value) => value,
             Err(error) => {
-                rollback(&created);
+                staged.restore(&created)?;
                 return Err(error.into());
             }
         };
@@ -282,6 +287,7 @@ pub fn apply(
                     .items
                     .iter()
                     .map(|item| item.source.clone())
+                    .filter(|source| !created.contains(source))
                     .collect::<Vec<_>>(),
                 |path| fs::remove_file(path),
             ));
@@ -289,6 +295,7 @@ pub fn apply(
         result
             .cleanup_failed
             .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
+        result.cleanup_failed.extend(staged.cleanup());
         if let Some(album_id) = album_id {
             result.album_ids.push(album_id);
         }
@@ -343,15 +350,12 @@ fn prepare(
                 .skip(1)
                 .any(|item| item.match_item.artist != album.items[0].match_item.artist));
     let replace_ids = if decision.duplicate == Some(DuplicateDecision::Replace) {
-        album
-            .duplicates
-            .iter()
-            .map(|entry| entry.album_id)
-            .collect()
+        selected_replacements(library, album, candidate)?
     } else {
         Vec::new()
     };
     let mut old_paths = replacement_paths(library, &replace_ids, &options.library_root)?;
+    let mut occupied_paths = Vec::new();
     let mut album_fields = LibraryFields::new();
     let mut prepared = Vec::new();
     let albums = library.albums()?;
@@ -494,8 +498,12 @@ fn prepare(
             return Err(ApplyError::InvalidDestination);
         }
         let destination = options.library_root.join(relative);
-        if destination.exists() || destination.symlink_metadata().is_ok() {
-            return Err(ApplyError::DestinationExists(destination));
+        if destination.symlink_metadata().is_ok() {
+            if old_paths.contains(&destination) {
+                occupied_paths.push(destination.clone());
+            } else {
+                return Err(ApplyError::DestinationExists(destination));
+            }
         }
         if !reserved.insert(destination.clone()) {
             return Err(ApplyError::DestinationCollision(destination));
@@ -517,8 +525,15 @@ fn prepare(
             Some((source, parent.join(name)))
         });
     if let Some((_, destination)) = &cover {
-        if destination.exists() || !reserved.insert(destination.clone()) {
-            return Err(ApplyError::DestinationExists(destination.clone()));
+        if destination.symlink_metadata().is_ok() {
+            if old_paths.contains(destination) {
+                occupied_paths.push(destination.clone());
+            } else {
+                return Err(ApplyError::DestinationExists(destination.clone()));
+            }
+        }
+        if !reserved.insert(destination.clone()) {
+            return Err(ApplyError::DestinationCollision(destination.clone()));
         }
         album_fields.insert("artpath".into(), sql_path_value(destination));
     }
@@ -536,7 +551,66 @@ fn prepare(
         cover,
         replace_ids,
         old_paths,
+        occupied_paths,
     })
+}
+
+fn selected_replacements(
+    library: &Library,
+    album: &AlbumPlan,
+    candidate: Option<&crate::plan::PlannedCandidate>,
+) -> Result<Vec<i64>, ApplyError> {
+    let first = &album.items.first().ok_or(ApplyError::NoAudio)?.match_item;
+    let selected_id = candidate
+        .map(|candidate| candidate.release.id.0.as_str())
+        .or_else(|| (!first.album_id.is_empty()).then_some(first.album_id.as_str()));
+    let selected_artist = candidate.map_or_else(
+        || {
+            if first.album_artist.is_empty() {
+                first.artist.as_str()
+            } else {
+                first.album_artist.as_str()
+            }
+        },
+        |candidate| candidate.release.artist.as_str(),
+    );
+    let selected_title = candidate.map_or(first.album.as_str(), |candidate| {
+        candidate.release.title.as_str()
+    });
+    let source_ids: BTreeSet<_> = album
+        .items
+        .iter()
+        .filter_map(|item| item.source_id.as_deref())
+        .collect();
+    let mut ids = BTreeSet::new();
+    for duplicate in &album.duplicates {
+        let Some(existing) = library.album(duplicate.album_id)? else {
+            continue;
+        };
+        let text = |key| match existing.fields.get(key) {
+            Some(SqlValue::Text(value)) if !value.is_empty() => Some(value.as_str()),
+            _ => None,
+        };
+        let existing_id = text("mb_albumid");
+        let same_release = selected_id.is_some_and(|id| existing_id == Some(id));
+        let same_source = library
+            .items_for_album(duplicate.album_id)?
+            .iter()
+            .any(|item| {
+                item.attributes.get("muzik_source_id").is_some_and(
+                    |value| matches!(value, SqlValue::Text(id) if source_ids.contains(id.as_str())),
+                )
+            });
+        let same_name = (selected_id.is_none() || existing_id.is_none())
+            && text("albumartist")
+                .or_else(|| text("artist"))
+                .is_some_and(|artist| artist.eq_ignore_ascii_case(selected_artist))
+            && text("album").is_some_and(|title| title.eq_ignore_ascii_case(selected_title));
+        if same_release || same_source || same_name {
+            ids.insert(duplicate.album_id);
+        }
+    }
+    Ok(ids.into_iter().collect())
 }
 
 fn path_fields(tags: &TagData) -> BTreeMap<String, String> {
@@ -729,6 +803,81 @@ fn rollback(paths: &[PathBuf]) {
         if let Err(error) = fs::remove_file(path) {
             tracing::warn!(path = %path.display(), %error, "cannot remove failed import file");
         }
+    }
+}
+
+struct StagedReplacement {
+    directory: Option<tempfile::TempDir>,
+    files: Vec<(PathBuf, PathBuf)>,
+}
+
+impl StagedReplacement {
+    fn new(paths: &[PathBuf], root: &Path) -> Result<Self, ApplyError> {
+        if paths.is_empty() {
+            return Ok(Self {
+                directory: None,
+                files: Vec::new(),
+            });
+        }
+        fs::create_dir_all(root)?;
+        let directory = tempfile::tempdir_in(root)?;
+        let temporary_root = directory.path().to_path_buf();
+        let mut staged = Self {
+            directory: Some(directory),
+            files: Vec::new(),
+        };
+        for (index, original) in paths.iter().enumerate() {
+            let temporary = temporary_root.join(index.to_string());
+            if let Err(error) = fs::rename(original, &temporary) {
+                staged.restore(&[])?;
+                return Err(error.into());
+            }
+            staged.files.push((original.clone(), temporary));
+        }
+        Ok(staged)
+    }
+
+    fn source_for<'a>(&'a self, source: &'a Path) -> &'a Path {
+        self.files
+            .iter()
+            .find(|(original, _)| original == source)
+            .map_or(source, |(_, temporary)| temporary.as_path())
+    }
+
+    fn restore(mut self, created: &[PathBuf]) -> Result<(), ApplyError> {
+        rollback(created);
+        let mut failed = None;
+        for (original, temporary) in self.files.iter().rev() {
+            if let Err(error) = fs::rename(temporary, original) {
+                tracing::error!(path = %original.display(), staged = %temporary.display(), %error, "cannot restore replaced file");
+                failed = Some(original.clone());
+            }
+        }
+        if let Some(path) = failed {
+            if let Some(directory) = self.directory.take() {
+                let preserved = directory.keep();
+                tracing::error!(path = %preserved.display(), "staged files kept for manual recovery");
+            }
+            return Err(ApplyError::RestoreFailed(path));
+        }
+        Ok(())
+    }
+
+    fn cleanup(mut self) -> Vec<PathBuf> {
+        let mut failed = Vec::new();
+        for (_, temporary) in &self.files {
+            if let Err(error) = files::move_to_trash(temporary) {
+                tracing::warn!(path = %temporary.display(), %error, "old import file remains after replacement");
+                failed.push(temporary.clone());
+            }
+        }
+        if !failed.is_empty()
+            && let Some(directory) = self.directory.take()
+        {
+            let preserved = directory.keep();
+            tracing::warn!(path = %preserved.display(), "staged files kept after trash failure");
+        }
+        failed
     }
 }
 

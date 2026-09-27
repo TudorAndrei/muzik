@@ -553,6 +553,160 @@ fn replace_removes_selected_duplicate_rows() {
 }
 
 #[test]
+fn replace_keeps_album_from_unselected_release() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let mut fields = muzik_library::Fields::new();
+    fields.insert("album".into(), SqlValue::Text("Night Lines".into()));
+    fields.insert("albumartist".into(), SqlValue::Text("Mara Vale".into()));
+    fields.insert("mb_albumid".into(), SqlValue::Text("other-release".into()));
+    let other_id = library.insert_album(&fields, &Default::default()).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner.plan(&[source]).unwrap();
+    assert!(
+        plan.albums[0]
+            .duplicates
+            .iter()
+            .any(|duplicate| duplicate.album_id == other_id)
+    );
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.placement = Placement::Copy;
+    apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::Candidate(0),
+            duplicate: Some(DuplicateDecision::Replace),
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(library.album(other_id).unwrap().is_some());
+}
+
+#[test]
+fn replace_can_use_an_occupied_old_destination() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.placement = Placement::Copy;
+    options.paths.default = "$albumartist/$album/$track $title".into();
+
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let first_plan = planner.plan(std::slice::from_ref(&source)).unwrap();
+    let first = apply::apply(
+        &mut library,
+        &first_plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+    )
+    .unwrap();
+    let old_album_id = first.album_ids[0];
+    let old_destination = first.destinations[0].clone();
+    assert!(old_destination.exists());
+
+    let second_plan = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    }
+    .plan(&[source])
+    .unwrap();
+    assert!(
+        second_plan.albums[0]
+            .duplicates
+            .iter()
+            .any(|duplicate| duplicate.album_id == old_album_id)
+    );
+    let second = apply::apply(
+        &mut library,
+        &second_plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Replace),
+        }],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(second.destinations, vec![old_destination.clone()]);
+    assert!(old_destination.exists());
+    assert!(library.album(old_album_id).unwrap().is_none());
+    assert_eq!(
+        library.items_for_album(second.album_ids[0]).unwrap().len(),
+        1
+    );
+}
+
+#[test]
+fn failed_replace_restores_occupied_old_destination() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.placement = Placement::Copy;
+    let first_plan = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    }
+    .plan(std::slice::from_ref(&source))
+    .unwrap();
+    let first = apply::apply(
+        &mut library,
+        &first_plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+    )
+    .unwrap();
+    let old_destination = &first.destinations[0];
+    let old_bytes = fs::read(old_destination).unwrap();
+    let second_plan = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    }
+    .plan(std::slice::from_ref(&source))
+    .unwrap();
+    fs::remove_file(source).unwrap();
+
+    assert!(
+        apply::apply(
+            &mut library,
+            &second_plan,
+            &[AlbumDecision {
+                choice: MatchDecision::AsIs,
+                duplicate: Some(DuplicateDecision::Replace),
+            }],
+            &options,
+        )
+        .is_err()
+    );
+    assert_eq!(fs::read(old_destination).unwrap(), old_bytes);
+    assert!(library.album(first.album_ids[0]).unwrap().is_some());
+}
+
+#[test]
 fn as_is_flac_matches_beets_path_and_library_fields() {
     let temp = tempfile::tempdir().unwrap();
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
