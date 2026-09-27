@@ -24,6 +24,8 @@ pub enum Error {
     NoItems,
     #[error("item or track index is outside the supplied album")]
     InvalidPair,
+    #[error("track assignment failed: {0}")]
+    Assignment(&'static str),
 }
 
 /// The fields in a local beets Item that affect matching.

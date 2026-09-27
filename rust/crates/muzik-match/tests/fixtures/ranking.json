@@ -1,0 +1,367 @@
+{
+  "beets_version": "2.13.1",
+  "assignments": [
+    {
+      "name": "more files than tracks",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "track": 1
+        },
+        {
+          "title": "Two",
+          "artist": "Band",
+          "track": 2
+        },
+        {
+          "title": "Bonus",
+          "artist": "Band",
+          "track": 3
+        }
+      ],
+      "tracks": [
+        {
+          "title": "One",
+          "index": 1
+        },
+        {
+          "title": "Two",
+          "index": 2
+        }
+      ],
+      "expected": {
+        "pairs": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "extra_items": [
+          2
+        ],
+        "extra_tracks": [],
+        "total_cost": 0.0
+      }
+    },
+    {
+      "name": "more tracks than files",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "track": 1
+        },
+        {
+          "title": "Three",
+          "artist": "Band",
+          "track": 3
+        }
+      ],
+      "tracks": [
+        {
+          "title": "One",
+          "index": 1
+        },
+        {
+          "title": "Two",
+          "index": 2
+        },
+        {
+          "title": "Three",
+          "index": 3
+        }
+      ],
+      "expected": {
+        "pairs": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            2
+          ]
+        ],
+        "extra_items": [],
+        "extra_tracks": [
+          1
+        ],
+        "total_cost": 0.0
+      }
+    },
+    {
+      "name": "multiple discs",
+      "items": [
+        {
+          "title": "Intro",
+          "artist": "Band",
+          "track": 1,
+          "disc": 2
+        },
+        {
+          "title": "Intro",
+          "artist": "Band",
+          "track": 1,
+          "disc": 1
+        }
+      ],
+      "tracks": [
+        {
+          "title": "Intro",
+          "index": 1,
+          "medium_index": 1,
+          "medium": 1
+        },
+        {
+          "title": "Intro",
+          "index": 2,
+          "medium_index": 1,
+          "medium": 2
+        }
+      ],
+      "expected": {
+        "pairs": [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            1
+          ]
+        ],
+        "extra_items": [],
+        "extra_tracks": [],
+        "total_cost": 0.0
+      }
+    },
+    {
+      "name": "equal cost tie",
+      "items": [
+        {
+          "title": "Same",
+          "artist": "Band"
+        },
+        {
+          "title": "Same",
+          "artist": "Band"
+        }
+      ],
+      "tracks": [
+        {
+          "title": "Same"
+        },
+        {
+          "title": "Same"
+        }
+      ],
+      "expected": {
+        "pairs": [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "extra_items": [],
+        "extra_tracks": [],
+        "total_cost": 0.0
+      }
+    }
+  ],
+  "rankings": [
+    {
+      "name": "exact album ranks first",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album_id": "wrong",
+          "album": "Different",
+          "artist": "Another",
+          "tracks": [
+            {
+              "title": "Other",
+              "index": 1
+            }
+          ]
+        },
+        {
+          "album_id": "right",
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "ids": [
+          "right",
+          "wrong"
+        ],
+        "scores": [
+          0.0,
+          0.8047619047619047
+        ],
+        "recommendation": "strong"
+      }
+    },
+    {
+      "name": "single distant candidate",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album_id": "distant",
+          "album": "Other",
+          "artist": "Another",
+          "tracks": [
+            {
+              "title": "Other",
+              "index": 1
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "ids": [
+          "distant"
+        ],
+        "scores": [
+          0.7839285714285714
+        ],
+        "recommendation": "low"
+      }
+    },
+    {
+      "name": "missing track limits recommendation",
+      "items": [
+        {
+          "title": "Song 0",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 1",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 2",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 3",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 4",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 5",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 6",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 7",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 8",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album_id": "short",
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "Song 0",
+              "index": 1
+            },
+            {
+              "title": "Song 1",
+              "index": 2
+            },
+            {
+              "title": "Song 2",
+              "index": 3
+            },
+            {
+              "title": "Song 3",
+              "index": 4
+            },
+            {
+              "title": "Song 4",
+              "index": 5
+            },
+            {
+              "title": "Song 5",
+              "index": 6
+            },
+            {
+              "title": "Song 6",
+              "index": 7
+            },
+            {
+              "title": "Song 7",
+              "index": 8
+            },
+            {
+              "title": "Song 8",
+              "index": 9
+            },
+            {
+              "title": "Song 9",
+              "index": 10
+            }
+          ]
+        }
+      ],
+      "expected": {
+        "ids": [
+          "short"
+        ],
+        "scores": [
+          0.03614457831325302
+        ],
+        "recommendation": "medium"
+      }
+    }
+  ]
+}
