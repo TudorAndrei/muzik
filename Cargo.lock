@@ -4616,6 +4616,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "muzik-core",
+ "muzik-soulseek",
  "serde",
  "serde_json",
  "tempfile",
