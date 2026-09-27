@@ -12,6 +12,8 @@ serde_json = "1"
 muzik-core = { path = "../crates/muzik-core" }
 muzik-soulseek = { path = "../crates/muzik-soulseek" }
 chrono = "0.4"
+ureq = "3.4.2"
+url = "2.5.8"
 
 [dev-dependencies]
 gpui-kit = { version = "=0.6.6", features = ["test-support"] }

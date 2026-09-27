@@ -1,6 +1,7 @@
 mod bridge;
 mod native;
 mod services;
+mod thumbnails;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;

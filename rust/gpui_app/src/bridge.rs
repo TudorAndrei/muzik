@@ -1,15 +1,18 @@
 //! JSON-lines link for commands still served by the Python workflow process.
-use crate::native;
+use crate::{native, thumbnails};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 pub struct Bridge {
     input: Option<Sender<Value>>,
     output: Receiver<Value>,
     native_output: Sender<Value>,
+    thumbnail_pending: Arc<Mutex<HashSet<String>>>,
     next_id: u64,
 }
 
@@ -20,6 +23,7 @@ impl Bridge {
             input: None,
             output,
             native_output: events,
+            thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             next_id: 1,
         })
     }
@@ -73,6 +77,46 @@ impl Bridge {
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
+        if command == "thumbnails.cache" {
+            let ids = match thumbnails::validate_ids(&params) {
+                Ok(ids) => ids,
+                Err(message) => {
+                    self.native_output
+                        .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}))
+                        .map_err(|_| "Rust backend is not available".to_owned())?;
+                    return Ok(id);
+                }
+            };
+            let mut pending = self
+                .thumbnail_pending
+                .lock()
+                .map_err(|_| "thumbnail queue is not available")?;
+            let fresh = ids
+                .into_iter()
+                .filter(|id| pending.insert(id.clone()))
+                .collect::<Vec<_>>();
+            let response = json!({"id": id, "type": "response", "ok": true, "result": {"queued": fresh.len()}});
+            self.native_output
+                .send(response)
+                .map_err(|_| "Rust backend is not available".to_owned())?;
+            drop(pending);
+            if !fresh.is_empty() {
+                let sender = self.native_output.clone();
+                let pending = Arc::clone(&self.thumbnail_pending);
+                thread::spawn(move || {
+                    let (watchlist, cache) = thumbnails::default_paths();
+                    let data = thumbnails::cache_requested(&fresh, &watchlist, &cache);
+                    let _ = sender
+                        .send(json!({"type":"event", "event":"thumbnails.updated", "data":data}));
+                    if let Ok(mut pending) = pending.lock() {
+                        for id in fresh {
+                            pending.remove(&id);
+                        }
+                    }
+                });
+            }
+            return Ok(id);
+        }
         if native::handles(command) {
             if matches!(command, "library.scan" | "services.check") {
                 let sender = self.native_output.clone();
@@ -124,8 +168,10 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 mod tests {
     use super::Bridge;
     use serde_json::{json, Value};
+    use std::collections::HashSet;
     use std::fs;
     use std::sync::mpsc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[test]
@@ -139,6 +185,7 @@ mod tests {
             input: Some(input),
             output,
             native_output,
+            thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             next_id: 1,
         };
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
@@ -157,6 +204,24 @@ mod tests {
         let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
         assert_eq!(response["id"], id);
         assert_eq!(response["result"]["protocol_version"], 1);
+        assert!(bridge.input.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn thumbnail_requests_get_a_native_protocol_response() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let mut bridge = Bridge::start()?;
+        let id = bridge.send("thumbnails.cache", json!({"video_ids": []}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(response["result"]["queued"], 0);
+        assert!(bridge.input.is_none());
+
+        let id = bridge.send("thumbnails.cache", json!({"video_ids": [42]}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(response["error"]["code"], "invalid_request");
         assert!(bridge.input.is_none());
         Ok(())
     }

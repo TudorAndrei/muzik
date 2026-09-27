@@ -3,7 +3,7 @@
 The GPUI app starts `python -m muzik.native_gui` when a remaining command needs
 the Python backend. It handles `hello`, `config.get`, `config.save`, and
 `library.scan`, `services.check`, `spotify.set_client_id`, and
-`spotify.logout` in Rust. The app writes
+`spotify.logout`, and `thumbnails.cache` in Rust. The app writes
 one UTF-8 JSON object per line to standard input. The service writes one JSON
 object per line to standard output. Only protocol records go to standard
 output. The service ends when standard input closes.
@@ -69,7 +69,7 @@ each action name to `enabled` and `reason`. A `thumbnail_path` is a local path
 or `null`. `thumbnails.cache` downloads images only for the requested IDs. The
 app sends IDs from the current watchlist page. `queued` counts new IDs that
 were not already pending. The download does not take the workflow job slot.
-When it finishes, the service sends `thumbnails.updated` with
+When it finishes, the Rust app sends `thumbnails.updated` with
 `{ "thumbnails": [{ "video_id": "...", "path": "...", "error": null }] }`.
 `path` is `null` if the image failed, and `error` then gives the reason. This
 event has no watchlist snapshot. The app applies paths only to matching items
