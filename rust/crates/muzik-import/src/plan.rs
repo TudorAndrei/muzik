@@ -167,6 +167,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 let tags = muzik_tags::read(&source, &[])?;
                 let sidecar = read_sidecar(&source)?;
                 let mut match_item = match_item(&tags);
+                match_item.length = muzik_tags::probe(&source)?.duration_seconds.unwrap_or(0.0);
                 fill_from_sidecar(&mut match_item, sidecar.as_ref(), &source);
                 let source_id = sidecar
                     .as_ref()

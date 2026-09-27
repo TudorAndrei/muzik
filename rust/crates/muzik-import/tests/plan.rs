@@ -140,6 +140,11 @@ fn groups_audio_and_ranks_release_with_source_sidecar() {
     assert_eq!(album.items.len(), 1);
     assert_eq!(album.items[0].source, source.canonicalize().unwrap());
     assert_eq!(album.items[0].source_id.as_deref(), Some("video-123"));
+    let duration = muzik_tags::probe(&source)
+        .unwrap()
+        .duration_seconds
+        .unwrap();
+    assert_eq!(album.items[0].match_item.length, duration);
     assert_eq!(album.candidates.len(), 1);
     assert_eq!(album.candidates[0].release.id.0, "release-1");
     assert_eq!(album.candidates[0].assignment.pairs, vec![(0, 0)]);
