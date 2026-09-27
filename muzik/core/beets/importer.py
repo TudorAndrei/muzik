@@ -44,21 +44,24 @@ class BeetsImporterAdapter:
         self._task_ids: dict[int, str] = {}
         self._candidates: dict[str, dict[str, Any]] = {}
 
-    def view_for(self, task: Any) -> BeetsTaskView:
+    def view_for(
+        self, task: Any, ranking: NativeRanking | None = None
+    ) -> BeetsTaskView:
         key = id(task)
         task_id = self._task_ids.get(key)
         if task_id is None:
             task_id = f"task-{self._next_task_id}"
             self._next_task_id += 1
             self._task_ids[key] = task_id
-        view = task_view(task, task_id=task_id)
+        ranked = (
+            [(row.original_index, row.distance) for row in ranking.candidates]
+            if ranking is not None
+            else None
+        )
+        view = task_view(task, task_id=task_id, ranked=ranked)
         self._candidates[task_id] = {
-            match.candidate_id: candidate
-            for match, candidate in zip(
-                view.matches,
-                getattr(task, "candidates", []) or [],
-                strict=True,
-            )
+            f"{task_id}:match:{index}": candidate
+            for index, candidate in enumerate(getattr(task, "candidates", []) or [])
         }
         return view
 
@@ -153,7 +156,8 @@ class MuzikImportSession(importer.ImportSession):
         return self.decisions.should_resume_beets_import(Path(os.fsdecode(path)))
 
     def choose_match(self, task: Any) -> Any:
-        view = self.adapter.view_for(task)
+        ranking = rank_album_candidates(task) if self.match_mode == "native" else None
+        view = self.adapter.view_for(task, ranking)
         if self.match_mode == "shadow":
             try:
                 ranking = rank_album_candidates(task)

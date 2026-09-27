@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +37,12 @@ class BeetsDuplicateView:
     title: str | None = None
 
 
-def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
+def task_view(
+    task: Any,
+    *,
+    task_id: str,
+    ranked: Sequence[tuple[int, float]] | None = None,
+) -> BeetsTaskView:
     paths = []
     for path in getattr(task, "paths", []) or []:
         try:
@@ -49,10 +54,18 @@ def task_view(task: Any, *, task_id: str) -> BeetsTaskView:
     item_count = len(items)
     first_item = items[0] if item_count else None
 
+    source_candidates = list(getattr(task, "candidates", []) or [])
     candidates = []
-    for index, candidate in enumerate(getattr(task, "candidates", []) or []):
+    for index, distance in (
+        ranked
+        if ranked is not None
+        else [(index, None) for index in range(len(source_candidates))]
+    ):
+        match = match_view(
+            source_candidates[index], candidate_id=f"{task_id}:match:{index}"
+        )
         candidates.append(
-            match_view(candidate, candidate_id=f"{task_id}:match:{index}")
+            replace(match, distance=distance) if distance is not None else match
         )
 
     return BeetsTaskView(

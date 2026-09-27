@@ -8,6 +8,8 @@ import pytest
 from requests.exceptions import RetryError
 
 from muzik.core.beets.decisions import BeetsDuplicateDecision, BeetsMatchDecision
+from muzik.core.beets.agent_decisions import AgentBeetsDecisions, MatchDecision
+from muzik.core.beets.decisions import NonInteractiveBeetsDecisions
 from muzik.core.beets.events import (
     BeetsDuplicateEvent,
     BeetsImportFinishedEvent,
@@ -208,6 +210,73 @@ def test_shadow_match_keeps_beets_choice_after_native_error(monkeypatch) -> None
         isinstance(event, BeetsLogEvent) and "native matcher failed" in event.message
         for event in events.events
     )
+
+
+def test_native_ranking_selects_original_beets_object_for_agent(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.get_native_settings",
+        lambda: {"match": "native"},
+    )
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.rank_album_candidates",
+        lambda _task: NativeRanking(
+            [RankedCandidate(1, 0.4), RankedCandidate(0, 0.5)], "low"
+        ),
+    )
+    decisions = AgentBeetsDecisions(
+        chooser=lambda _view: MatchDecision(
+            action="pick", candidate_index=0, confidence=0.9
+        )
+    )
+    events = RecordingBeetsEventEmitter()
+    session = MuzikImportSession(
+        object(), None, [Path("/tmp/Album")], None, decisions, events
+    )
+    task = FakeTask()
+    original = SimpleNamespace(distance=0.5)
+    best = SimpleNamespace(distance=0.8)
+    task.candidates = [original, best]
+
+    assert session.choose_match(task) is best
+    assert isinstance(events.events[0], BeetsTaskEvent)
+    view = events.events[0].task
+    assert [match.candidate_id for match in view.matches] == [
+        "task-0:match:1",
+        "task-0:match:0",
+    ]
+    assert [match.distance for match in view.matches] == [0.4, 0.5]
+
+
+def test_native_ranking_keeps_noninteractive_as_is_choice(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.get_native_settings",
+        lambda: {"match": "native"},
+    )
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.rank_album_candidates",
+        lambda _task: NativeRanking(
+            [RankedCandidate(1, 0.0), RankedCandidate(0, 0.8)], "strong"
+        ),
+    )
+    events = RecordingBeetsEventEmitter()
+    session = MuzikImportSession(
+        object(),
+        None,
+        [Path("/tmp/Album")],
+        None,
+        NonInteractiveBeetsDecisions(),
+        events,
+    )
+    task = FakeTask()
+    task.candidates = [SimpleNamespace(distance=0.8), SimpleNamespace(distance=0.0)]
+
+    assert session.choose_match(task) is beets_importer.Action.ASIS
+    assert isinstance(events.events[0], BeetsTaskEvent)
+    view = events.events[0].task
+    assert [match.candidate_id for match in view.matches] == [
+        "task-0:match:1",
+        "task-0:match:0",
+    ]
 
 
 def test_apply_duplicate_decision_sets_task_flags() -> None:
