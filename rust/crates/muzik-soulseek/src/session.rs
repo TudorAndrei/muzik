@@ -33,6 +33,7 @@ pub struct Session {
 
 impl Session {
     pub fn connect(settings: SessionSettings) -> Result<Self, BridgeError> {
+        tracing::debug!("connect to Soulseek server");
         let mut client_settings = ClientSettings::new(settings.username, settings.password);
         if let (Some(host), Some(port)) = (settings.server_host, settings.server_port) {
             client_settings.server_address = PeerAddress::new(host, port);
@@ -49,6 +50,7 @@ impl Session {
         if !client.login()? {
             return Err(BridgeError::AuthenticationFailed);
         }
+        tracing::info!("Soulseek login succeeded");
         Ok(Self {
             client: Arc::new(client),
         })
@@ -56,6 +58,7 @@ impl Session {
 
     #[must_use]
     pub fn start_track_search(&self, query: String, timeout_secs: f64) -> Arc<JobHandle> {
+        tracing::debug!(timeout_secs, "start Soulseek track search");
         let handle = JobHandle::new();
         let cancel = handle.cancel_flag();
         let worker = Arc::clone(&handle);
@@ -87,6 +90,7 @@ impl Session {
         size: u64,
         destination: String,
     ) -> Result<Arc<JobHandle>, BridgeError> {
+        tracing::debug!("start Soulseek download");
         let handle = JobHandle::new();
         let worker = Arc::clone(&handle);
 

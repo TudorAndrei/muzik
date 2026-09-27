@@ -1,24 +1,26 @@
-//! Embedded Soulseek bridge: wraps `soulseek_rs::Client` as the private
-//! Python extension module `muzik._seakarr`.
+//! Python bindings for muzik's Rust libraries.
 //!
 //! The Rust boundary returns owned values only (candidate ids, peers, file
 //! names, sizes, queue state, transfer progress, error text) — never a
 //! `soulseek_rs` connection, channel, or internal reference.
 
-mod error;
-mod job;
-mod session;
-mod types;
-
 use std::sync::Arc;
 
+use pyo3::create_exception;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use error::SeakarrError;
-use job::{JobHandle, JobOutcome, JobState};
-use session::{Session, SessionSettings};
-use types::{Candidate, DownloadProgress};
+use muzik_soulseek::error::BridgeError;
+use muzik_soulseek::job::{JobHandle, JobOutcome, JobState};
+use muzik_soulseek::session::{Session, SessionSettings};
+use muzik_soulseek::types::{Candidate, DownloadProgress};
+
+create_exception!(_native, SeakarrError, PyException);
+
+fn soulseek_error(error: BridgeError) -> PyErr {
+    SeakarrError::new_err(error.to_string())
+}
 
 /// `SeakarrSession.connect(...)` — logs into the Soulseek server and starts
 /// jobs on the resulting `soulseek_rs::Client`.
@@ -52,7 +54,7 @@ impl PySeakarrSession {
         // Python thread (e.g. the GUI's worker-thread setup) is not stalled.
         let inner = py
             .detach(|| Session::connect(settings))
-            .map_err(PyErr::from)?;
+            .map_err(soulseek_error)?;
         Ok(Self { inner })
     }
 
@@ -72,7 +74,7 @@ impl PySeakarrSession {
         let handle = self
             .inner
             .start_download(username, filename, size, destination)
-            .map_err(PyErr::from)?;
+            .map_err(soulseek_error)?;
         Ok(PySeakarrJob { handle })
     }
 
@@ -107,7 +109,7 @@ impl PySeakarrJob {
     /// Return the finished result, or raise `SeakarrError` when the job is
     /// still running, failed, or was cancelled.
     fn result(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        match self.handle.result().map_err(PyErr::from)? {
+        match self.handle.result().map_err(soulseek_error)? {
             JobOutcome::Search(candidates) => {
                 let list = PyList::empty(py);
                 for candidate in &candidates {
@@ -183,7 +185,7 @@ fn download_progress_to_dict<'py>(
 }
 
 #[pymodule]
-fn _seakarr(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySeakarrSession>()?;
     m.add_class::<PySeakarrJob>()?;
     m.add("SeakarrError", m.py().get_type::<SeakarrError>())?;

@@ -46,11 +46,10 @@ Repository = "https://github.com/TudorAndrei/muzik"
 Issues = "https://github.com/TudorAndrei/muzik/issues"
 
 [tool.maturin]
-# The Rust crate lives under rust/seakarr_bridge/, not next to this
-# pyproject.toml, so both paths must be given explicitly.
-manifest-path = "rust/seakarr_bridge/Cargo.toml"
+# The binding crate lives in the Rust workspace.
+manifest-path = "rust/crates/muzik-py/Cargo.toml"
 python-source = "."
-module-name = "muzik._seakarr"
+module-name = "muzik._native"
 include = [
     { path = "muzik/bin/muzik-gpui", format = "wheel" },
     { path = "rust/gpui_app/Cargo.toml", format = "sdist" },

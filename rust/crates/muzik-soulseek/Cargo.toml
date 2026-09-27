@@ -1,0 +1,12 @@
+[package]
+name = "muzik-soulseek"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Blocking Soulseek search and download client for muzik"
+
+[dependencies]
+soulseek_rs = { package = "soulseek-rs-lib", git = "https://github.com/michel/soulseek-rs", rev = "a62bab1e6a505362109b8303aa528af03403eeae" }
+thiserror = "2"
+tracing = "0.1"

@@ -7,7 +7,12 @@ import tarfile
 
 
 REQUIRED = (
-    "rust/seakarr_bridge/Cargo.toml",
+    "rust/Cargo.toml",
+    "rust/Cargo.lock",
+    "rust/crates/muzik-soulseek/Cargo.toml",
+    "rust/crates/muzik-soulseek/src/lib.rs",
+    "rust/crates/muzik-py/Cargo.toml",
+    "rust/crates/muzik-py/src/lib.rs",
     "rust/gpui_app/Cargo.toml",
     "rust/gpui_app/Cargo.lock",
     "rust/gpui_app/src/main.rs",

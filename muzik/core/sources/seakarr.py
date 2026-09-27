@@ -80,13 +80,13 @@ def remote_parent(remote_path: str) -> str:
 
 def _load_seakarr_module() -> Any:
     try:
-        from muzik import _seakarr
+        from muzik import _native
     except ImportError as exc:
         raise SoulseekError(
             "The embedded Seakarr bridge is not built. Run `maturin develop` "
-            "in rust/seakarr_bridge/ and retry."
+            "in rust/crates/muzik-py/ and retry."
         ) from exc
-    return _seakarr
+    return _native
 
 
 def _candidate_file(file_data: dict[str, Any]) -> CandidateFile:

@@ -11,9 +11,9 @@ The release workflow builds these files:
 
 | File | Target | Contents |
 | --- | --- | --- |
-| macOS wheel | macOS arm64, Python 3.14 | Python package, Seakarr extension, GPUI app |
-| Linux wheel | Linux x86_64, Python 3.14 | Python package, Seakarr extension, GPUI app |
-| Source archive | Source | Python and both Rust crates |
+| macOS wheel | macOS arm64, Python 3.14 | Python package, `_native` extension, GPUI app |
+| Linux wheel | Linux x86_64, Python 3.14 | Python package, `_native` extension, GPUI app |
+| Source archive | Source | Python, Rust workspace, and GPUI app crate |
 
 The Linux wheel uses a `linux_x86_64` tag. It is built on Ubuntu with GPUI's
 system libraries. It is not a manylinux wheel. Linux users need a working
@@ -37,13 +37,16 @@ python scripts/check-native-wheel.py
 ```
 
 `scripts/build-native-gui.sh` builds `rust/gpui_app` and puts its executable in
-`muzik/bin/`. Maturin builds `muzik._seakarr` from `rust/seakarr_bridge/` and
+`muzik/bin/`. Maturin builds `muzik._native` from `rust/crates/muzik-py/` and
 includes the executable in the wheel. The wheel check confirms the file and
 its executable mode. Install a built wheel in a clean Python 3.14 environment
 and run `muzik gui` to test the real application.
 
+The Soulseek dependency notice is in
+[`rust/crates/muzik-soulseek/THIRD_PARTY_NOTICES.md`](rust/crates/muzik-soulseek/THIRD_PARTY_NOTICES.md).
+
 The source archive includes the GPUI crate but does not build its executable
-when `pip` builds the Seakarr extension. A direct `pip install` from the source
+when `pip` builds the `_native` extension. A direct `pip install` from the source
 archive gives the command-line interface; `muzik gui` then needs a separate
 GPUI build. The Homebrew formula runs that build before `pip install`, so its
 installed package contains the desktop program.
@@ -67,7 +70,9 @@ The CLI can run without a display; the GPUI app needs a GPU and display.
 ## Release checks
 
 The release workflow sets one version in both Rust Cargo manifests, then
-builds macOS and Linux wheels and a source archive. Each wheel job builds the
+builds macOS and Linux wheels and a source archive. The release workflow sets
+the versions in `rust/crates/muzik-py/Cargo.toml` and
+`rust/crates/muzik-soulseek/Cargo.toml`. Each wheel job builds the
 GPUI binary first, installs the wheel, and checks the Python service link.
 The normal check workflow runs Python and Rust checks on Linux and a GPUI
 build on macOS. This service check does not open a window.

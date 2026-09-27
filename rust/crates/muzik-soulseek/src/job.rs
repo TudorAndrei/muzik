@@ -1,6 +1,5 @@
 //! Pollable job state shared between a background worker thread and the
-//! Python-facing `SeakarrJob`. Kept free of PyO3 so the state machine is
-//! unit-testable without a Python interpreter.
+//! host-facing `SeakarrJob`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

@@ -1,42 +1,26 @@
-//! Error mapping between `soulseek_rs::SoulseekRs` and the Python-facing
-//! exception. `BridgeError` stays free of any PyO3 type so it is
-//! unit-testable without a Python interpreter.
+//! Error mapping from `soulseek_rs::SoulseekRs` to library errors.
 
-use pyo3::create_exception;
-use pyo3::exceptions::PyException;
-
-create_exception!(_seakarr, SeakarrError, PyException);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BridgeError {
+    #[error("not connected to the Soulseek server")]
     NotConnected,
+    #[error("Soulseek login failed")]
     AuthenticationFailed,
+    #[error("network error: {0}")]
     Network(String),
+    #[error("operation timed out")]
     Timeout,
+    #[error("connection closed")]
     ConnectionClosed,
+    #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("job has not finished yet")]
     JobNotFinished,
+    #[error("job failed: {0}")]
     JobFailed(String),
+    #[error("job was cancelled")]
     JobCancelled,
 }
-
-impl std::fmt::Display for BridgeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NotConnected => write!(f, "not connected to the Soulseek server"),
-            Self::AuthenticationFailed => write!(f, "Soulseek login failed"),
-            Self::Network(msg) => write!(f, "network error: {msg}"),
-            Self::Timeout => write!(f, "operation timed out"),
-            Self::ConnectionClosed => write!(f, "connection closed"),
-            Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
-            Self::JobNotFinished => write!(f, "job has not finished yet"),
-            Self::JobFailed(msg) => write!(f, "job failed: {msg}"),
-            Self::JobCancelled => write!(f, "job was cancelled"),
-        }
-    }
-}
-
-impl std::error::Error for BridgeError {}
 
 impl From<soulseek_rs::SoulseekRs> for BridgeError {
     fn from(err: soulseek_rs::SoulseekRs) -> Self {
@@ -53,12 +37,6 @@ impl From<soulseek_rs::SoulseekRs> for BridgeError {
                 Self::Protocol("internal lock poisoned".to_string())
             }
         }
-    }
-}
-
-impl From<BridgeError> for pyo3::PyErr {
-    fn from(err: BridgeError) -> Self {
-        SeakarrError::new_err(err.to_string())
     }
 }
 

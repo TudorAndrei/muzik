@@ -1,16 +1,14 @@
 # Third-party notices
 
-`rust/seakarr_bridge/` links against `soulseek-rs-lib`, a dependency not
+`rust/crates/muzik-soulseek/` links against `soulseek-rs-lib`, a dependency not
 authored by this project. Its license text and required notice are
-reproduced below, as PLAN.md requires.
+reproduced below, as `plans/rust-port/PLAN.md` requires.
 
 ## soulseek-rs-lib
 
 - Source: <https://github.com/michel/soulseek-rs>
 - Pinned commit: `a62bab1e6a505362109b8303aa528af03403eeae`
-  (verified against the live repository; PLAN.md's earlier commit,
-  `571819f1101bb99bce5c839cb4ffcdf967c94d0c`, does not exist upstream —
-  see the corrected Phase 2 section of PLAN.md)
+  (verified against the live repository)
 - License: MIT
 
 ```text
@@ -38,5 +36,4 @@ SOFTWARE.
 ```
 
 MIT permits use in a proprietary distribution such as Muzik's, provided the
-notice above ships with the release. `DISTRIBUTION.md` must reference this
-file once the native wheel is packaged (Phase 7).
+notice above ships with the release.

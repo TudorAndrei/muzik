@@ -1,0 +1,19 @@
+[package]
+name = "muzik-py"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Python bindings for muzik Rust libraries"
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+muzik-soulseek = { path = "../muzik-soulseek" }
+pyo3 = "0.29"
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]

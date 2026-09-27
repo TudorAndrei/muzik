@@ -11,6 +11,7 @@ shellcheck = "latest"
 zizmor = "latest"
 rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] }
 "pipx:maturin" = "latest"
+"cargo:cargo-deny" = "latest"
 
 [env]
 HK_MISE = 1
@@ -25,7 +26,7 @@ MUZIK_PYTHON="$PWD/.venv/bin/python" cargo run --manifest-path rust/gpui_app/Car
 """
 
 [tasks.develop]
-description = "Rebuild the Rust bridge and reinstall muzik editable in the local venv"
+description = "Rebuild the Rust extension and reinstall muzik editable in the local venv"
 run = "uvx maturin develop --uv --release"
 
 [tasks.check]
@@ -37,10 +38,11 @@ uv run ruff check .
 uv run ty check . --ignore unresolved-import
 uv run pytest -q
 uv pip check
-cargo fmt --manifest-path rust/seakarr_bridge/Cargo.toml --check
-cargo clippy --manifest-path rust/seakarr_bridge/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path rust/seakarr_bridge/Cargo.toml
-cargo build --manifest-path rust/seakarr_bridge/Cargo.toml --release
+cargo fmt --manifest-path rust/Cargo.toml --all --check
+cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace
+cargo build --manifest-path rust/Cargo.toml --workspace --release
+cargo deny --manifest-path rust/Cargo.toml check licenses
 cargo fmt --manifest-path rust/gpui_app/Cargo.toml --check
 cargo clippy --manifest-path rust/gpui_app/Cargo.toml --all-targets --locked -- -D warnings
 cargo test --manifest-path rust/gpui_app/Cargo.toml --locked

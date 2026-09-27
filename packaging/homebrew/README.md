@@ -47,7 +47,7 @@ For each new tag, edit `Formula/muzik.rb` in the tap:
 ## Notes and caveats
 
 - **Compiles both Rust parts from source.** The formula builds the GPUI app
-  before `pip` builds `muzik._seakarr` with Maturin. It needs Rust and network
+  before `pip` builds `muzik._native` with Maturin. It needs Rust and network
   access to fetch the pinned `soulseek-rs-lib` git dependency.
 - **Dependencies come from PyPI at install time.** `pip` resolves the Python
   dependencies while `brew install` runs.

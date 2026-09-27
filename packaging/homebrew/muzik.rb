@@ -11,9 +11,9 @@
 #
 # Since Phase 7 (embedded Seakarr bridge), muzik is a Maturin mixed Python/Rust
 # project: the source archive has no prebuilt wheel inside it, so `pip install`
-# compiles the native muzik._seakarr extension from source at install time —
+# compiles the native muzik._native extension from source at install time —
 # this needs a Rust toolchain (below) and network access to fetch the pinned
-# soulseek-rs-lib git dependency declared in rust/seakarr_bridge/Cargo.toml.
+# soulseek-rs-lib git dependency declared in rust/crates/muzik-soulseek/Cargo.toml.
 # The GPUI desktop program is a separate Rust crate. Build it before pip so
 # Maturin can put the native program in the installed Python package.
 class Muzik < Formula

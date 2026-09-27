@@ -57,7 +57,7 @@ uv run playwright install chromium
 
 ## Soulseek setup
 
-Soulseek support is an embedded Rust client (`rust/seakarr_bridge/`) — there
+Soulseek support is an embedded Rust client (`rust/crates/muzik-soulseek/`) — there
 is no separate server process to run. Set your Soulseek account credentials
 as environment variables:
 
