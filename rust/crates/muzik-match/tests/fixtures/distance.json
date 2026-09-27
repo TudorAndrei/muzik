@@ -3,6 +3,30 @@
   "current_year": 2026,
   "tracks": [
     {
+      "name": "local track without length",
+      "item": {
+        "title": "Song",
+        "artist": "Band"
+      },
+      "track": {
+        "title": "Song",
+        "artist": "Band",
+        "length": 180.0
+      },
+      "include_artist": false,
+      "expected": {
+        "score": 0.4,
+        "penalties": {
+          "track_length": [
+            1.0
+          ],
+          "track_title": [
+            0.0
+          ]
+        }
+      }
+    },
+    {
       "name": "length within grace",
       "item": {
         "title": "Song",

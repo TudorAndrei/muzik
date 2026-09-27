@@ -71,6 +71,12 @@ CASES: tuple[tuple[str | None, str | None], ...] = (
 
 TRACK_CASES: list[dict[str, Any]] = [
     {
+        "name": "local track without length",
+        "item": {"title": "Song", "artist": "Band"},
+        "track": {"title": "Song", "artist": "Band", "length": 180.0},
+        "include_artist": False,
+    },
+    {
         "name": "length within grace",
         "item": {"title": "Song", "artist": "Band", "length": 100.0},
         "track": {"title": "Song", "artist": "Band", "length": 108.0},
