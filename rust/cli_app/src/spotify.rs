@@ -1,4 +1,4 @@
-use muzik_core::{app_config, spotify};
+use muzik_core::{app_config, spotify, watchlist};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -80,6 +80,26 @@ pub fn export(uri: &str, output: Option<&Path>) -> Result<(), String> {
             String::from_utf8(bytes).map_err(|error| error.to_string())?
         );
     }
+    Ok(())
+}
+
+pub fn watch(reference: &str) -> Result<(), String> {
+    let source = watchlist::parse_source(reference)?;
+    if source.get("kind").and_then(serde_json::Value::as_str) != Some("spotify") {
+        return Err("enter a Spotify playlist or album link, or liked".into());
+    }
+    let repository = watchlist::Repository::new(watchlist::Repository::default_path());
+    let playlist = repository.add(reference)?;
+    let name = playlist
+        .get("title")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            playlist
+                .get("playlist_id")
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("playlist");
+    println!("Added {name}. Open the Watchlist tab, or run a refresh, to sync it.");
     Ok(())
 }
 

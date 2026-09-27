@@ -261,6 +261,8 @@ enum SpotifyCommand {
     Playlists,
     /// Read a Spotify playlist or album as JSON metadata.
     Export(SpotifyExport),
+    /// Add a Spotify playlist or album to the watchlist.
+    Watch(SpotifyWatch),
     /// Save the client ID of your Spotify application.
     SetClientId(SetSpotifyClientId),
     /// Remove saved Spotify tokens.
@@ -281,6 +283,12 @@ struct SpotifyExport {
     /// Write the JSON document to this file instead of standard output.
     #[usage(long, short = 'o')]
     output: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct SpotifyWatch {
+    /// Spotify playlist or album URI or link, or liked.
+    reference: String,
 }
 
 #[derive(Args)]
@@ -322,6 +330,7 @@ async fn run(command: Command) -> Result<(), String> {
             SpotifyCommand::Status => spotify::status(),
             SpotifyCommand::Playlists => spotify::playlists(),
             SpotifyCommand::Export(args) => spotify::export(&args.uri, args.output.as_deref()),
+            SpotifyCommand::Watch(args) => spotify::watch(&args.reference),
             SpotifyCommand::SetClientId(args) => spotify::set_client_id(&args.client_id),
             SpotifyCommand::Logout => spotify::logout(),
         },
