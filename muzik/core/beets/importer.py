@@ -12,6 +12,8 @@ from beets import config as beets_config
 from beets import importer
 from requests.exceptions import RequestException
 
+from muzik.config import get_native_settings
+from muzik.core.matching import NativeRanking, rank_album_candidates
 from muzik.core.beets.config import open_library
 from muzik.core.beets.decisions import (
     BeetsDecisions,
@@ -145,12 +147,30 @@ class MuzikImportSession(importer.ImportSession):
         self.decisions = decisions
         self.events = events or NullBeetsEventEmitter()
         self.adapter = BeetsImporterAdapter()
+        self.match_mode = get_native_settings()["match"]
 
     def should_resume(self, path: bytes) -> bool:
         return self.decisions.should_resume_beets_import(Path(os.fsdecode(path)))
 
     def choose_match(self, task: Any) -> Any:
         view = self.adapter.view_for(task)
+        if self.match_mode == "shadow":
+            try:
+                ranking = rank_album_candidates(task)
+                if _ranking_differs(view, ranking):
+                    self.events.emit(
+                        BeetsLogEvent(
+                            "Native album ranking differs from beets.",
+                            severity="warning",
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001 - shadow mode must keep beets usable
+                self.events.emit(
+                    BeetsLogEvent(
+                        f"Native album ranking failed: {exc}",
+                        severity="warning",
+                    )
+                )
         self.events.emit(BeetsTaskEvent(view))
         return self.adapter.resolve_choice(
             task, self.decisions.choose_beets_album_match(view)
@@ -169,6 +189,17 @@ class MuzikImportSession(importer.ImportSession):
         self.events.emit(BeetsDuplicateEvent(view, duplicates))
         decision = self.decisions.resolve_beets_duplicate(view, duplicates)
         apply_duplicate_decision(task, decision)
+
+
+def _ranking_differs(view: BeetsTaskView, ranking: NativeRanking) -> bool:
+    if len(view.matches) != len(ranking.candidates):
+        return True
+    for index, candidate in enumerate(ranking.candidates):
+        if candidate.original_index != index:
+            return True
+        if view.matches[index].distance != candidate.distance:
+            return True
+    return False
 
 
 def apply_duplicate_decision(task: Any, decision: BeetsDuplicateDecision) -> None:

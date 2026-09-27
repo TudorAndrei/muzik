@@ -11,6 +11,8 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
+use muzik_core::BeetsConfig;
+use muzik_match::{rank_albums, MatchAlbum, MatchConfig, MatchItem};
 use muzik_metadata::{MetadataClient, ReleaseSearch};
 use muzik_soulseek::error::BridgeError;
 use muzik_soulseek::job::{JobHandle, JobOutcome, JobState};
@@ -19,6 +21,7 @@ use muzik_soulseek::types::{Candidate, DownloadProgress};
 
 create_exception!(_native, SeakarrError, PyException);
 create_exception!(_native, MetadataError, PyException);
+create_exception!(_native, MatchError, PyException);
 
 const MUSICBRAINZ_USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
@@ -28,6 +31,57 @@ fn soulseek_error(error: BridgeError) -> PyErr {
 
 fn metadata_error(error: muzik_metadata::Error) -> PyErr {
     MetadataError::new_err(error.to_string())
+}
+
+/// Rank the supplied beets album candidates. Indices refer to the input list.
+#[pyfunction]
+fn rank_album_candidates(
+    py: Python<'_>,
+    items_json: String,
+    albums_json: String,
+    config_json: String,
+) -> PyResult<(Vec<(usize, f64)>, String)> {
+    py.detach(move || {
+        let result = (|| -> Result<_, String> {
+            let items: Vec<MatchItem> =
+                serde_json::from_str(&items_json).map_err(|error| error.to_string())?;
+            let albums: Vec<MatchAlbum> =
+                serde_json::from_str(&albums_json).map_err(|error| error.to_string())?;
+            let overrides: serde_json::Value =
+                serde_json::from_str(&config_json).map_err(|error| error.to_string())?;
+            let config = BeetsConfig::from_layers("", overrides.clone())
+                .map_err(|error| error.to_string())?;
+            let mut config = MatchConfig::from_beets(&config).map_err(|error| error.to_string())?;
+            if let Some(count) = overrides
+                .get("metadata_source_count")
+                .and_then(|value| value.as_u64())
+            {
+                config.metadata_source_count = count as usize;
+            }
+            if let Some(penalties) = overrides.get("data_source_penalties") {
+                config.data_source_penalties =
+                    serde_json::from_value(penalties.clone()).map_err(|error| error.to_string())?;
+            }
+            let ranking =
+                rank_albums(&items, &albums, &config).map_err(|error| error.to_string())?;
+            let candidates = ranking
+                .candidates
+                .iter()
+                .map(|candidate| {
+                    candidate
+                        .distance
+                        .score(&config)
+                        .map(|score| (candidate.input_index, score))
+                        .map_err(|error| error.to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok((
+                candidates,
+                format!("{:?}", ranking.recommendation).to_lowercase(),
+            ))
+        })();
+        result.map_err(MatchError::new_err)
+    })
 }
 
 #[pyfunction]
@@ -253,6 +307,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySeakarrJob>()?;
     m.add("SeakarrError", m.py().get_type::<SeakarrError>())?;
     m.add("MetadataError", m.py().get_type::<MetadataError>())?;
+    m.add("MatchError", m.py().get_type::<MatchError>())?;
+    m.add_function(wrap_pyfunction!(rank_album_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(search_musicbrainz_releases, m)?)?;
     m.add_function(wrap_pyfunction!(get_musicbrainz_tracklist, m)?)?;
     Ok(())

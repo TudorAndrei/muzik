@@ -12,8 +12,11 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 muzik-metadata = { path = "../muzik-metadata" }
+muzik-core = { path = "../muzik-core" }
+muzik-match = { path = "../muzik-match" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 pyo3 = "0.29"
+serde_json = "1"
 
 [features]
 default = []

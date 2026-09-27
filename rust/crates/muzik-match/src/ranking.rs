@@ -75,6 +75,7 @@ pub enum Recommendation {
 
 #[derive(Clone, Debug)]
 pub struct RankedAlbum {
+    pub input_index: usize,
     pub album: MatchAlbum,
     pub assignment: Assignment,
     pub distance: Distance,
@@ -151,7 +152,7 @@ pub fn rank_albums(
 ) -> Result<Ranking, Error> {
     let mut ranked = Vec::new();
     let mut seen = HashSet::new();
-    for album in candidates {
+    for (input_index, album) in candidates.iter().enumerate() {
         if album.tracks.is_empty() {
             continue;
         }
@@ -173,6 +174,7 @@ pub fn rank_albums(
             continue;
         }
         ranked.push(RankedAlbum {
+            input_index,
             album: album.clone(),
             assignment,
             distance,

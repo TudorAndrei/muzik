@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 from beets import config as beets_config
@@ -23,6 +24,7 @@ from muzik.core.beets.importer import (
     apply_import_options,
     import_paths,
 )
+from muzik.core.matching import NativeRanking, RankedCandidate
 
 
 class FakeDecisions:
@@ -144,6 +146,68 @@ def test_muzik_import_session_delegates_decisions_and_emits_events() -> None:
         BeetsTaskEvent,
         BeetsDuplicateEvent,
     ]
+
+
+@pytest.mark.parametrize(
+    ("rows", "warning"),
+    [
+        ([RankedCandidate(0, 0.2), RankedCandidate(1, 0.5)], False),
+        ([RankedCandidate(1, 0.5), RankedCandidate(0, 0.2)], True),
+        ([RankedCandidate(0, 0.3), RankedCandidate(1, 0.5)], True),
+    ],
+)
+def test_shadow_match_compares_rankings_and_keeps_beets_choice(
+    monkeypatch, rows, warning
+) -> None:
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.get_native_settings",
+        lambda: {"match": "shadow"},
+    )
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.rank_album_candidates",
+        lambda _task: NativeRanking(rows, "medium"),
+    )
+    events = RecordingBeetsEventEmitter()
+    session = MuzikImportSession(
+        object(), None, [Path("/tmp/Album")], None, FakeDecisions(), events
+    )
+    task = FakeTask()
+    task.candidates = [
+        SimpleNamespace(distance=0.2),
+        SimpleNamespace(distance=0.5),
+    ]
+
+    assert session.choose_match(task) is beets_importer.Action.APPLY
+    warnings = [
+        event
+        for event in events.events
+        if isinstance(event, BeetsLogEvent) and event.severity == "warning"
+    ]
+    assert bool(warnings) is warning
+
+
+def test_shadow_match_keeps_beets_choice_after_native_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "muzik.core.beets.importer.get_native_settings",
+        lambda: {"match": "shadow"},
+    )
+
+    def fail(_task):
+        raise RuntimeError("native matcher failed")
+
+    monkeypatch.setattr("muzik.core.beets.importer.rank_album_candidates", fail)
+    events = RecordingBeetsEventEmitter()
+    session = MuzikImportSession(
+        object(), None, [Path("/tmp/Album")], None, FakeDecisions(), events
+    )
+    task = FakeTask()
+    task.candidates = [SimpleNamespace(distance=0.2)]
+
+    assert session.choose_match(task) is beets_importer.Action.APPLY
+    assert any(
+        isinstance(event, BeetsLogEvent) and "native matcher failed" in event.message
+        for event in events.events
+    )
 
 
 def test_apply_duplicate_decision_sets_task_flags() -> None:
