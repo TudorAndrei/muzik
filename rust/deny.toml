@@ -9,3 +9,9 @@ allow = [
 ]
 confidence-threshold = 0.8
 unused-allowed-license = "allow"
+exceptions = [
+    { crate = "ring", allow = ["ISC"] },
+    { crate = "rustls-webpki", allow = ["ISC"] },
+    { crate = "untrusted", allow = ["ISC"] },
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
