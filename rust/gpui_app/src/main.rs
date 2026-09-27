@@ -22,6 +22,7 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
     Workflow,
+    Config,
     Watchlist,
     Library,
     Settings,
@@ -129,9 +130,8 @@ const ITEM_ACTIONS: &[(&str, &str)] = &[
 
 struct Muzik {
     page: Page,
-    fields: Vec<Field>,
-    choices: Vec<Choice>,
-    switches: Vec<Switch>,
+    raw: Entity<InputState>,
+    config_view: Option<Entity<ConfigView>>,
     watch_url: Entity<InputState>,
     playlist_name: Entity<InputState>,
     spotify_client_id: Entity<InputState>,
@@ -161,7 +161,6 @@ struct Muzik {
     services: Value,
     spotify: Value,
     defaults: Value,
-    config_window: Option<WindowHandle<Root>>,
     config_status: Rc<RefCell<String>>,
 }
 
@@ -171,65 +170,10 @@ impl Muzik {
     }
 
     fn new_with_bridge(window: &mut Window, cx: &mut Context<Self>, start_bridge: bool) -> Self {
-        let fields = [
-            ("raw", "URL or path", ""),
-            ("output", "Downloads", ""),
-            ("splits", "Splits", ""),
-            ("config", "Beets config", ""),
-            ("jobs", "Jobs", "0"),
-            ("min_bitrate", "Min bitrate", "256"),
-        ]
-        .into_iter()
-        .map(|(key, label, default)| Field {
-            key,
-            label,
-            state: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(label)
-                    .default_value(default)
-            }),
-        })
-        .collect();
-        let choices: Vec<Choice> = CHOICES
-            .iter()
-            .map(|(key, label, values)| Choice {
-                key,
-                label,
-                values,
-                selected: 0,
-                state: cx.new(|cx| {
-                    SelectState::new(values.to_vec(), Some(IndexPath::default()), window, cx)
-                }),
-            })
-            .collect();
-        for (index, choice) in choices.iter().enumerate() {
-            cx.subscribe_in(&choice.state, window, move |view, _, event, _, cx| {
-                let SelectEvent::Confirm(value) = event;
-                if let Some(value) = value {
-                    if let Some(selected) = view.choices[index]
-                        .values
-                        .iter()
-                        .position(|item| item == value)
-                    {
-                        view.choices[index].selected = selected;
-                        cx.notify();
-                    }
-                }
-            })
-            .detach();
-        }
         let mut this = Self {
             page: Page::Workflow,
-            fields,
-            choices,
-            switches: SWITCHES
-                .iter()
-                .map(|(key, label, enabled)| Switch {
-                    key,
-                    label,
-                    enabled: *enabled,
-                })
-                .collect(),
+            raw: cx.new(|cx| InputState::new(window, cx).placeholder("URL or path")),
+            config_view: None,
             watch_url: cx.new(|cx| InputState::new(window, cx).placeholder("Playlist URL")),
             playlist_name: cx.new(|cx| InputState::new(window, cx).placeholder("Playlist name")),
             spotify_client_id: cx
@@ -260,7 +204,6 @@ impl Muzik {
             services: Value::Null,
             spotify: Value::Null,
             defaults: Value::Null,
-            config_window: None,
             config_status: Rc::new(RefCell::new(String::new())),
         };
         if start_bridge {
@@ -321,101 +264,39 @@ impl Muzik {
     }
 
     fn launcher_params(&self, cx: &App) -> Value {
-        let mut params = Map::new();
-        for field in &self.fields {
-            let value = field.state.read(cx).value().to_string();
-            if field.key == "jobs" || field.key == "min_bitrate" {
-                if let Ok(number) = value.parse::<u64>() {
-                    params.insert(field.key.into(), json!(number));
-                }
-            } else {
-                let value = if value.is_empty() && (field.key == "output" || field.key == "splits")
-                {
-                    self.defaults[field.key].as_str().unwrap_or("").to_string()
-                } else {
-                    value
-                };
-                params.insert(field.key.into(), json!(value));
-            }
-        }
-        for choice in &self.choices {
-            params.insert(choice.key.into(), json!(choice.values[choice.selected]));
-        }
-        for switch in &self.switches {
-            params.insert(switch.key.into(), json!(switch.enabled));
-        }
+        let mut params = self.defaults.as_object().cloned().unwrap_or_default();
+        params.insert("raw".into(), json!(self.raw.read(cx).value().to_string()));
         Value::Object(params)
     }
 
-    fn apply_defaults(&mut self, defaults: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn apply_defaults(&mut self, defaults: Value, cx: &mut Context<Self>) {
         self.defaults = defaults;
-        for field in &self.fields {
-            if field.key == "raw" {
-                continue;
-            }
-            let value = match &self.defaults[field.key] {
-                Value::String(value) => value.clone(),
-                Value::Number(value) => value.to_string(),
-                _ => continue,
-            };
-            field
-                .state
-                .update(cx, |state, cx| state.set_value(value, window, cx));
-        }
-        for choice in &mut self.choices {
-            if let Some(value) = self.defaults[choice.key].as_str() {
-                if let Some(index) = choice.values.iter().position(|item| *item == value) {
-                    choice.selected = index;
-                    choice.state.update(cx, |state, cx| {
-                        state.set_selected_index(Some(IndexPath::new(index)), window, cx)
-                    });
-                }
-            }
-        }
-        for switch in &mut self.switches {
-            if let Some(value) = self.defaults[switch.key].as_bool() {
-                switch.enabled = value;
-            }
-        }
         cx.notify();
     }
 
-    fn open_config(&mut self, cx: &mut Context<Self>) {
+    fn open_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.defaults.is_object() {
             self.status = "Config is loading".into();
             cx.notify();
             return;
         }
-        if let Some(handle) = &self.config_window {
-            if handle
-                .update(cx, |_, window, _| window.activate_window())
-                .is_ok()
-            {
-                return;
-            }
+        if self.config_view.is_none() {
+            let main = cx.entity();
+            let defaults = self.defaults.clone();
+            let status = self.config_status.clone();
+            self.config_view =
+                Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
         }
-        let main = cx.entity();
-        let defaults = self.defaults.clone();
-        let status = self.config_status.clone();
-        let bounds = WindowBounds::centered(size(px(920.), px(760.)), cx);
-        match cx.open_window(
-            WindowOptions {
-                window_bounds: Some(bounds),
-                focus: true,
-                ..Default::default()
-            },
-            move |window, cx| {
-                let view = cx.new(|cx| ConfigView::new(main, defaults, status, window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            },
-        ) {
-            Ok(handle) => self.config_window = Some(handle),
-            Err(error) => self.status = format!("Could not open Config: {error}"),
-        }
+        self.page = Page::Config;
+        self.error = None;
         cx.notify();
     }
 
-    fn set_page(&mut self, page: Page, cx: &mut Context<Self>) {
+    fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if page == Page::Config {
+            self.open_config(window, cx);
+            return;
+        }
         self.page = page;
         self.error = None;
         match page {
@@ -426,19 +307,13 @@ impl Muzik {
                 self.send("watchlist.load", self.launcher_params(cx));
                 self.send("spotify.status", json!({}));
             }
-            Page::Workflow => {}
+            Page::Workflow | Page::Config => {}
         }
         cx.notify();
     }
 
-    fn scan_library(&mut self, cx: &App) {
-        let output = self
-            .fields
-            .iter()
-            .find(|f| f.key == "output")
-            .map(|f| f.state.read(cx).value().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| self.defaults["output"].as_str().unwrap_or("").to_string());
+    fn scan_library(&mut self, _cx: &App) {
+        let output = self.defaults["output"].as_str().unwrap_or("").to_string();
         self.send("library.scan", json!({"output":output}));
     }
 
@@ -640,11 +515,10 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let directories = matches!(self.fields[index].key, "output" | "splits");
+    fn pick_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: !directories,
-            directories,
+            files: true,
+            directories: false,
             multiple: false,
             prompt: Some("Select".into()),
         });
@@ -653,8 +527,7 @@ impl Muzik {
                 if let Some(path) = paths.into_iter().next() {
                     let value = path.to_string_lossy().into_owned();
                     let _ = view.update_in(cx, |view, window, cx| {
-                        view.fields[index]
-                            .state
+                        view.raw
                             .update(cx, |state, cx| state.set_value(value, window, cx));
                         cx.notify();
                     });
@@ -713,7 +586,7 @@ impl Muzik {
                             self.error = None;
                             *self.config_status.borrow_mut() = self.status.clone();
                         }
-                        self.apply_defaults(result["defaults"].clone(), window, _cx);
+                        self.apply_defaults(result["defaults"].clone(), _cx);
                     }
                     "watchlist.load" | "watchlist.add" | "watchlist.remove"
                     | "watchlist.rename" => {
@@ -1021,6 +894,7 @@ impl Muzik {
             );
         for (page, label) in [
             (Page::Workflow, "Workflow"),
+            (Page::Config, "Config"),
             (Page::Watchlist, "Watchlist"),
             (Page::Library, "Library"),
             (Page::Settings, "Settings"),
@@ -1033,70 +907,51 @@ impl Muzik {
                 } else {
                     button
                 }
-                .on_click(cx.listener(move |view, _, _, cx| view.set_page(page, cx))),
+                .on_click(cx.listener(move |view, _, window, cx| view.set_page(page, window, cx))),
             );
         }
-        row = row.child(
-            Button::new("open-config")
-                .label("Config")
-                .on_click(cx.listener(|view, _, _, cx| view.open_config(cx))),
-        );
         row.into_any_element()
     }
 
     fn workflow(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut source = div().v_flex().gap_3();
-        let mut destinations = div().v_flex().gap_3();
-        let mut tuning = div().flex().flex_wrap().gap_4();
-        for (index, field) in self.fields.iter().enumerate() {
-            let mut row = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().flex_1().child(Input::new(&field.state)));
-            if matches!(field.key, "raw" | "output" | "splits" | "config") {
-                row = row.child(Button::new(("pick-path", index)).label("Choose…").on_click(
-                    cx.listener(move |view, _, window, cx| view.pick_path(index, window, cx)),
-                ));
-            }
-            let field_view = div()
+        let source =
+            div()
                 .v_flex()
                 .gap_1()
-                .child(div().text_sm().font_semibold().child(field.label))
-                .child(row);
-            match field.key {
-                "raw" => source = source.child(field_view),
-                "jobs" | "min_bitrate" => {
-                    tuning = tuning.child(div().w(px(180.)).child(field_view))
-                }
-                _ => destinations = destinations.child(field_view),
-            }
-        }
-        let mut choices = div().flex().flex_wrap().gap_4();
-        for choice in &self.choices {
-            choices = choices.child(
+                .child(div().text_sm().font_semibold().child("URL or path"))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1().child(Input::new(&self.raw)))
+                        .child(Button::new("pick-source").label("Choose…").on_click(
+                            cx.listener(|view, _, window, cx| view.pick_source(window, cx)),
+                        )),
+                );
+        let output = self.defaults["output"]
+            .as_str()
+            .unwrap_or("Set a download folder");
+        let splits = self.defaults["splits"]
+            .as_str()
+            .unwrap_or("Set a splits folder");
+        let audio = self.defaults["audio_source"].as_str().unwrap_or("youtube");
+        let prefer = self.defaults["prefer"].as_str().unwrap_or("lossless");
+        let summary = div()
+            .v_flex()
+            .gap_2()
+            .child(div().text_sm().child(format!("Downloads: {output}")))
+            .child(div().text_sm().child(format!("Splits: {splits}")))
+            .child(
                 div()
-                    .v_flex()
-                    .gap_1()
-                    .w(px(240.))
-                    .child(div().text_sm().font_semibold().child(choice.label))
-                    .child(Select::new(&choice.state).w_full()),
+                    .text_sm()
+                    .child(format!("Audio source: {audio} · Prefer: {prefer}")),
+            )
+            .child(
+                Button::new("edit-config")
+                    .label("Edit config")
+                    .on_click(cx.listener(|view, _, window, cx| view.open_config(window, cx))),
             );
-        }
-        let mut switches = div().flex().flex_wrap().gap_3();
-        for (index, switch) in self.switches.iter().enumerate() {
-            switches = switches.child(
-                div().w(px(210.)).child(
-                    Checkbox::new(("switch", index))
-                        .label(switch.label)
-                        .checked(switch.enabled)
-                        .on_change(cx.listener(move |view, checked, _, cx| {
-                            view.switches[index].enabled = *checked;
-                            cx.notify();
-                        })),
-                ),
-            );
-        }
         let run = Button::new("run")
             .primary()
             .label("Run workflow")
@@ -1113,7 +968,7 @@ impl Muzik {
             .v_flex()
             .gap_5()
             .w_full()
-            .max_w(px(860.))
+            .max_w(px(720.))
             .py_8()
             .px_6()
             .child(
@@ -1136,25 +991,10 @@ impl Muzik {
             )
             .child(
                 GroupBox::new()
-                    .id("workflow-destinations")
-                    .title("DESTINATIONS")
+                    .id("workflow-config")
+                    .title("SAVED CONFIG")
                     .outline()
-                    .child(destinations),
-            )
-            .child(
-                GroupBox::new()
-                    .id("workflow-quality")
-                    .title("SOURCES AND QUALITY")
-                    .outline()
-                    .child(choices),
-            )
-            .child(
-                GroupBox::new()
-                    .id("workflow-processing")
-                    .title("PROCESSING")
-                    .outline()
-                    .child(tuning)
-                    .child(switches),
+                    .child(summary),
             )
             .child(div().flex().justify_end().child(run));
         div()
@@ -2300,7 +2140,7 @@ impl Muzik {
 }
 
 struct ConfigView {
-    main: Entity<Muzik>,
+    main: WeakEntity<Muzik>,
     fields: Vec<Field>,
     choices: Vec<Choice>,
     switches: Vec<Switch>,
@@ -2389,7 +2229,7 @@ impl ConfigView {
             })
             .collect();
         Self {
-            main,
+            main: main.downgrade(),
             fields,
             choices,
             switches,
@@ -2442,11 +2282,13 @@ impl ConfigView {
         for switch in &self.switches {
             params.insert(switch.key.into(), json!(switch.enabled));
         }
-        self.main.update(cx, |main, cx| {
-            main.error = None;
-            main.send("config.save", Value::Object(params));
-            cx.notify();
-        });
+        if let Some(main) = self.main.upgrade() {
+            main.update(cx, |main, cx| {
+                main.error = None;
+                main.send("config.save", Value::Object(params));
+                cx.notify();
+            });
+        }
         *self.status.borrow_mut() = "Saving config".into();
         cx.notify();
     }
@@ -2583,22 +2425,32 @@ impl Render for Muzik {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
             Page::Workflow => self.workflow(cx),
+            Page::Config => div()
+                .flex_1()
+                .child(
+                    self.config_view
+                        .as_ref()
+                        .expect("config view exists")
+                        .clone(),
+                )
+                .into_any_element(),
             Page::Watchlist => self.watchlist(cx),
             Page::Library => self.library(cx),
             Page::Settings => self.settings(cx),
             Page::Spotify => self.spotify(cx),
         };
-        let body =
-            if self.page != Page::Workflow && (self.job_id.is_some() || self.decision.is_some()) {
-                div()
-                    .flex()
-                    .flex_1()
-                    .child(body)
-                    .child(self.job_panel(cx))
-                    .into_any_element()
-            } else {
-                body
-            };
+        let body = if !matches!(self.page, Page::Workflow | Page::Config)
+            && (self.job_id.is_some() || self.decision.is_some())
+        {
+            div()
+                .flex()
+                .flex_1()
+                .child(body)
+                .child(self.job_panel(cx))
+                .into_any_element()
+        } else {
+            body
+        };
         div()
             .v_flex()
             .size_full()
@@ -2606,22 +2458,24 @@ impl Render for Muzik {
             .child(self.header(cx))
             .child(body)
             .child(self.confirmation_view(cx))
-            .child(
-                div()
-                    .p_2()
-                    .bg(if self.error.is_some() {
-                        cx.theme().danger
-                    } else {
-                        cx.theme().secondary
-                    })
-                    .text_color(if self.error.is_some() {
-                        cx.theme().danger_foreground
-                    } else {
-                        cx.theme().secondary_foreground
-                    })
-                    .text_sm()
-                    .child(self.error.clone().unwrap_or_else(|| self.status.clone())),
-            )
+            .when(self.page != Page::Config, |this| {
+                this.child(
+                    div()
+                        .p_2()
+                        .bg(if self.error.is_some() {
+                            cx.theme().danger
+                        } else {
+                            cx.theme().secondary
+                        })
+                        .text_color(if self.error.is_some() {
+                            cx.theme().danger_foreground
+                        } else {
+                            cx.theme().secondary_foreground
+                        })
+                        .text_sm()
+                        .child(self.error.clone().unwrap_or_else(|| self.status.clone())),
+                )
+            })
     }
 }
 
@@ -2968,17 +2822,18 @@ mod tests {
     use std::collections::HashSet;
 
     #[gpui_kit::test]
-    fn config_window_can_observe_a_main_view_update(cx: &mut TestAppContext) {
-        let main = cx.update(|cx| {
+    fn config_tab_saves_without_repeating_workflow_fields(cx: &mut TestAppContext) {
+        let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
             let mut main = None;
-            cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
-                main = Some(view.clone());
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .unwrap();
-            main.unwrap()
+            let handle = cx
+                .open_window(WindowOptions::default(), |window, cx| {
+                    let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
+                    main = Some(view.clone());
+                    cx.new(|cx| Root::new(view, window, cx))
+                })
+                .unwrap();
+            (handle, main.unwrap())
         });
         cx.update(|cx| {
             main.update(cx, |view, cx| {
@@ -2986,21 +2841,22 @@ mod tests {
                     "output": "/tmp/downloads", "splits": "/tmp/splits", "config": "",
                     "jobs": 0, "min_bitrate": 256,
                 });
-                view.open_config(cx);
-            });
-        });
-        cx.update(|cx| {
-            main.update(cx, |view, cx| {
                 view.status = "Changed".into();
                 cx.notify();
             });
         });
-        let config = main.read_with(cx, |view, _| view.config_window.unwrap());
-        cx.update_window(config.into(), |_, window, cx| {
+        cx.update_window(handle.into(), |_, window, cx| {
             window.render_frame(cx);
+            window.click("Config", cx);
             window.click("save-config", cx);
+            window.click("Workflow", cx);
+            assert!(window.try_find("edit-config").is_some());
+            assert!(window.try_find("save-config").is_none());
         })
         .unwrap();
+        let params = main.read_with(cx, |view, cx| view.launcher_params(cx));
+        assert_eq!(params["output"], "/tmp/downloads");
+        assert_eq!(params["splits"], "/tmp/splits");
     }
 
     #[test]

@@ -37,9 +37,8 @@ its view on the event loop.
 
 - **Workflow** accepts a URL or local path. It uses saved settings and shows
   job progress, logs, and decisions.
-- **Config window** saves output paths, source choices, quality policy, and
-  processing options in `config.yaml`. Open it from the top bar or Workflow.
-  Save the settings once for later runs.
+- **Config** is a tab for output paths, source choices, quality policy, and
+  processing options. Save them in `config.yaml` once for later runs.
 - **Watchlist** shows saved YouTube and Spotify sources, item states, thumbnails,
   filters, and item commands. The Python service reads and saves the same
   watchlist file as the command-line interface.
