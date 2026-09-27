@@ -253,12 +253,21 @@ struct Spotify {
 
 #[derive(Subcommands)]
 enum SpotifyCommand {
+    /// Connect a Spotify account in your browser.
+    Login(SpotifyLogin),
     /// Show the Spotify client ID, redirect URI, and account connection.
     Status,
     /// Save the client ID of your Spotify application.
     SetClientId(SetSpotifyClientId),
     /// Remove saved Spotify tokens.
     Logout,
+}
+
+#[derive(Args)]
+struct SpotifyLogin {
+    /// Loopback port for the browser redirect.
+    #[usage(long, short = 'p')]
+    port: Option<u16>,
 }
 
 #[derive(Args)]
@@ -296,6 +305,7 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Init => init::run().map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
         Command::Spotify(args) => match args.command {
+            SpotifyCommand::Login(args) => spotify::login(args.port),
             SpotifyCommand::Status => spotify::status(),
             SpotifyCommand::SetClientId(args) => spotify::set_client_id(&args.client_id),
             SpotifyCommand::Logout => spotify::logout(),

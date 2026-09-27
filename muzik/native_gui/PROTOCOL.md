@@ -3,7 +3,7 @@
 The GPUI app starts `python -m muzik.native_gui` when a remaining command needs
 the Python backend. It handles `hello`, `config.get`, `config.save`, and
 `library.scan`, `services.check`, `spotify.set_client_id`, and
-`spotify.logout`, `spotify.status`, and `thumbnails.cache` in Rust. The app writes
+`spotify.logout`, `spotify.status`, `spotify.login`, and `thumbnails.cache` in Rust. The app writes
 one UTF-8 JSON object per line to standard input. The service writes one JSON
 object per line to standard output. Only protocol records go to standard
 output. The service ends when standard input closes.

@@ -737,12 +737,13 @@ impl Muzik {
                             None
                         };
                         self.logs.push(format!("Job {}", self.job_status));
-                        self.send("watchlist.load", self.launcher_params(_cx));
                         if self.job_kind.as_deref() == Some("spotify.login") {
                             self.send("spotify.status", json!({}));
                             if event == "job.completed" {
                                 self.send("spotify.playlists", json!({}));
                             }
+                        } else {
+                            self.send("watchlist.load", self.launcher_params(_cx));
                         }
                         self.job_kind = None;
                         if let Some(failure) = failure {

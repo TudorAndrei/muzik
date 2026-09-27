@@ -10,6 +10,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 const PROFILE_URL: &str = "https://api.spotify.com/v1/me";
 
+mod login;
+pub use login::login;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Tokens {
     pub access_token: String,

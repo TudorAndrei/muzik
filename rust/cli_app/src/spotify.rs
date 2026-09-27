@@ -1,4 +1,5 @@
 use muzik_core::{app_config, spotify};
+use std::sync::atomic::AtomicBool;
 
 pub fn set_client_id(client_id: &str) -> Result<(), String> {
     spotify::set_client_id(&app_config::path(), client_id)?;
@@ -45,4 +46,31 @@ pub fn status() -> Result<(), String> {
         println!("Connection: not connected");
         Ok(())
     }
+}
+
+pub fn login(port: Option<u16>) -> Result<(), String> {
+    let config = app_config::path();
+    if let Some(port) = port {
+        if port == 0 {
+            return Err("port must be from 1 to 65535".into());
+        }
+        app_config::save_section_string(&config, "spotify", "redirect_port", &port.to_string())?;
+    }
+    let mut settings = spotify::settings(&config)?;
+    if let Some(port) = port {
+        settings.redirect_port = port;
+    }
+    println!(
+        "Your Spotify application must have this redirect URI: {}",
+        settings.redirect_uri()
+    );
+    println!("Opening the browser for Spotify login...");
+    let name = spotify::login(
+        &config,
+        &spotify::token_path(),
+        port,
+        &AtomicBool::new(false),
+    )?;
+    println!("Connected as {name}.");
+    Ok(())
 }

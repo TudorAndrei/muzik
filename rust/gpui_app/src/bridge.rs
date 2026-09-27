@@ -1,9 +1,11 @@
 //! JSON-lines link for commands still served by the Python workflow process.
 use crate::{native, thumbnails};
+use muzik_core::{app_config, spotify};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -13,7 +15,13 @@ pub struct Bridge {
     output: Receiver<Value>,
     native_output: Sender<Value>,
     thumbnail_pending: Arc<Mutex<HashSet<String>>>,
+    login: Arc<Mutex<Option<NativeLogin>>>,
     next_id: u64,
+}
+
+struct NativeLogin {
+    job_id: String,
+    cancel: Arc<AtomicBool>,
 }
 
 impl Bridge {
@@ -24,6 +32,7 @@ impl Bridge {
             output,
             native_output: events,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
+            login: Arc::new(Mutex::new(None)),
             next_id: 1,
         })
     }
@@ -77,6 +86,29 @@ impl Bridge {
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
+        if command == "spotify.login" {
+            return self.start_spotify_login(id, params);
+        }
+        if command == "job.cancel" {
+            let job_id = params.get("job_id").and_then(Value::as_str).unwrap_or("");
+            let login = self
+                .login
+                .lock()
+                .map_err(|_| "Spotify login is not available")?;
+            if let Some(active) = login.as_ref().filter(|active| active.job_id == job_id) {
+                active.cancel.store(true, Ordering::Relaxed);
+                self.native_output
+                    .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id,"cancel_requested":true}}))
+                    .map_err(|_| "Rust backend is not available".to_owned())?;
+                return Ok(id);
+            }
+            if job_id.starts_with("spotify-login-") {
+                self.native_output
+                    .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"The job is not active."}}))
+                    .map_err(|_| "Rust backend is not available".to_owned())?;
+                return Ok(id);
+            }
+        }
         if command == "thumbnails.cache" {
             let ids = match thumbnails::validate_ids(&params) {
                 Ok(ids) => ids,
@@ -148,6 +180,77 @@ impl Bridge {
         Ok(id)
     }
 
+    fn start_spotify_login(&mut self, id: String, params: Value) -> Result<String, String> {
+        let port = match params.get("port") {
+            None | Some(Value::Null) => None,
+            Some(value) => match value
+                .as_u64()
+                .and_then(|port| u16::try_from(port).ok())
+                .filter(|port| *port > 0)
+            {
+                Some(port) => Some(port),
+                None => {
+                    self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"port must be an integer from 1 to 65535."}}))
+                        .map_err(|_| "Rust backend is not available".to_owned())?;
+                    return Ok(id);
+                }
+            },
+        };
+        let mut login = self
+            .login
+            .lock()
+            .map_err(|_| "Spotify login is not available")?;
+        if login.is_some() {
+            self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"job_active","message":"A job is already active."}}))
+                .map_err(|_| "Rust backend is not available".to_owned())?;
+            return Ok(id);
+        }
+        let config = app_config::path();
+        if let Some(port) = port {
+            if let Err(message) = app_config::save_section_string(
+                &config,
+                "spotify",
+                "redirect_port",
+                &port.to_string(),
+            ) {
+                self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}}))
+                    .map_err(|_| "Rust backend is not available".to_owned())?;
+                return Ok(id);
+            }
+        }
+        let job_id = format!("spotify-login-{id}");
+        let cancel = Arc::new(AtomicBool::new(false));
+        *login = Some(NativeLogin {
+            job_id: job_id.clone(),
+            cancel: Arc::clone(&cancel),
+        });
+        self.native_output
+            .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id}}))
+            .map_err(|_| "Rust backend is not available".to_owned())?;
+        drop(login);
+        let sender = self.native_output.clone();
+        let state = Arc::clone(&self.login);
+        thread::spawn(move || {
+            let result = spotify::login(&config, &spotify::token_path(), port, &cancel);
+            let event = match result {
+                Ok(name) => {
+                    json!({"type":"event","event":"job.completed","data":{"job_id":job_id,"result":{"account_name":name}}})
+                }
+                Err(message) if message == "cancelled" => {
+                    json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}})
+                }
+                Err(message) => {
+                    json!({"type":"event","event":"job.failed","data":{"job_id":job_id,"error":{"code":"operation_failed","message":message}}})
+                }
+            };
+            let _ = sender.send(event);
+            if let Ok(mut active) = state.lock() {
+                *active = None;
+            }
+        });
+        Ok(id)
+    }
+
     pub fn drain(&self) -> Vec<Value> {
         self.output.try_iter().collect()
     }
@@ -169,10 +272,11 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::Bridge;
+    use super::{Bridge, NativeLogin};
     use serde_json::{json, Value};
     use std::collections::HashSet;
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -189,6 +293,7 @@ mod tests {
             output,
             native_output,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
+            login: Arc::new(Mutex::new(None)),
             next_id: 1,
         };
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
@@ -225,6 +330,30 @@ mod tests {
         let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
         assert_eq!(response["id"], id);
         assert_eq!(response["error"]["code"], "invalid_request");
+        assert!(bridge.input.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn spotify_login_validates_port_and_uses_the_native_job_slot(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut bridge = Bridge::start()?;
+        let id = bridge.send("spotify.login", json!({"port": 0}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(response["error"]["code"], "invalid_request");
+        assert!(bridge.input.is_none());
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        *bridge.login.lock().map_err(|_| "login lock failed")? = Some(NativeLogin {
+            job_id: "spotify-login-test".into(),
+            cancel: Arc::clone(&cancel),
+        });
+        let id = bridge.send("job.cancel", json!({"job_id": "spotify-login-test"}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(response["result"]["cancel_requested"], true);
+        assert!(cancel.load(Ordering::Relaxed));
         assert!(bridge.input.is_none());
         Ok(())
     }
