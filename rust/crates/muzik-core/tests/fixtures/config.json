@@ -1,0 +1,36 @@
+{
+  "beets_version": "2.13.1",
+  "overrides": {
+    "match": {
+      "medium_rec_thresh": 0.3
+    }
+  },
+  "user_yaml": "library: ~/Music/.library.db\nplugins: [musicbrainz, mbsync, fetchart, embedart]\npaths:\n  default: $albumartist/$album%aunique{}/$track $title\n  comp: Compilations/$album%aunique{}/$track $title\n  singleton: Non-Album/$artist/$title\nmatch:\n  strong_rec_thresh: 0.08\n  preferred:\n    countries: [GB, US]\nfetchart:\n  sources: [filesystem]\nembedart:\n  auto: yes\n",
+  "values": {
+    "create_backup_before_migrations": true,
+    "embedart.auto": true,
+    "fetchart.sources": [
+      "filesystem"
+    ],
+    "import.move": false,
+    "import.write": true,
+    "library": "~/Music/.library.db",
+    "match.medium_rec_thresh": 0.3,
+    "match.preferred.countries": [
+      "GB",
+      "US"
+    ],
+    "match.preferred.media": [],
+    "match.rec_gap_thresh": 0.25,
+    "match.strong_rec_thresh": 0.08,
+    "paths.comp": "Compilations/$album%aunique{}/$track $title",
+    "paths.default": "$albumartist/$album%aunique{}/$track $title",
+    "paths.singleton": "Non-Album/$artist/$title",
+    "plugins": [
+      "musicbrainz",
+      "mbsync",
+      "fetchart",
+      "embedart"
+    ]
+  }
+}

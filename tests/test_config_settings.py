@@ -106,6 +106,29 @@ def test_seakarr_env_overrides_muzik_config(tmp_path: Path) -> None:
     assert settings["download_dir"] == str(tmp_path / "env-downloads")
 
 
+def test_native_settings_default_to_beets(tmp_path: Path) -> None:
+    assert config.get_native_settings(
+        env={}, config_path=tmp_path / "missing.yaml"
+    ) == {
+        "match": "beets",
+        "metadata": "beets",
+        "tags": "beets",
+        "library": "beets",
+        "import": "beets",
+    }
+
+
+def test_native_settings_read_config_and_environment(tmp_path: Path) -> None:
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("native:\n  match: shadow\n  tags: native\n", encoding="utf-8")
+    settings = config.get_native_settings(
+        env={"MUZIK_NATIVE_MATCH": "native"}, config_path=cfg
+    )
+    assert settings["match"] == "native"
+    assert settings["tags"] == "native"
+    assert settings["library"] == "beets"
+
+
 def test_config_set_soulseek_writes_muzik_config(
     tmp_path: Path,
     monkeypatch,

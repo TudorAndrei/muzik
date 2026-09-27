@@ -171,6 +171,29 @@ def get_seakarr_settings(
     }
 
 
+def get_native_settings(
+    *,
+    env: Mapping[str, str] = os.environ,
+    config_path: Path = MUZIK_CONFIG_FILE,
+) -> dict[str, str]:
+    """Return the rollout mode for each native beets component."""
+    config = load_muzik_config(config_path)
+    settings = {}
+    for component in ("match", "metadata", "tags", "library", "import"):
+        mode = _env_or_config(
+            env,
+            f"MUZIK_NATIVE_{component.upper()}",
+            config,
+            "native",
+            component,
+            "beets",
+        )
+        if mode not in {"beets", "shadow", "native"}:
+            raise ValueError(f"invalid native.{component} mode: {mode}")
+        settings[component] = mode
+    return settings
+
+
 def get_spotify_settings(
     *,
     env: Mapping[str, str] = os.environ,
