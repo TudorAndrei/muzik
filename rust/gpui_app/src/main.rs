@@ -2760,7 +2760,7 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             choices.push(("Skip".into(), Value::Null));
             choices
         }
-        "beets_duplicate" => ["skip", "keep_all", "remove_old", "merge"]
+        "beets_duplicate" => ["skip", "keep_all", "remove_old"]
             .into_iter()
             .map(|value| (value.replace('_', " "), json!(value)))
             .collect(),
@@ -2901,7 +2901,13 @@ mod tests {
         let details = decision_details(&decision);
         assert!(details.iter().any(|line| line.contains("old.flac")));
         assert!(details.iter().any(|line| line.contains("new.flac")));
-        assert_eq!(decision_choices(&decision).len(), 4);
+        assert_eq!(
+            decision_choices(&decision)
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect::<Vec<_>>(),
+            vec![json!("skip"), json!("keep_all"), json!("remove_old")]
+        );
     }
 
     #[gpui_kit::test]
