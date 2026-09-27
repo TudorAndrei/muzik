@@ -3,13 +3,15 @@
 mod functions;
 pub mod query;
 
-use rusqlite::types::{Value, ValueRef};
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Row};
 use std::collections::BTreeMap;
 use std::path::Path;
 use thiserror::Error;
 
 pub use functions::register_functions;
+pub use rusqlite::types::Value as SqlValue;
+use SqlValue as Value;
 
 #[derive(Debug, Error)]
 pub enum Error {

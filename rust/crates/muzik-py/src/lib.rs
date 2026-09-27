@@ -4,14 +4,16 @@
 //! names, sizes, queue state, transfer progress, error text) — never a
 //! `soulseek_rs` connection, channel, or internal reference.
 
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBytes, PyDict, PyList};
 
 use muzik_core::BeetsConfig;
+use muzik_library::{Fields, Library as RustLibrary, SqlValue};
 use muzik_match::{rank_albums, MatchAlbum, MatchConfig, MatchItem};
 use muzik_metadata::{MetadataClient, ReleaseSearch};
 use muzik_soulseek::error::BridgeError;
@@ -22,6 +24,7 @@ use muzik_soulseek::types::{Candidate, DownloadProgress};
 create_exception!(_native, SeakarrError, PyException);
 create_exception!(_native, MetadataError, PyException);
 create_exception!(_native, MatchError, PyException);
+create_exception!(_native, LibraryError, PyException);
 
 const MUSICBRAINZ_USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
@@ -31,6 +34,140 @@ fn soulseek_error(error: BridgeError) -> PyErr {
 
 fn metadata_error(error: muzik_metadata::Error) -> PyErr {
     MetadataError::new_err(error.to_string())
+}
+
+fn library_error(error: impl std::fmt::Display) -> PyErr {
+    LibraryError::new_err(error.to_string())
+}
+
+fn beets_path(raw: &str, config_path: &Path) -> PathBuf {
+    let expanded = if raw == "~" || raw.starts_with("~/") {
+        std::env::var_os("HOME")
+            .map(|home| {
+                PathBuf::from(home).join(raw.trim_start_matches('~').trim_start_matches('/'))
+            })
+            .unwrap_or_else(|| PathBuf::from(raw))
+    } else {
+        PathBuf::from(raw)
+    };
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(expanded)
+    }
+}
+
+#[pyclass(name = "NativeLibrary")]
+struct PyNativeLibrary {
+    inner: Mutex<RustLibrary>,
+    directory: String,
+}
+
+#[pymethods]
+impl PyNativeLibrary {
+    #[new]
+    fn new(config_path: String) -> PyResult<Self> {
+        let config_path = Path::new(&config_path);
+        let config =
+            BeetsConfig::load(config_path, serde_json::json!({})).map_err(library_error)?;
+        let library_path = config
+            .get(&["library"])
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| LibraryError::new_err("beets config has no library path"))?;
+        let directory = config
+            .get(&["directory"])
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| LibraryError::new_err("beets config has no music directory"))?;
+        let library_path = beets_path(library_path, config_path);
+        let directory = beets_path(directory, config_path);
+        let inner = RustLibrary::open_read_only(&library_path).map_err(library_error)?;
+        Ok(Self {
+            inner: Mutex::new(inner),
+            directory: directory.to_string_lossy().into_owned(),
+        })
+    }
+
+    #[getter]
+    fn directory(&self) -> &str {
+        &self.directory
+    }
+
+    #[pyo3(signature = (query=""))]
+    fn items(&self, py: Python<'_>, query: &str) -> PyResult<Py<PyAny>> {
+        let items = py.detach(|| {
+            self.inner
+                .lock()
+                .map_err(library_error)?
+                .query_items(query)
+                .map_err(library_error)
+        })?;
+        let list = PyList::empty(py);
+        for item in items {
+            list.append(library_row(py, item.id, &item.fields, &item.attributes)?)?;
+        }
+        Ok(list.into())
+    }
+
+    #[pyo3(signature = (query=""))]
+    fn albums(&self, py: Python<'_>, query: &str) -> PyResult<Py<PyAny>> {
+        let albums = py.detach(|| {
+            self.inner
+                .lock()
+                .map_err(library_error)?
+                .query_albums(query)
+                .map_err(library_error)
+        })?;
+        let list = PyList::empty(py);
+        for album in albums {
+            list.append(library_row(py, album.id, &album.fields, &album.attributes)?)?;
+        }
+        Ok(list.into())
+    }
+
+    fn items_for_album(&self, py: Python<'_>, album_id: i64) -> PyResult<Py<PyAny>> {
+        let items = py.detach(|| {
+            self.inner
+                .lock()
+                .map_err(library_error)?
+                .items_for_album(album_id)
+                .map_err(library_error)
+        })?;
+        let list = PyList::empty(py);
+        for item in items {
+            list.append(library_row(py, item.id, &item.fields, &item.attributes)?)?;
+        }
+        Ok(list.into())
+    }
+}
+
+fn library_row<'py>(
+    py: Python<'py>,
+    id: i64,
+    fields: &Fields,
+    attributes: &Fields,
+) -> PyResult<Bound<'py, PyDict>> {
+    let row = PyDict::new(py);
+    row.set_item("id", id)?;
+    row.set_item("fields", fields_to_dict(py, fields)?)?;
+    row.set_item("attributes", fields_to_dict(py, attributes)?)?;
+    Ok(row)
+}
+
+fn fields_to_dict<'py>(py: Python<'py>, fields: &Fields) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    for (name, value) in fields {
+        match value {
+            SqlValue::Null => dict.set_item(name, py.None())?,
+            SqlValue::Integer(value) => dict.set_item(name, value)?,
+            SqlValue::Real(value) => dict.set_item(name, value)?,
+            SqlValue::Text(value) => dict.set_item(name, value)?,
+            SqlValue::Blob(value) => dict.set_item(name, PyBytes::new(py, value))?,
+        }
+    }
+    Ok(dict)
 }
 
 /// Rank the supplied beets album candidates. Indices refer to the input list.
@@ -303,11 +440,13 @@ fn download_progress_to_dict<'py>(
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyNativeLibrary>()?;
     m.add_class::<PySeakarrSession>()?;
     m.add_class::<PySeakarrJob>()?;
     m.add("SeakarrError", m.py().get_type::<SeakarrError>())?;
     m.add("MetadataError", m.py().get_type::<MetadataError>())?;
     m.add("MatchError", m.py().get_type::<MatchError>())?;
+    m.add("LibraryError", m.py().get_type::<LibraryError>())?;
     m.add_function(wrap_pyfunction!(rank_album_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(search_musicbrainz_releases, m)?)?;
     m.add_function(wrap_pyfunction!(get_musicbrainz_tracklist, m)?)?;

@@ -15,9 +15,17 @@ from typing import Any, cast
 
 from beets.library import Library
 
-from muzik.config import MUZIK_WATCHLIST_FILE
+from muzik.config import MUZIK_WATCHLIST_FILE, get_native_settings
 from muzik.core.beets.config import open_library
-from muzik.core.beets.lookup import find_organized_path, find_path_by_source_id
+from muzik.core.beets.lookup import (
+    find_organized_path,
+    find_path_by_source_id,
+)
+from muzik.core.native_library import (
+    NativeLibrary,
+    ShadowLibrary,
+    open_library_for_reads,
+)
 from muzik.core.quality import QualityPolicy
 from muzik.core.sources.base import ResolvedPlaylist, ResolvedTrack
 from muzik.core.sources.spotify import parse_link as parse_spotify_link
@@ -776,11 +784,15 @@ def reconcile_watchlist(
         )
 
 
-def _open_beets_library(config_path: Path | None) -> Library | None:
+def _open_beets_library(
+    config_path: Path | None,
+) -> Library | NativeLibrary | ShadowLibrary | None:
     # Best-effort: an unconfigured or broken Beets setup must not break
     # watchlist reconciliation, which already works fine without it.
     try:
-        return open_library(config_path)
+        if get_native_settings()["library"] == "beets":
+            return open_library(config_path)
+        return open_library_for_reads(config_path)
     except Exception:
         return None
 
@@ -821,7 +833,7 @@ def _reconcile_playlist(
     *,
     request: WorkflowRequest,
     options: WorkflowOptions,
-    beets_library: Library | None = None,
+    beets_library: Library | NativeLibrary | ShadowLibrary | None = None,
 ) -> None:
     playlist_state = load_playlist_state(playlist.playlist_id)
     for item in playlist.items:

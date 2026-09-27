@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from beets.library import Item
 import typer
 from rich.progress import (
     BarColumn,
@@ -17,11 +16,12 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from muzik.config import BEETS_CONFIG, DEFAULT_SOULSEEK_DIR
+from muzik.config import BEETS_CONFIG, DEFAULT_SOULSEEK_DIR, get_native_settings
 from muzik.commands.organize import organize_cmd
 import muzik.core.cache as cache_mod
 from muzik.core.beets.config import open_library
 from muzik.core.beets.lookup import resolve_item_path
+from muzik.core.native_library import open_library_for_reads
 from muzik.core.quality import measure_quality, quality_score
 from muzik.core.sources.base import (
     Candidate,
@@ -344,14 +344,18 @@ def check_library_cmd(
     works with `muzik soulseek download --candidate <id>` to fetch it.
     """
     try:
-        library = open_library(config)
+        library = (
+            open_library(config)
+            if get_native_settings()["library"] == "beets"
+            else open_library_for_reads(config)
+        )
     except Exception as exc:
         err(f"[red]Could not open the Beets library:[/red] {exc}")
         raise typer.Exit(1) from exc
 
     directory = os.fsdecode(library.directory)
     scanned = 0
-    flagged: list[tuple[Item, QualityInfo, Path]] = []
+    flagged: list[tuple[Any, QualityInfo, Path]] = []
     for item in library.items(query):
         path = resolve_item_path(directory, item.path)
         if not path.is_file():

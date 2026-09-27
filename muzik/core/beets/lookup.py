@@ -9,6 +9,7 @@ from beets.library import Library
 
 from muzik.beets_plugins.muzik_source import FIELD_NAME
 from muzik.core.audio import _parse_title
+from muzik.core.native_library import NativeLibrary, ShadowLibrary
 
 
 def resolve_item_path(directory: str, raw_path: bytes) -> Path:
@@ -24,7 +25,9 @@ def resolve_item_path(directory: str, raw_path: bytes) -> Path:
     return Path(decoded)
 
 
-def find_path_by_source_id(video_id: str, library: Library) -> Path | None:
+def find_path_by_source_id(
+    video_id: str, library: Library | NativeLibrary | ShadowLibrary
+) -> Path | None:
     """Return the path of a Beets item tagged with this exact video id.
 
     The `muzik_source` beets plugin records the id at import time (see
@@ -41,7 +44,9 @@ def find_path_by_source_id(video_id: str, library: Library) -> Path | None:
     return None
 
 
-def find_organized_path(title: str, library: Library) -> Path | None:
+def find_organized_path(
+    title: str, library: Library | NativeLibrary | ShadowLibrary
+) -> Path | None:
     """Return the path of an already-imported Beets album matching *title*.
 
     Best-effort only: parses ``title`` the same way muzik would parse a
