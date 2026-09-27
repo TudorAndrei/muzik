@@ -35,7 +35,7 @@ fn find_binary() -> Option<PathBuf> {
         {
             candidates.push(parent.join(name));
         }
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         candidates.push(repo.join("muzik/bin").join(name));
         candidates.push(repo.join("target/release").join(name));
         candidates.push(repo.join("target/debug").join(name));

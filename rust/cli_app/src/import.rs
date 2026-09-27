@@ -284,7 +284,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("create test directory");
         let source = temp.path().join("incoming.flac");
         let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../muzik-tags/tests/fixtures/blank.flac");
+            .join("../crates/muzik-tags/tests/fixtures/blank.flac");
         fs::copy(fixture, &source).expect("copy audio fixture");
         let config = temp.path().join("config.yaml");
         fs::write(

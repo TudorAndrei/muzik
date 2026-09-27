@@ -8,7 +8,7 @@ mod downloaded;
 mod gui;
 mod import;
 mod init;
-mod paths;
+use muzik_core::paths;
 mod validate;
 
 use std::path::PathBuf;

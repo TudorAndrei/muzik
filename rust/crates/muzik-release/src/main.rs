@@ -21,6 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     manifests.push(root.join("rust/gpui_app/Cargo.toml"));
+    manifests.push(root.join("rust/cli_app/Cargo.toml"));
     manifests.sort();
     for manifest in manifests {
         set_version(&manifest, &version)?;

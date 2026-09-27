@@ -21,12 +21,12 @@ name = "muzik"
 path = "src/main.rs"
 
 [dependencies]
-muzik-core = { path = "../muzik-core" }
-muzik-import = { path = "../muzik-import" }
-muzik-library = { path = "../muzik-library" }
-muzik-match = { path = "../muzik-match" }
-muzik-metadata = { path = "../muzik-metadata" }
-muzik-tags = { path = "../muzik-tags" }
+muzik-core = { path = "../crates/muzik-core" }
+muzik-import = { path = "../crates/muzik-import" }
+muzik-library = { path = "../crates/muzik-library" }
+muzik-match = { path = "../crates/muzik-match" }
+muzik-metadata = { path = "../crates/muzik-metadata" }
+muzik-tags = { path = "../crates/muzik-tags" }
 serde_json = "1"
 serde-pickle = "1.2"
 serde-saphyr = "1.3"

@@ -4604,6 +4604,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -4612,9 +4613,12 @@ dependencies = [
 name = "muzik-gpui"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui-kit",
+ "muzik-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
