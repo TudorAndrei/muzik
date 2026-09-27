@@ -182,7 +182,12 @@ impl PyNativeLibrary {
             .ok_or_else(|| LibraryError::new_err("beets config has no music directory"))?;
         let library_path = beets_path(library_path, config_path);
         let directory = beets_path(directory, config_path);
-        let inner = RustLibrary::open_read_only(&library_path).map_err(library_error)?;
+        let inner = if library_path.exists() {
+            RustLibrary::open_read_only(&library_path)
+        } else {
+            RustLibrary::empty()
+        }
+        .map_err(library_error)?;
         Ok(Self {
             inner: Mutex::new(inner),
             library_path,

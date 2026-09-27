@@ -1,7 +1,9 @@
 """Decision and event flow for the native import bridge."""
 
 from pathlib import Path
+import json
 import pickle
+import shutil
 from typing import Any
 
 import pytest
@@ -18,6 +20,37 @@ from muzik.core.import_models import (
 )
 from muzik.core import native_import
 from muzik.core.native_import import run_native_import
+
+
+def test_first_native_import_creates_library(tmp_path: Path) -> None:
+    from muzik import _native
+
+    source = tmp_path / "incoming" / "track.flac"
+    source.parent.mkdir()
+    fixture = (
+        Path(__file__).resolve().parents[1]
+        / "rust/crates/muzik-tags/tests/fixtures/mediafile.flac"
+    )
+    shutil.copyfile(fixture, source)
+    database = tmp_path / "data" / "library.db"
+    config = tmp_path / "config.yaml"
+    overrides = {
+        "library": str(database),
+        "directory": str(tmp_path / "music"),
+        "statefile": str(tmp_path / "state.pickle"),
+        "import": {"autotag": False, "copy": True, "write": False},
+    }
+    config.write_text(json.dumps(overrides), encoding="utf-8")
+    importer = _native.NativeImporter(str(config), json.dumps(overrides))
+    plan = importer.plan([str(source)])
+    assert len(plan) == 1
+    assert not database.exists()
+
+    result = importer.apply([("as_is", None, None)])
+    assert database.exists()
+    assert len(result["item_ids"]) == 1
+    assert Path(result["destinations"][0]).exists()
+    assert len(_native.NativeLibrary(str(config)).items("")) == 1
 
 
 class FakeImporter:

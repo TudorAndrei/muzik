@@ -10,6 +10,30 @@ pub struct LibraryWrite<'a> {
 }
 
 impl Library {
+    /// Open a library for writes, creating a beets-compatible database if needed.
+    pub fn open_or_create(path: &Path) -> Result<Self, Error> {
+        if path.exists() {
+            return Self::open_read_write(path);
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| Error::InvalidPath(path.to_path_buf()))?;
+        std::fs::create_dir_all(parent)?;
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+        )?;
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        connection.execute_batch(include_str!("schema.sql"))?;
+        connection.execute_batch("COMMIT")?;
+        crate::register_functions(&connection)?;
+        Ok(Self {
+            connection,
+            path: path.to_path_buf(),
+            writable: true,
+        })
+    }
+
     /// Open an existing database for writes. A backup is made before the first write.
     pub fn open_read_write(path: &Path) -> Result<Self, Error> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;

@@ -20,6 +20,33 @@ fn fields(pairs: &[(&str, Value)]) -> Fields {
 }
 
 #[test]
+fn creates_first_library_with_readable_schema() {
+    let temp = tempfile::tempdir().unwrap();
+    let database = temp.path().join("new").join("library.db");
+    assert!(Library::empty().unwrap().items().unwrap().is_empty());
+    assert!(!database.exists());
+
+    let mut library = Library::open_or_create(&database).unwrap();
+    let album_id = library
+        .insert_album(
+            &fields(&[("album", Value::Text("First".into()))]),
+            &Fields::new(),
+        )
+        .unwrap();
+    library
+        .insert_item(
+            &fields(&[
+                ("album_id", Value::Integer(album_id)),
+                ("title", Value::Text("Track".into())),
+            ]),
+            &Fields::new(),
+        )
+        .unwrap();
+    let reader = Library::open_read_only(&database).unwrap();
+    assert_eq!(reader.items_for_album(album_id).unwrap().len(), 1);
+}
+
+#[test]
 fn inserts_and_updates_fixed_and_flexible_fields() {
     let (directory, mut library) = fixture();
     let album_id = library

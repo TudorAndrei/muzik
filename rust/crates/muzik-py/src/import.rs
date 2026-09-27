@@ -120,9 +120,13 @@ impl PyNativeImporter {
             let options = ApplyOptions::from_beets(&self.config, self.directory.clone())
                 .map_err(import_error)?;
             let mut library = if options.dry_run {
-                Library::open_read_only(&self.library_path)
+                if self.library_path.exists() {
+                    Library::open_read_only(&self.library_path)
+                } else {
+                    Library::empty()
+                }
             } else {
-                Library::open_read_write(&self.library_path)
+                Library::open_or_create(&self.library_path)
             }
             .map_err(import_error)?;
             apply::apply(&mut library, plan, &decisions, &options).map_err(import_error)
@@ -203,7 +207,12 @@ impl PyNativeImporter {
         singletons: bool,
     ) -> PyResult<Py<PyAny>> {
         let plan = py.detach(|| {
-            let library = Library::open_read_only(&self.library_path).map_err(import_error)?;
+            let library = if self.library_path.exists() {
+                Library::open_read_only(&self.library_path)
+            } else {
+                Library::empty()
+            }
+            .map_err(import_error)?;
             let match_config = MatchConfig::from_beets(&self.config).map_err(import_error)?;
             let provider = MetadataClient::new(MUSICBRAINZ_USER_AGENT);
             let planner = ImportPlanner {
@@ -255,7 +264,12 @@ impl PyNativeImporter {
                 .map_err(import_error)
         })?;
         let list = PyList::empty(py);
-        let library = Library::open_read_only(&self.library_path).map_err(import_error)?;
+        let library = if self.library_path.exists() {
+            Library::open_read_only(&self.library_path)
+        } else {
+            Library::empty()
+        }
+        .map_err(import_error)?;
         for album in &plan.albums {
             list.append(album_to_dict(py, album, &library)?)?;
         }

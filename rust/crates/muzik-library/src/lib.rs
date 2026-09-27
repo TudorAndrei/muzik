@@ -20,6 +20,8 @@ use SqlValue as Value;
 pub enum Error {
     #[error("SQLite library error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+    #[error("library file error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("beets {table} row has no id")]
     MissingId { table: &'static str },
     #[error("invalid beets query: {0}")]
@@ -88,6 +90,18 @@ pub struct Library {
 }
 
 impl Library {
+    /// Make a read-only empty library for planning before the first import.
+    pub fn empty() -> Result<Self, Error> {
+        let connection = Connection::open_in_memory()?;
+        connection.execute_batch(include_str!("schema.sql"))?;
+        register_functions(&connection)?;
+        Ok(Self {
+            connection,
+            path: PathBuf::from(":memory:"),
+            writable: false,
+        })
+    }
+
     /// Open an existing beets database without changing its schema.
     pub fn open_read_only(path: &Path) -> Result<Self, Error> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
