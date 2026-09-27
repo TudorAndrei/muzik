@@ -1,0 +1,16 @@
+[package]
+name = "muzik-tags"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Beets-compatible audio tag read and write support"
+
+[dependencies]
+lofty = "0.25"
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
