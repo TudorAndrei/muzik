@@ -6,6 +6,7 @@ use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths;
 use muzik_core::spotify;
+use muzik_core::watchlist::Repository;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -21,6 +22,9 @@ pub fn handles(command: &str) -> bool {
             | "spotify.logout"
             | "spotify.status"
             | "spotify.playlists"
+            | "watchlist.add"
+            | "watchlist.rename"
+            | "watchlist.remove"
     )
 }
 
@@ -51,8 +55,37 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         "spotify.status" => spotify::status(&path, &spotify::token_path()),
         "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
             .map(|playlists| json!({"playlists": playlists})),
+        "watchlist.add" | "watchlist.rename" | "watchlist.remove" => watchlist_edit(
+            &Repository::new(Repository::default_path()),
+            command,
+            params,
+        ),
         _ => Err(format!("unknown command: {command}")),
     }
+}
+
+fn required_string<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("{key} must be a non-empty string."))
+}
+
+fn watchlist_edit(repository: &Repository, command: &str, params: &Value) -> Result<Value, String> {
+    let result = match command {
+        "watchlist.add" => json!({"playlist": repository.add(required_string(params, "url")?)?}),
+        "watchlist.rename" => json!({"renamed": repository.rename(
+            required_string(params, "playlist_id")?,
+            required_string(params, "title")?,
+        )?}),
+        "watchlist.remove" => json!({"removed": repository.remove(
+            required_string(params, "playlist_id")?,
+        )?}),
+        _ => return Err(format!("unknown watchlist edit: {command}")),
+    };
+    Ok(result)
 }
 
 pub fn library_scan(params: &Value) -> Result<Value, String> {
@@ -88,7 +121,8 @@ pub fn library_scan(params: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::library_scan;
+    use super::{library_scan, watchlist_edit};
+    use muzik_core::watchlist::Repository;
     use serde_json::json;
     use std::fs;
 
@@ -103,6 +137,41 @@ mod tests {
         assert!(result["items"][0]["modified"]
             .as_str()
             .is_some_and(|date| !date.is_empty()));
+        Ok(())
+    }
+
+    #[test]
+    fn watchlist_edits_keep_the_existing_file_format() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let repository = Repository::new(dir.path().join("watchlist.json"));
+        let added = watchlist_edit(
+            &repository,
+            "watchlist.add",
+            &json!({"url": "https://www.youtube.com/playlist?list=PL123"}),
+        )
+        .map_err(std::io::Error::other)?;
+        assert_eq!(added["playlist"]["playlist_id"], "PL123");
+        let renamed = watchlist_edit(
+            &repository,
+            "watchlist.rename",
+            &json!({"playlist_id": "PL123", "title": "  New name  "}),
+        )
+        .map_err(std::io::Error::other)?;
+        assert_eq!(renamed["renamed"], true);
+        let saved = repository.load().map_err(std::io::Error::other)?;
+        assert_eq!(saved["version"], 3);
+        assert_eq!(saved["playlists"][0]["title"], "New name");
+        let removed = watchlist_edit(
+            &repository,
+            "watchlist.remove",
+            &json!({"playlist_id": "PL123"}),
+        )
+        .map_err(std::io::Error::other)?;
+        assert_eq!(removed["removed"], true);
+        assert_eq!(
+            repository.load().map_err(std::io::Error::other)?["playlists"],
+            json!([])
+        );
         Ok(())
     }
 }

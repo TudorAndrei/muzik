@@ -3,7 +3,8 @@
 The GPUI app starts `python -m muzik.native_gui` when a remaining command needs
 the Python backend. It handles `hello`, `config.get`, `config.save`, and
 `library.scan`, `services.check`, `spotify.set_client_id`, and
-`spotify.logout`, `spotify.status`, `spotify.playlists`, `spotify.login`, and `thumbnails.cache` in Rust. The app writes
+`spotify.logout`, `spotify.status`, `spotify.playlists`, `spotify.login`,
+`watchlist.add`, `watchlist.rename`, `watchlist.remove`, and `thumbnails.cache` in Rust. The app writes
 one UTF-8 JSON object per line to standard input. The service writes one JSON
 object per line to standard output. Only protocol records go to standard
 output. The service ends when standard input closes.
@@ -37,9 +38,9 @@ order. Match each response to its request by `id`. A slow read does not hold up
 | `services.check` | none | `services` array with `name`, `available`, `detail`, `optional` |
 | `library.scan` | optional `output` path | `output`, `total_size`, `items` array with size and modified time |
 | `watchlist.load` | optional launcher fields | `watchlist` object |
-| `watchlist.add` | `url` | `playlist`, `watchlist` |
-| `watchlist.rename` | `playlist_id`, `title` | `renamed`, `watchlist` |
-| `watchlist.remove` | `playlist_id` | `removed`, `watchlist` |
+| `watchlist.add` | `url` | `playlist` |
+| `watchlist.rename` | `playlist_id`, `title` | `renamed` |
+| `watchlist.remove` | `playlist_id` | `removed` |
 | `thumbnails.cache` | `video_ids` array of at most 16 IDs | `queued` count |
 | `watchlist.refresh` | optional launcher fields | `job_id` |
 | `watchlist.action` | `playlist_id`, `position`, `video_id`, `action`, optional launcher fields | `job_id` |
@@ -62,7 +63,8 @@ values. A missing launcher field uses the saved value when the service starts a
 workflow, refreshes the watchlist, or runs a watchlist item action. A field
 sent with a request overrides the saved value for that request only. `raw` is
 never saved. `watchlist.add` accepts a YouTube or Spotify
-playlist link, a Spotify album link, or `liked`. Each item in a returned
+playlist link, a Spotify album link, or `liked`. The app sends `watchlist.load`
+after an edit. Each item in a returned
 `watchlist` has `summary`, `thumbnail_path`, `primary_action`, and `actions`.
 `primary_action` has an `action` and a `label`, or it is `null`. `actions` maps
 each action name to `enabled` and `reason`. A `thumbnail_path` is a local path
@@ -95,7 +97,7 @@ check, the service saves the checked cards and sends `watchlist.updated` with
 it again before it saves. If the check fails, the service sends
 `watchlist.error` with a `message`. A load during a job does not start this
 check. For each `watchlist.load`, its response comes before any
-`watchlist.updated` event from the check it starts. The service rejects add,
+`watchlist.updated` event from the check it starts. The app rejects add,
 rename, and remove commands until the job ends.
 
 ## Blocking decisions

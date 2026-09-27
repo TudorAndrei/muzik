@@ -2,7 +2,7 @@
 
 `muzik gui` starts the Rust desktop app in `rust/gpui_app/`. The app uses GPUI
 Kit 0.6.6. Startup, config, download inventory, service checks, Spotify status,
-settings, login, logout, playlist listing, and thumbnail caching run in Rust. The app
+settings, login, logout, playlist listing, watchlist edits, and thumbnail caching run in Rust. The app
 starts `python -m muzik.native_gui` when a remaining command needs it. The
 Python process still handles workflow, watchlist refresh and actions, and
 Spotify playlist track reads.
@@ -42,8 +42,8 @@ its view on the event loop.
 - **Config** is a tab for output paths, source choices, quality policy, and
   processing options. Save them in `config.yaml` once for later runs.
 - **Watchlist** shows saved YouTube and Spotify sources, item states, thumbnails,
-  filters, and item commands. The Python service reads and saves the same
-  watchlist file as the command-line interface.
+  filters, and item commands. Rust adds, renames, and removes sources in the
+  existing watchlist file. The Python service reads the file and checks item state.
 - **Library** lists audio files in the selected download directory.
 - **Settings** checks external services.
 - **Spotify** stores a client ID, starts login, shows account state, and adds

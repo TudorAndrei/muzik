@@ -236,6 +236,15 @@ impl Muzik {
     fn send(&mut self, command: &str, params: Value) {
         if matches!(
             command,
+            "watchlist.add" | "watchlist.rename" | "watchlist.remove"
+        ) && (self.job_kind.is_some() || self.job_id.is_some())
+        {
+            self.status = "A job is already active".into();
+            self.error = Some(self.status.clone());
+            return;
+        }
+        if matches!(
+            command,
             "spotify.set_client_id" | "spotify.logout" | "spotify.login"
         ) {
             self.latest_reads.remove("spotify.status");
@@ -603,14 +612,13 @@ impl Muzik {
                         }
                         self.apply_defaults(result["defaults"].clone(), _cx);
                     }
-                    "watchlist.load" | "watchlist.add" | "watchlist.remove"
-                    | "watchlist.rename" => {
+                    "watchlist.load" => {
                         self.replace_watchlist(result["watchlist"].clone(), window, _cx);
                         self.cache_visible_thumbnails(_cx);
-                        if command != "watchlist.load" {
-                            self.send("watchlist.load", self.launcher_params(_cx));
-                        }
                         self.status = "Watchlist ready".into();
+                    }
+                    "watchlist.add" | "watchlist.remove" | "watchlist.rename" => {
+                        self.send("watchlist.load", self.launcher_params(_cx));
                     }
                     "library.scan" => {
                         self.library = result.clone();
