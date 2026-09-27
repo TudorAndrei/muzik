@@ -388,7 +388,7 @@ impl Muzik {
                     }
                 )
             }
-            "message" | "beets_log" => {
+            "message" | "log" | "beets_log" => {
                 let message = describe(&payload["message"]);
                 self.job_status = message.clone();
                 message
@@ -421,21 +421,33 @@ impl Muzik {
                 ));
                 format!("Chapter review: {}", describe(&payload["source"]))
             }
-            "beets_task" => {
+            "task" | "beets_task" => {
                 self.set_activity_section(activity_section(
-                    "Beets matches",
+                    "Album matches",
                     &payload["task"]["matches"],
                     beets_match_summary,
                 ));
                 let task = &payload["task"];
-                format!(
-                    "Beets: {} · {}",
+                let message = format!(
+                    "Import: {} · {}",
                     task["current_artist"].as_str().unwrap_or("Unknown artist"),
                     task["current_album"].as_str().unwrap_or("Unknown album")
-                )
+                );
+                self.job_status = message.clone();
+                message
             }
-            "beets_import_started" => "Beets import started".into(),
-            "beets_import_finished" => "Beets import finished".into(),
+            "import_started" | "beets_import_started" => {
+                self.job_status = "Import started".into();
+                self.job_status.clone()
+            }
+            "import_finished" | "beets_import_finished" => {
+                self.job_status = if payload["success"] == false {
+                    "Import failed".into()
+                } else {
+                    "Import finished".into()
+                };
+                self.job_status.clone()
+            }
             _ => kind.replace('_', " "),
         };
         self.progress = match self.progress_state.total {
@@ -2890,6 +2902,53 @@ mod tests {
         assert!(details.iter().any(|line| line.contains("old.flac")));
         assert!(details.iter().any(|line| line.contains("new.flac")));
         assert_eq!(decision_choices(&decision).len(), 4);
+    }
+
+    #[gpui_kit::test]
+    fn native_import_events_show_matches_and_progress(cx: &mut TestAppContext) {
+        let main = cx.update(|cx| {
+            gpui_kit::init(cx);
+            let mut main = None;
+            cx.open_window(WindowOptions::default(), |window, cx| {
+                let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
+                main = Some(view.clone());
+                cx.new(|cx| Root::new(view, window, cx))
+            })
+            .unwrap();
+            main.unwrap()
+        });
+        cx.update(|cx| {
+            main.update(cx, |view, _cx| {
+                view.record_job_event(
+                    "import_started",
+                    &json!({"paths": ["/music/album"], "dry_run": false}),
+                );
+                assert_eq!(view.job_status, "Import started");
+                view.record_job_event(
+                    "task",
+                    &json!({"task": {
+                        "current_artist": "Artist",
+                        "current_album": "Album",
+                        "matches": [{
+                            "artist": "Artist", "album": "Album", "distance": 0.05
+                        }]
+                    }}),
+                );
+                let section = view
+                    .activity_sections
+                    .iter()
+                    .find(|section| section.title == "Album matches")
+                    .unwrap();
+                assert_eq!(section.count, 1);
+                assert!(section.rows[0].contains("Artist"));
+                assert!(view.job_status.contains("Album"));
+                view.record_job_event("log", &json!({"message": "Writing tags"}));
+                assert_eq!(view.job_status, "Writing tags");
+                view.record_job_event("import_finished", &json!({"success": true}));
+                assert_eq!(view.job_status, "Import finished");
+                assert!(view.logs.iter().any(|line| line == "Writing tags"));
+            });
+        });
     }
 
     #[test]
