@@ -71,6 +71,7 @@ pub struct Duplicate {
 
 #[derive(Clone, Debug)]
 pub struct AlbumPlan {
+    pub kind: ImportMode,
     pub source_dir: PathBuf,
     pub items: Vec<PlanItem>,
     pub candidates: Vec<PlannedCandidate>,
@@ -83,6 +84,12 @@ pub struct ImportPlan {
     pub albums: Vec<AlbumPlan>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportMode {
+    Album,
+    Singleton,
+}
+
 pub struct ImportPlanner<'a, P: ReleaseProvider> {
     pub provider: &'a P,
     pub library: &'a Library,
@@ -92,7 +99,29 @@ pub struct ImportPlanner<'a, P: ReleaseProvider> {
 
 impl<P: ReleaseProvider> ImportPlanner<'_, P> {
     pub fn plan(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
-        let groups = group_audio_paths(paths)?;
+        self.plan_with_mode(paths, ImportMode::Album)
+    }
+
+    /// Plan each audio file as an item without an album row.
+    pub fn plan_singletons(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
+        self.plan_with_mode(paths, ImportMode::Singleton)
+    }
+
+    fn plan_with_mode(
+        &self,
+        paths: &[PathBuf],
+        mode: ImportMode,
+    ) -> Result<ImportPlan, ImportError> {
+        let grouped = group_audio_paths(paths)?;
+        let groups: Vec<_> = match mode {
+            ImportMode::Album => grouped.into_iter().collect(),
+            ImportMode::Singleton => grouped
+                .into_iter()
+                .flat_map(|(dir, paths)| {
+                    paths.into_iter().map(move |path| (dir.clone(), vec![path]))
+                })
+                .collect(),
+        };
         if groups.is_empty() {
             return Err(ImportError::NoAudio);
         }
@@ -131,7 +160,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 || ["", "various artists", "various", "va", "unknown"]
                     .contains(&artist.to_lowercase().as_str());
             let mut releases = Vec::new();
-            if !title.is_empty() {
+            if mode == ImportMode::Album && !title.is_empty() {
                 let criteria = ReleaseSearch {
                     release: title.to_owned(),
                     artist: (!artist.is_empty()).then(|| artist.to_owned()),
@@ -175,9 +204,14 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                     })
                 })
                 .collect::<Result<Vec<_>, muzik_match::Error>>()?;
-            let duplicates = find_duplicates(&items, &releases, &library_albums, &library_items);
+            let duplicates = if mode == ImportMode::Album {
+                find_duplicates(&items, &releases, &library_albums, &library_items)
+            } else {
+                Vec::new()
+            };
             tracing::debug!(path = %source_dir.display(), tracks = items.len(), candidates = releases.len(), duplicates = duplicates.len(), "planned album import");
             albums.push(AlbumPlan {
+                kind: mode,
                 source_dir,
                 items,
                 candidates,

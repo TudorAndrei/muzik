@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::files::{self, Placement};
 use crate::ftclean;
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
-use crate::plan::{AlbumPlan, ImportPlan};
+use crate::plan::{AlbumPlan, ImportMode, ImportPlan};
 use muzik_core::BeetsConfig;
 use muzik_library::{Fields as LibraryFields, Library, SqlValue};
 use muzik_tags::TagData;
@@ -88,7 +88,22 @@ impl ApplyOptions {
                 compilation: text(&["paths", "comp"], "Compilations/$album/$track $title"),
                 singleton: text(&["paths", "singleton"], "Non-Album/$artist/$title"),
             },
-            sanitizer: PathSanitizer::new(&[])?,
+            sanitizer: PathSanitizer::new(
+                &config
+                    .get(&["replace"])
+                    .and_then(serde_json::Value::as_object)
+                    .map(|rules| {
+                        rules
+                            .iter()
+                            .filter_map(|(pattern, value)| {
+                                value
+                                    .as_str()
+                                    .map(|replacement| (pattern.clone(), replacement.to_owned()))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default(),
+            )?,
             aunique_keys: text(&["aunique", "keys"], "albumartist album")
                 .split_whitespace()
                 .map(str::to_owned)
@@ -110,6 +125,8 @@ pub struct ApplyResult {
     pub skipped_albums: usize,
     /// Old files that remained after a successful database replacement.
     pub cleanup_failed: Vec<PathBuf>,
+    /// Move sources that remained after a successful database write.
+    pub source_cleanup_failed: Vec<PathBuf>,
 }
 
 struct PreparedItem {
@@ -121,6 +138,7 @@ struct PreparedItem {
 }
 
 struct PreparedAlbum {
+    kind: ImportMode,
     items: Vec<PreparedItem>,
     album_fields: LibraryFields,
     cover: Option<(PathBuf, PathBuf)>,
@@ -219,10 +237,16 @@ pub fn apply(
             for id in &prepared.replace_ids {
                 writer.remove_album(*id)?;
             }
-            let album_id = writer.insert_album(&prepared.album_fields, &LibraryFields::new())?;
+            let album_id = if prepared.kind == ImportMode::Album {
+                Some(writer.insert_album(&prepared.album_fields, &LibraryFields::new())?)
+            } else {
+                None
+            };
             let mut item_ids = Vec::new();
             for (item, mut fields) in prepared.items.iter().zip(item_fields) {
-                fields.insert("album_id".into(), SqlValue::Integer(album_id));
+                if let Some(album_id) = album_id {
+                    fields.insert("album_id".into(), SqlValue::Integer(album_id));
+                }
                 let mut attributes = LibraryFields::new();
                 if let Some(source_id) = &item.source_id {
                     attributes.insert("muzik_source_id".into(), SqlValue::Text(source_id.clone()));
@@ -239,14 +263,21 @@ pub fn apply(
             }
         };
         if options.placement == Placement::Move {
-            for item in &prepared.items {
-                fs::remove_file(&item.source)?;
-            }
+            result.source_cleanup_failed.extend(cleanup_sources(
+                &prepared
+                    .items
+                    .iter()
+                    .map(|item| item.source.clone())
+                    .collect::<Vec<_>>(),
+                |path| fs::remove_file(path),
+            ));
         }
         result
             .cleanup_failed
             .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
-        result.album_ids.push(album_id);
+        if let Some(album_id) = album_id {
+            result.album_ids.push(album_id);
+        }
         result.item_ids.extend(item_ids);
         result.destinations.extend(
             created
@@ -378,7 +409,7 @@ fn prepare(
         tags.fields.insert("artist".into(), artist);
         let mut path_fields = path_fields(&tags);
         path_fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
-        if index == 0 {
+        if index == 0 && album.kind == ImportMode::Album {
             for key in [
                 "album",
                 "albumartist",
@@ -401,14 +432,16 @@ fn prepare(
             });
             insert_dates(&mut album_fields, &tags);
         }
-        let kind = if compilation {
+        let kind = if album.kind == ImportMode::Singleton {
+            PathKind::Singleton
+        } else if compilation {
             PathKind::Compilation
         } else {
             PathKind::Album
         };
         let context = TemplateContext {
             fields: path_fields,
-            album_id: Some(next_id),
+            album_id: (album.kind == ImportMode::Album).then_some(next_id),
             albums: known.clone(),
             aunique_keys: options.aunique_keys.clone(),
             aunique_disambiguators: options.aunique_disambiguators.clone(),
@@ -445,11 +478,14 @@ fn prepare(
             source_id: item.source_id.clone(),
         });
     }
-    let cover = muzik_tags::find_cover(&album.source_dir).and_then(|source| {
-        let parent = prepared.first()?.destination.parent()?;
-        let name = source.file_name()?.to_owned();
-        Some((source, parent.join(name)))
-    });
+    let cover = (album.kind == ImportMode::Album)
+        .then(|| muzik_tags::find_cover(&album.source_dir))
+        .flatten()
+        .and_then(|source| {
+            let parent = prepared.first()?.destination.parent()?;
+            let name = source.file_name()?.to_owned();
+            Some((source, parent.join(name)))
+        });
     if let Some((_, destination)) = &cover {
         if destination.exists() || !reserved.insert(destination.clone()) {
             return Err(ApplyError::DestinationExists(destination.clone()));
@@ -464,6 +500,7 @@ fn prepare(
     });
     album_fields.insert("added".into(), SqlValue::Real(now()));
     Ok(PreparedAlbum {
+        kind: album.kind,
         items: prepared,
         album_fields,
         cover,
@@ -681,12 +718,27 @@ fn cleanup_replaced(
     failed
 }
 
+fn cleanup_sources(
+    paths: &[PathBuf],
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> Vec<PathBuf> {
+    let mut failed = Vec::new();
+    for path in paths {
+        if let Err(error) = remove(path) {
+            tracing::warn!(path = %path.display(), %error, "move source remains after import");
+            failed.push(path.clone());
+        }
+    }
+    failed
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{cleanup_replaced, replacement_paths};
+    use super::{cleanup_replaced, cleanup_sources, replacement_paths};
     use muzik_library::{Fields, Library, SqlValue};
     use std::fs;
     use std::io;
+    use std::path::PathBuf;
 
     #[test]
     fn failed_trash_cleanup_reports_the_remaining_file() {
@@ -698,6 +750,18 @@ mod tests {
         });
         assert_eq!(failures, vec![old_cover.clone()]);
         assert!(old_cover.exists());
+    }
+
+    #[test]
+    fn failed_move_source_cleanup_reports_the_remaining_file() {
+        let source = PathBuf::from("incoming/song.flac");
+        let failures = cleanup_sources(std::slice::from_ref(&source), |_| {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "source locked",
+            ))
+        });
+        assert_eq!(failures, vec![source]);
     }
 
     #[test]

@@ -5,7 +5,8 @@ use muzik_core::{BeetsConfig, RecordingId, ReleaseCandidate, ReleaseId, TrackCan
 use muzik_import::apply::{
     self, AlbumDecision, ApplyError, ApplyOptions, DuplicateDecision, MatchDecision,
 };
-use muzik_import::plan::{Duplicate, DuplicateReason, ImportPlanner, ReleaseProvider};
+use muzik_import::files::Placement;
+use muzik_import::plan::{Duplicate, DuplicateReason, ImportMode, ImportPlanner, ReleaseProvider};
 use muzik_library::{Library, SqlValue};
 use muzik_match::MatchConfig;
 use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
@@ -85,6 +86,107 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, BeetsConfig) {
     fs::create_dir(&root).unwrap();
     let config = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
     (temp, source, database, root, config)
+}
+
+#[test]
+fn singleton_mode_uses_singleton_path_without_an_album_row() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner.plan_singletons(&[source]).unwrap();
+    assert_eq!(plan.albums.len(), 1);
+    assert_eq!(plan.albums[0].kind, ImportMode::Singleton);
+    assert!(plan.albums[0].candidates.is_empty());
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.paths.singleton = "Singles/$artist/$title".into();
+    let result = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: None,
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(result.album_ids.is_empty());
+    assert!(result.destinations[0].ends_with("Singles/Mara Vale/Song.flac"));
+    assert!(result.destinations[0].exists());
+    let item = library.item(result.item_ids[0]).unwrap().unwrap();
+    assert_eq!(item.album_id(), None);
+}
+
+#[test]
+fn move_import_removes_source_after_the_database_write() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_singletons(std::slice::from_ref(&source))
+        .unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.placement = Placement::Move;
+    let result = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: None,
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(result.source_cleanup_failed.is_empty());
+    assert!(!source.exists());
+    assert!(result.destinations[0].exists());
+    assert!(library.item(result.item_ids[0]).unwrap().is_some());
+}
+
+#[test]
+fn custom_replace_rule_changes_import_destination() {
+    let (_temp, source, database, root, _) = fixture();
+    let config = BeetsConfig::from_layers(
+        "",
+        serde_json::json!({
+            "replace": {"Song": "Tune"}
+        }),
+    )
+    .unwrap();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner.plan(&[source]).unwrap();
+    assert_eq!(plan.albums[0].kind, ImportMode::Album);
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.dry_run = true;
+    let result = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::Candidate(0),
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(result.destinations[0].ends_with("02 Tune.flac"));
 }
 
 #[test]
