@@ -1,5 +1,6 @@
 //! Rust handlers for GPUI requests that no longer need the Python service.
 
+use crate::services;
 use chrono::{DateTime, Local};
 use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
@@ -10,7 +11,7 @@ use std::path::Path;
 pub fn handles(command: &str) -> bool {
     matches!(
         command,
-        "hello" | "config.get" | "config.save" | "library.scan"
+        "hello" | "config.get" | "config.save" | "library.scan" | "services.check"
     )
 }
 
@@ -28,6 +29,7 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(&path)?})),
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(&path, params)?})),
         "library.scan" => library_scan(params),
+        "services.check" => Ok(json!({"services": services::check()})),
         _ => Err(format!("unknown command: {command}")),
     }
 }

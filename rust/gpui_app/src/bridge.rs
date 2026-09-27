@@ -74,11 +74,12 @@ impl Bridge {
         let id = self.next_id.to_string();
         self.next_id += 1;
         if native::handles(command) {
-            if command == "library.scan" {
+            if matches!(command, "library.scan" | "services.check") {
                 let sender = self.native_output.clone();
                 let response_id = id.clone();
+                let command = command.to_owned();
                 thread::spawn(move || {
-                    let response = native_response(&response_id, "library.scan", &params);
+                    let response = native_response(&response_id, &command, &params);
                     let _ = sender.send(response);
                 });
             } else {
