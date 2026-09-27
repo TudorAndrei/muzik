@@ -16,6 +16,8 @@ pub enum Error {
     Metadata(#[from] muzik_metadata::Error),
     #[error("cannot score album: {0}")]
     Match(#[from] muzik_match::Error),
+    #[error("incremental history is invalid: {0}")]
+    HistoryFormat(#[from] serde_json::Error),
     #[error("path format failed: {0}")]
     Path(#[from] fancy_regex::Error),
     #[error("trash operation failed: {0}")]
@@ -51,6 +53,7 @@ pub enum Error {
 pub mod apply;
 pub mod files;
 pub mod ftclean;
+pub mod history;
 pub mod paths;
 pub mod plan;
 pub mod sync;

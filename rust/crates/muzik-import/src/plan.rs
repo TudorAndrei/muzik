@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::Error as ImportError;
+use crate::history::IncrementalHistory;
 use muzik_core::{ReleaseCandidate, TrackCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_match::{
@@ -82,6 +83,25 @@ pub struct AlbumPlan {
 #[derive(Clone, Debug)]
 pub struct ImportPlan {
     pub albums: Vec<AlbumPlan>,
+    pub history: Option<IncrementalHistory>,
+    pub incremental_skip_later: bool,
+    pub skipped_incremental: usize,
+}
+
+pub struct PlanOptions {
+    pub autotag: bool,
+    pub history: Option<IncrementalHistory>,
+    pub incremental_skip_later: bool,
+}
+
+impl Default for PlanOptions {
+    fn default() -> Self {
+        Self {
+            autotag: true,
+            history: None,
+            incremental_skip_later: false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,18 +119,19 @@ pub struct ImportPlanner<'a, P: ReleaseProvider> {
 
 impl<P: ReleaseProvider> ImportPlanner<'_, P> {
     pub fn plan(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
-        self.plan_with_mode(paths, ImportMode::Album)
+        self.plan_with_options(paths, ImportMode::Album, PlanOptions::default())
     }
 
     /// Plan each audio file as an item without an album row.
     pub fn plan_singletons(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
-        self.plan_with_mode(paths, ImportMode::Singleton)
+        self.plan_with_options(paths, ImportMode::Singleton, PlanOptions::default())
     }
 
-    fn plan_with_mode(
+    pub fn plan_with_options(
         &self,
         paths: &[PathBuf],
         mode: ImportMode,
+        options: PlanOptions,
     ) -> Result<ImportPlan, ImportError> {
         let grouped = group_audio_paths(paths)?;
         let groups: Vec<_> = match mode {
@@ -125,10 +146,22 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         if groups.is_empty() {
             return Err(ImportError::NoAudio);
         }
+        let mut skipped_incremental = 0;
         let library_albums = self.library.albums()?;
         let library_items = self.library.items()?;
         let mut albums = Vec::new();
         for (source_dir, paths) in groups {
+            let history_key = if mode == ImportMode::Singleton {
+                paths.clone()
+            } else {
+                vec![source_dir.clone()]
+            };
+            if let Some(history) = &options.history
+                && history.contains(&history_key)?
+            {
+                skipped_incremental += 1;
+                continue;
+            }
             let mut items = Vec::new();
             for source in paths {
                 let tags = muzik_tags::read(&source, &[])?;
@@ -160,7 +193,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 || ["", "various artists", "various", "va", "unknown"]
                     .contains(&artist.to_lowercase().as_str());
             let mut releases = Vec::new();
-            if mode == ImportMode::Album && !title.is_empty() {
+            if options.autotag && mode == ImportMode::Album && !title.is_empty() {
                 let criteria = ReleaseSearch {
                     release: title.to_owned(),
                     artist: (!artist.is_empty()).then(|| artist.to_owned()),
@@ -219,7 +252,12 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 duplicates,
             });
         }
-        Ok(ImportPlan { albums })
+        Ok(ImportPlan {
+            albums,
+            history: options.history,
+            incremental_skip_later: options.incremental_skip_later,
+            skipped_incremental,
+        })
     }
 }
 

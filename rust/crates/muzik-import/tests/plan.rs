@@ -2,7 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use muzik_core::{BeetsConfig, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
-use muzik_import::plan::{ImportPlanner, ReleaseProvider};
+use muzik_import::history::IncrementalHistory;
+use muzik_import::plan::{ImportMode, ImportPlanner, PlanOptions, ReleaseProvider};
 use muzik_library::Library;
 use muzik_match::MatchConfig;
 use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
@@ -10,6 +11,26 @@ use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
 struct FixtureProvider;
 
 struct FailingProvider;
+
+struct NoLookupProvider;
+
+impl ReleaseProvider for NoLookupProvider {
+    fn search_releases(
+        &self,
+        _: &ReleaseSearch,
+        _: u8,
+    ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
+        panic!("autotag=false must not search MusicBrainz");
+    }
+
+    fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
+        panic!("autotag=false must not load a release");
+    }
+
+    fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        panic!("autotag=false must not load a recording");
+    }
+}
 
 impl ReleaseProvider for FailingProvider {
     fn search_releases(
@@ -155,4 +176,78 @@ fn metadata_failure_keeps_as_is_import_plan() {
     assert_eq!(plan.albums.len(), 1);
     assert!(plan.albums[0].candidates.is_empty());
     assert_eq!(plan.albums[0].items[0].match_item.artist, "Mara Vale");
+}
+
+#[test]
+fn autotag_off_plans_as_is_without_metadata_requests() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("Song.flac");
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source).unwrap();
+    let library =
+        Library::open_read_only(&crates.join("muzik-library/tests/fixtures/library.db")).unwrap();
+    let beets = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
+    let config = MatchConfig::from_beets(&beets).unwrap();
+    let planner = ImportPlanner {
+        provider: &NoLookupProvider,
+        library: &library,
+        match_config: &config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            &[source],
+            ImportMode::Album,
+            PlanOptions {
+                autotag: false,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(plan.albums.len(), 1);
+    assert!(plan.albums[0].candidates.is_empty());
+}
+
+#[test]
+fn incremental_plan_skips_seeded_album_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let album_dir = temp.path().join("incoming");
+    fs::create_dir(&album_dir).unwrap();
+    let source = album_dir.join("Song.flac");
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source).unwrap();
+    let library =
+        Library::open_read_only(&crates.join("muzik-library/tests/fixtures/library.db")).unwrap();
+    let beets = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
+    let config = MatchConfig::from_beets(&beets).unwrap();
+    let history = IncrementalHistory::open_or_seed(
+        &temp.path().join("state.pickle"),
+        &[vec![album_dir.canonicalize().unwrap()]],
+    )
+    .unwrap();
+    let planner = ImportPlanner {
+        provider: &NoLookupProvider,
+        library: &library,
+        match_config: &config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            &[source],
+            ImportMode::Album,
+            PlanOptions {
+                history: Some(history),
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+    assert!(plan.albums.is_empty());
+    assert_eq!(plan.skipped_incremental, 1);
+    assert!(!IncrementalHistory::path_for_statefile(&temp.path().join("state.pickle")).exists());
 }

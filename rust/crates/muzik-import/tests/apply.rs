@@ -6,7 +6,10 @@ use muzik_import::apply::{
     self, AlbumDecision, ApplyError, ApplyOptions, DuplicateDecision, MatchDecision,
 };
 use muzik_import::files::Placement;
-use muzik_import::plan::{Duplicate, DuplicateReason, ImportMode, ImportPlanner, ReleaseProvider};
+use muzik_import::history::IncrementalHistory;
+use muzik_import::plan::{
+    Duplicate, DuplicateReason, ImportMode, ImportPlanner, PlanOptions, ReleaseProvider,
+};
 use muzik_library::{Library, SqlValue};
 use muzik_match::MatchConfig;
 use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
@@ -152,6 +155,170 @@ fn move_import_removes_source_after_the_database_write() {
     assert!(!source.exists());
     assert!(result.destinations[0].exists());
     assert!(library.item(result.item_ids[0]).unwrap().is_some());
+}
+
+#[test]
+fn successful_import_records_incremental_history() {
+    let (temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let history = IncrementalHistory::open_or_seed(&temp.path().join("state.pickle"), &[]).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            std::slice::from_ref(&source),
+            ImportMode::Album,
+            PlanOptions {
+                autotag: false,
+                history: Some(history.clone()),
+                incremental_skip_later: false,
+            },
+        )
+        .unwrap();
+    let options = ApplyOptions::from_beets(&config, root).unwrap();
+    let result = apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(result.history_failed.is_empty());
+    assert!(
+        history
+            .contains(&[source.parent().unwrap().canonicalize().unwrap()])
+            .unwrap()
+    );
+}
+
+#[test]
+fn skipped_import_respects_incremental_skip_later() {
+    let (temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    for skip_later in [false, true] {
+        let history = IncrementalHistory::open_or_seed(
+            &temp.path().join(format!("state-{skip_later}.pickle")),
+            &[],
+        )
+        .unwrap();
+        let planner = ImportPlanner {
+            provider: &FixtureProvider,
+            library: &library,
+            match_config: &match_config,
+            search_limit: 5,
+        };
+        let plan = planner
+            .plan_with_options(
+                std::slice::from_ref(&source),
+                ImportMode::Album,
+                PlanOptions {
+                    autotag: false,
+                    history: Some(history.clone()),
+                    incremental_skip_later: skip_later,
+                },
+            )
+            .unwrap();
+        let options = ApplyOptions::from_beets(&config, root.clone()).unwrap();
+        let result = apply::apply(
+            &mut library,
+            &plan,
+            &[AlbumDecision {
+                choice: MatchDecision::Skip,
+                duplicate: None,
+            }],
+            &options,
+        )
+        .unwrap();
+        assert_eq!(result.skipped_albums, 1);
+        assert_eq!(
+            history
+                .contains(&[source.parent().unwrap().canonicalize().unwrap()])
+                .unwrap(),
+            !skip_later
+        );
+    }
+}
+
+#[test]
+fn dry_run_does_not_write_incremental_history() {
+    let (temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let statefile = temp.path().join("state.pickle");
+    let history = IncrementalHistory::open_or_seed(&statefile, &[]).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            &[source],
+            ImportMode::Album,
+            PlanOptions {
+                autotag: false,
+                history: Some(history),
+                incremental_skip_later: false,
+            },
+        )
+        .unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root).unwrap();
+    options.dry_run = true;
+    apply::apply(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+    )
+    .unwrap();
+    assert!(!IncrementalHistory::path_for_statefile(&statefile).exists());
+}
+
+#[test]
+fn real_run_saves_seed_when_all_groups_were_already_imported() {
+    let (temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let statefile = temp.path().join("state.pickle");
+    let source_dir = source.parent().unwrap().canonicalize().unwrap();
+    let history =
+        IncrementalHistory::open_or_seed(&statefile, &[vec![source_dir.clone()]]).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            &[source],
+            ImportMode::Album,
+            PlanOptions {
+                autotag: true,
+                history: Some(history.clone()),
+                incremental_skip_later: false,
+            },
+        )
+        .unwrap();
+    assert!(plan.albums.is_empty());
+    let options = ApplyOptions::from_beets(&config, root).unwrap();
+    let result = apply::apply(&mut library, &plan, &[], &options).unwrap();
+    assert_eq!(result.skipped_incremental, 1);
+    assert!(IncrementalHistory::path_for_statefile(&statefile).exists());
+    assert!(history.contains(&[source_dir]).unwrap());
 }
 
 #[test]

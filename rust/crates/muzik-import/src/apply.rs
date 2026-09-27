@@ -123,10 +123,13 @@ pub struct ApplyResult {
     pub item_ids: Vec<i64>,
     pub destinations: Vec<PathBuf>,
     pub skipped_albums: usize,
+    pub skipped_incremental: usize,
     /// Old files that remained after a successful database replacement.
     pub cleanup_failed: Vec<PathBuf>,
     /// Move sources that remained after a successful database write.
     pub source_cleanup_failed: Vec<PathBuf>,
+    /// Source groups that could not be written to incremental history.
+    pub history_failed: Vec<Vec<PathBuf>>,
 }
 
 struct PreparedItem {
@@ -160,13 +163,24 @@ pub fn apply(
     {
         return Err(ApplyError::LinkedWrite);
     }
-    let mut result = ApplyResult::default();
+    if !options.dry_run
+        && let Some(history) = &plan.history
+    {
+        history.persist_seed()?;
+    }
+    let mut result = ApplyResult {
+        skipped_incremental: plan.skipped_incremental,
+        ..ApplyResult::default()
+    };
     let mut reserved = BTreeSet::new();
     for (album, decision) in plan.albums.iter().zip(decisions) {
         if decision.choice == MatchDecision::Skip
             || (!album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip))
         {
             result.skipped_albums += 1;
+            if !options.dry_run && !plan.incremental_skip_later {
+                record_history(plan, album, &mut result);
+            }
             continue;
         }
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
@@ -284,8 +298,24 @@ pub fn apply(
                 .into_iter()
                 .filter(|path| prepared.items.iter().any(|item| item.destination == *path)),
         );
+        record_history(plan, album, &mut result);
     }
     Ok(result)
+}
+
+fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult) {
+    let Some(history) = &plan.history else {
+        return;
+    };
+    let paths = if album.kind == ImportMode::Singleton {
+        album.items.iter().map(|item| item.source.clone()).collect()
+    } else {
+        vec![album.source_dir.clone()]
+    };
+    if let Err(error) = history.record(&paths) {
+        tracing::warn!(?paths, %error, "incremental history was not saved");
+        result.history_failed.push(paths);
+    }
 }
 
 fn prepare(
