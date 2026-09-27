@@ -1,4 +1,4 @@
-use muzik_core::watchlist::Repository;
+use muzik_core::watchlist::{reconcile, view, ReconcileOptions, Repository};
 use serde_json::{json, Value};
 use std::fs;
 
@@ -100,5 +100,262 @@ fn rejects_invalid_data_without_replacing_the_file() -> Result<(), Box<dyn std::
         .add("https://youtube.com/playlist?list=PL_NEW")
         .is_err());
     assert_eq!(fs::read_to_string(path)?, invalid);
+    Ok(())
+}
+
+#[test]
+fn view_adds_card_actions_and_cached_thumbnail_without_saving(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("watchlist.json");
+    let cache = directory.path().join("cache");
+    fs::create_dir(&cache)?;
+    fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"image")?;
+    let document = json!({"version": 3, "playlists": [{
+        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
+            "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}]
+    }]});
+    fs::write(&path, serde_json::to_vec(&document)?)?;
+    let cards = view(
+        Repository::new(path.clone()).load()?,
+        directory.path(),
+        &cache,
+    )?;
+    let item = &cards["playlists"][0]["items"][0];
+    assert_eq!(item["summary"], "Pending");
+    assert_eq!(
+        item["primary_action"],
+        json!({"action": "run", "label": "Run"})
+    );
+    assert_eq!(
+        item["actions"]["run"],
+        json!({"enabled": true, "reason": null})
+    );
+    assert_eq!(item["actions"]["split_again"]["enabled"], false);
+    assert_eq!(
+        item["thumbnail_path"],
+        cache
+            .join("yt_thumbnail_abcdefghijk.jpg")
+            .to_string_lossy()
+            .as_ref()
+    );
+    assert_eq!(serde_json::from_slice::<Value>(&fs::read(path)?)?, document);
+    Ok(())
+}
+
+#[test]
+fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("cache");
+    let output = directory.path().join("downloads");
+    let splits = directory.path().join("splits");
+    fs::create_dir(&cache)?;
+    fs::create_dir(&output)?;
+    fs::create_dir(&splits)?;
+    let audio = output.join("Song [abcdefghijk].flac");
+    fs::write(&audio, b"audio")?;
+    let mut document = json!({"version": 3, "playlists": [{
+        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "processed_video_ids": ["abcdefghijk"],
+        "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
+            "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}]
+    }]});
+    fs::write(
+        cache.join("playlist_PL1.json"),
+        serde_json::to_vec(&json!({
+            "videos": {"abcdefghijk": {"status": "organized", "audio_file": audio}}
+        }))?,
+    )?;
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: &output,
+            splits: &splits,
+            cache: &cache,
+            config: None,
+            no_organize: false,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    let playlist = &document["playlists"][0];
+    assert_eq!(playlist["processed_video_ids"], json!([]));
+    assert_eq!(
+        playlist["items"][0]["stages"]["organize"]["status"],
+        "failed"
+    );
+    assert_eq!(playlist["items"][0]["last_action"], "refresh");
+    fs::remove_file(audio)?;
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: &output,
+            splits: &splits,
+            cache: &cache,
+            config: None,
+            no_organize: false,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    assert_eq!(
+        document["playlists"][0]["processed_video_ids"],
+        json!(["abcdefghijk"])
+    );
+    assert_eq!(
+        document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
+        "complete"
+    );
+    Ok(())
+}
+
+#[test]
+fn retained_source_with_empty_split_dir_keeps_processed_state(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("cache");
+    let splits = directory.path().join("splits");
+    let empty_split = splits.join("Song [abcdefghijk]");
+    fs::create_dir(&cache)?;
+    fs::create_dir_all(&empty_split)?;
+    let audio = directory.path().join("Song [abcdefghijk].flac");
+    fs::write(&audio, b"retained source")?;
+    fs::write(
+        cache.join("playlist_PL1.json"),
+        serde_json::to_vec(&json!({"videos": {"abcdefghijk": {
+            "status": "organized", "audio_file": audio, "split_dir": empty_split
+        }}}))?,
+    )?;
+    let mut document = json!({"version":3,"playlists":[{
+        "playlist_id":"PL1","url":"https://www.youtube.com/playlist?list=PL1",
+        "processed_video_ids":["abcdefghijk"],
+        "items":[{"position":1,"title":"Song","video_id":"abcdefghijk"}]
+    }]});
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: directory.path(),
+            splits: &splits,
+            cache: &cache,
+            config: None,
+            no_organize: false,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    assert_eq!(
+        document["playlists"][0]["processed_video_ids"],
+        json!(["abcdefghijk"])
+    );
+    assert_eq!(
+        document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
+        "complete"
+    );
+    Ok(())
+}
+
+#[test]
+fn reconcile_finds_existing_source_id_in_beets_library() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../muzik-library/tests/fixtures/library.db");
+    fs::copy(fixture, directory.path().join("library.db"))?;
+    let config = directory.path().join("config.yaml");
+    fs::write(&config, "library: library.db\ndirectory: .\n")?;
+    let mut document = json!({"version": 3, "playlists": [{
+        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "items": [
+            {"position": 1, "title": "Unrelated title", "video_id": "video-123",
+                "video_url": "https://www.youtube.com/watch?v=video-123"},
+            {"position": 2, "title": "Artist - Album (Full Album)", "video_id": "other-video",
+                "video_url": "https://www.youtube.com/watch?v=other-video"}
+        ]
+    }]});
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: &directory.path().join("downloads"),
+            splits: &directory.path().join("splits"),
+            cache: &directory.path().join("cache"),
+            config: Some(&config),
+            no_organize: false,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    assert_eq!(
+        document["playlists"][0]["processed_video_ids"],
+        json!(["video-123", "other-video"])
+    );
+    assert_eq!(
+        document["playlists"][0]["items"][0]["stages"]["download"]["status"],
+        "complete"
+    );
+    assert_eq!(
+        document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
+        "complete"
+    );
+    Ok(())
+}
+
+#[test]
+fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("cache");
+    let output = directory.path().join("downloads");
+    let splits = directory.path().join("splits");
+    fs::create_dir(&cache)?;
+    fs::create_dir(&output)?;
+    let audio = output.join("legacy.flac");
+    fs::write(&audio, b"audio")?;
+    fs::write(
+        cache.join("yt_abcdefghijk.txt"),
+        audio.to_string_lossy().as_bytes(),
+    )?;
+    fs::write(
+        cache.join("playlist_spotify_TEST.json"),
+        serde_json::to_vec(&json!({
+            "videos": {"track-1": {"status": "downloaded", "files": [audio]}}
+        }))?,
+    )?;
+    let mut document = json!({"version": 3, "playlists": [
+        {"playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1", "items": [
+            {"position": 1, "title": "Legacy", "video_id": "abcdefghijk", "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}
+        ]},
+        {"playlist_id": "spotify:playlist:TEST", "url": "https://open.spotify.com/playlist/TEST", "kind": "spotify", "items": [
+            {"position": 1, "title": "Track", "video_id": "track-1", "entry_id": "track-1", "kind": "spotify", "video_url": "https://open.spotify.com/track/TEST"}
+        ]}
+    ]});
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: &output,
+            splits: &splits,
+            cache: &cache,
+            config: None,
+            no_organize: true,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    assert_eq!(
+        document["playlists"][0]["items"][0]["stages"]["download"]["status"],
+        "complete"
+    );
+    assert_eq!(
+        document["playlists"][1]["items"][0]["stages"]["download"]["status"],
+        "complete"
+    );
+    assert_eq!(
+        document["playlists"][1]["items"][0]["stages"]["quality"]["status"],
+        "skipped"
+    );
+    assert_eq!(
+        document["playlists"][1]["items"][0]["stages"]["organize"]["status"],
+        "skipped"
+    );
     Ok(())
 }

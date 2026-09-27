@@ -19,3 +19,6 @@ getrandom = "0.4"
 open = "5.4.4"
 sha2 = "0.10"
 url = "2.5.8"
+muzik-library = { path = "../muzik-library" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"

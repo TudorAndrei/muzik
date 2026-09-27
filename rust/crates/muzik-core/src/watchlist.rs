@@ -4,7 +4,14 @@ use crate::paths;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+mod library_lookup;
+mod reconcile;
+mod view;
+
+pub use reconcile::{reconcile, ReconcileOptions};
+pub use view::view;
 
 const STAGES: [&str; 5] = ["download", "quality", "parse", "split", "organize"];
 
@@ -15,6 +22,10 @@ pub struct Repository {
 impl Repository {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub fn default_path() -> PathBuf {
