@@ -118,7 +118,10 @@ impl Bridge {
             return Ok(id);
         }
         if native::handles(command) {
-            if matches!(command, "library.scan" | "services.check") {
+            if matches!(
+                command,
+                "library.scan" | "services.check" | "spotify.status"
+            ) {
                 let sender = self.native_output.clone();
                 let response_id = id.clone();
                 let command = command.to_owned();
