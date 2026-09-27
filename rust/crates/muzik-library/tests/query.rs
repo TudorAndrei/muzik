@@ -101,3 +101,13 @@ fn default_item_sort_uses_beets_artist_sort_field() {
         [2, 1]
     );
 }
+
+#[test]
+fn query_with_non_ascii_final_character_is_a_search_term() {
+    let query = Query::parse("Beyoncé").unwrap();
+    assert_eq!(query.groups[0][0].pattern, "Beyoncé");
+    assert!(query.sorts.is_empty());
+
+    let sorted = Query::parse("Beyoncé+").unwrap();
+    assert_eq!(sorted.sorts[0].field, "Beyoncé");
+}

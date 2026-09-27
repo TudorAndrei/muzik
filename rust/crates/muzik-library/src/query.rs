@@ -148,21 +148,18 @@ const ITEM_SEARCH_FIELDS: &[&str] = &[
 const ALBUM_SEARCH_FIELDS: &[&str] = &["album", "albumartist", "genres"];
 
 fn parse_sort(part: &str) -> Option<Sort> {
-    if part.len() < 2 || part.contains(':') {
+    if part.contains(':') {
         return None;
     }
-    let (field, direction) = part.split_at(part.len() - 1);
-    match direction {
-        "+" => Some(Sort {
-            field: field.into(),
-            ascending: true,
-        }),
-        "-" => Some(Sort {
-            field: field.into(),
-            ascending: false,
-        }),
-        _ => None,
-    }
+    let (field, ascending) = if let Some(field) = part.strip_suffix('+') {
+        (field, true)
+    } else {
+        (part.strip_suffix('-')?, false)
+    };
+    (!field.is_empty()).then(|| Sort {
+        field: field.into(),
+        ascending,
+    })
 }
 
 fn parse_term(part: &str) -> Result<Term, Error> {
