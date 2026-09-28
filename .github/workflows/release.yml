@@ -21,7 +21,7 @@ jobs:
       - name: Install GPUI Linux libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc g++ clang libfontconfig-dev libwayland-dev \
+          sudo apt-get install -y gcc g++ clang ffmpeg libfontconfig-dev libwayland-dev \
             libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
