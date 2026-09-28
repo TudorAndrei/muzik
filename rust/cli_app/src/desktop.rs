@@ -16,17 +16,28 @@ pub fn install(user: bool) -> io::Result<()> {
     }
 
     let executable = env::current_exe()?;
+    let gpui = env::var_os("MUZIK_GPUI_BIN")
+        .map(PathBuf::from)
+        .or_else(|| executable.parent().map(|parent| parent.join("muzik-gpui")))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "GPUI binary is missing"))?;
+    if !gpui.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("GPUI binary is missing: {}", gpui.display()),
+        ));
+    }
     let target = target_dir(user)?;
     let icon = prepare_icon();
     let app = build_app_bundle(
         &target,
         &executable,
+        &gpui,
         icon.as_ref().map(|(_, path)| path.as_path()),
         env!("CARGO_PKG_VERSION"),
     )?;
 
     println!("Installed {}", app.display());
-    println!("  Launches: {} gui", executable.display());
+    println!("  Bundled Rust CLI and desktop programs.");
     if icon.is_none() {
         println!("  No icon set (sips or logo unavailable).");
     }
@@ -98,22 +109,28 @@ fn prepare_icon() -> Option<(tempfile::TempDir, PathBuf)> {
 fn build_app_bundle(
     target_dir: &Path,
     executable: &Path,
+    gpui: &Path,
     icns: Option<&Path>,
     version: &str,
 ) -> io::Result<PathBuf> {
     let app = target_dir.join(BUNDLE_NAME);
-    if app.exists() {
-        fs::remove_dir_all(&app)?;
-    }
-    let contents = app.join("Contents");
+    let staging = tempfile::Builder::new()
+        .prefix(".muzik-install-")
+        .tempdir_in(target_dir)?;
+    let staged_app = staging.path().join(BUNDLE_NAME);
+    let contents = staged_app.join("Contents");
     let macos = contents.join("MacOS");
     let resources = contents.join("Resources");
     fs::create_dir_all(&macos)?;
     fs::create_dir_all(&resources)?;
+    fs::copy(executable, macos.join("muzik"))?;
+    fs::copy(gpui, macos.join("muzik-gpui"))?;
 
     let launcher = macos.join(LAUNCHER);
-    let quoted = executable.display().to_string().replace('\'', "'\\''");
-    fs::write(&launcher, format!("#!/bin/sh\nexec '{quoted}' gui\n"))?;
+    fs::write(
+        &launcher,
+        "#!/bin/sh\nexec \"$(dirname \"$0\")/muzik\" gui\n",
+    )?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -125,6 +142,16 @@ fn build_app_bundle(
         fs::copy(icon, resources.join("muzik.icns"))?;
     }
     fs::write(contents.join("Info.plist"), info_plist(version, has_icon))?;
+    let backup = staging.path().join("previous.app");
+    if app.exists() {
+        fs::rename(&app, &backup)?;
+    }
+    if let Err(error) = fs::rename(&staged_app, &app) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, &app);
+        }
+        return Err(error);
+    }
     Ok(app)
 }
 
@@ -165,22 +192,28 @@ fn xml_escape(value: &str) -> String {
 mod tests {
     use super::build_app_bundle;
     use std::fs;
+    #[cfg(unix)]
+    use std::process::Command;
 
     #[test]
     fn bundle_has_launcher_plist_and_optional_icon() -> Result<(), Box<dyn std::error::Error>> {
         let temp = tempfile::tempdir()?;
         let icon = temp.path().join("source.icns");
+        let cli = temp.path().join("muzik-source");
+        let gpui = temp.path().join("gpui-source");
         fs::write(&icon, b"icns-bytes")?;
-        let app = build_app_bundle(
-            temp.path(),
-            "/opt/homebrew/bin/muzik".as_ref(),
-            Some(&icon),
-            "1.2.3",
-        )?;
+        fs::write(&cli, b"cli-bytes")?;
+        fs::write(&gpui, b"gpui-bytes")?;
+        let app = build_app_bundle(temp.path(), &cli, &gpui, Some(&icon), "1.2.3")?;
         let launcher = app.join("Contents/MacOS/muzik-launcher");
         assert_eq!(
             fs::read_to_string(&launcher)?,
-            "#!/bin/sh\nexec '/opt/homebrew/bin/muzik' gui\n"
+            "#!/bin/sh\nexec \"$(dirname \"$0\")/muzik\" gui\n"
+        );
+        assert_eq!(fs::read(app.join("Contents/MacOS/muzik"))?, b"cli-bytes");
+        assert_eq!(
+            fs::read(app.join("Contents/MacOS/muzik-gpui"))?,
+            b"gpui-bytes"
         );
         #[cfg(unix)]
         {
@@ -201,18 +234,41 @@ mod tests {
     }
 
     #[test]
-    fn bundle_replaces_existing_and_quotes_launcher_path() -> Result<(), Box<dyn std::error::Error>>
+    fn bundle_replaces_existing_and_can_copy_its_own_cli() -> Result<(), Box<dyn std::error::Error>>
     {
         let temp = tempfile::tempdir()?;
-        let app = build_app_bundle(temp.path(), "/first/muzik".as_ref(), None, "0.1.0")?;
+        let cli = temp.path().join("muzik-source");
+        let gpui = temp.path().join("gpui-source");
+        fs::write(&cli, b"cli-v1")?;
+        fs::write(&gpui, b"gpui-v1")?;
+        let app = build_app_bundle(temp.path(), &cli, &gpui, None, "0.1.0")?;
         fs::write(app.join("old"), "old")?;
-        let app = build_app_bundle(temp.path(), "/O'Brien/muzik".as_ref(), None, "0.1.0")?;
+        let old_cli = app.join("Contents/MacOS/muzik");
+        let old_gpui = app.join("Contents/MacOS/muzik-gpui");
+        let app = build_app_bundle(temp.path(), &old_cli, &old_gpui, None, "0.1.0")?;
         assert!(!app.join("old").exists());
-        assert_eq!(
-            fs::read_to_string(app.join("Contents/MacOS/muzik-launcher"))?,
-            "#!/bin/sh\nexec '/O'\\''Brien/muzik' gui\n"
-        );
+        assert_eq!(fs::read(app.join("Contents/MacOS/muzik"))?, b"cli-v1");
         assert!(!fs::read_to_string(app.join("Contents/Info.plist"))?.contains("CFBundleIconFile"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bundle_launcher_runs_from_a_path_with_spaces() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir()?;
+        let target = temp.path().join("Music App's Folder");
+        fs::create_dir(&target)?;
+        let cli = temp.path().join("muzik-source");
+        let gpui = temp.path().join("gpui-source");
+        fs::write(&cli, "#!/bin/sh\nprintf '%s\\n' \"$1\"\n")?;
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755))?;
+        fs::write(&gpui, b"gpui")?;
+        let app = build_app_bundle(&target, &cli, &gpui, None, "0.1.0")?;
+        let result = Command::new(app.join("Contents/MacOS/muzik-launcher")).output()?;
+        assert!(result.status.success());
+        assert_eq!(result.stdout, b"gui\n");
         Ok(())
     }
 }

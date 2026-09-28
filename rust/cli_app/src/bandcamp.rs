@@ -1,6 +1,6 @@
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{Bandcamp, paths};
@@ -31,7 +31,7 @@ pub fn download(args: &Bandcamp) -> io::Result<()> {
         })?;
 
     migrate_cache(&output)?;
-    let mut command = Command::new("bandsnatch");
+    let mut command = Command::new(bandsnatch_executable()?);
     command
         .arg("run")
         .arg("--format")
@@ -56,6 +56,20 @@ pub fn download(args: &Bandcamp) -> io::Result<()> {
             "bandsnatch exited with status {status}"
         )))
     }
+}
+
+fn bandsnatch_executable() -> io::Result<PathBuf> {
+    let current = std::env::current_exe()?;
+    Ok(bandsnatch_executable_for(&current))
+}
+
+fn bandsnatch_executable_for(current: &Path) -> PathBuf {
+    let name = format!("bandsnatch{}", std::env::consts::EXE_SUFFIX);
+    current
+        .parent()
+        .map(|parent| parent.join(&name))
+        .filter(|candidate| candidate.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 fn read_stored_user(path: &Path) -> Option<String> {
@@ -84,7 +98,25 @@ fn migrate_cache_from(old_cache: &Path, output: &Path) -> io::Result<()> {
 mod tests {
     use std::fs;
 
-    use super::migrate_cache_from;
+    use super::{bandsnatch_executable_for, migrate_cache_from};
+
+    #[test]
+    fn uses_bandsnatch_installed_beside_muzik() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let muzik = temp.path().join("muzik");
+        let bandsnatch = temp
+            .path()
+            .join(format!("bandsnatch{}", std::env::consts::EXE_SUFFIX));
+        fs::write(&bandsnatch, []).expect("create sidecar binary");
+
+        assert_eq!(bandsnatch_executable_for(&muzik), bandsnatch);
+
+        fs::remove_file(&bandsnatch).expect("remove sidecar binary");
+        assert_eq!(
+            bandsnatch_executable_for(&muzik),
+            std::path::PathBuf::from(format!("bandsnatch{}", std::env::consts::EXE_SUFFIX))
+        );
+    }
 
     #[test]
     fn retains_download_history_when_changing_bandcamp_downloaders() {
