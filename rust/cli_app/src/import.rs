@@ -183,7 +183,11 @@ fn sync_library(query: &str, args: &Import, db: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> Result<PathBuf, String> {
+pub(crate) fn configured_path(
+    config: &BeetsConfig,
+    config_path: &Path,
+    key: &str,
+) -> Result<PathBuf, String> {
     let raw = config
         .get(&[key])
         .and_then(serde_json::Value::as_str)

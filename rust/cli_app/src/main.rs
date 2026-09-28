@@ -9,6 +9,7 @@ mod downloaded;
 mod gui;
 mod import;
 mod init;
+mod organize;
 mod soulseek;
 mod spotify;
 use muzik_core::paths;
@@ -46,6 +47,8 @@ enum Command {
     InstallApp(InstallApp),
     /// Import audio into a beets-compatible library.
     Import(Import),
+    /// Import audio or write tags from the music library.
+    Organize(Organize),
     /// Manage a Spotify account.
     Spotify(Spotify),
     /// Check, search, and download from Soulseek.
@@ -91,6 +94,24 @@ struct Import {
     /// Keep missing library rows after moving files.
     #[usage(long)]
     no_prune: bool,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct Organize {
+    /// Directory containing audio tracks, or a library file or directory for --tag-only.
+    directory: PathBuf,
+    /// Import files into the music library.
+    #[usage(long, short = 'i')]
+    import: bool,
+    /// Write tags from existing library records without moving files.
+    #[usage(long, short = 't')]
+    tag_only: bool,
+    /// Show planned changes without writing them.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
     /// Beets-compatible library config file.
     #[usage(long, short = 'c')]
     config: Option<PathBuf>,
@@ -405,6 +426,7 @@ async fn run(command: Command) -> Result<(), String> {
         Command::Init => init::run().map_err(|error| error.to_string()),
         Command::InstallApp(args) => desktop::install(args.user).map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
+        Command::Organize(args) => organize::run(&args),
         Command::Spotify(args) => match args.command {
             SpotifyCommand::Login(args) => spotify::login(args.port),
             SpotifyCommand::Status => spotify::status(),
