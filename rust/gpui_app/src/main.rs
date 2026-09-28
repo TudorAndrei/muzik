@@ -1,4 +1,5 @@
 mod bridge;
+mod local_workflow;
 mod native;
 mod services;
 mod thumbnails;
@@ -16,6 +17,7 @@ use gpui_kit::component::tag::{Tag, TagVariant};
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use muzik_core::{AudioFallback, AudioSource, MetadataSource, QualityPolicy};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -87,19 +89,15 @@ struct ActivitySection {
 }
 
 const CHOICES: &[(&str, &str, &[&str])] = &[
+    ("audio_source", "Audio source", AudioSource::CHOICES),
+    ("metadata_source", "Metadata", MetadataSource::CHOICES),
     (
-        "audio_source",
-        "Audio source",
-        &["youtube", "soulseek", "auto"],
+        "prefer",
+        "Prefer",
+        muzik_core::config_choices::PREFERRED_AUDIO_CHOICES,
     ),
-    (
-        "metadata_source",
-        "Metadata",
-        &["auto", "youtube", "musicbrainz", "none"],
-    ),
-    ("prefer", "Prefer", &["lossless", "best", "mp3", "flac"]),
-    ("fallback", "Fallback", &["youtube", "none"]),
-    ("quality_policy", "Quality policy", &["off", "ask", "auto"]),
+    ("fallback", "Fallback", AudioFallback::CHOICES),
+    ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
 ];
 const SWITCHES: &[(&str, &str, bool)] = &[
     ("review", "Review chapters", false),
@@ -968,7 +966,9 @@ impl Muzik {
         let splits = self.defaults["splits"]
             .as_str()
             .unwrap_or("Set a splits folder");
-        let audio = self.defaults["audio_source"].as_str().unwrap_or("youtube");
+        let audio = self.defaults["audio_source"]
+            .as_str()
+            .unwrap_or(AudioSource::default().as_str());
         let prefer = self.defaults["prefer"].as_str().unwrap_or("lossless");
         let summary = div()
             .v_flex()

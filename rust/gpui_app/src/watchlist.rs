@@ -1,6 +1,6 @@
 //! Saved watchlist reads and local checks for the desktop app.
 
-use muzik_core::{app_config, paths, watchlist};
+use muzik_core::{app_config, paths, watchlist, QualityPolicy};
 use serde_json::{Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +14,7 @@ pub struct Options {
     config: Option<PathBuf>,
     no_organize: bool,
     no_split: bool,
-    quality_policy: String,
+    quality_policy: QualityPolicy,
 }
 
 impl Options {
@@ -44,7 +44,8 @@ impl Options {
                 .get("quality_policy")
                 .and_then(Value::as_str)
                 .ok_or("quality_policy must be a string")?
-                .to_owned(),
+                .parse()
+                .map_err(|error: muzik_core::ChoiceError| error.to_string())?,
         })
     }
 
@@ -63,7 +64,7 @@ impl Options {
                 config: self.config.as_deref(),
                 no_organize: self.no_organize,
                 no_split: self.no_split,
-                quality_policy: &self.quality_policy,
+                quality_policy: self.quality_policy.as_ref(),
             },
         )?;
         Ok(document)
