@@ -7,7 +7,7 @@ use muzik_soulseek::ranking::{rank, search_query};
 use muzik_soulseek::session::{setting, Session, SessionSettings};
 use muzik_soulseek::types::{Candidate, DownloadProgress};
 use muzik_workflow::{
-    classify_input, playlist, run_workflow_with_events, AudioSource, ChapterReview,
+    classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,
     QualityCheckedAudio, SplitProgress, SplitTask, WorkflowEvent, WorkflowInput,
     WorkflowOperations, WorkflowOptions,
 };
@@ -72,6 +72,7 @@ pub fn run(
         prefer: remote.local.options.prefer.clone(),
         interactive: remote.local.options.interactive,
         audio_source: remote.local.options.audio_source,
+        fallback: remote.local.options.fallback,
         output: remote.local.request.output.clone(),
         youtube_acquired: false,
     };
@@ -138,6 +139,7 @@ struct RemoteOperations<'a> {
     prefer: String,
     interactive: bool,
     audio_source: AudioSource,
+    fallback: AudioFallback,
     output: PathBuf,
     youtube_acquired: bool,
 }
@@ -189,21 +191,27 @@ impl WorkflowOperations for RemoteOperations<'_> {
         track: &playlist::SpotifyTrack,
     ) -> Result<Vec<PathBuf>, String> {
         let query = format!("{} - {}", track.artist, track.title);
-        if self.audio_source == AudioSource::Youtube
-            || self.audio_source == AudioSource::Auto && !self.soulseek_ready()
-        {
-            let files = download(&query, &self.output, false, self.local.cancelled)
-                .map_err(|error| error.to_string())?;
-            self.youtube_acquired = true;
-            return Ok(files);
-        }
-        self.acquire_soulseek(&query)
+        let ready = self.soulseek_ready();
+        let source = self.audio_source;
+        let fallback = self.fallback;
+        let output = self.output.clone();
+        let cancelled = self.local.cancelled;
+        let prefer = self.prefer.clone();
+        let interactive = self.interactive;
+        let decide = &mut *self.local.decide;
+        let (files, from_youtube) = acquire_spotify_audio(
+            source,
+            fallback,
+            ready,
+            || soulseek_download(&query, &prefer, interactive, cancelled, decide, false, None),
+            || download(&query, &output, false, cancelled).map_err(|error| error.to_string()),
+        )?;
+        self.youtube_acquired = from_youtube;
+        Ok(files)
     }
 
     fn soulseek_ready(&self) -> bool {
-        app_config::load(&app_config::path())
-            .ok()
-            .is_some_and(|config| SessionSettings::configured(&config).is_some())
+        soulseek_ready()
     }
 
     fn check_quality(
@@ -267,6 +275,37 @@ impl WorkflowOperations for RemoteOperations<'_> {
     ) -> Result<(), String> {
         self.local
             .split_with_cancel(task, options, cancelled, on_progress)
+    }
+}
+
+pub(crate) fn soulseek_ready() -> bool {
+    app_config::load(&app_config::path())
+        .ok()
+        .is_some_and(|config| SessionSettings::configured(&config).is_some())
+}
+
+/// Apply the same source and fallback policy to Spotify exports and saved items.
+pub(crate) fn acquire_spotify_audio<S, Y>(
+    source: AudioSource,
+    fallback: AudioFallback,
+    soulseek_ready: bool,
+    mut soulseek: S,
+    mut youtube: Y,
+) -> Result<(Vec<PathBuf>, bool), String>
+where
+    S: FnMut() -> Result<Vec<PathBuf>, String>,
+    Y: FnMut() -> Result<Vec<PathBuf>, String>,
+{
+    if source == AudioSource::Youtube || source == AudioSource::Auto && !soulseek_ready {
+        return youtube().map(|files| (files, true));
+    }
+    match soulseek() {
+        Ok(files) if !files.is_empty() => Ok((files, false)),
+        Ok(_) | Err(_) if fallback == AudioFallback::Youtube => {
+            youtube().map(|files| (files, true))
+        }
+        Ok(files) => Ok((files, false)),
+        Err(error) => Err(error),
     }
 }
 
@@ -628,12 +667,53 @@ pub(crate) fn yt_dlp_environment_args() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{candidate_row, execute_with_path, supported};
+    use super::{acquire_spotify_audio, candidate_row, execute_with_path, supported};
+    use muzik_core::{AudioFallback, AudioSource};
     use muzik_soulseek::types::{Candidate, FileEntry};
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn spotify_youtube_source_does_not_call_soulseek() -> Result<(), String> {
+        let audio = std::path::PathBuf::from("youtube-audio.flac");
+        let (files, from_youtube) = acquire_spotify_audio(
+            AudioSource::Youtube,
+            AudioFallback::None,
+            true,
+            || Err("Soulseek must not run".into()),
+            || Ok(vec![audio.clone()]),
+        )?;
+        assert_eq!(files, vec![audio]);
+        assert!(from_youtube);
+        Ok(())
+    }
+
+    #[test]
+    fn spotify_soulseek_failure_uses_selected_fallback() -> Result<(), String> {
+        let audio = std::path::PathBuf::from("fallback-audio.flac");
+        let (files, from_youtube) = acquire_spotify_audio(
+            AudioSource::Soulseek,
+            AudioFallback::Youtube,
+            true,
+            || Err("Soulseek is unavailable".into()),
+            || Ok(vec![audio.clone()]),
+        )?;
+        assert_eq!(files, vec![audio]);
+        assert!(from_youtube);
+        let error = acquire_spotify_audio(
+            AudioSource::Soulseek,
+            AudioFallback::None,
+            true,
+            || Err("Soulseek is unavailable".into()),
+            || Err("YouTube must not run".into()),
+        )
+        .err()
+        .ok_or("Soulseek failure must be returned")?;
+        assert_eq!(error, "Soulseek is unavailable");
+        Ok(())
+    }
 
     #[test]
     fn selects_youtube_video_and_playlist() -> Result<(), Box<dyn std::error::Error>> {

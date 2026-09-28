@@ -401,16 +401,33 @@ impl Adapter<'_, '_> {
             .local
             .request
             .output
-            .join("soulseek-watchlist")
+            .join("spotify-watchlist")
             .join(safe_id);
-        let files = remote_workflow::soulseek_download(
-            &query,
-            preference,
-            false,
-            cancelled,
-            self.decide,
-            true,
-            Some(&root),
+        let options = &self.prepared.local.options;
+        let (files, _) = remote_workflow::acquire_spotify_audio(
+            options.audio_source,
+            options.fallback,
+            remote_workflow::soulseek_ready(),
+            || {
+                remote_workflow::soulseek_download(
+                    &query,
+                    preference,
+                    false,
+                    cancelled,
+                    self.decide,
+                    true,
+                    Some(&root),
+                )
+            },
+            || {
+                remote_workflow::download(
+                    &query,
+                    &root,
+                    matches!(action, "download_again" | "run_all_again"),
+                    cancelled,
+                )
+                .map_err(|error| error.to_string())
+            },
         )
         .map_err(|error| {
             if cancelled.load(Ordering::SeqCst) {
