@@ -2,6 +2,7 @@ mod bridge;
 mod local_workflow;
 mod native;
 mod native_watchlist;
+mod pages;
 mod remote_workflow;
 mod services;
 mod style;
@@ -11,15 +12,15 @@ mod watchlist_view;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;
-use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputState, NumberInput};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::theme::Theme;
@@ -66,7 +67,7 @@ struct Choice {
     selected: usize,
     state: Entity<SelectState<Vec<&'static str>>>,
 }
-struct Switch {
+struct ConfigSwitch {
     key: &'static str,
     label: &'static str,
     enabled: bool,
@@ -1266,443 +1267,13 @@ impl Muzik {
             )
             .into_any_element()
     }
-
-    fn library(&self, cx: &mut Context<Self>) -> AnyElement {
-        let scanning = self
-            .pending
-            .values()
-            .any(|command| command == "library.scan");
-        let mut page = div().v_flex().gap_4().p_8().w_full().max_w(px(960.)).child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(div().text_2xl().font_semibold().child("Downloaded audio"))
-                .child(
-                    Button::new("library-refresh")
-                        .label("Refresh")
-                        .disabled(scanning)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.scan_library(cx);
-                            cx.notify();
-                        })),
-                ),
-        );
-        let items = self.library["items"]
-            .as_array()
-            .or_else(|| self.library.as_array());
-        if let Some(items) = items {
-            page = page
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(self.library["output"].as_str().unwrap_or("").to_string()),
-                )
-                .child(if scanning {
-                    "Scanning…".to_string()
-                } else if items.is_empty() {
-                    "No downloads found.".to_string()
-                } else {
-                    format!(
-                        "{} files, {}",
-                        items.len(),
-                        self.library["total_size"].as_str().unwrap_or("0 B")
-                    )
-                });
-            for (index, item) in items.iter().enumerate() {
-                let title = item["title"].as_str().unwrap_or("Audio file");
-                let detail = format!(
-                    "{}  •  {}  •  {}  •  {}",
-                    item["ext"].as_str().unwrap_or(""),
-                    item["size_label"].as_str().unwrap_or(""),
-                    item["modified"].as_str().unwrap_or(""),
-                    item["youtube_id"].as_str().unwrap_or("No YouTube ID")
-                );
-                page = page.child(
-                    div()
-                        .id(("library-item", index))
-                        .v_flex()
-                        .gap_1()
-                        .p_4()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded_md()
-                        .bg(cx.theme().background)
-                        .child(div().font_semibold().child(title.to_string()))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(detail),
-                        ),
-                );
-            }
-        } else {
-            page = page.child(if scanning {
-                "Scanning…"
-            } else {
-                "No downloads found."
-            });
-        }
-        div()
-            .flex()
-            .justify_center()
-            .flex_1()
-            .overflow_y_scrollbar()
-            .child(page)
-            .into_any_element()
-    }
-
-    fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let checking = self
-            .pending
-            .values()
-            .any(|command| command == "services.check");
-        let mut page = div().v_flex().gap_4().p_8().w_full().max_w(px(960.)).child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_2xl()
-                        .font_semibold()
-                        .child("Service availability"),
-                )
-                .child(
-                    Button::new("service-refresh")
-                        .label("Re-check")
-                        .disabled(checking)
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.send("services.check", json!({}));
-                            cx.notify();
-                        })),
-                ),
-        );
-        let services = self.services["services"]
-            .as_array()
-            .or_else(|| self.services.as_array());
-        if let Some(services) = services {
-            let missing = services
-                .iter()
-                .filter(|service| service["available"] == false && service["optional"] != true)
-                .count();
-            page = page.child(if checking {
-                "Checking…".to_string()
-            } else if missing == 0 {
-                "All required services are available.".to_string()
-            } else {
-                format!("{missing} required service(s) unavailable.")
-            });
-            for (index, service) in services.iter().enumerate() {
-                let available = service["available"].as_bool();
-                let status = match available {
-                    Some(true) => Tag::success().child("Available").into_any_element(),
-                    Some(false) if service["optional"] == true => Tag::warning()
-                        .child("Optional · unavailable")
-                        .into_any_element(),
-                    Some(false) => Tag::danger().child("Unavailable").into_any_element(),
-                    None => Tag::secondary().child("Not configured").into_any_element(),
-                };
-                page = page.child(
-                    div()
-                        .id(("service", index))
-                        .flex()
-                        .items_center()
-                        .gap_4()
-                        .p_4()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded_md()
-                        .bg(cx.theme().background)
-                        .child(
-                            div()
-                                .v_flex()
-                                .gap_1()
-                                .flex_1()
-                                .child(div().font_semibold().child(
-                                    service["name"].as_str().unwrap_or("Service").to_string(),
-                                ))
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(
-                                            service["detail"].as_str().unwrap_or("").to_string(),
-                                        ),
-                                ),
-                        )
-                        .child(status),
-                );
-            }
-        } else {
-            page = page.child(if checking {
-                "Checking…"
-            } else {
-                "No service checks are available."
-            });
-        }
-        div()
-            .flex()
-            .justify_center()
-            .flex_1()
-            .overflow_y_scrollbar()
-            .child(page)
-            .into_any_element()
-    }
-
-    fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
-        let saved_ids: HashSet<&str> = self.watchlist["playlists"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|playlist| playlist["playlist_id"].as_str())
-            .collect();
-        let liked_saved = saved_ids.contains("spotify:liked");
-        let connected = self.spotify["connected"] == true;
-        let has_client_id = self.spotify["client_id"]
-            .as_str()
-            .is_some_and(|id| !id.trim().is_empty());
-        let redirect = self.spotify["redirect_uri"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        let checking = self
-            .pending
-            .values()
-            .any(|command| command == "spotify.status");
-        let mut page = div()
-            .v_flex()
-            .gap_4()
-            .p_8()
-            .w_full()
-            .max_w(px(960.))
-            .child(div().text_2xl().font_semibold().child("Spotify"))
-            .child(
-                GroupBox::new()
-                    .id("spotify-application")
-                    .title("YOUR SPOTIFY APPLICATION")
-                    .outline()
-                    .child(
-                        div().text_color(cx.theme().muted_foreground).child(
-                            "Create an application in Spotify, add this redirect URI, then save its client ID here.",
-                        ),
-                    )
-                    .child(
-                        Button::new("spotify-dashboard")
-                            .label("Open Spotify dashboard")
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                cx.open_url("https://developer.spotify.com/dashboard")
-                            })),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(div().text_sm().font_semibold().child("Client ID"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .max_w(px(500.))
-                                            .child(Input::new(&self.spotify_client_id)),
-                                    )
-                                    .child(
-                                        Button::new("spotify-save")
-                                            .label("Save client ID")
-                                            .on_click(cx.listener(|view, _, _, cx| {
-                                                let client_id = view
-                                                    .spotify_client_id
-                                                    .read(cx)
-                                                    .value()
-                                                    .to_string();
-                                                view.send(
-                                                    "spotify.set_client_id",
-                                                    json!({"client_id":client_id}),
-                                                );
-                                                cx.notify();
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .v_flex()
-                            .gap_1()
-                            .child(div().text_sm().font_semibold().child("Redirect URI"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .child(div().text_sm().child(redirect.clone()))
-                                    .child(
-                                        Button::new("copy-redirect")
-                                            .label("Copy")
-                                            .disabled(redirect.is_empty())
-                                            .on_click(cx.listener(move |_, _, _, cx| {
-                                                cx.write_to_clipboard(
-                                                    ClipboardItem::new_string(redirect.clone()),
-                                                );
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div().text_sm().text_color(cx.theme().muted_foreground).child(
-                                    "Use the exact URI. localhost and 127.0.0.1 are different.",
-                                ),
-                            ),
-                    ),
-            );
-        if checking {
-            page = page.child("Checking account…");
-        }
-        if connected {
-            page = page.child(
-                GroupBox::new()
-                    .id("spotify-account")
-                    .title("CONNECTED ACCOUNT")
-                    .outline()
-                    .child(
-                        div().font_semibold().child(
-                            self.spotify["account_name"]
-                                .as_str()
-                                .unwrap_or("Spotify account")
-                                .to_string(),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("spotify-disconnect")
-                                    .label("Disconnect")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.send("spotify.logout", json!({}));
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("spotify-reload")
-                                    .label("Reload playlists")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.send("spotify.playlists", json!({}));
-                                        cx.notify();
-                                    })),
-                            ),
-                    ),
-            );
-        } else if has_client_id && !checking {
-            page = page
-                .child(
-                    Button::new("spotify-connect")
-                        .primary()
-                        .label("Connect to Spotify")
-                        .disabled(self.job_kind.is_some())
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.start_job("spotify.login", json!({}), cx);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("muzik opens your browser. Approve access, then return here."),
-                );
-        } else if !checking {
-            page = page.child("Save a client ID to connect your account.");
-        }
-        if let Some(error) = self.spotify["error"].as_str() {
-            page = page.child(div().text_color(cx.theme().red).child(error.to_string()));
-        }
-        if connected {
-            page = page.child(
-                Button::new("spotify-liked")
-                    .primary()
-                    .label(if liked_saved {
-                        "Liked Songs saved"
-                    } else {
-                        "Add Liked Songs to watchlist"
-                    })
-                    .disabled(
-                        liked_saved
-                            || self
-                                .pending
-                                .values()
-                                .any(|command| command == "watchlist.load"),
-                    )
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.send("watchlist.add", json!({"url":"liked"}));
-                        cx.notify();
-                    })),
-            );
-        }
-        if connected
-            && self
-                .pending
-                .values()
-                .any(|command| command == "spotify.playlists")
-        {
-            page = page.child("Loading playlists…");
-        } else if connected
-            && self.spotify["playlists"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-        {
-            page = page.child("No Spotify playlists were found.");
-        }
-        if let Some(playlists) = self.spotify["playlists"].as_array().filter(|_| connected) {
-            for (index, playlist) in playlists.iter().enumerate() {
-                let name = playlist["name"].as_str().unwrap_or("Playlist");
-                let uri = playlist["uri"].as_str().unwrap_or("").to_string();
-                if uri == "spotify:liked" {
-                    continue;
-                }
-                let saved = saved_ids.contains(uri.as_str());
-                let detail = format!(
-                    "{} · {} tracks",
-                    playlist["owner"].as_str().unwrap_or("Spotify"),
-                    playlist["total"].as_u64().unwrap_or(0)
-                );
-                page = page.child(
-                    div()
-                        .id(("spotify-playlist", index))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(div().v_flex().child(name.to_string()).child(detail))
-                        .child(
-                            Button::new(("spotify-add", index))
-                                .label(if saved { "Saved" } else { "Add to watchlist" })
-                                .disabled(saved)
-                                .on_click(cx.listener(move |view, _, _, cx| {
-                                    view.send("watchlist.add", json!({"url":uri}));
-                                    cx.notify();
-                                })),
-                        ),
-                );
-            }
-        }
-        div()
-            .flex()
-            .justify_center()
-            .flex_1()
-            .overflow_y_scrollbar()
-            .child(page)
-            .into_any_element()
-    }
 }
 
 struct ConfigView {
     main: WeakEntity<Muzik>,
     fields: Vec<Field>,
     choices: Vec<Choice>,
-    switches: Vec<Switch>,
+    switches: Vec<ConfigSwitch>,
     status: Rc<RefCell<String>>,
 }
 
@@ -1733,9 +1304,14 @@ impl ConfigView {
                 key,
                 label,
                 state: cx.new(|cx| {
-                    InputState::new(window, cx)
+                    let state = InputState::new(window, cx)
                         .placeholder(label)
-                        .default_value(value)
+                        .default_value(value);
+                    match key {
+                        "jobs" => state.step(1.).min(0.),
+                        "min_bitrate" => state.step(32.).min(0.),
+                        _ => state,
+                    }
                 }),
             }
         })
@@ -1781,7 +1357,7 @@ impl ConfigView {
         }
         let switches = SWITCHES
             .iter()
-            .map(|(key, label, initial)| Switch {
+            .map(|(key, label, initial)| ConfigSwitch {
                 key,
                 label,
                 enabled: defaults[*key].as_bool().unwrap_or(*initial),
@@ -1858,14 +1434,21 @@ impl Render for ConfigView {
         let mut destinations = div().v_flex().gap_3();
         let mut tuning = div().flex().flex_wrap().gap_4();
         for (index, field) in self.fields.iter().enumerate() {
+            let numeric = matches!(field.key, "jobs" | "min_bitrate");
+            let control = if numeric {
+                NumberInput::new(&field.state).into_any_element()
+            } else {
+                Input::new(&field.state).into_any_element()
+            };
             let mut row = div()
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(div().flex_1().child(Input::new(&field.state)));
+                .child(div().flex_1().child(control));
             if matches!(field.key, "output" | "splits" | "config") {
                 row = row.child(
                     Button::new(("config-pick", index))
+                        .icon(IconName::FolderOpen)
                         .label("Choose…")
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.pick_path(index, window, cx)
@@ -1877,7 +1460,7 @@ impl Render for ConfigView {
                 .gap_1()
                 .child(div().text_sm().font_semibold().child(field.label))
                 .child(row);
-            if matches!(field.key, "jobs" | "min_bitrate") {
+            if numeric {
                 tuning = tuning.child(div().w(px(180.)).child(field_view));
             } else {
                 destinations = destinations.child(field_view);
@@ -1894,14 +1477,14 @@ impl Render for ConfigView {
                     .child(Select::new(&choice.state).w_full()),
             );
         }
-        let mut switches = div().flex().flex_wrap().gap_3();
+        let mut switches = div().flex().flex_wrap().gap_x_6().gap_y_3();
         for (index, switch) in self.switches.iter().enumerate() {
             switches = switches.child(
-                div().w(px(210.)).child(
-                    Checkbox::new(("config-switch", index))
+                div().w(px(200.)).child(
+                    Switch::new(("config-switch", index))
                         .label(switch.label)
                         .checked(switch.enabled)
-                        .on_change(cx.listener(move |view, checked, _, cx| {
+                        .on_click(cx.listener(move |view, checked: &bool, _, cx| {
                             view.switches[index].enabled = *checked;
                             cx.notify();
                         })),
@@ -1921,20 +1504,19 @@ impl Render for ConfigView {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
-                    .child(div().text_2xl().font_semibold().child("Config"))
-                    .child(
-                        div()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Save these settings once. Workflow uses them for each run."),
-                    ),
+                    .child(style::page_title("Config"))
+                    .child(style::meta(
+                        "Save these settings once. Workflow uses them for each run.",
+                        cx,
+                    )),
             )
             .child(
                 div().flex_1().overflow_y_scrollbar().child(
                     div()
                         .v_flex()
-                        .gap_5()
+                        .gap_6()
                         .p_6()
-                        .max_w(px(860.))
+                        .max_w(px(720.))
                         .child(
                             GroupBox::new()
                                 .id("config-destinations")

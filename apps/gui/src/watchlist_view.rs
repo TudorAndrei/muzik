@@ -576,7 +576,7 @@ fn item_sheet(
         .child(body.child(commands).overflow_y_scrollbar())
 }
 
-fn empty_state(
+pub(crate) fn empty_state(
     title: impl Into<SharedString>,
     description: impl Into<SharedString>,
     loading: bool,
