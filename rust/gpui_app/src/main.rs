@@ -2811,14 +2811,10 @@ fn main() {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(|cx| {
         gpui_kit::init(cx);
-        cx.spawn(async move |cx| {
-            cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|cx| Muzik::new(window, cx));
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("open main window");
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            cx.new(|cx| Muzik::new(window, cx))
         })
-        .detach();
+        .expect("open main window");
     });
 }
 
@@ -2851,7 +2847,7 @@ fn check_backend() -> Result<(), String> {
 mod tests {
     use super::{
         activity_section, candidate_summary, decision_choices, decision_details,
-        merge_thumbnail_paths, ActivityProgress, Muzik, Root,
+        merge_thumbnail_paths, ActivityProgress, Muzik,
     };
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
@@ -2862,15 +2858,10 @@ mod tests {
     fn config_tab_saves_without_repeating_workflow_fields(cx: &mut TestAppContext) {
         let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
-            let mut main = None;
-            let handle = cx
-                .open_window(WindowOptions::default(), |window, cx| {
-                    let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
-                    main = Some(view.clone());
-                    cx.new(|cx| Root::new(view, window, cx))
-                })
-                .unwrap();
-            (handle, main.unwrap())
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Muzik::new_with_bridge(window, cx, false))
+            })
+            .unwrap()
         });
         cx.update(|cx| {
             main.update(cx, |view, cx| {
@@ -2882,7 +2873,7 @@ mod tests {
                 cx.notify();
             });
         });
-        cx.update_window(handle.into(), |_, window, cx| {
+        cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             window.click("Config", cx);
             window.click("save-config", cx);
@@ -2939,14 +2930,11 @@ mod tests {
     fn native_import_events_show_matches_and_progress(cx: &mut TestAppContext) {
         let main = cx.update(|cx| {
             gpui_kit::init(cx);
-            let mut main = None;
-            cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|cx| Muzik::new_with_bridge(window, cx, false));
-                main = Some(view.clone());
-                cx.new(|cx| Root::new(view, window, cx))
+            let (_, main) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Muzik::new_with_bridge(window, cx, false))
             })
             .unwrap();
-            main.unwrap()
+            main
         });
         cx.update(|cx| {
             main.update(cx, |view, _cx| {
