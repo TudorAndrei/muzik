@@ -1,5 +1,6 @@
 //! Native command-line entry point.
 
+mod archive;
 mod bandcamp;
 mod cache;
 mod config;
@@ -11,9 +12,11 @@ mod import;
 mod init;
 mod organize;
 mod soulseek;
+mod split;
 mod spotify;
 use muzik_core::paths;
 mod validate;
+mod workflow;
 
 use std::path::PathBuf;
 
@@ -29,6 +32,8 @@ struct Muzik {
 
 #[derive(Subcommands)]
 enum Command {
+    /// Split and organize audio files already on disk.
+    Archive(Archive),
     /// Download a Bandcamp collection with bandsnatch.
     Bandcamp(Bandcamp),
     /// Manage cached data.
@@ -53,8 +58,12 @@ enum Command {
     Spotify(Spotify),
     /// Check, search, and download from Soulseek.
     Soulseek(Soulseek),
+    /// Split an audio file at chapter markers.
+    Split(Split),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
+    /// Download or process audio, split chapters, and organize tracks.
+    Workflow(Workflow),
 }
 
 #[derive(Args)]
@@ -115,6 +124,105 @@ struct Organize {
     /// Beets-compatible library config file.
     #[usage(long, short = 'c')]
     config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct Split {
+    /// Audio file to split.
+    path: PathBuf,
+    /// Review chapter titles in an editor before splitting.
+    #[usage(long, short = 'r')]
+    review: bool,
+    /// Number of parallel ffmpeg jobs (0 selects a default).
+    #[usage(long, short = 'j', default = "0")]
+    jobs: usize,
+    /// Output directory.
+    #[usage(long, short = 'o')]
+    output: Option<PathBuf>,
+    /// Keep the original audio and sidecars.
+    #[usage(long)]
+    keep_source: bool,
+    /// Replace existing output and ignore the split cache.
+    #[usage(long, short = 'f')]
+    force: bool,
+}
+
+#[derive(Args)]
+struct Archive {
+    /// Directory with downloaded audio files.
+    directory: PathBuf,
+    /// Root directory for split tracks.
+    #[usage(long, short = 'o', default = "./splits")]
+    output: PathBuf,
+    /// Import tracks into the Beets library.
+    #[usage(long, short = 'i')]
+    import: bool,
+    /// Write tags without moving library files.
+    #[usage(long, short = 't')]
+    tag_only: bool,
+    /// Show the plan without writing files.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
+    /// Skip chapter splitting.
+    #[usage(long)]
+    skip_split: bool,
+    /// Skip library organization.
+    #[usage(long)]
+    skip_organize: bool,
+    /// Number of parallel ffmpeg jobs per file.
+    #[usage(long, short = 'j', default = "0")]
+    jobs: usize,
+    /// Keep original audio and sidecars after splitting.
+    #[usage(long)]
+    keep_source: bool,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct Workflow {
+    /// YouTube video URL, local audio path, or search text.
+    raw: String,
+    /// Directory for downloaded audio.
+    #[usage(long, short = 'o')]
+    output: Option<PathBuf>,
+    /// Directory for chapter-split tracks.
+    #[usage(long)]
+    splits: Option<PathBuf>,
+    /// Review chapters in an editor before splitting.
+    #[usage(long, short = 'r')]
+    review: bool,
+    /// Keep chaptered audio as one file.
+    #[usage(long)]
+    no_split: bool,
+    /// Skip library organization.
+    #[usage(long)]
+    no_organize: bool,
+    /// Import audio into the Beets library.
+    #[usage(long, short = 'i')]
+    import: bool,
+    /// Write tags without moving library files.
+    #[usage(long, short = 't')]
+    tag_only: bool,
+    /// Show the planned operations without writing files.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
+    /// Number of parallel ffmpeg jobs per file.
+    #[usage(long, short = 'j', default = "0")]
+    jobs: usize,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
+    /// Keep original audio after splitting.
+    #[usage(long)]
+    keep_source: bool,
+    /// Replace output and reprocess source files.
+    #[usage(long, short = 'f')]
+    force: bool,
+    /// Interpret chapter titles as artist and song pairs.
+    #[usage(long)]
+    compilation: bool,
 }
 
 #[derive(Args)]
@@ -399,6 +507,7 @@ struct SetSpotifyClientId {
 
 async fn run(command: Command) -> Result<(), String> {
     match command {
+        Command::Archive(args) => archive::run(&args),
         Command::Bandcamp(args) => bandcamp::download(&args).map_err(|error| error.to_string()),
         Command::Cache(args) => match args.command {
             CacheCommand::List => cache::list(),
@@ -443,7 +552,9 @@ async fn run(command: Command) -> Result<(), String> {
             }
             SoulseekCommand::Download(args) => soulseek::download(&args),
         },
+        Command::Split(args) => split::run(&args).map(|_| ()),
         Command::Validate(args) => validate::run(&args),
+        Command::Workflow(args) => workflow::run(&args),
     }
 }
 

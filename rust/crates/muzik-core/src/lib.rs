@@ -5,6 +5,7 @@ pub mod chapters;
 mod config;
 pub mod downloads;
 pub mod paths;
+pub mod splitter;
 pub mod spotify;
 pub mod thumbnails;
 mod types;

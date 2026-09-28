@@ -4589,6 +4589,7 @@ dependencies = [
  "muzik-metadata",
  "muzik-soulseek",
  "muzik-tags",
+ "muzik-workflow",
  "serde",
  "serde-pickle",
  "serde-saphyr",
@@ -4608,6 +4609,7 @@ dependencies = [
  "chrono",
  "getrandom 0.4.3",
  "muzik-library",
+ "muzik-tags",
  "open",
  "regex",
  "serde",
@@ -4617,6 +4619,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "unicode-normalization",
  "ureq",
  "url",
 ]
@@ -4741,6 +4744,16 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "muzik-workflow"
+version = "0.1.0"
+dependencies = [
+ "muzik-core",
+ "tempfile",
+ "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]
