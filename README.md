@@ -164,7 +164,7 @@ files provide metadata; the selected audio source acquires each track.
 | Command | Description |
 |---------|-------------|
 | `muzik init` | Create app directories and configure the music library |
-| `muzik workflow <url-or-path>` | Full pipeline: acquire → split → organize |
+| `muzik workflow <url-or-path>` | Full pipeline: acquire → split → import by default |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik downloaded` | List audio already in the output folder |
 | `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
@@ -178,9 +178,9 @@ files provide metadata; the selected audio source acquires each track.
 | `muzik spotify watch <ref>` | Add one Spotify playlist to the watchlist |
 | `muzik bandcamp <user> --cookies <file>` | Download a Bandcamp collection through bandsnatch |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
-| `muzik organize <dir>` | Tag or import audio |
+| `muzik organize <dir>` | Import audio by default, or write library tags with `--tag-only` |
 | `muzik import <dir>` | Import audio into a Beets-compatible library |
-| `muzik archive <dir>` | Process existing downloaded files (split + organize) |
+| `muzik archive <dir>` | Process existing downloaded files (split + import by default) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik gui` | Open the GPUI Kit desktop interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |

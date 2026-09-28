@@ -52,7 +52,7 @@ enum Command {
     InstallApp(InstallApp),
     /// Import audio into a beets-compatible library.
     Import(Import),
-    /// Import audio or write tags from the music library.
+    /// Import audio by default, or write tags from the music library.
     Organize(Organize),
     /// Manage a Spotify account.
     Spotify(Spotify),
@@ -112,7 +112,7 @@ struct Import {
 struct Organize {
     /// Directory containing audio tracks, or a library file or directory for --tag-only.
     directory: PathBuf,
-    /// Import files into the music library.
+    /// Import files into the music library (the default; kept for old commands).
     #[usage(long, short = 'i')]
     import: bool,
     /// Write tags from existing library records without moving files.
@@ -154,7 +154,7 @@ struct Archive {
     /// Root directory for split tracks.
     #[usage(long, short = 'o', default = "./splits")]
     output: PathBuf,
-    /// Import tracks into the Beets library.
+    /// Import tracks into the Beets library (the default; kept for old commands).
     #[usage(long, short = 'i')]
     import: bool,
     /// Write tags without moving library files.
@@ -199,7 +199,7 @@ struct Workflow {
     /// Skip library organization.
     #[usage(long)]
     no_organize: bool,
-    /// Import audio into the Beets library.
+    /// Import audio into the Beets library (the default; kept for old commands).
     #[usage(long, short = 'i')]
     import: bool,
     /// Write tags without moving library files.

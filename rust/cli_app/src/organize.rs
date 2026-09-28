@@ -22,8 +22,9 @@ pub fn run(args: &Organize) -> Result<(), String> {
         return Ok(());
     }
 
-    // Import moves files by default, as in the existing Beets CLI command.
-    let _ = args.import;
+    // The old CLI accepted --import, but it imported by default. Keep the
+    // flag as an alias so existing commands have the same result.
+    let _legacy_import_alias = args.import;
     import::run(&Import {
         directory: Some(args.directory.clone()),
         library: None,
