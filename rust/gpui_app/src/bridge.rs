@@ -248,6 +248,12 @@ impl Bridge {
             }
             return Ok(id);
         }
+        if let Err(message) = validate_python_command(command, &params) {
+            self.native_output
+                .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}))
+                .map_err(|_| "Rust backend is not available".to_owned())?;
+            return Ok(id);
+        }
         if self.input.is_none() {
             self.start_python()?;
         }
@@ -356,6 +362,58 @@ impl Bridge {
     pub fn drain(&self) -> Vec<Value> {
         self.output.try_iter().collect()
     }
+}
+
+fn validate_python_command(command: &str, params: &Value) -> Result<(), String> {
+    let required = |key: &str| {
+        params
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| format!("{key} must be a non-empty string."))
+    };
+    match command {
+        "workflow.start" => {
+            if params
+                .get("raw")
+                .and_then(Value::as_str)
+                .is_none_or(|raw| raw.trim().is_empty())
+            {
+                return Err("Enter a URL or path.".into());
+            }
+        }
+        "watchlist.action" => {
+            required("playlist_id")?;
+            if params
+                .get("position")
+                .is_none_or(|value| value.as_i64().is_none() && value.as_u64().is_none())
+            {
+                return Err("position must be an integer.".into());
+            }
+            let action = required("action")?;
+            if !matches!(
+                action,
+                "run"
+                    | "retry"
+                    | "download_again"
+                    | "check_quality_again"
+                    | "parse_again"
+                    | "split_again"
+                    | "organize_again"
+                    | "run_all_again"
+            ) {
+                return Err(format!("'{action}' is not a valid ItemAction"));
+            }
+        }
+        "job.cancel" => {
+            required("job_id")?;
+        }
+        "decision.reply" => {
+            required("decision_id")?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 struct WatchlistLoad {
@@ -546,6 +604,32 @@ mod tests {
         assert_eq!(response["id"], id);
         assert_eq!(response["result"]["protocol_version"], 1);
         assert!(bridge.input.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_workflow_requests_use_the_native_protocol_response(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut bridge = Bridge::start()?;
+        for (command, params) in [
+            ("workflow.start", json!({"raw":"  "})),
+            (
+                "watchlist.action",
+                json!({"playlist_id":"PL123","position":true,"action":"run"}),
+            ),
+            (
+                "watchlist.action",
+                json!({"playlist_id":"PL123","position":1,"action":"unknown"}),
+            ),
+            ("decision.reply", json!({"decision_id":""})),
+            ("job.cancel", json!({"job_id":""})),
+        ] {
+            let id = bridge.send(command, params)?;
+            let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+            assert_eq!(response["id"], id);
+            assert_eq!(response["error"]["code"], "invalid_request");
+            assert!(bridge.input.is_none());
+        }
         Ok(())
     }
 
