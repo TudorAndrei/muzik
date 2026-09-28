@@ -2,13 +2,15 @@
 
 ![muzik](assets/muzik-logo-v2.png)
 
-Music organizer CLI — download, split, and organize music from Soulseek, YouTube,
-and Bandcamp.
+Rust CLI and desktop app to download, split, and organize music from Soulseek,
+YouTube, and Bandcamp.
 
 ---
 
-Uses an embedded Soulseek client, **yt-dlp**, **ffmpeg**, and native Rust music
-library tools. It gives progress feedback and an interactive chapter editor.
+Uses an embedded Soulseek client, the Rust `yt-dlp` crate, **ffmpeg**, and native
+Rust music library tools. The crate starts the `yt-dlp` program to read YouTube
+data, so that program must also be installed. The app gives progress feedback
+and an interactive chapter editor.
 Soulseek is used for higher-quality audio acquisition when configured;
 yt-dlp remains available for YouTube metadata, playlist parsing, and fallback
 audio downloads. Chapter sidecars can come from `.chapters.txt`, yt-dlp
@@ -17,9 +19,8 @@ collection.
 
 ## Requirements
 
-- Python 3.14+
-- [`uv`](https://github.com/astral-sh/uv)
 - `yt-dlp` and `ffmpeg` on `$PATH`
+- [bandsnatch](https://github.com/Ovyerus/bandsnatch) on `$PATH` for Bandcamp
 - Optional for Soulseek: a Soulseek account (username/password) — the client
   is embedded, no separate server to run
 
@@ -28,29 +29,21 @@ Check external tools before running a full workflow:
 ```sh
 yt-dlp --version
 ffmpeg -version
-uv run muzik soulseek check      # when using Soulseek
-uv run playwright install chromium
+muzik soulseek check      # when using Soulseek
 ```
 
-Bandcamp collection downloads use Playwright browser automation. The first
-Bandcamp run opens a browser so you can log in, then stores cookies under the
-app data directory.
+For Bandcamp, export your own cookies to a file and give that file to
+`muzik bandcamp --cookies`. See the upstream bandsnatch instructions for the
+cookie file format.
 
 ### macOS arm64 prerequisites
 
 Install the required command-line tools and confirm that they are on `PATH`:
 
 ```sh
-brew install ffmpeg yt-dlp
+brew install ffmpeg yt-dlp ovyerus/tap/bandsnatch
 ffmpeg -version
 yt-dlp --version
-```
-
-Before you use Bandcamp, install the Playwright Chromium browser once from a
-source checkout:
-
-```sh
-uv run playwright install chromium
 ```
 
 ## Soulseek setup
@@ -83,48 +76,44 @@ Then run `muzik soulseek check`; it should report `Soulseek reachable`.
 `--min-bitrate` (default `256`) sets the lossy-bitrate floor: a lossy file at
 or above it is kept as-is. A lossless file is always kept.
 
-A quality check never turns a workflow into a failure: a Soulseek search or
-download error, no safe candidate, or a duration mismatch all keep the
-YouTube file and log a warning instead of raising. "Safe" means the candidate
+A Soulseek search or download error, no safe candidate, or a duration mismatch
+keeps the YouTube file and logs a warning. "Safe" means the candidate
 passes the same identity and duration checks as any other Soulseek search
 result (see [SPOTIFY.md](SPOTIFY.md)). A multi-file replacement (a Soulseek
 result with more than one track) is treated as a pre-split album and skips
 chapter parsing for that item.
 
 ```sh
-uv run muzik workflow "https://youtube.com/watch?v=..." --quality-policy ask
-uv run muzik workflow "https://youtube.com/watch?v=..." --quality-policy auto --min-bitrate 192
+muzik workflow "https://youtube.com/watch?v=..." --quality-policy ask
+muzik workflow "https://youtube.com/watch?v=..." --quality-policy auto --min-bitrate 192
 ```
 
 In `muzik gui`, the launcher exposes the same **Quality policy** and **Min
 bitrate** fields. With `ask`, the desktop app asks you before it replaces a
 YouTube file.
 
-## Direct Spotify acquisition
+## Spotify track acquisition
 
-A Spotify JSON or CSV entry is a resolved track, not a search query, so it
-skips YouTube entirely: `acquire_track_from_soulseek` searches Soulseek by
-track title/artist/duration and downloads the match directly. There is no
-YouTube fallback for a Spotify-derived track — if no safe Soulseek candidate
-is found, the run stops at that track (exit code 0) rather than skipping it;
-already-organized tracks before it are not re-downloaded on the next run. See
-[SPOTIFY.md](SPOTIFY.md) for the full source-routing policy.
+A Spotify JSON or CSV entry supplies a track title, artist, and duration.
+`--audio-source` selects Soulseek or YouTube for its audio. Spotify supplies
+metadata only. Already organized tracks are saved in playlist state, so a
+later run can skip them. See [SPOTIFY.md](SPOTIFY.md).
 
 ## Install
 
-Download the wheel for your operating system and Python 3.14 from the
+Download the archive for your system from the
 [latest GitHub release](https://github.com/TudorAndrei/muzik/releases/latest).
-From the directory that contains the wheel, install it as an isolated tool:
+Extract `muzik` and `muzik-gpui` to the same directory:
 
 ```sh
-uv tool install ./muzik-*.whl
-muzik gui
+tar -xzf muzik-<version>-<target>.tar.gz
+./muzik gui
 ```
 
-Or install with Homebrew, which also pulls `ffmpeg` and `yt-dlp`:
+On macOS, the Rust source formula in this repository can build both programs:
 
 ```sh
-brew install TudorAndrei/muzik/muzik
+brew install --HEAD TudorAndrei/muzik/muzik
 ```
 
 ### macOS app in Applications
@@ -145,9 +134,8 @@ For development, install from a source checkout:
 ```sh
 git clone <repo>
 cd muzik
-uv sync
-uv run playwright install chromium
-uv run muzik init
+mise run develop
+cargo run --locked -p muzik-cli -- init
 ```
 
 ## Development
@@ -164,14 +152,12 @@ The same checks run in CI and as individual pre-push hooks.
 
 `--audio-source` chooses where audio comes from: `youtube`, `soulseek`, or
 `auto`. `auto` uses Soulseek when the configured service is ready and otherwise
-uses YouTube for YouTube inputs. `--fallback youtube` is available only when a
-YouTube input has no acceptable Soulseek result. `--metadata-source` controls
-chapter/metadata lookup for downloaded audio: `youtube`, `musicbrainz`, `none`,
-or `auto`.
+uses YouTube. `--fallback youtube` lets a Soulseek run use YouTube when it has
+no acceptable result. `--metadata-source` controls chapter and metadata
+lookup: `youtube`, `musicbrainz`, `none`, or `auto`.
 
-Local audio paths are processed without remote acquisition. Spotify export files
-are detected before local audio discovery and are the exception to the fallback
-rule: they are metadata-only and require Soulseek or a ready `auto` source.
+Local audio paths are processed without remote acquisition. Spotify export
+files provide metadata; the selected audio source acquires each track.
 
 ## Commands
 
@@ -190,78 +176,35 @@ rule: they are metadata-only and require Soulseek or a ready `auto` source.
 | `muzik spotify playlists` | List Liked Songs and your Spotify playlists |
 | `muzik spotify export <ref>` | Write one Spotify playlist as a metadata export |
 | `muzik spotify watch <ref>` | Add one Spotify playlist to the watchlist |
-| `muzik bandcamp` | Download and organize a Bandcamp collection |
+| `muzik bandcamp <user> --cookies <file>` | Download a Bandcamp collection through bandsnatch |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Tag or import audio |
-| `muzik import <dir>` | Import an existing music library (`--agent` selects tags) |
+| `muzik import <dir>` | Import audio into a Beets-compatible library |
 | `muzik archive <dir>` | Process existing downloaded files (split + organize) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik gui` | Open the GPUI Kit desktop interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage music library configuration |
 
-## Agentic tagging
-
-`muzik import --agent` tags a library without prompts. For each album, the
-native importer finds candidate releases on MusicBrainz; the agent then chooses:
-
-- A **strong match** (distance ≤ 0.10) is applied at once, with no LLM call.
-- An **uncertain match** is sent to an LLM, which picks a candidate, keeps the
-  files as-is, or skips them. It only chooses from the candidates found;
-  it never invents tags.
-- **Confident picks are applied; the rest are skipped** for manual review.
-
-```sh
-muzik import ~/Music --agent                     # tag untracked files
-muzik import --agent --library "mb_albumid::^$"  # re-tag unmatched albums
-muzik import ~/Music --agent --dry-run           # preview planned destinations
-```
-
-Files are moved and retagged, so keep a backup.
-
-### Agent backends
-
-Choose the backend with `MUZIK_TAG_BACKEND` and the model with `MUZIK_TAG_MODEL`:
-
-| Backend | How | Setup |
-|---------|-----|-------|
-| `openrouter` (default) | pydantic-ai over OpenRouter | `OPENROUTER_API_KEY`; model defaults to `z-ai/glm-5.2:free` |
-| `codex` | shells out to `codex exec` | Codex CLI on `PATH`, signed in; uses your ChatGPT subscription. Defaults to the fast `gpt-5.3-codex-spark` model |
-| `opencode` | shells out to `opencode run` | OpenCode CLI on `PATH`. Defaults to the free `opencode/deepseek-v4-flash-free` zen model — free, so no paid quota, only rate limits |
-
-```sh
-MUZIK_TAG_BACKEND=codex uv run muzik import --agent --library "mb_albumid::^$"
-MUZIK_TAG_BACKEND=opencode uv run muzik import ~/Music --agent   # free zen model
-```
-
-For bulk tagging, prefer `openrouter` or a free `opencode` zen model: each
-`codex exec` runs a multi-turn agent loop that costs tens of thousands of tokens
-per album, which exhausts a subscription quota quickly. Keep codex for a few
-hard cases.
-
-Without a usable backend, only the strong-match fast path runs and uncertain
-albums are skipped. When a CLI backend errors (missing model, not signed in),
-the reason is printed as an `agent:` line and the album is skipped.
-
 ## Spotify playlist exports
 
 `muzik` accepts a canonical version-1 Spotify playlist JSON file and
-Exportify-style CSV files as metadata-only workflow inputs. It does not sign in
-to Spotify, call the Spotify API, or pass Spotify URLs to `yt-dlp`.
+Exportify-style CSV files as metadata-only workflow inputs. The CLI can also
+sign in to Spotify to read playlist metadata. It never passes Spotify URLs to
+`yt-dlp`.
 
-Use Soulseek (or `auto` when `muzik soulseek check` reports ready) to acquire
-audio for the exported tracks:
+Select an audio source for the exported tracks:
 
 ```sh
-uv run muzik workflow playlist.spotify.json --audio-source soulseek --fallback none
-uv run muzik workflow exportify-playlist.csv --audio-source soulseek --fallback none
+muzik workflow playlist.spotify.json --audio-source soulseek --fallback none
+muzik workflow exportify-playlist.csv --audio-source youtube
 ```
 
 Spotify exports reject episodes and require track title, artist, positive unique
 position, and a deterministic track identity. Local tracks are supported with a
 stable synthetic identity. Re-running an updated export skips entries already
 organized by track ID, tolerates reordering, and acquires only new entries.
-`--audio-source youtube` is intentionally rejected for Spotify exports.
+`--audio-source youtube` searches YouTube with each track's title and artist.
 
 See [SPOTIFY.md](SPOTIFY.md) for the supported JSON/CSV fields and the
 metadata-only policy.
@@ -274,15 +217,13 @@ Build and run the desktop interface from a source checkout with:
 mise run gui
 ```
 
-An installed release wheel includes the native desktop program. Run it with
-`muzik gui`. To build the program for a local wheel, run
-`./scripts/build-native-gui.sh` before the wheel build.
+The release archive contains both programs. Run `muzik gui` when both are in
+the same directory.
 
 The interface provides a workflow launcher, pipeline progress and logs, source
 candidate tables, chapter review and editing, and album match and duplicate
-decisions. It uses the same workflow and native import service as the CLI. The
-Rust window sends commands to a Python worker process. Cancel asks the worker
-to stop at the next safe point.
+decisions. The app runs workflow and import work in Rust. Cancel asks the active
+job to stop at the next safe point.
 
 The **Library** page lists the audio already in the output folder, so you can
 see what is downloaded before you start a run.
@@ -311,10 +252,10 @@ apply to the selected source.
 
 You can also add a Spotify playlist, a Spotify album, or your Liked Songs.
 Connect your Spotify account first on the **Spotify** page, or run
-`muzik spotify login`. Each refresh then reads the current tracks
-with the Spotify Web API and acquires the new ones from Soulseek. muzik reads
-metadata only; it never downloads Spotify media. Set the audio source to
-Soulseek for these sources. See [SPOTIFY.md](SPOTIFY.md) for the application
+`muzik spotify login`. Each refresh reads the current tracks through the
+Spotify Web API. Select Soulseek or YouTube for audio. muzik reads Spotify
+metadata only; it never downloads Spotify media.
+See [SPOTIFY.md](SPOTIFY.md) for the application
 setup, the scopes, and the limits.
 
 Select a source in the left rail. The page shows all current items in a paged
@@ -354,7 +295,7 @@ To override the skip and download again, use `--force` (`-f`) on the CLI, or the
 
 ## Credits
 
-- Bandcamp collection downloading is a Python port of [bandsnatch](https://github.com/Ovyerus/bandsnatch)
+- Bandcamp collection downloading uses the upstream Rust [bandsnatch](https://github.com/Ovyerus/bandsnatch) program.
 - Soulseek integration via the embedded [soulseek-rs](https://github.com/michel/soulseek-rs) client
 - YouTube metadata and fallback audio via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - Audio processing via [FFmpeg](https://ffmpeg.org/)
@@ -386,16 +327,14 @@ muzik workflow "https://youtube.com/watch?v=..." --audio-source soulseek --prefe
 # Fall back to YouTube audio if Soulseek finds no acceptable candidate
 muzik workflow "https://youtube.com/watch?v=..." --audio-source soulseek --fallback youtube
 
-# Download your full Bandcamp collection (opens browser on first run)
-muzik bandcamp
+# Download your Bandcamp collection with an exported cookie file
+muzik bandcamp <user> --cookies <file>
 
 # Import an existing music collection
 muzik import ~/Music --copy
 ```
 
-Bandcamp setup stores the authenticated cookies and username in the app config
-directory. Cookie scope is preserved; use `muzik bandcamp --setup` to log in
-again after expiry. Only releases downloaded successfully in a run are sent to
-the music library for organization.
+Bandsnatch needs an authenticated cookie file. Pass it with `--cookies` each
+time, or keep it at `bandcamp_cookies.txt` in the muzik config directory.
 
 Only download music you are authorized to access.

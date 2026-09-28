@@ -2,7 +2,6 @@
 hk = "1.55.0"
 node = "latest"
 pkl = "latest"
-uv = "latest"
 rumdl = "latest"
 typos = "latest"
 gitleaks = "latest"
@@ -10,7 +9,6 @@ actionlint = "latest"
 shellcheck = "latest"
 zizmor = "latest"
 rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] }
-"pipx:maturin" = "latest"
 "cargo:cargo-deny" = "latest"
 cocogitto = "7"
 
@@ -22,23 +20,15 @@ postinstall = "hk install --mise"
 
 [tasks.gui]
 description = "Run the GPUI Kit desktop interface"
-run = """
-MUZIK_PYTHON="$PWD/.venv/bin/python" cargo run --manifest-path rust/gpui_app/Cargo.toml --locked
-"""
+run = "cargo run --locked -p muzik-gpui"
 
 [tasks.develop]
-description = "Rebuild the Rust extension and reinstall muzik editable in the local venv"
-run = "uvx maturin develop --uv --release"
+description = "Build the Rust CLI and desktop app"
+run = "cargo build --locked -p muzik-cli -p muzik-gpui"
 
 [tasks.check]
 description = "Run the complete locked verification gate"
 run = """
-uv lock --check
-uv run ruff format --check .
-uv run ruff check .
-uv run ty check . --ignore unresolved-import
-uv run pytest -q
-uv pip check
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked

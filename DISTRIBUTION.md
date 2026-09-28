@@ -1,18 +1,33 @@
 # Distribution
 
-The project is moving to a Rust CLI and a Rust GPUI app. The Cargo workspace
-is at the repository root. It contains the library crates, the CLI app in
-`rust/cli_app`, and the GPUI app in `rust/gpui_app`.
+The Cargo workspace at the repository root builds two Rust programs:
+`muzik` in `rust/cli_app` and `muzik-gpui` in `rust/gpui_app`.
 
-No release workflow runs now. The GPUI app starts the Python service in
-`muzik/native_gui` for workflow, remote watchlist refresh and actions, and Spotify playlist track reads. Spotify status, playlist listing, export, local watchlist reads and checks, watchlist edits, client ID changes, login, logout, and Soulseek check, search, and waited download run in Rust. The Rust CLI does not yet have all commands from the Python
-CLI. A Rust-only release needs both ports to be complete and checked.
+## Check a release
 
-Cocogitto reads conventional commits and controls version tags. Its version
-hook runs `muzik-release`, which sets the version of each Rust crate and updates
-the root `Cargo.lock`. Run the Rust checks with `cargo test --workspace --locked`
-and `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`.
+Run the same gate used by CI:
 
-Existing beets config files and SQLite library files must remain usable. The
-Rust crates use these files directly. A Rust release must check this data with
-the CLI and the app before it is published.
+```sh
+mise run check
+```
+
+This checks format, Clippy, Rust tests, the release build, and Cargo licenses.
+The CLI and app read existing Beets config files and SQLite libraries. Check
+both programs against copies of real Beets data before a public release.
+
+## Create a release
+
+The `Release` GitHub Actions workflow runs by request. Cocogitto reads
+Conventional Commits and selects the next version. The `muzik-release` hook
+sets each Cargo package version and updates `Cargo.lock`. The workflow builds
+the CLI and GPUI app for macOS arm64, macOS x86_64, and Linux x86_64. Each
+archive contains both programs, their license files, and the crate notices.
+
+The two binaries must stay in the same directory so `muzik gui` can find the
+desktop app. The Rust `yt-dlp` crate starts the `yt-dlp` program. Install that
+program and `ffmpeg` on `PATH`. Install the upstream Rust
+`bandsnatch` program to use the Bandcamp command.
+
+The Homebrew formula in `packaging/homebrew` builds the Rust programs from
+`main` with `brew install --HEAD`. Add a stable source URL and hash to the
+external tap after the first Rust release.

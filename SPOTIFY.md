@@ -1,25 +1,25 @@
 # Spotify playlist exports
 
-`muzik` supports Spotify playlists as **metadata-only** workflow inputs. It
-does not authenticate with Spotify, call its API, download Spotify media, or
-send Spotify URLs to `yt-dlp`.
+`muzik` supports Spotify playlists as metadata-only workflow inputs. It can
+read a local export or sign in to the Spotify API for playlist metadata. It
+does not download Spotify media or send Spotify URLs to `yt-dlp`.
 
-The export supplies track identity and metadata; audio is acquired from
-Soulseek. Only use this workflow for music you are authorized to obtain.
+The export supplies track identity and metadata. Select Soulseek or YouTube
+for audio. Only use this workflow for music you are authorized to obtain.
 
 ## Run an export
 
 ```sh
-uv run muzik workflow playlist.spotify.json --audio-source soulseek --fallback none
-uv run muzik workflow exportify-playlist.csv --audio-source soulseek --fallback none
+muzik workflow playlist.spotify.json --audio-source soulseek --fallback none
+muzik workflow exportify-playlist.csv --audio-source youtube
 ```
 
-`--audio-source auto` is also supported when `muzik soulseek check` reports a
-ready service. `--audio-source youtube` is rejected for an export because the
-workflow never treats Spotify as a media URL.
+`--audio-source auto` uses Soulseek when it is ready and uses YouTube
+otherwise. The workflow searches YouTube by track title and artist; it does
+not treat a Spotify URL as a media URL.
 
-The same file can be entered as the input path in `muzik gui`; choose Soulseek
-as the audio source before starting the workflow.
+The same file can be entered as the input path in `muzik gui`. Select the audio
+source before starting the workflow.
 
 ## Canonical JSON v1
 
@@ -75,25 +75,17 @@ path instead of misclassifying them as Spotify exports.
 
 ## Direct structured acquisition
 
-Each entry is a resolved track (title, artist, duration), not a free-text
-search query. `acquire_track_from_soulseek` searches Soulseek by that
-identity and downloads the match directly — it never requests a complete
-album for one playlist track, and a Spotify-derived track is never sent to
-`yt-dlp` even with `--fallback youtube` (rejected, see above).
+Each entry supplies a track title, artist, and duration. With Soulseek, the
+workflow searches these fields and downloads a matching result. With YouTube,
+it searches by title and artist. It does not download media from Spotify.
 
-A returned candidate is kept only when its title/artist text and duration
-plausibly match the track (see `candidate_matches_track` in
-`muzik/core/sources/seakarr.py`); a multi-file candidate matches on the sum
-of its file durations, for a candidate that is itself a bundled release.
+A Soulseek candidate must match the track title, artist, and duration. A
+multi-file result uses the sum of its file durations.
+
 Limits:
 
-- If no safe candidate is found for a track, the run stops there (a graceful
-  exit, code 0) instead of skipping that track and continuing to the rest of
-  the playlist. A Soulseek search or download error stops the run the same
-  way. Tracks already organized before the stopping point are recorded in
-  playlist state and are not re-downloaded on the next run, but the run will
-  hit the same failing track again until it is resolved (a better search
-  term, a wider `--min-bitrate`, or removing that entry from the export).
+- If no audio is found for a track, the export run stops at that track.
+  Completed tracks stay in playlist state, so the next run skips them.
 - Track identity matching can still choose a wrong pressing or edit that
   happens to match on title, artist, and duration — review acquired files
   before trusting them for anything but casual listening.
@@ -112,9 +104,9 @@ occurrence in the playlist.
 ## Spotify Web API
 
 muzik can also read playlists directly from your Spotify account. It reads
-**metadata only**: names, artists, albums, durations, and ISRC codes. It never
+metadata only: names, artists, albums, durations, and ISRC codes. It never
 downloads Spotify media, and it never sends a Spotify URL to `yt-dlp`. The
-audio still comes from Soulseek.
+selected audio source supplies the track.
 
 ### Set up your own application
 
@@ -131,8 +123,8 @@ muzik has no Spotify application of its own, thus each user registers one:
 3. Save the client ID:
 
 ```sh
-uv run muzik spotify set-client-id <client-id>
-uv run muzik spotify status
+muzik spotify set-client-id <client-id>
+muzik spotify status
 ```
 
 The flow is Authorization Code with PKCE, thus there is no client secret.
@@ -147,11 +139,11 @@ Premium account. A 403 answer usually has one of these two causes.
 ### Connect and read
 
 ```sh
-uv run muzik spotify login          # opens the browser, then saves the tokens
-uv run muzik spotify playlists      # Liked Songs and your playlists
-uv run muzik spotify export liked -o liked.json
-uv run muzik spotify watch liked    # add it to the watchlist
-uv run muzik spotify logout
+muzik spotify login          # opens the browser, then saves the tokens
+muzik spotify playlists      # Liked Songs and your playlists
+muzik spotify export liked -o liked.json
+muzik spotify watch liked    # add it to the watchlist
+muzik spotify logout
 ```
 
 `export` writes the same canonical JSON v1 document as above, thus a file
@@ -174,16 +166,15 @@ Scopes: `playlist-read-private`, `playlist-read-collaborative`, and
 A Spotify playlist, album, or the Liked Songs collection can be a watchlist
 source. Each refresh reads the current tracks, adds new cards, keeps the
 state of the tracks that are done, and acquires only the tracks that are not
-done. Set the audio source to Soulseek: a Spotify source cannot use YouTube.
+done. Set the audio source to Soulseek, YouTube, or Auto.
 
-Unlike a single export run, a watchlist sync does not stop at the first track
-that Soulseek cannot supply. That track keeps a `Failed` download stage, and
-the sync continues with the other tracks. Use **Retry** on the card, or the
-next refresh, to try that track again.
+Unlike a single export run, a watchlist sync continues after a track fails.
+That track keeps a `Failed` download stage. Use **Retry** on the card, or the
+next refresh, to try it again.
 
-A Spotify card has only two stages that do work: Download (Soulseek) and
-Organize (beets). Quality, Parse, and Split stay `Skipped`, because one track
-is one file with no chapters.
+A Spotify card downloads audio from the selected source and then organizes it
+in the Beets library. A YouTube download can also run the configured quality
+check.
 
 Podcast episodes and local files in a playlist are skipped.
 
