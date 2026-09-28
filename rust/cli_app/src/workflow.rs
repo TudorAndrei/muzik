@@ -3,32 +3,20 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
-use muzik_core::{paths, splitter};
+use muzik_core::{app_config, paths, splitter};
+use muzik_soulseek::session::SessionSettings;
 use muzik_workflow::{
     AudioProcessingResult, SplitTask, WorkflowInput, WorkflowOperations, WorkflowOptions,
-    WorkflowRequest, classify_input, find_audio_inputs, run_workflow,
+    WorkflowRequest, classify_input, find_audio_inputs, playlist, run_workflow,
 };
+use yt_dlp::executor::Executor;
 
-use crate::{Download, Organize, Workflow, download, organize, split};
+use crate::{Download, Organize, SoulseekDownload, Workflow, download, organize, soulseek, split};
 
 pub fn run(args: &Workflow) -> Result<(), String> {
     let input = classify_input(&args.raw);
-    match &input {
-        WorkflowInput::Local(_) | WorkflowInput::YoutubeVideo { .. } => {}
-        WorkflowInput::YoutubePlaylist { .. } => {
-            return Err("YouTube playlist workflow is not available in the Rust CLI yet.".into());
-        }
-        WorkflowInput::SpotifyExport(_) => {
-            return Err("Spotify export workflow is not available in the Rust CLI yet.".into());
-        }
-        WorkflowInput::Search(_) => {
-            return Err("Give a local audio path or one YouTube video URL. Soulseek workflow is not available in the Rust CLI yet.".into());
-        }
-    }
-    if args.force && matches!(input, WorkflowInput::YoutubeVideo { .. }) {
-        return Err("Forced YouTube download is not available in the Rust CLI yet.".into());
-    }
     let request = WorkflowRequest {
         raw: args.raw.clone(),
         output: args.output.clone().unwrap_or_else(paths::download_dir),
@@ -48,12 +36,57 @@ pub fn run(args: &Workflow) -> Result<(), String> {
         config: args.config.clone(),
         keep_source: args.keep_source,
         force: args.force,
+        audio_source: args.audio_source,
+        prefer: args.prefer.clone(),
+        fallback: args.fallback,
+        interactive: !args.no_interactive,
         ..WorkflowOptions::default()
     };
     let mut operations = CliOperations {
         compilation: args.compilation,
+        prefer: args.prefer.clone(),
+        interactive: !args.no_interactive,
     };
     let cancelled = AtomicBool::new(false);
+    if let WorkflowInput::YoutubePlaylist { url, playlist_id } = &input {
+        let result = playlist::run_youtube_playlist(
+            &request,
+            &options,
+            &mut operations,
+            &cancelled,
+            playlist_id,
+            url,
+            &mut |_| {},
+        )
+        .map_err(|error| error.to_string())?;
+        show_result(&result.processing, &options);
+        let failures = result
+            .items
+            .iter()
+            .filter(|item| !item.completed)
+            .collect::<Vec<_>>();
+        for item in &failures {
+            eprintln!("{}: {}", item.id, item.error.as_deref().unwrap_or("failed"));
+        }
+        if !failures.is_empty() {
+            return Err(format!("{} playlist item(s) failed", failures.len()));
+        }
+        return Ok(());
+    }
+    if let WorkflowInput::SpotifyExport(path) = &input {
+        let result = playlist::run_spotify_export(
+            &request,
+            &options,
+            &mut operations,
+            &cancelled,
+            path,
+            &mut |_| {},
+        )
+        .map_err(|error| error.to_string())?;
+        show_result(&result.processing, &options);
+        println!("{} Spotify track(s) processed", result.items.len());
+        return Ok(());
+    }
     let result = run_workflow(&request, &options, &mut operations, &cancelled)
         .map_err(|error| error.to_string())?;
     show_result(&result, &options);
@@ -84,6 +117,8 @@ fn show_result(result: &AudioProcessingResult, options: &WorkflowOptions) {
 
 struct CliOperations {
     compilation: bool,
+    prefer: String,
+    interactive: bool,
 }
 
 impl WorkflowOperations for CliOperations {
@@ -93,17 +128,20 @@ impl WorkflowOperations for CliOperations {
         output: &Path,
         force: bool,
     ) -> Result<Vec<PathBuf>, String> {
-        if force {
-            return Err("Forced YouTube download is not available in the Rust CLI yet.".into());
-        }
         let before = known_audio(output)?;
+        let target = if matches!(classify_input(url), WorkflowInput::Search(_)) {
+            format!("ytsearch1:{url}")
+        } else {
+            url.to_owned()
+        };
         let request = Download {
-            url: url.to_owned(),
+            url: target,
             output: Some(output.to_path_buf()),
             format: "bestaudio".into(),
             quality: "0".into(),
             no_chapters: false,
             archive_file: None,
+            force_overwrites: force,
         };
         // The CLI entry point already has a Tokio runtime. The downloader needs
         // its own runtime because this shared workflow service is synchronous.
@@ -118,14 +156,80 @@ impl WorkflowOperations for CliOperations {
         .map_err(|_| "YouTube downloader stopped unexpectedly".to_owned())??;
         let after =
             find_audio_inputs(&[output.to_path_buf()]).map_err(|error| error.to_string())?;
+        let forced_id = if force {
+            match classify_input(url) {
+                WorkflowInput::YoutubeVideo { video_id, .. } => Some(video_id),
+                _ => None,
+            }
+        } else {
+            None
+        };
         Ok(after
             .into_iter()
-            .filter(|path| !before.contains(path))
+            .filter(|path| {
+                !before.contains(path)
+                    || forced_id.as_ref().is_some_and(|id| {
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .is_some_and(|stem| stem.contains(&format!("[{id}]")))
+                    })
+            })
             .collect())
     }
 
-    fn acquire_soulseek(&mut self, _query: &str) -> Result<Vec<PathBuf>, String> {
-        Err("Soulseek workflow is not available in the Rust CLI yet.".into())
+    fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
+        let output = paths::data_dir().join("soulseek");
+        let before = known_audio(&output)?;
+        soulseek::download(&SoulseekDownload {
+            query: Some(query.to_owned()),
+            candidate: None,
+            prefer: self.prefer.clone(),
+            limit: 10,
+            output: Some(output.clone()),
+            no_interactive: !self.interactive,
+            no_organize: true,
+            dry_run: false,
+        })?;
+        let after = known_audio(&output)?;
+        Ok(after.difference(&before).cloned().collect())
+    }
+
+    fn soulseek_ready(&self) -> bool {
+        app_config::load(&app_config::path())
+            .ok()
+            .is_some_and(|config| SessionSettings::configured(&config).is_some())
+    }
+
+    fn youtube_playlist_video_ids(&mut self, url: &str) -> Result<Vec<String>, String> {
+        let url = url.to_owned();
+        let output = std::thread::spawn(move || -> Result<String, String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| error.to_string())?;
+            let executor = Executor::new(
+                "yt-dlp",
+                vec!["--flat-playlist".into(), "--print".into(), "id".into(), url],
+                Duration::from_secs(600),
+            );
+            runtime
+                .block_on(executor.execute())
+                .map(|result| result.stdout)
+                .map_err(|error| error.to_string())
+        })
+        .join()
+        .map_err(|_| "playlist lookup stopped unexpectedly".to_owned())??;
+        Ok(output
+            .lines()
+            .map(str::trim)
+            .filter(|id| {
+                id.len() == 11
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+            })
+            .map(str::to_owned)
+            .collect())
     }
 
     fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String> {
@@ -214,6 +318,10 @@ mod tests {
             keep_source: false,
             force: false,
             compilation: false,
+            audio_source: muzik_core::AudioSource::default(),
+            prefer: "lossless".into(),
+            fallback: muzik_core::AudioFallback::default(),
+            no_interactive: false,
         })?;
         assert!(audio.exists());
         assert!(!splits.exists());

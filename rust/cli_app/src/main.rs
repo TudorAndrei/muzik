@@ -223,6 +223,18 @@ struct Workflow {
     /// Interpret chapter titles as artist and song pairs.
     #[usage(long)]
     compilation: bool,
+    /// Audio source for search and Spotify export tracks.
+    #[usage(long, value_enum, default = "youtube")]
+    audio_source: muzik_core::AudioSource,
+    /// Preferred Soulseek audio quality.
+    #[usage(long, default = "lossless")]
+    prefer: String,
+    /// Source to try if Soulseek has no result.
+    #[usage(long, value_enum, default = "youtube")]
+    fallback: muzik_core::AudioFallback,
+    /// Select the highest-ranked Soulseek result without a prompt.
+    #[usage(long)]
+    no_interactive: bool,
 }
 
 #[derive(Args)]
@@ -347,6 +359,9 @@ struct Download {
     /// yt-dlp download archive.
     #[usage(long, hide)]
     archive_file: Option<PathBuf>,
+    /// Replace existing download and metadata files.
+    #[usage(long)]
+    force_overwrites: bool,
 }
 
 #[derive(Args)]

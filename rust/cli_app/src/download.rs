@@ -85,6 +85,9 @@ fn build_args(args: &Download, output: &Path) -> Vec<String> {
             archive.to_string_lossy().into_owned(),
         ]);
     }
+    if args.force_overwrites {
+        flags.push("--force-overwrites".to_owned());
+    }
     flags.push(args.url.clone());
     flags
 }
@@ -154,6 +157,7 @@ mod tests {
             quality: "0".to_owned(),
             no_chapters: false,
             archive_file: Some("archive.txt".into()),
+            force_overwrites: false,
         };
         let flags = build_args(&args, Path::new("/music/downloads"));
         for flag in [
