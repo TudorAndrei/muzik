@@ -1,5 +1,8 @@
 //! Read and update the existing muzik config file.
 
+use crate::config_choices::{
+    choices_for_field, AudioFallback, AudioSource, MetadataSource, QualityPolicy,
+};
 use crate::paths;
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -23,12 +26,12 @@ pub fn gui_defaults() -> Value {
         "config": "",
         "keep_source": false,
         "force": false,
-        "metadata_source": "auto",
-        "audio_source": "youtube",
+        "metadata_source": MetadataSource::default(),
+        "audio_source": AudioSource::default(),
         "prefer": "lossless",
-        "fallback": "youtube",
+        "fallback": AudioFallback::default(),
         "interactive": true,
-        "quality_policy": "off",
+        "quality_policy": QualityPolicy::default(),
         "min_bitrate": 256
     })
 }
@@ -162,14 +165,7 @@ fn validate(value: Value) -> Result<Value, String> {
             if matches!(key.as_str(), "output" | "splits" | "prefer") && text.trim().is_empty() {
                 return Err(format!("{key} must not be empty"));
             }
-            let choices: &[&str] = match key.as_str() {
-                "metadata_source" => &["none", "youtube", "musicbrainz", "auto"],
-                "audio_source" => &["youtube", "soulseek", "auto"],
-                "fallback" => &["youtube", "none"],
-                "quality_policy" => &["off", "ask", "auto"],
-                _ => &[],
-            };
-            if !choices.is_empty() && !choices.contains(&text) {
+            if choices_for_field(key).is_some_and(|choices| !choices.contains(&text)) {
                 return Err(format!("invalid {key}: {text}"));
             }
         }

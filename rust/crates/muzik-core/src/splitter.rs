@@ -8,9 +8,10 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 
 const THUMB_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp"];
@@ -26,8 +27,17 @@ pub struct SplitOptions {
     pub cache_dir: Option<PathBuf>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SplitProgress {
+    pub completed: usize,
+    pub total: usize,
+    pub chapter_index: u32,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SplitError {
+    #[error("split cancelled")]
+    Cancelled,
     #[error("file not found: {0}")]
     SourceMissing(PathBuf),
     #[error("no chapters found")]
@@ -67,6 +77,49 @@ pub fn split_audio(
     output: &Path,
     options: &SplitOptions,
 ) -> Result<PathBuf, SplitError> {
+    split_audio_with_cancel(
+        source,
+        chapters,
+        output,
+        options,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+}
+
+/// Split tracks and stop active ffmpeg processes when `cancelled` becomes true.
+/// Cancellation keeps the source and its sidecars in place.
+pub fn split_audio_with_cancel(
+    source: &Path,
+    chapters: &[Chapter],
+    output: &Path,
+    options: &SplitOptions,
+    cancelled: &AtomicBool,
+    on_progress: &mut dyn FnMut(SplitProgress),
+) -> Result<PathBuf, SplitError> {
+    split_audio_with_binary(
+        source,
+        chapters,
+        output,
+        options,
+        cancelled,
+        on_progress,
+        Path::new("ffmpeg"),
+    )
+}
+
+fn split_audio_with_binary(
+    source: &Path,
+    chapters: &[Chapter],
+    output: &Path,
+    options: &SplitOptions,
+    cancelled: &AtomicBool,
+    on_progress: &mut dyn FnMut(SplitProgress),
+    ffmpeg: &Path,
+) -> Result<PathBuf, SplitError> {
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(SplitError::Cancelled);
+    }
     if !source.is_file() {
         return Err(SplitError::SourceMissing(source.to_path_buf()));
     }
@@ -109,6 +162,9 @@ pub fn split_audio(
         }
     }
 
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(SplitError::Cancelled);
+    }
     if output.exists() {
         if !output.is_dir() {
             return Err(SplitError::OutputNotDirectory(output.to_path_buf()));
@@ -134,26 +190,46 @@ pub fn split_audio(
     let next = AtomicUsize::new(0);
     let failures = Mutex::new(Vec::new());
     let launch_error = Mutex::new(None);
+    let completed = AtomicUsize::new(0);
+    let track_context = SplitTrackContext {
+        source: &source,
+        output,
+        count: chapters.len(),
+        metadata: &metadata,
+        compilation: options.compilation,
+        cancelled,
+        ffmpeg,
+    };
     std::thread::scope(|scope| {
+        let (sender, receiver) = std::sync::mpsc::channel();
         for _ in 0..workers {
-            scope.spawn(|| loop {
+            let sender = sender.clone();
+            let next = &next;
+            let failures = &failures;
+            let launch_error = &launch_error;
+            let completed = &completed;
+            scope.spawn(move || loop {
+                if cancelled.load(Ordering::SeqCst) {
+                    break;
+                }
                 let index = next.fetch_add(1, Ordering::Relaxed);
                 let Some(chapter) = chapters.get(index) else {
                     break;
                 };
-                match split_track(
-                    &source,
-                    output,
-                    chapter,
-                    chapters.len(),
-                    &metadata,
-                    options.compilation,
-                ) {
-                    Ok(true) => {}
+                match split_track(&track_context, chapter) {
+                    Ok(true) => {
+                        let count = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                        let _ = sender.send(SplitProgress {
+                            completed: count,
+                            total: chapters.len(),
+                            chapter_index: chapter.index,
+                        });
+                    }
                     Ok(false) => failures
                         .lock()
                         .unwrap_or_else(|error| error.into_inner())
                         .push(chapter.title.clone()),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => break,
                     Err(error) => {
                         *launch_error
                             .lock()
@@ -163,7 +239,14 @@ pub fn split_audio(
                 }
             });
         }
+        drop(sender);
+        for progress in receiver {
+            on_progress(progress);
+        }
     });
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(SplitError::Cancelled);
+    }
     if let Some(error) = launch_error
         .into_inner()
         .unwrap_or_else(|error| error.into_inner())
@@ -177,6 +260,11 @@ pub fn split_audio(
         return Err(SplitError::TracksFailed(failed.len(), failed.join(", ")));
     }
 
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(SplitError::Cancelled);
+    }
+    // The following file updates form the final commit step. Cancellation is
+    // observed before this step, so it cannot leave a removed source behind.
     place_cover(&source, output);
     if let Some(cache_file) = cache_file {
         if let Some(parent) = cache_file.parent() {
@@ -255,14 +343,27 @@ fn validate_chapters(
     Ok(())
 }
 
-fn split_track(
-    source: &Path,
-    output: &Path,
-    chapter: &Chapter,
+#[derive(Clone, Copy)]
+struct SplitTrackContext<'a> {
+    source: &'a Path,
+    output: &'a Path,
     count: usize,
-    metadata: &Metadata,
+    metadata: &'a Metadata,
     compilation: bool,
-) -> Result<bool, io::Error> {
+    cancelled: &'a AtomicBool,
+    ffmpeg: &'a Path,
+}
+
+fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, io::Error> {
+    let SplitTrackContext {
+        source,
+        output,
+        count,
+        metadata,
+        compilation,
+        cancelled,
+        ffmpeg,
+    } = *context;
     let (mut artist, title) = if compilation {
         let (artist, title) = parse_artist_title(&chapter.title).map_or_else(
             || (metadata.artist.clone(), chapter.title.as_str()),
@@ -288,7 +389,7 @@ fn split_track(
         name.push_str(extension);
     }
     let destination = output.join(name);
-    let mut command = Command::new("ffmpeg");
+    let mut command = Command::new(ffmpeg);
     command
         .arg("-i")
         .arg(source)
@@ -320,8 +421,26 @@ fn split_track(
         .arg("-metadata")
         .arg(format!("compilation={}", u8::from(compilation)))
         .arg(&destination);
-    let result = command.output()?;
-    if !result.status.success() {
+    let mut child = command
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let status = loop {
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = fs::remove_file(&destination);
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "split cancelled",
+            ));
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    if !status.success() {
         return Ok(false);
     }
     if let Some(source_id) = &metadata.source_id {
@@ -599,6 +718,59 @@ fn place_cover(source: &Path, output: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_stops_active_ffmpeg_and_keeps_source() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("album.mp3");
+        let sidecar = sidecar_path(&source, ".chapters.txt");
+        fs::write(&source, b"source audio").unwrap();
+        fs::write(&sidecar, b"0:00 Song\n").unwrap();
+        let marker = temp.path().join("started");
+        let binary = temp.path().join("ffmpeg");
+        fs::write(
+            &binary,
+            format!("#!/bin/sh\ntouch '{}'\nexec sleep 30\n", marker.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let trigger = Arc::clone(&cancelled);
+        let marker_for_thread = marker.clone();
+        let watcher = std::thread::spawn(move || {
+            for _ in 0..500 {
+                if marker_for_thread.exists() {
+                    trigger.store(true, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            trigger.store(true, Ordering::SeqCst);
+        });
+        let result = split_audio_with_binary(
+            &source,
+            &[Chapter {
+                index: 1,
+                start: 0,
+                end: Some(1),
+                title: "Song".into(),
+            }],
+            &temp.path().join("output"),
+            &SplitOptions::default(),
+            &cancelled,
+            &mut |_| panic!("cancelled track cannot finish"),
+            &binary,
+        );
+        watcher.join().unwrap();
+        assert!(marker.exists(), "ffmpeg did not start");
+        assert!(matches!(result, Err(SplitError::Cancelled)));
+        assert!(source.exists());
+        assert!(sidecar.exists());
+    }
 
     #[test]
     fn chapter_validation_keeps_input_safe() {

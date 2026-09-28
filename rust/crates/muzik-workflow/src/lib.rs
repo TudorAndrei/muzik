@@ -4,6 +4,8 @@
 //! audio discovery, the split/organize order, and safe cancellation points.
 
 use muzik_core::chapters::{self, Chapter};
+pub use muzik_core::splitter::SplitProgress;
+pub use muzik_core::{AudioFallback, AudioSource, MetadataSource, QualityPolicy};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -11,43 +13,13 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 
+pub mod playlist;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRequest {
     pub raw: String,
     pub output: PathBuf,
     pub splits: PathBuf,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AudioSource {
-    #[default]
-    Youtube,
-    Soulseek,
-    Auto,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum AudioFallback {
-    #[default]
-    Youtube,
-    None,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum MetadataSource {
-    None,
-    Youtube,
-    Musicbrainz,
-    #[default]
-    Auto,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum QualityPolicy {
-    #[default]
-    Off,
-    Ask,
-    Auto,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -199,6 +171,34 @@ pub struct AudioProcessingResult {
     pub organize_targets: Vec<PathBuf>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorkflowEvent {
+    InputClassified(WorkflowInput),
+    AcquisitionStarted,
+    AcquisitionCompleted {
+        files: Vec<PathBuf>,
+    },
+    PlanReady {
+        albums: usize,
+        singles: usize,
+    },
+    SplitStarted(SplitTask),
+    SplitProgress {
+        source: PathBuf,
+        progress: SplitProgress,
+    },
+    SplitCompleted {
+        output: PathBuf,
+    },
+    OrganizeStarted {
+        target: PathBuf,
+    },
+    OrganizeCompleted {
+        target: PathBuf,
+    },
+    Completed,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("workflow cancelled")]
@@ -226,12 +226,42 @@ pub trait WorkflowOperations {
         force: bool,
     ) -> Result<Vec<PathBuf>, String>;
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String>;
+    /// Return video IDs in playlist order.
+    fn youtube_playlist_video_ids(&mut self, _url: &str) -> Result<Vec<String>, String> {
+        Err("YouTube playlist discovery is not configured".into())
+    }
+    /// Acquire audio using the metadata of one Spotify track.
+    fn acquire_spotify_track(
+        &mut self,
+        track: &playlist::SpotifyTrack,
+    ) -> Result<Vec<PathBuf>, String> {
+        let query = [
+            Some(track.artist.as_str()),
+            Some(track.title.as_str()),
+            track.album.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" - ");
+        self.acquire_soulseek(&query)
+    }
     fn soulseek_ready(&self) -> bool {
         false
     }
     /// Keep Beets configuration, match decisions, and duplicate behavior in the import adapter.
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String>;
     fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String>;
+    /// Override this to pass cancellation and per-track progress to the splitter.
+    fn split_with_cancel(
+        &mut self,
+        task: &SplitTask,
+        options: &WorkflowOptions,
+        _cancelled: &AtomicBool,
+        _on_progress: &mut dyn FnMut(SplitProgress),
+    ) -> Result<(), String> {
+        self.split(task, options)
+    }
 }
 
 /// Find supported audio below files and directories, with one result per real path.
@@ -315,8 +345,32 @@ pub fn process_audio_plan<O: WorkflowOperations>(
     operations: &mut O,
     cancelled: &AtomicBool,
 ) -> Result<AudioProcessingResult, Error> {
+    process_audio_plan_with_events(
+        audio_files,
+        pre_split_dirs,
+        splits,
+        options,
+        operations,
+        cancelled,
+        &mut |_| {},
+    )
+}
+
+pub fn process_audio_plan_with_events<O: WorkflowOperations>(
+    audio_files: &[PathBuf],
+    pre_split_dirs: &[PathBuf],
+    splits: &Path,
+    options: &WorkflowOptions,
+    operations: &mut O,
+    cancelled: &AtomicBool,
+    on_event: &mut dyn FnMut(WorkflowEvent),
+) -> Result<AudioProcessingResult, Error> {
     check_cancelled(cancelled)?;
     let plan = plan_audio_processing(audio_files, pre_split_dirs, options.no_split)?;
+    on_event(WorkflowEvent::PlanReady {
+        albums: plan.albums.len(),
+        singles: plan.singles.len(),
+    });
     let mut split_dirs = plan.pre_split_dirs.clone();
     for album in &plan.albums {
         check_cancelled(cancelled)?;
@@ -330,7 +384,19 @@ pub fn process_audio_plan<O: WorkflowOperations>(
             output: splits.join(stem),
         };
         if !options.dry_run {
-            operations.split(&task, options).map_err(Error::Operation)?;
+            on_event(WorkflowEvent::SplitStarted(task.clone()));
+            operations
+                .split_with_cancel(&task, options, cancelled, &mut |progress| {
+                    on_event(WorkflowEvent::SplitProgress {
+                        source: task.source.clone(),
+                        progress,
+                    });
+                })
+                .map_err(|error| operation_error(error, cancelled))?;
+            check_cancelled(cancelled)?;
+            on_event(WorkflowEvent::SplitCompleted {
+                output: task.output.clone(),
+            });
             split_dirs.push(task.output);
         }
     }
@@ -342,14 +408,22 @@ pub fn process_audio_plan<O: WorkflowOperations>(
         for target in &targets {
             check_cancelled(cancelled)?;
             if !options.dry_run {
+                on_event(WorkflowEvent::OrganizeStarted {
+                    target: target.clone(),
+                });
                 operations
                     .organize(target, options)
-                    .map_err(Error::Operation)?;
+                    .map_err(|error| operation_error(error, cancelled))?;
+                check_cancelled(cancelled)?;
+                on_event(WorkflowEvent::OrganizeCompleted {
+                    target: target.clone(),
+                });
             }
         }
         targets
     };
     check_cancelled(cancelled)?;
+    on_event(WorkflowEvent::Completed);
     Ok(AudioProcessingResult {
         plan,
         split_dirs,
@@ -382,8 +456,26 @@ pub fn run_workflow<O: WorkflowOperations>(
     operations: &mut O,
     cancelled: &AtomicBool,
 ) -> Result<AudioProcessingResult, Error> {
+    run_workflow_with_events(request, options, operations, cancelled, &mut |_| {})
+}
+
+pub fn run_workflow_with_events<O: WorkflowOperations>(
+    request: &WorkflowRequest,
+    options: &WorkflowOptions,
+    operations: &mut O,
+    cancelled: &AtomicBool,
+    on_event: &mut dyn FnMut(WorkflowEvent),
+) -> Result<AudioProcessingResult, Error> {
     check_cancelled(cancelled)?;
     let input = classify_input(&request.raw);
+    on_event(WorkflowEvent::InputClassified(input.clone()));
+    if matches!(
+        input,
+        WorkflowInput::YoutubeVideo { .. } | WorkflowInput::Search(_)
+    ) && !options.dry_run
+    {
+        on_event(WorkflowEvent::AcquisitionStarted);
+    }
     let files = match input {
         WorkflowInput::Local(path) => find_audio_inputs(&[path])?,
         WorkflowInput::YoutubeVideo { url, video_id } => {
@@ -394,14 +486,14 @@ pub fn run_workflow<O: WorkflowOperations>(
                 if existing.is_empty() {
                     operations
                         .download_youtube(&url, &request.output, false)
-                        .map_err(Error::Operation)?
+                        .map_err(|error| operation_error(error, cancelled))?
                 } else {
                     existing
                 }
             } else {
                 operations
                     .download_youtube(&url, &request.output, true)
-                    .map_err(Error::Operation)?
+                    .map_err(|error| operation_error(error, cancelled))?
             }
         }
         WorkflowInput::Search(query) => {
@@ -412,22 +504,59 @@ pub fn run_workflow<O: WorkflowOperations>(
             {
                 operations
                     .acquire_soulseek(&query)
-                    .map_err(Error::Operation)?
+                    .map_err(|error| operation_error(error, cancelled))?
             } else {
                 operations
                     .download_youtube(&query, &request.output, options.force)
-                    .map_err(Error::Operation)?
+                    .map_err(|error| operation_error(error, cancelled))?
             }
         }
-        WorkflowInput::YoutubePlaylist { .. } => return Err(Error::PlaylistAdapterRequired),
-        WorkflowInput::SpotifyExport(_) => return Err(Error::SpotifyAdapterRequired),
+        WorkflowInput::YoutubePlaylist { url, playlist_id } => {
+            return playlist::run_youtube_playlist(
+                request,
+                options,
+                operations,
+                cancelled,
+                &playlist_id,
+                &url,
+                on_event,
+            )
+            .map(|result| result.processing);
+        }
+        WorkflowInput::SpotifyExport(path) => {
+            return playlist::run_spotify_export(
+                request, options, operations, cancelled, &path, on_event,
+            )
+            .map(|result| result.processing);
+        }
     };
     check_cancelled(cancelled)?;
+    if !options.dry_run {
+        on_event(WorkflowEvent::AcquisitionCompleted {
+            files: files.clone(),
+        });
+    }
     let files = find_audio_inputs(&files)?;
     if files.is_empty() && !options.dry_run {
         return Err(Error::NoAudio);
     }
-    process_audio_plan(&files, &[], &request.splits, options, operations, cancelled)
+    process_audio_plan_with_events(
+        &files,
+        &[],
+        &request.splits,
+        options,
+        operations,
+        cancelled,
+        on_event,
+    )
+}
+
+fn operation_error(message: String, cancelled: &AtomicBool) -> Error {
+    if cancelled.load(Ordering::SeqCst) {
+        Error::Cancelled
+    } else {
+        Error::Operation(message)
+    }
 }
 
 fn find_audio_by_youtube_id(directory: &Path, video_id: &str) -> Result<Vec<PathBuf>, Error> {

@@ -1,6 +1,7 @@
 use muzik_workflow::{
-    AudioSource, Error, SplitTask, WorkflowInput, WorkflowOperations, WorkflowOptions,
-    WorkflowRequest, classify_input, plan_audio_processing, run_workflow,
+    AudioSource, Error, SplitProgress, SplitTask, WorkflowEvent, WorkflowInput, WorkflowOperations,
+    WorkflowOptions, WorkflowRequest, classify_input, plan_audio_processing, run_workflow,
+    run_workflow_with_events,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +39,22 @@ impl WorkflowOperations for RecordingOperations {
     fn split(&mut self, task: &SplitTask, _options: &WorkflowOptions) -> Result<(), String> {
         self.split_sources.push(task.source.clone());
         fs::create_dir_all(&task.output).map_err(|error| error.to_string())
+    }
+
+    fn split_with_cancel(
+        &mut self,
+        task: &SplitTask,
+        options: &WorkflowOptions,
+        _cancelled: &AtomicBool,
+        on_progress: &mut dyn FnMut(SplitProgress),
+    ) -> Result<(), String> {
+        self.split(task, options)?;
+        on_progress(SplitProgress {
+            completed: 1,
+            total: task.chapters.len(),
+            chapter_index: task.chapters[0].index,
+        });
+        Ok(())
     }
 }
 
@@ -177,5 +194,72 @@ fn no_split_keeps_chaptered_audio_as_one_import_target() -> Result<(), Box<dyn s
     let plan = plan_audio_processing(std::slice::from_ref(&audio), &[], true)?;
     assert!(plan.albums.is_empty());
     assert_eq!(plan.singles, vec![audio]);
+    Ok(())
+}
+
+#[test]
+fn events_report_work_and_callback_can_cancel_before_split()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let audio = dir.path().join("album.flac");
+    fs::write(&audio, b"audio")?;
+    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+    let cancelled = AtomicBool::new(false);
+    let mut operations = RecordingOperations::default();
+    let mut events = Vec::new();
+    let result = run_workflow_with_events(
+        &request(audio.to_string_lossy().into_owned(), dir.path()),
+        &WorkflowOptions::default(),
+        &mut operations,
+        &cancelled,
+        &mut |event| {
+            if matches!(event, WorkflowEvent::PlanReady { .. }) {
+                cancelled.store(true, Ordering::SeqCst);
+            }
+            events.push(event);
+        },
+    );
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert!(matches!(
+        events.first(),
+        Some(WorkflowEvent::InputClassified(_))
+    ));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        WorkflowEvent::PlanReady {
+            albums: 1,
+            singles: 0
+        }
+    )));
+    assert!(operations.split_sources.is_empty());
+    Ok(())
+}
+
+#[test]
+fn events_include_track_progress_and_completion() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let audio = dir.path().join("album.flac");
+    fs::write(&audio, b"audio")?;
+    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+    let mut events = Vec::new();
+    run_workflow_with_events(
+        &request(audio.to_string_lossy().into_owned(), dir.path()),
+        &WorkflowOptions::default(),
+        &mut RecordingOperations::default(),
+        &AtomicBool::new(false),
+        &mut |event| events.push(event),
+    )?;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        WorkflowEvent::SplitProgress {
+            progress: SplitProgress {
+                completed: 1,
+                total: 1,
+                chapter_index: 1
+            },
+            ..
+        }
+    )));
+    assert!(matches!(events.last(), Some(WorkflowEvent::Completed)));
     Ok(())
 }

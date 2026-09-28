@@ -53,6 +53,7 @@ pub enum Error {
 }
 
 pub mod apply;
+pub mod beets;
 pub mod files;
 pub mod ftclean;
 pub mod history;

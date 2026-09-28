@@ -6,7 +6,9 @@ license = "GPL-3.0-only"
 publish = false
 
 [dependencies]
+csv = "1"
 muzik-core = { path = "../muzik-core" }
+serde_json = "1"
 thiserror = "2"
 url = "2.5.8"
 
