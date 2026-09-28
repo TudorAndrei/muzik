@@ -1,4 +1,5 @@
 use super::normalize;
+use crate::chapters;
 use crate::thumbnails;
 use serde_json::{json, Value};
 use std::fs;
@@ -128,7 +129,9 @@ fn availability(item: &Value, action: &str, output: &Path) -> (bool, Option<&'st
             Some("Download this video before you run this command."),
         );
     };
-    if action == "split_again" && !has_chapters(&audio) {
+    if action == "split_again"
+        && !chapters::find_chapters(&audio).is_ok_and(|chapters| !chapters.is_empty())
+    {
         return (
             false,
             Some("Parse and accept chapters before you split this video."),
@@ -178,88 +181,4 @@ pub(super) fn is_audio(path: &Path) -> bool {
                 "flac" | "mp3" | "m4a" | "opus" | "wav" | "aac"
             )
         })
-}
-
-fn has_chapters(audio: &Path) -> bool {
-    let stem = audio.file_stem().unwrap_or_default().to_string_lossy();
-    let parent = audio.parent().unwrap_or(Path::new(""));
-    let txt = parent.join(format!("{stem}.chapters.txt"));
-    if txt.metadata().is_ok_and(|meta| meta.len() > 0) {
-        return fs::read_to_string(txt).is_ok_and(|text| {
-            text.lines().any(|line| {
-                let mut parts = line.split_whitespace();
-                let Some(time) = parts.next() else {
-                    return false;
-                };
-                let numbers: Vec<_> = time.split(':').collect();
-                matches!(numbers.len(), 2 | 3)
-                    && numbers[0].chars().all(|c| c.is_ascii_digit())
-                    && numbers[1..]
-                        .iter()
-                        .all(|part| part.len() == 2 && part.chars().all(|c| c.is_ascii_digit()))
-                    && parts.next().is_some()
-            })
-        });
-    }
-    let info = parent.join(format!("{stem}.info.json"));
-    if let Ok(bytes) = fs::read(info) {
-        if serde_json::from_slice::<Value>(&bytes)
-            .ok()
-            .and_then(|data| data["chapters"].as_array().cloned())
-            .is_some_and(|chapters| !chapters.is_empty())
-        {
-            return true;
-        }
-    }
-    let cue = parent.join(format!("{stem}.cue"));
-    let cue = if cue.exists() {
-        Some(cue)
-    } else {
-        let mut candidates: Vec<_> = fs::read_dir(parent)
-            .ok()
-            .into_iter()
-            .flatten()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("cue"))
-            })
-            .collect();
-        if candidates.len() == 1 {
-            candidates.pop()
-        } else {
-            None
-        }
-    };
-    if let Some(cue) = cue {
-        let mut track = false;
-        return fs::read_to_string(cue).is_ok_and(|text| {
-            text.lines().any(|line| {
-                let words: Vec<_> = line.split_whitespace().collect();
-                if words
-                    .first()
-                    .is_some_and(|word| word.eq_ignore_ascii_case("TRACK"))
-                    && words
-                        .get(1)
-                        .is_some_and(|number| number.parse::<u32>().is_ok())
-                {
-                    track = true;
-                }
-                track
-                    && words
-                        .first()
-                        .is_some_and(|word| word.eq_ignore_ascii_case("INDEX"))
-                    && words.get(1) == Some(&"01")
-                    && words.get(2).is_some_and(|time| {
-                        let values: Vec<_> = time.split(':').collect();
-                        values.len() == 3
-                            && values
-                                .iter()
-                                .all(|value| value.len() == 2 && value.parse::<u32>().is_ok())
-                    })
-            })
-        });
-    }
-    false
 }
