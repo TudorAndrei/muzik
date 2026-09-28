@@ -92,6 +92,101 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, BeetsConfig) {
 }
 
 #[test]
+fn cancellation_during_placement_restores_files_and_keeps_database() {
+    let (_temp, source, database, root, config) = fixture();
+    let second = source.with_file_name("03 Other.flac");
+    fs::copy(&source, &second).unwrap();
+    fs::write(
+        second.with_extension("muzik.json"),
+        r#"{"resolved":{"title":"Other","artist":"Mara Vale","album":"Night Lines"}}"#,
+    )
+    .unwrap();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let old_items = library.items().unwrap().len();
+    let old_albums = library.albums().unwrap().len();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_with_options(
+            &[source.clone(), second.clone()],
+            ImportMode::Album,
+            PlanOptions {
+                autotag: false,
+                ..PlanOptions::default()
+            },
+        )
+        .unwrap();
+    let mut options = ApplyOptions::from_beets(&config, root.clone()).unwrap();
+    options.placement = Placement::Move;
+    let result = apply::apply_with_cancel(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: Some(DuplicateDecision::Keep),
+        }],
+        &options,
+        &|| fs::read_dir(&root).is_ok_and(|mut entries| entries.next().is_some()),
+    );
+    assert!(matches!(result, Err(ApplyError::Cancelled)));
+    assert!(source.exists());
+    assert!(second.exists());
+    assert_eq!(library.items().unwrap().len(), old_items);
+    assert_eq!(library.albums().unwrap().len(), old_albums);
+    fn files_under(path: &std::path::Path) -> usize {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    files_under(&entry.path())
+                } else {
+                    1
+                }
+            })
+            .sum()
+    }
+    assert_eq!(files_under(&root), 0);
+}
+
+#[test]
+fn cancellation_before_apply_keeps_source_and_database() {
+    let (_temp, source, database, root, config) = fixture();
+    let mut library = Library::open_read_write(&database).unwrap();
+    let old_items = library.items().unwrap().len();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let planner = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let plan = planner
+        .plan_singletons(std::slice::from_ref(&source))
+        .unwrap();
+    let options = ApplyOptions::from_beets(&config, root.clone()).unwrap();
+    let result = apply::apply_with_cancel(
+        &mut library,
+        &plan,
+        &[AlbumDecision {
+            choice: MatchDecision::AsIs,
+            duplicate: None,
+        }],
+        &options,
+        &|| true,
+    );
+    assert!(matches!(result, Err(ApplyError::Cancelled)));
+    assert!(source.exists());
+    assert_eq!(library.items().unwrap().len(), old_items);
+    assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+}
+
+#[test]
 fn singleton_mode_uses_singleton_path_without_an_album_row() {
     let (_temp, source, database, root, config) = fixture();
     let mut library = Library::open_read_write(&database).unwrap();

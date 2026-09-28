@@ -156,6 +156,19 @@ pub fn apply(
     decisions: &[AlbumDecision],
     options: &ApplyOptions,
 ) -> Result<ApplyResult, ApplyError> {
+    apply_with_cancel(library, plan, decisions, options, &|| false)
+}
+
+/// Stop before a new album starts or before its database write. A committed
+/// album remains imported if cancellation arrives after that write.
+pub fn apply_with_cancel(
+    library: &mut Library,
+    plan: &ImportPlan,
+    decisions: &[AlbumDecision],
+    options: &ApplyOptions,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ApplyResult, ApplyError> {
+    check_cancelled(cancelled)?;
     if decisions.len() != plan.albums.len() {
         return Err(ApplyError::DecisionCount);
     }
@@ -175,6 +188,7 @@ pub fn apply(
     };
     let mut reserved = BTreeSet::new();
     for (album, decision) in plan.albums.iter().zip(decisions) {
+        check_cancelled(cancelled)?;
         if decision.choice == MatchDecision::Skip
             || (!album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip))
         {
@@ -188,6 +202,7 @@ pub fn apply(
             return Err(ApplyError::DuplicateDecision);
         }
         let prepared = prepare(library, album, *decision, options, &mut reserved)?;
+        check_cancelled(cancelled)?;
         if options.dry_run {
             result
                 .destinations
@@ -198,6 +213,7 @@ pub fn apply(
         let mut created = Vec::new();
         let placed = (|| -> Result<(), ApplyError> {
             for item in &prepared.items {
+                check_cancelled(cancelled)?;
                 let source = staged.source_for(&item.source);
                 let mode = if options.placement == Placement::Move
                     || (options.placement == Placement::Symlink && source != item.source)
@@ -213,6 +229,7 @@ pub fn apply(
                 }
             }
             if let Some((source, destination)) = &prepared.cover {
+                check_cancelled(cancelled)?;
                 files::place(source, destination, Placement::Copy)?;
                 created.push(destination.clone());
                 if options.embed_art {
@@ -226,6 +243,7 @@ pub fn apply(
                         "image/jpeg"
                     };
                     for item in &prepared.items {
+                        check_cancelled(cancelled)?;
                         muzik_tags::embed_cover(&item.destination, &bytes, mime)?;
                     }
                 }
@@ -252,6 +270,10 @@ pub fn apply(
                 return Err(error.into());
             }
         };
+        if let Err(error) = check_cancelled(cancelled) {
+            staged.restore(&created)?;
+            return Err(error);
+        }
         let database = library.transaction(|writer| {
             for id in &prepared.replace_ids {
                 writer.remove_album(*id)?;
@@ -308,6 +330,14 @@ pub fn apply(
         record_history(plan, album, &mut result);
     }
     Ok(result)
+}
+
+fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), ApplyError> {
+    if cancelled() {
+        Err(ApplyError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult) {

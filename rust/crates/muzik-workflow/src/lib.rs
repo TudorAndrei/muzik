@@ -4,6 +4,7 @@
 //! audio discovery, the split/organize order, and safe cancellation points.
 
 use muzik_core::chapters::{self, Chapter};
+use muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE;
 pub use muzik_core::splitter::SplitProgress;
 pub use muzik_core::{AudioFallback, AudioSource, MetadataSource, QualityPolicy};
 use std::collections::HashSet;
@@ -13,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 
+pub mod discovery;
 pub mod playlist;
+pub mod quality;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkflowRequest {
@@ -56,12 +59,12 @@ impl Default for WorkflowOptions {
             keep_source: false,
             force: false,
             config: None,
-            metadata_source: MetadataSource::Auto,
-            audio_source: AudioSource::Youtube,
-            prefer: "lossless".into(),
-            fallback: AudioFallback::Youtube,
+            metadata_source: MetadataSource::default(),
+            audio_source: AudioSource::default(),
+            prefer: DEFAULT_AUDIO_PREFERENCE.into(),
+            fallback: AudioFallback::default(),
             interactive: true,
-            quality_policy: QualityPolicy::Off,
+            quality_policy: QualityPolicy::default(),
             min_bitrate: 256,
         }
     }
@@ -164,11 +167,26 @@ pub struct SplitTask {
     pub output: PathBuf,
 }
 
+/// The result of a review before the audio plan is fixed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChapterReview {
+    Accept,
+    Edit(Vec<Chapter>),
+    Reject,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AudioProcessingResult {
     pub plan: AudioProcessingPlan,
     pub split_dirs: Vec<PathBuf>,
     pub organize_targets: Vec<PathBuf>,
+}
+
+/// Audio files and ready-to-import directories after a source quality check.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QualityCheckedAudio {
+    pub audio_files: Vec<PathBuf>,
+    pub pre_split_dirs: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -249,6 +267,37 @@ pub trait WorkflowOperations {
     fn soulseek_ready(&self) -> bool {
         false
     }
+    /// Check newly acquired audio before chapter planning. The default keeps it.
+    fn check_quality(
+        &mut self,
+        audio_files: &[PathBuf],
+        _options: &WorkflowOptions,
+        _cancelled: &AtomicBool,
+    ) -> Result<QualityCheckedAudio, String> {
+        Ok(QualityCheckedAudio {
+            audio_files: audio_files.to_vec(),
+            pre_split_dirs: Vec::new(),
+        })
+    }
+    /// Find chapters from the selected metadata service when no local chapters exist.
+    fn discover_chapters(
+        &mut self,
+        source: &Path,
+        selected: MetadataSource,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<Chapter>, String> {
+        discovery::discover(source, selected, cancelled)
+    }
+    /// Ask for a decision when `WorkflowOptions::review` is set.
+    /// Returning `Reject` treats the source as one track.
+    fn review_chapters(
+        &mut self,
+        _source: &Path,
+        _chapters: &[Chapter],
+        _cancelled: &AtomicBool,
+    ) -> Result<ChapterReview, String> {
+        Ok(ChapterReview::Accept)
+    }
     /// Keep Beets configuration, match decisions, and duplicate behavior in the import adapter.
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String>;
     fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String>;
@@ -313,13 +362,28 @@ pub fn plan_audio_processing(
     pre_split_dirs: &[PathBuf],
     no_split: bool,
 ) -> Result<AudioProcessingPlan, Error> {
+    plan_audio_processing_with_source(audio_files, pre_split_dirs, no_split, MetadataSource::Auto)
+}
+
+fn plan_audio_processing_with_source(
+    audio_files: &[PathBuf],
+    pre_split_dirs: &[PathBuf],
+    no_split: bool,
+    metadata_source: MetadataSource,
+) -> Result<AudioProcessingPlan, Error> {
     let mut albums = Vec::new();
     let mut singles = Vec::new();
     for source in audio_files {
         let chapters = if no_split {
             Vec::new()
         } else {
-            chapters::find_chapters(source)?
+            chapters::find_chapters_with_info(
+                source,
+                matches!(
+                    metadata_source,
+                    MetadataSource::Youtube | MetadataSource::Auto
+                ),
+            )?
         };
         if chapters.is_empty() {
             singles.push(source.clone());
@@ -366,7 +430,58 @@ pub fn process_audio_plan_with_events<O: WorkflowOperations>(
     on_event: &mut dyn FnMut(WorkflowEvent),
 ) -> Result<AudioProcessingResult, Error> {
     check_cancelled(cancelled)?;
-    let plan = plan_audio_processing(audio_files, pre_split_dirs, options.no_split)?;
+    let checked = operations
+        .check_quality(audio_files, options, cancelled)
+        .map_err(|error| operation_error(error, cancelled))?;
+    check_cancelled(cancelled)?;
+    let mut ready_dirs = pre_split_dirs.to_vec();
+    ready_dirs.extend(checked.pre_split_dirs);
+    let mut plan = plan_audio_processing_with_source(
+        &checked.audio_files,
+        &ready_dirs,
+        options.no_split,
+        options.metadata_source,
+    )?;
+    if !options.no_split && options.metadata_source != MetadataSource::None {
+        let mut without_chapters = Vec::new();
+        for source in plan.singles {
+            check_cancelled(cancelled)?;
+            let found = operations
+                .discover_chapters(&source, options.metadata_source, cancelled)
+                .map_err(|error| operation_error(error, cancelled))?;
+            if found.is_empty() {
+                without_chapters.push(source);
+            } else {
+                plan.albums.push(AlbumInput {
+                    source,
+                    chapters: found,
+                });
+            }
+        }
+        plan.singles = without_chapters;
+    }
+    if options.review {
+        let mut reviewed = Vec::with_capacity(plan.albums.len());
+        for mut album in plan.albums {
+            check_cancelled(cancelled)?;
+            match operations
+                .review_chapters(&album.source, &album.chapters, cancelled)
+                .map_err(|error| operation_error(error, cancelled))?
+            {
+                ChapterReview::Accept => reviewed.push(album),
+                ChapterReview::Edit(chapters) if chapters.is_empty() => {
+                    return Err(Error::Operation("edited chapters must not be empty".into()));
+                }
+                ChapterReview::Edit(chapters) => {
+                    album.chapters = chapters;
+                    reviewed.push(album);
+                }
+                ChapterReview::Reject => plan.singles.push(album.source),
+            }
+            check_cancelled(cancelled)?;
+        }
+        plan.albums = reviewed;
+    }
     on_event(WorkflowEvent::PlanReady {
         albums: plan.albums.len(),
         singles: plan.singles.len(),
@@ -481,7 +596,7 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
         WorkflowInput::YoutubeVideo { url, video_id } => {
             if options.dry_run {
                 Vec::new()
-            } else if !options.force {
+            } else if !options.force && options.audio_source != AudioSource::Soulseek {
                 let existing = find_audio_by_youtube_id(&request.output, &video_id)?;
                 if existing.is_empty() {
                     operations
@@ -489,6 +604,15 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
                         .map_err(|error| operation_error(error, cancelled))?
                 } else {
                     existing
+                }
+            } else if options.audio_source == AudioSource::Soulseek {
+                match operations.acquire_soulseek(&url) {
+                    Ok(files) if !files.is_empty() => files,
+                    Ok(_) | Err(_) if options.fallback == AudioFallback::Youtube => operations
+                        .download_youtube(&url, &request.output, options.force)
+                        .map_err(|error| operation_error(error, cancelled))?,
+                    Ok(files) => files,
+                    Err(error) => return Err(operation_error(error, cancelled)),
                 }
             } else {
                 operations
@@ -502,9 +626,14 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
             } else if matches!(options.audio_source, AudioSource::Soulseek)
                 || matches!(options.audio_source, AudioSource::Auto) && operations.soulseek_ready()
             {
-                operations
-                    .acquire_soulseek(&query)
-                    .map_err(|error| operation_error(error, cancelled))?
+                match operations.acquire_soulseek(&query) {
+                    Ok(files) if !files.is_empty() => files,
+                    Ok(_) | Err(_) if options.fallback == AudioFallback::Youtube => operations
+                        .download_youtube(&query, &request.output, options.force)
+                        .map_err(|error| operation_error(error, cancelled))?,
+                    Ok(files) => files,
+                    Err(error) => return Err(operation_error(error, cancelled)),
+                }
             } else {
                 operations
                     .download_youtube(&query, &request.output, options.force)

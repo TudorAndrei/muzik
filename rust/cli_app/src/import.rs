@@ -20,6 +20,7 @@ pub fn run(args: &Import) -> Result<(), String> {
         link: args.link,
         nowrite: args.nowrite,
         dry_run: args.dry_run,
+        force: false,
         no_prune: args.no_prune,
     })?;
     let decisions = preview

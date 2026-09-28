@@ -1,6 +1,4 @@
-//! Candidate/progress types the bridge hands to Python, and their
-//! conversions from `soulseek_rs` wire types. Kept free of PyO3 so this
-//! module is unit-testable without a Python interpreter.
+//! Candidate and progress types converted from `soulseek_rs` wire types.
 
 use serde::{Deserialize, Serialize};
 use soulseek_rs::types::{Download as WireDownload, DownloadStatus as WireDownloadStatus};

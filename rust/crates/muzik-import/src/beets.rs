@@ -26,6 +26,7 @@ pub struct ImportRequest {
     pub link: bool,
     pub nowrite: bool,
     pub dry_run: bool,
+    pub force: bool,
     pub no_prune: bool,
 }
 
@@ -104,6 +105,14 @@ pub fn load_paths(
 }
 
 pub fn plan_import(request: ImportRequest) -> Result<ImportPreview, String> {
+    plan_import_with_cancel(request, &|| false)
+}
+
+pub fn plan_import_with_cancel(
+    request: ImportRequest,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ImportPreview, String> {
+    check_cancelled(cancelled)?;
     if request.source.as_os_str().is_empty() {
         return Err("audio path is missing".to_owned());
     }
@@ -119,18 +128,26 @@ pub fn plan_import(request: ImportRequest) -> Result<ImportPreview, String> {
         "move": !request.copy && !request.link,
         "write": !request.nowrite,
         "pretend": request.dry_run,
-        "incremental": true
+        "incremental": !request.force
     }});
     let (config, paths) = load_paths(request.config_path.as_deref(), overrides)?;
+    check_cancelled(cancelled)?;
     if !request.source.exists() {
         return Err(format!(
             "audio path does not exist: {}",
             request.source.display()
         ));
     }
-    let seed = legacy_history(&paths.statefile)?;
-    let history = IncrementalHistory::open_or_seed(&paths.statefile, &seed)
-        .map_err(|error| error.to_string())?;
+    let history = if request.force {
+        None
+    } else {
+        let seed = legacy_history(&paths.statefile)?;
+        check_cancelled(cancelled)?;
+        Some(
+            IncrementalHistory::open_or_seed(&paths.statefile, &seed)
+                .map_err(|error| error.to_string())?,
+        )
+    };
     let library = if paths.library.exists() {
         Library::open_read_only(&paths.library)
     } else {
@@ -150,7 +167,7 @@ pub fn plan_import(request: ImportRequest) -> Result<ImportPreview, String> {
             .unwrap_or(5),
     };
     let plan = planner
-        .plan_with_options(
+        .plan_with_options_and_cancel(
             std::slice::from_ref(&request.source),
             ImportMode::Album,
             PlanOptions {
@@ -158,12 +175,13 @@ pub fn plan_import(request: ImportRequest) -> Result<ImportPreview, String> {
                     .get(&["import", "autotag"])
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(true),
-                history: Some(history),
+                history,
                 incremental_skip_later: config
                     .get(&["import", "incremental_skip_later"])
                     .and_then(serde_json::Value::as_bool)
                     .unwrap_or(false),
             },
+            cancelled,
         )
         .map_err(|error| error.to_string())?;
     Ok(ImportPreview {
@@ -178,6 +196,15 @@ pub fn apply_import(
     preview: ImportPreview,
     decisions: &[AlbumDecision],
 ) -> Result<ImportOutcome, String> {
+    apply_import_with_cancel(preview, decisions, &|| false)
+}
+
+pub fn apply_import_with_cancel(
+    preview: ImportPreview,
+    decisions: &[AlbumDecision],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<ImportOutcome, String> {
+    check_cancelled(cancelled)?;
     let mut options = ApplyOptions::from_beets(&preview.config, preview.paths.directory.clone())
         .map_err(|error| error.to_string())?;
     options.dry_run = preview.request.dry_run;
@@ -191,15 +218,17 @@ pub fn apply_import(
         Library::open_or_create(&preview.paths.library)
     }
     .map_err(|error| error.to_string())?;
-    let result = apply::apply(&mut library, &preview.plan, decisions, &options)
-        .map_err(|error| error.to_string())?;
+    let result =
+        apply::apply_with_cancel(&mut library, &preview.plan, decisions, &options, cancelled)
+            .map_err(|error| error.to_string())?;
     let mut outcome = ImportOutcome {
         planned_albums: preview.plan.albums.len(),
         apply: result,
         pruned_items: 0,
         prune_error: None,
     };
-    if !preview.request.copy
+    if !cancelled()
+        && !preview.request.copy
         && !preview.request.link
         && !preview.request.dry_run
         && !preview.request.no_prune
@@ -210,6 +239,14 @@ pub fn apply_import(
         }
     }
     Ok(outcome)
+}
+
+fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+    if cancelled() {
+        Err(crate::Error::Cancelled.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 pub fn import_with(
@@ -500,6 +537,52 @@ mod tests {
         assert!(source.exists());
         assert!(!database.exists());
         assert!(!IncrementalHistory::path_for_statefile(&statefile).exists());
+    }
+
+    #[test]
+    fn force_replans_an_incremental_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let source_dir = temp.path().join("incoming");
+        fs::create_dir(&source_dir).unwrap();
+        let source = source_dir.join("track.flac");
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../muzik-tags/tests/fixtures/blank.flac"),
+            &source,
+        )
+        .unwrap();
+        let config_path = temp.path().join("config.yaml");
+        let statefile = temp.path().join("state.pickle");
+        fs::write(
+            &config_path,
+            format!(
+                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
+                temp.path().join("Music").display(),
+                temp.path().join("library.db").display(),
+                statefile.display(),
+            ),
+        )
+        .unwrap();
+        IncrementalHistory::open_or_seed(&statefile, &[])
+            .unwrap()
+            .record(&[source_dir.canonicalize().unwrap()])
+            .unwrap();
+        let request = ImportRequest {
+            source: source.clone(),
+            config_path: Some(config_path),
+            dry_run: true,
+            ..ImportRequest::default()
+        };
+        let skipped = plan_import(request.clone()).unwrap();
+        assert!(skipped.plan.albums.is_empty());
+        assert_eq!(skipped.plan.skipped_incremental, 1);
+        let forced = plan_import(ImportRequest {
+            force: true,
+            ..request
+        })
+        .unwrap();
+        assert_eq!(forced.plan.albums.len(), 1);
+        assert_eq!(forced.plan.skipped_incremental, 0);
     }
 
     #[test]

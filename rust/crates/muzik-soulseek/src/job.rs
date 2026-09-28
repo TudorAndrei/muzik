@@ -21,7 +21,7 @@ pub enum JobState {
     Cancelled,
 }
 
-/// Shared handle a worker thread finishes and the Python wrapper polls.
+/// Shared handle for a Soulseek worker job.
 ///
 /// A worker only ever calls [`JobHandle::finish`] once; a caller can call
 /// [`JobHandle::cancel`] at any time, but the worker decides when — and

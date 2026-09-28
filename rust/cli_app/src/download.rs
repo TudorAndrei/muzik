@@ -41,22 +41,7 @@ pub async fn run(args: &Download) -> Result<(), String> {
 }
 
 fn build_args(args: &Download, output: &Path) -> Vec<String> {
-    let mut flags = Vec::new();
-    if let Ok(browser) = env::var("MUZIK_YTDLP_COOKIES_FROM_BROWSER")
-        && !browser.trim().is_empty()
-    {
-        flags.extend(["--cookies-from-browser".to_owned(), browser]);
-    } else if let Ok(file) = env::var("MUZIK_YTDLP_COOKIES")
-        && !file.trim().is_empty()
-    {
-        flags.extend(["--cookies".to_owned(), file]);
-    }
-    for runtime in ["node", "bun"] {
-        if executable_on_path(runtime) {
-            flags.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
-            break;
-        }
-    }
+    let mut flags = yt_dlp_access_args();
     flags.extend([
         "--paths".to_owned(),
         output.to_string_lossy().into_owned(),
@@ -89,6 +74,26 @@ fn build_args(args: &Download, output: &Path) -> Vec<String> {
         flags.push("--force-overwrites".to_owned());
     }
     flags.push(args.url.clone());
+    flags
+}
+
+pub(crate) fn yt_dlp_access_args() -> Vec<String> {
+    let mut flags = Vec::new();
+    if let Ok(browser) = env::var("MUZIK_YTDLP_COOKIES_FROM_BROWSER")
+        && !browser.trim().is_empty()
+    {
+        flags.extend(["--cookies-from-browser".to_owned(), browser]);
+    } else if let Ok(file) = env::var("MUZIK_YTDLP_COOKIES")
+        && !file.trim().is_empty()
+    {
+        flags.extend(["--cookies".to_owned(), file]);
+    }
+    for runtime in ["node", "bun"] {
+        if executable_on_path(runtime) {
+            flags.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
+            break;
+        }
+    }
     flags
 }
 

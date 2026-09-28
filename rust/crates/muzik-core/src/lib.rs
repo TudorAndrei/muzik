@@ -6,6 +6,7 @@ mod config;
 pub mod config_choices;
 pub mod downloads;
 pub mod paths;
+pub mod quality;
 pub mod splitter;
 pub mod spotify;
 pub mod thumbnails;

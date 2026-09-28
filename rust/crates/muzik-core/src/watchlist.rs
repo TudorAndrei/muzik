@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub mod jobs;
 mod library_lookup;
 mod reconcile;
 mod view;

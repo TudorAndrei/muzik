@@ -79,6 +79,18 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
                     stage["status"] = json!("not_started");
                 }
             }
+            // Explicit repeat actions invalidate later stages. Older cache records
+            // must not turn these stages back into completed work.
+            if item["stages"]
+                .as_object()
+                .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "stale"))
+            {
+                let key = if spotify { "entry_id" } else { "video_id" };
+                if let Some(id) = item[key].as_str() {
+                    processed_ids.retain(|processed| processed != id);
+                }
+                continue;
+            }
             if spotify {
                 for name in ["quality", "parse", "split"] {
                     set_status(item, name, "skipped");

@@ -12,8 +12,11 @@ pub struct ChoiceError {
     pub value: String,
 }
 
-/// Preset preferences shown in the desktop app. The CLI also accepts format names.
-pub const PREFERRED_AUDIO_CHOICES: &[&str] = &["lossless", "best", "mp3", "flac"];
+/// Default audio preference for workflows and Soulseek searches.
+pub const DEFAULT_AUDIO_PREFERENCE: &str = "lossless";
+
+/// Common preferences shown in the desktop app. Custom format names remain valid.
+pub const PREFERRED_AUDIO_CHOICES: &[&str] = &["lossless", "best", "mp3", "flac", "mp3-320", "any"];
 
 macro_rules! config_choice {
     (

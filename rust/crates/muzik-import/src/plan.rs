@@ -133,7 +133,18 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         mode: ImportMode,
         options: PlanOptions,
     ) -> Result<ImportPlan, ImportError> {
-        let grouped = group_audio_paths(paths)?;
+        self.plan_with_options_and_cancel(paths, mode, options, &|| false)
+    }
+
+    pub fn plan_with_options_and_cancel(
+        &self,
+        paths: &[PathBuf],
+        mode: ImportMode,
+        options: PlanOptions,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<ImportPlan, ImportError> {
+        check_cancelled(cancelled)?;
+        let grouped = group_audio_paths(paths, cancelled)?;
         let groups: Vec<_> = match mode {
             ImportMode::Album => grouped.into_iter().collect(),
             ImportMode::Singleton => grouped
@@ -151,6 +162,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         let library_items = self.library.items()?;
         let mut albums = Vec::new();
         for (source_dir, paths) in groups {
+            check_cancelled(cancelled)?;
             let history_key = if mode == ImportMode::Singleton {
                 paths.clone()
             } else {
@@ -164,6 +176,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             }
             let mut items = Vec::new();
             for source in paths {
+                check_cancelled(cancelled)?;
                 let tags = muzik_tags::read(&source, &[])?;
                 let sidecar = read_sidecar(&source)?;
                 let mut match_item = match_item(&tags);
@@ -209,7 +222,9 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                         Vec::new()
                     }
                 };
+                check_cancelled(cancelled)?;
                 for hit in hits {
+                    check_cancelled(cancelled)?;
                     let release = match self.provider.lookup_release(&hit.id.0) {
                         Ok(release) => release,
                         Err(error) => {
@@ -217,6 +232,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                             continue;
                         }
                     };
+                    check_cancelled(cancelled)?;
                     if !releases
                         .iter()
                         .any(|known: &ReleaseCandidate| known.id == release.id)
@@ -225,6 +241,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                     }
                 }
             }
+            check_cancelled(cancelled)?;
             let candidates_for_match: Vec<_> = releases.iter().map(match_album).collect();
             let ranked = rank_albums(&current, &candidates_for_match, self.match_config)?;
             let candidates = ranked
@@ -253,6 +270,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 duplicates,
             });
         }
+        check_cancelled(cancelled)?;
         Ok(ImportPlan {
             albums,
             history: options.history,
@@ -262,20 +280,33 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
     }
 }
 
-fn group_audio_paths(paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Vec<PathBuf>>, ImportError> {
+fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), ImportError> {
+    if cancelled() {
+        Err(ImportError::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+fn group_audio_paths(
+    paths: &[PathBuf],
+    cancelled: &dyn Fn() -> bool,
+) -> Result<BTreeMap<PathBuf, Vec<PathBuf>>, ImportError> {
     fn visit(
         path: &Path,
         found: &mut BTreeSet<PathBuf>,
         visited_dirs: &mut BTreeSet<PathBuf>,
         supplied: bool,
+        cancelled: &dyn Fn() -> bool,
     ) -> Result<(), ImportError> {
+        check_cancelled(cancelled)?;
         let metadata = fs::metadata(path)?;
         if metadata.is_dir() {
             if !visited_dirs.insert(path.canonicalize()?) {
                 return Ok(());
             }
             for entry in fs::read_dir(path)? {
-                visit(&entry?.path(), found, visited_dirs, false)?;
+                visit(&entry?.path(), found, visited_dirs, false, cancelled)?;
             }
         } else if metadata.is_file() && is_audio(path) {
             found.insert(path.canonicalize()?);
@@ -287,7 +318,7 @@ fn group_audio_paths(paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Vec<PathBuf>
     let mut found = BTreeSet::new();
     let mut visited_dirs = BTreeSet::new();
     for path in paths {
-        visit(path, &mut found, &mut visited_dirs, true)?;
+        visit(path, &mut found, &mut visited_dirs, true, cancelled)?;
     }
     let mut groups: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for path in found {
@@ -579,7 +610,7 @@ mod tests {
         let path = temp.path().join("notes.txt");
         fs::write(&path, "notes").unwrap();
         assert!(matches!(
-            group_audio_paths(&[path]),
+            group_audio_paths(&[path], &|| false),
             Err(ImportError::UnsupportedAudio(_))
         ));
     }

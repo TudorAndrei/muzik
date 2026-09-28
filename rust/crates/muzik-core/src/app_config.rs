@@ -2,6 +2,7 @@
 
 use crate::config_choices::{
     choices_for_field, AudioFallback, AudioSource, MetadataSource, QualityPolicy,
+    DEFAULT_AUDIO_PREFERENCE,
 };
 use crate::paths;
 use serde_json::{json, Map, Value};
@@ -28,7 +29,7 @@ pub fn gui_defaults() -> Value {
         "force": false,
         "metadata_source": MetadataSource::default(),
         "audio_source": AudioSource::default(),
-        "prefer": "lossless",
+        "prefer": DEFAULT_AUDIO_PREFERENCE,
         "fallback": AudioFallback::default(),
         "interactive": true,
         "quality_policy": QualityPolicy::default(),

@@ -1,4 +1,4 @@
-//! Rust handlers for GPUI requests that no longer need the Python service.
+//! Rust handlers for GPUI requests.
 
 use crate::services;
 use chrono::{DateTime, Local};

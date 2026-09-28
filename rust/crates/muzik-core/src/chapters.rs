@@ -61,6 +61,80 @@ pub fn parse_chapters(text: &str) -> Vec<Chapter> {
         .collect()
 }
 
+/// Read a track list from a video description or comment.
+pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
+    static START: LazyLock<Option<Regex>> = LazyLock::new(|| {
+        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?[\s\-–—•|:.)\]]*(.+?)\s*$").ok()
+    });
+    static END: LazyLock<Option<Regex>> = LazyLock::new(|| {
+        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*$").ok()
+    });
+    static RANGE: LazyLock<Option<Regex>> = LazyLock::new(|| {
+        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]\s*$").ok()
+    });
+    let mut entries = Vec::new();
+    for line in text.lines() {
+        let pair = RANGE
+            .as_ref()
+            .and_then(|regex| regex.captures(line))
+            .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
+            .or_else(|| {
+                START
+                    .as_ref()
+                    .and_then(|regex| regex.captures(line))
+                    .and_then(|capture| Some((capture.get(1)?.as_str(), capture.get(2)?.as_str())))
+            })
+            .or_else(|| {
+                END.as_ref()
+                    .and_then(|regex| regex.captures(line))
+                    .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
+            });
+        if let Some((time, title)) = pair {
+            let title = title
+                .trim()
+                .trim_matches(|character: char| "-–—•|:. \t".contains(character))
+                .trim();
+            if let Some(start) = timestamp_seconds(time).filter(|_| !title.is_empty()) {
+                entries.push((start, title.to_owned()));
+            }
+        }
+    }
+    entries.sort_by_key(|entry| entry.0);
+    entries.dedup_by_key(|entry| entry.0);
+    if entries.len() < 2 {
+        return Vec::new();
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(position, (start, title))| Chapter {
+            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
+            start: *start,
+            end: entries.get(position + 1).map(|entry| entry.0),
+            title: title.clone(),
+        })
+        .collect()
+}
+
+/// Select a useful track list from YouTube comments, with pinned comments first.
+pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
+    metadata
+        .get("comments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|comment| {
+            let chapters = parse_tracklist(comment.get("text")?.as_str()?);
+            (chapters.len() >= 2).then_some((
+                u8::from(comment.get("is_pinned") == Some(&Value::Bool(true))) * 2
+                    + u8::from(comment.get("author_is_uploader") == Some(&Value::Bool(true))),
+                chapters,
+            ))
+        })
+        .max_by_key(|(rank, _)| *rank)
+        .map_or_else(Vec::new, |(_, chapters)| chapters)
+}
+
 /// Parse the `chapters` array in yt-dlp metadata.
 pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
     let data: Value = serde_json::from_str(text)?;
@@ -180,15 +254,20 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
     entries
 }
 
-/// Find chapters in the same order as the Python workflow.
+/// Find chapters in the configured sidecar order.
 pub fn find_chapters(audio: &Path) -> Result<Vec<Chapter>, Error> {
+    find_chapters_with_info(audio, true)
+}
+
+/// Find local text and CUE chapters, with optional yt-dlp metadata.
+pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<Chapter>, Error> {
     let txt = sidecar_path(audio, ".chapters.txt");
     if txt.metadata().is_ok_and(|metadata| metadata.len() > 0) {
         return Ok(normalize(parse_chapters(&read_text(&txt)?)));
     }
 
     let info = sidecar_path(audio, ".info.json");
-    if info.exists() {
+    if include_info && info.exists() {
         let chapters = parse_info_json(&read_text(&info)?)?;
         if !chapters.is_empty() {
             return Ok(normalize(chapters));

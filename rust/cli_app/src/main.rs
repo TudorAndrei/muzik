@@ -226,6 +226,15 @@ struct Workflow {
     /// Audio source for search and Spotify export tracks.
     #[usage(long, value_enum, default = "youtube")]
     audio_source: muzik_core::AudioSource,
+    /// Source for chapter metadata.
+    #[usage(long, value_enum, default = "auto")]
+    metadata_source: muzik_core::MetadataSource,
+    /// Check YouTube audio and select safe Soulseek replacements.
+    #[usage(long, value_enum, default = "off")]
+    quality_policy: muzik_core::QualityPolicy,
+    /// Minimum acceptable lossy bitrate in kbps.
+    #[usage(long, default = "256")]
+    min_bitrate: u32,
     /// Preferred Soulseek audio quality.
     #[usage(long, default = "lossless")]
     prefer: String,
@@ -458,6 +467,8 @@ struct Soulseek {
 enum SoulseekCommand {
     /// Check the Soulseek account and server connection.
     Check,
+    /// Measure library audio and suggest safe Soulseek replacements.
+    CheckLibrary(SoulseekCheckLibrary),
     /// Search peer audio files and rank the results.
     Search(SoulseekSearch),
     /// Download a Soulseek result and organize its audio files.
@@ -465,15 +476,30 @@ enum SoulseekCommand {
 }
 
 #[derive(Args)]
+struct SoulseekCheckLibrary {
+    /// Beets query that limits the library scan.
+    #[usage(long, short = 'q')]
+    query: Option<String>,
+    /// Minimum acceptable lossy bitrate in kbps.
+    #[usage(long, default = "256")]
+    min_bitrate: u32,
+    /// Preferred replacement quality.
+    #[usage(long, default = "lossless")]
+    prefer: String,
+    /// Maximum number of low-quality tracks to search.
+    #[usage(long, short = 'n', default = "20")]
+    limit: usize,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
+}
+
+#[derive(Args)]
 struct SoulseekSearch {
     /// Artist, album, or track search text.
     query: String,
     /// Preferred audio quality.
-    #[usage(
-        long,
-        default = "lossless",
-        choices("flac", "lossless", "mp3-320", "any")
-    )]
+    #[usage(long, default = "lossless")]
     prefer: String,
     /// Maximum number of results to show.
     #[usage(long, short = 'n', default = "20")]
@@ -491,11 +517,7 @@ struct SoulseekDownload {
     #[usage(long)]
     candidate: Option<String>,
     /// Preferred audio quality for a new search.
-    #[usage(
-        long,
-        default = "lossless",
-        choices("flac", "lossless", "mp3-320", "any")
-    )]
+    #[usage(long, default = "lossless")]
     prefer: String,
     /// Maximum number of results to consider.
     #[usage(long, short = 'n', default = "10")]
@@ -562,6 +584,7 @@ async fn run(command: Command) -> Result<(), String> {
         },
         Command::Soulseek(args) => match args.command {
             SoulseekCommand::Check => soulseek::check(),
+            SoulseekCommand::CheckLibrary(args) => soulseek::check_library(&args),
             SoulseekCommand::Search(args) => {
                 soulseek::search(&args.query, &args.prefer, args.limit, args.json)
             }

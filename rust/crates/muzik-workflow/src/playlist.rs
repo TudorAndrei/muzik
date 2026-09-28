@@ -148,15 +148,6 @@ pub fn run_spotify_export<O: WorkflowOperations>(
 ) -> Result<PlaylistRunResult, Error> {
     check_cancelled(cancelled)?;
     let playlist = load_spotify_export(path)?;
-    if !options.dry_run
-        && (options.audio_source == AudioSource::Youtube
-            || options.audio_source == AudioSource::Auto && !operations.soulseek_ready())
-    {
-        return Err(Error::Operation(
-            "Spotify exports need Soulseek audio. Select Soulseek or Auto with Soulseek ready."
-                .into(),
-        ));
-    }
     let mut checkpoint =
         Checkpoint::load(&checkpoint_path(request, "spotify", &playlist.source_id))?;
     let mut result = empty_result();
@@ -191,7 +182,7 @@ pub fn run_spotify_export<O: WorkflowOperations>(
         let files = find_audio_inputs(&files)?;
         if files.is_empty() {
             return Err(Error::Operation(format!(
-                "no Soulseek audio was acquired for {}",
+                "no audio was acquired for {}",
                 track.title
             )));
         }

@@ -23,6 +23,7 @@ path = "src/main.rs"
 [dependencies]
 muzik-core = { path = "../crates/muzik-core" }
 muzik-import = { path = "../crates/muzik-import" }
+muzik-library = { path = "../crates/muzik-library" }
 muzik-tags = { path = "../crates/muzik-tags" }
 muzik-workflow = { path = "../crates/muzik-workflow" }
 muzik-soulseek = { path = "../crates/muzik-soulseek" }

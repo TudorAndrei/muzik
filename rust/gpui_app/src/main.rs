@@ -1,6 +1,8 @@
 mod bridge;
 mod local_workflow;
 mod native;
+mod native_watchlist;
+mod remote_workflow;
 mod services;
 mod thumbnails;
 mod watchlist;
@@ -611,7 +613,7 @@ impl Muzik {
                 let result = &message["result"];
                 match command.as_str() {
                     "hello" | "config.get" | "config.save" => {
-                        self.status = "Python service ready".into();
+                        self.status = "Backend ready".into();
                         if command == "config.save" {
                             self.status = "Config saved".into();
                             self.error = None;
@@ -771,7 +773,7 @@ impl Muzik {
             "transport.error" | "transport.closed" => {
                 self.status = message["message"]
                     .as_str()
-                    .unwrap_or("Python service stopped")
+                    .unwrap_or("Rust service stopped")
                     .into();
             }
             _ => {}
@@ -969,7 +971,9 @@ impl Muzik {
         let audio = self.defaults["audio_source"]
             .as_str()
             .unwrap_or(AudioSource::default().as_str());
-        let prefer = self.defaults["prefer"].as_str().unwrap_or("lossless");
+        let prefer = self.defaults["prefer"]
+            .as_str()
+            .unwrap_or(muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE);
         let summary = div()
             .v_flex()
             .gap_2()

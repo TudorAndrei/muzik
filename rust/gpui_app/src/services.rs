@@ -82,15 +82,12 @@ fn check_soulseek() -> ServiceStatus {
         .unwrap_or_else(|| "server.slsknet.org".into());
     let port = settings.server_port.unwrap_or(2416);
     match Session::connect(settings) {
-        Ok(session) => {
-            session.close();
-            ServiceStatus {
-                name: "Soulseek",
-                available: Some(true),
-                detail: format!("Connected: {host}:{port}"),
-                optional: true,
-            }
-        }
+        Ok(_session) => ServiceStatus {
+            name: "Soulseek",
+            available: Some(true),
+            detail: format!("Connected: {host}:{port}"),
+            optional: true,
+        },
         Err(error) => ServiceStatus {
             name: "Soulseek",
             available: Some(false),

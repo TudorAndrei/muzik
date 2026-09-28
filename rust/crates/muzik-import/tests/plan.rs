@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use muzik_core::{BeetsConfig, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
 use muzik_import::history::IncrementalHistory;
@@ -13,6 +14,60 @@ struct FixtureProvider;
 struct FailingProvider;
 
 struct NoLookupProvider;
+
+struct CancellingProvider<'a>(&'a AtomicBool);
+
+impl ReleaseProvider for CancellingProvider<'_> {
+    fn search_releases(
+        &self,
+        _: &ReleaseSearch,
+        _: u8,
+    ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
+        self.0.store(true, Ordering::SeqCst);
+        Ok(Vec::new())
+    }
+
+    fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
+        unreachable!()
+    }
+
+    fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
+        unreachable!()
+    }
+}
+
+#[test]
+fn cancellation_after_metadata_search_stops_planning() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("song.flac");
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .to_owned();
+    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source).unwrap();
+    fs::write(
+        source.with_extension("muzik.json"),
+        r#"{"resolved":{"title":"Song","artist":"Mara Vale","album":"Night Lines"}}"#,
+    )
+    .unwrap();
+    let library = Library::empty().unwrap();
+    let config = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let cancelled = AtomicBool::new(false);
+    let planner = ImportPlanner {
+        provider: &CancellingProvider(&cancelled),
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    };
+    let result = planner.plan_with_options_and_cancel(
+        &[source],
+        ImportMode::Album,
+        PlanOptions::default(),
+        &|| cancelled.load(Ordering::SeqCst),
+    );
+    assert!(matches!(result, Err(muzik_import::Error::Cancelled)));
+}
 
 impl ReleaseProvider for NoLookupProvider {
     fn search_releases(

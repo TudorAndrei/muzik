@@ -183,12 +183,6 @@ impl Session {
         });
         Ok(handle)
     }
-
-    /// `soulseek_rs::Client` has no explicit teardown call; dropping the
-    /// session's last `Arc<Client>` ends the connection. This method exists
-    /// so the Python-facing lifecycle stays symmetric with `connect()` — it
-    /// is intentionally a no-op beyond that.
-    pub fn close(&self) {}
 }
 
 fn finish_from_progress(worker: &JobHandle, progress: DownloadProgress) {

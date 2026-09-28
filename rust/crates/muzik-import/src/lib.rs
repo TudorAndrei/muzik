@@ -50,6 +50,8 @@ pub enum Error {
     RestoreFailed(PathBuf),
     #[error("item {0} has no audio path")]
     MissingPath(i64),
+    #[error("import cancelled")]
+    Cancelled,
 }
 
 pub mod apply;
