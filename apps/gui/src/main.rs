@@ -4,18 +4,25 @@ mod native;
 mod native_watchlist;
 mod remote_workflow;
 mod services;
+mod style;
 mod thumbnails;
 mod watchlist;
+mod watchlist_view;
 
 use bridge::Bridge;
 use gpui_kit::component::button::*;
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::tag::{Tag, TagVariant};
+use gpui_kit::component::status_bar::StatusBar;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -25,6 +32,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -36,6 +44,15 @@ enum Page {
     Settings,
     Spotify,
 }
+
+const PAGES: [(Page, &str); 6] = [
+    (Page::Workflow, "Workflow"),
+    (Page::Config, "Config"),
+    (Page::Watchlist, "Watchlist"),
+    (Page::Library, "Library"),
+    (Page::Settings, "Settings"),
+    (Page::Spotify, "Spotify"),
+];
 
 struct Field {
     key: &'static str,
@@ -62,8 +79,12 @@ struct ChapterRow {
     title: Entity<InputState>,
 }
 
+#[derive(Clone)]
 struct PendingAction {
     title: String,
+    description: &'static str,
+    confirm: String,
+    destructive: bool,
     command: &'static str,
     params: Value,
 }
@@ -121,6 +142,8 @@ const FILTERS: &[&str] = &[
     "Unavailable",
 ];
 const WATCH_PAGE_SIZE: usize = 8;
+const REPLACE_WARNING: &str =
+    "This replaces the files from this stage. Later stages can become stale.";
 const ITEM_ACTIONS: &[(&str, &str)] = &[
     ("run", "Run"),
     ("retry", "Retry"),
@@ -140,7 +163,7 @@ struct Muzik {
     playlist_name: Entity<InputState>,
     spotify_client_id: Entity<InputState>,
     chapter_rows: Vec<ChapterRow>,
-    confirmation: Option<PendingAction>,
+    logo: Arc<Image>,
     bridge: Option<Bridge>,
     pending: HashMap<String, String>,
     latest_reads: HashMap<String, String>,
@@ -159,7 +182,6 @@ struct Muzik {
     selected_playlist: usize,
     filter: usize,
     watch_page: usize,
-    expanded_item_actions: Option<String>,
     thumbnail_attempted: HashSet<String>,
     library: Value,
     services: Value,
@@ -183,7 +205,7 @@ impl Muzik {
             spotify_client_id: cx
                 .new(|cx| InputState::new(window, cx).placeholder("Spotify client ID")),
             chapter_rows: Vec::new(),
-            confirmation: None,
+            logo: style::logo(),
             bridge: None,
             pending: HashMap::new(),
             latest_reads: HashMap::new(),
@@ -202,7 +224,6 @@ impl Muzik {
             selected_playlist: 0,
             filter: 0,
             watch_page: 0,
-            expanded_item_actions: None,
             thumbnail_attempted: HashSet::new(),
             library: Value::Null,
             services: Value::Null,
@@ -219,6 +240,10 @@ impl Muzik {
                 Err(error) => this.status = error,
             }
         }
+        cx.observe_window_appearance(window, |_, window, cx| {
+            Theme::sync_system_appearance(Some(window), cx);
+        })
+        .detach();
         cx.spawn_in(window, async move |weak, cx| loop {
             cx.background_executor()
                 .timer(Duration::from_millis(80))
@@ -493,55 +518,40 @@ impl Muzik {
 
     fn request_action(
         &mut self,
-        title: String,
-        command: &'static str,
-        params: Value,
+        action: PendingAction,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.confirmation = Some(PendingAction {
-            title,
-            command,
-            params,
+        let view = cx.entity().downgrade();
+        window.open_alert_dialog(cx, move |dialog, _, _| {
+            let view = view.clone();
+            let action = action.clone();
+            dialog
+                .title(action.title.clone())
+                .description(action.description)
+                .show_cancel(true)
+                .cancel_text("Cancel")
+                .ok_text(action.confirm.clone())
+                .ok_variant(if action.destructive {
+                    ButtonVariant::Danger
+                } else {
+                    ButtonVariant::Primary
+                })
+                .on_ok(move |_, _, cx| {
+                    let action = action.clone();
+                    let _ = view.update(cx, |view, cx| view.run_action(action, cx));
+                    true
+                })
         });
-        cx.notify();
     }
 
-    fn confirmation_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(action) = &self.confirmation else {
-            return div().into_any_element();
-        };
-        div()
-            .flex()
-            .items_center()
-            .gap_3()
-            .p_3()
-            .bg(cx.theme().warning)
-            .text_color(cx.theme().warning_foreground)
-            .child(format!("Confirm: {}", action.title))
-            .child(
-                Button::new("confirm-action")
-                    .danger()
-                    .label("Confirm")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        if let Some(action) = view.confirmation.take() {
-                            if action.command == "watchlist.action" {
-                                view.start_job(action.command, action.params, cx);
-                            } else {
-                                view.send(action.command, action.params);
-                                cx.notify();
-                            }
-                        }
-                    })),
-            )
-            .child(
-                Button::new("cancel-action")
-                    .label("Cancel")
-                    .on_click(cx.listener(|view, _, _, cx| {
-                        view.confirmation = None;
-                        cx.notify();
-                    })),
-            )
-            .into_any_element()
+    fn run_action(&mut self, action: PendingAction, cx: &mut Context<Self>) {
+        if action.command == "watchlist.action" {
+            self.start_job(action.command, action.params, cx);
+        } else {
+            self.send(action.command, action.params);
+            cx.notify();
+        }
     }
 
     fn pick_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -754,6 +764,17 @@ impl Muzik {
                             None
                         };
                         self.logs.push(format!("Job {}", self.job_status));
+                        let job = job_label(self.job_kind.as_deref());
+                        let note = match (&failure, event) {
+                            (Some(failure), _) => {
+                                Notification::error(failure.clone()).title(format!("{job} failed"))
+                            }
+                            (None, "job.cancelled") => {
+                                Notification::warning(format!("{job} cancelled"))
+                            }
+                            (None, _) => Notification::success(format!("{job} finished")),
+                        };
+                        window.push_notification(note, _cx);
                         if self.job_kind.as_deref() == Some("spotify.login") {
                             self.send("spotify.status", json!({}));
                             if event == "job.completed" {
@@ -823,14 +844,7 @@ impl Muzik {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|item| {
-                self.filter == 0
-                    || item["summary"]
-                        .as_str()
-                        .or_else(|| item["status"].as_str())
-                        .map(|state| state.eq_ignore_ascii_case(FILTERS[self.filter]))
-                        .unwrap_or(false)
-            })
+            .filter(|item| watchlist_view::matches_filter(item, self.filter))
             .skip(self.watch_page * WATCH_PAGE_SIZE)
             .take(WATCH_PAGE_SIZE)
             .filter(|item| item["thumbnail_path"].is_null())
@@ -907,11 +921,14 @@ impl Muzik {
     }
 
     fn header(&self, cx: &mut Context<Self>) -> AnyElement {
-        let mut row = div()
+        let selected = PAGES
+            .iter()
+            .position(|(page, _)| *page == self.page)
+            .unwrap_or(0);
+        div()
             .flex()
-            .flex_row()
             .items_center()
-            .gap_1()
+            .gap_8()
             .px_6()
             .py_3()
             .border_b_1()
@@ -919,31 +936,42 @@ impl Muzik {
             .bg(cx.theme().background)
             .child(
                 div()
-                    .text_xl()
-                    .font_semibold()
-                    .text_color(cx.theme().foreground)
-                    .mr_8()
-                    .child("muzik"),
-            );
-        for (page, label) in [
-            (Page::Workflow, "Workflow"),
-            (Page::Config, "Config"),
-            (Page::Watchlist, "Watchlist"),
-            (Page::Library, "Library"),
-            (Page::Settings, "Settings"),
-            (Page::Spotify, "Spotify"),
-        ] {
-            let button = Button::new(label).label(label);
-            row = row.child(
-                if self.page == page {
-                    button.primary()
-                } else {
-                    button
-                }
-                .on_click(cx.listener(move |view, _, window, cx| view.set_page(page, window, cx))),
-            );
-        }
-        row.into_any_element()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(img(self.logo.clone()).size(px(24.)))
+                    .child(div().text_lg().font_bold().child("muzik")),
+            )
+            .child(
+                TabBar::new("pages")
+                    .segmented()
+                    .selected_index(selected)
+                    .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
+                    .on_click(cx.listener(|view, index: &usize, window, cx| {
+                        if let Some((page, _)) = PAGES.get(*index) {
+                            view.set_page(*page, window, cx);
+                        }
+                    })),
+            )
+            .into_any_element()
+    }
+
+    fn status_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let (text, color) = match &self.error {
+            Some(error) => (error.clone(), cx.theme().danger),
+            None if self.status.is_empty() => ("Ready".to_string(), cx.theme().muted_foreground),
+            None => (self.status.clone(), cx.theme().muted_foreground),
+        };
+        let output = self.defaults["output"].as_str().unwrap_or("").to_string();
+        StatusBar::new()
+            .left(
+                div()
+                    .text_xs()
+                    .text_color(color)
+                    .child(short_text(&text, 160)),
+            )
+            .right(style::mono(output, cx).text_color(cx.theme().muted_foreground))
+            .into_any_element()
     }
 
     fn workflow(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -976,21 +1004,25 @@ impl Muzik {
             .unwrap_or(muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE);
         let summary = div()
             .v_flex()
-            .gap_2()
-            .child(div().text_sm().child(format!("Downloads: {output}")))
-            .child(div().text_sm().child(format!("Splits: {splits}")))
+            .gap_3()
             .child(
-                div()
-                    .text_sm()
-                    .child(format!("Audio source: {audio} · Prefer: {prefer}")),
+                DescriptionList::horizontal()
+                    .label_width(px(120.))
+                    .item("Downloads", output.to_string(), 1)
+                    .item("Splits", splits.to_string(), 1)
+                    .item("Audio source", audio.to_string(), 1)
+                    .item("Prefer", prefer.to_string(), 1),
             )
             .child(
-                Button::new("edit-config")
-                    .label("Edit config")
-                    .on_click(cx.listener(|view, _, window, cx| view.open_config(window, cx))),
+                div().child(
+                    Button::new("edit-config")
+                        .label("Edit config")
+                        .on_click(cx.listener(|view, _, window, cx| view.open_config(window, cx))),
+                ),
             );
         let run = Button::new("run")
             .primary()
+            .icon(IconName::Play)
             .label("Run workflow")
             .on_click(cx.listener(|view, _, _, cx| {
                 let params = view.launcher_params(cx);
@@ -1003,16 +1035,15 @@ impl Muzik {
             }));
         let form = div()
             .v_flex()
-            .gap_5()
+            .gap_6()
             .w_full()
             .max_w(px(720.))
-            .py_8()
-            .px_6()
+            .p_6()
             .child(
                 div()
                     .v_flex()
                     .gap_1()
-                    .child(div().text_2xl().font_semibold().child("Workflow"))
+                    .child(style::page_title("Workflow"))
                     .child(
                         div()
                             .text_color(cx.theme().muted_foreground)
@@ -1051,54 +1082,77 @@ impl Muzik {
     }
 
     fn job_panel(&self, cx: &mut Context<Self>) -> AnyElement {
+        let show_progress = self.job_kind.is_some() || !self.progress_state.description.is_empty();
         let mut panel = div()
             .v_flex()
             .gap_4()
-            .p_6()
+            .p_4()
             .w(px(320.))
             .h_full()
+            .flex_none()
             .overflow_y_scrollbar()
             .border_l_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().muted)
-            .child(div().text_lg().font_semibold().child("Activity"))
+            .border_color(cx.theme().sidebar_border)
+            .bg(cx.theme().sidebar)
+            .child(style::section_title("Activity"))
             .child(
-                GroupBox::new().id("activity-status").outline().child(
-                    div()
-                        .v_flex()
-                        .gap_2()
-                        .child(
+                div()
+                    .id("activity-status")
+                    .v_flex()
+                    .gap_2()
+                    .child(style::meta(job_label(self.job_kind.as_deref()), cx))
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .child(self.job_status.clone()),
+                    )
+                    .when(show_progress, |this| {
+                        this.child(
                             div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("STATUS"),
-                        )
-                        .child(div().font_semibold().child(self.job_status.clone()))
-                        .child(div().text_sm().child(self.progress.clone()))
-                        .when(
-                            self.job_kind.is_some() || !self.progress_state.description.is_empty(),
-                            |this| {
-                                this.child(
-                                    Progress::new("activity-progress")
-                                        .value(self.progress_state.percentage())
-                                        .loading(
-                                            self.progress_state.total.is_none()
-                                                && self.job_kind.is_some(),
-                                        )
-                                        .accessibility_label("Workflow progress"),
+                                .flex()
+                                .items_center()
+                                .gap_2p5()
+                                .child(
+                                    div().flex_1().child(
+                                        Progress::new("activity-progress")
+                                            .value(self.progress_state.percentage())
+                                            .loading(
+                                                self.progress_state.total.is_none()
+                                                    && self.job_kind.is_some(),
+                                            )
+                                            .accessibility_label("Workflow progress"),
+                                    ),
                                 )
-                            },
-                        ),
-                ),
+                                .child(style::mono(self.progress.clone(), cx)),
+                        )
+                    }),
             );
         if let Some(id) = &self.job_id {
             let id = id.clone();
-            panel = panel.child(Button::new("cancel-job").danger().label("Cancel").on_click(
-                cx.listener(move |view, _, _, cx| {
-                    view.send("job.cancel", json!({"job_id":id}));
-                    cx.notify();
-                }),
-            ));
+            let job = job_label(self.job_kind.as_deref());
+            panel = panel.child(
+                div().child(
+                    Button::new("cancel-job")
+                        .danger()
+                        .small()
+                        .label("Cancel job")
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.request_action(
+                                PendingAction {
+                                    title: format!("Cancel the {}?", job.to_lowercase()),
+                                    description: "The job stops at a safe point. Finished files and saved state stay.",
+                                    confirm: "Cancel job".into(),
+                                    destructive: true,
+                                    command: "job.cancel",
+                                    params: json!({"job_id":id}),
+                                },
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
+            );
         }
         if let Some(decision) = &self.decision {
             let mut review = div()
@@ -1189,560 +1243,28 @@ impl Muzik {
         }
         let mut log = div()
             .v_flex()
-            .gap_2()
+            .gap_1()
             .min_h(px(120.))
             .max_h(px(220.))
             .overflow_y_scrollbar();
         if self.logs.is_empty() {
-            log = log.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Job updates will appear here."),
-            );
+            log = log.child(style::meta("Job updates will appear here.", cx));
         }
         for (index, line) in self.logs.iter().rev().take(100).enumerate() {
-            log = log.child(div().id(("log", index)).text_sm().child(line.clone()));
+            log = log.child(style::mono(line.clone(), cx).id(("log", index)));
         }
         panel
-            .child(div().text_sm().font_semibold().child("Recent events"))
-            .child(log)
-            .into_any_element()
-    }
-
-    fn watchlist(&self, cx: &mut Context<Self>) -> AnyElement {
-        let playlists = self.watchlist["playlists"]
-            .as_array()
-            .or_else(|| self.watchlist.as_array());
-        let mut rail = div()
-            .v_flex()
-            .gap_3()
-            .p_5()
-            .w(px(260.))
-            .h_full()
-            .border_r_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
-            .child(div().text_lg().font_semibold().child("Sources"));
-        if let Some(playlists) = playlists {
-            for (index, playlist) in playlists.iter().enumerate() {
-                let title = playlist["title"]
-                    .as_str()
-                    .or_else(|| playlist["playlist_id"].as_str())
-                    .unwrap_or("Playlist");
-                let rename_title = playlist["title"].as_str().unwrap_or("").to_string();
-                let detail = format!(
-                    "{} · {} items · {}",
-                    playlist["kind"].as_str().unwrap_or("source"),
-                    playlist["items"].as_array().map_or(0, Vec::len),
-                    playlist["last_checked_at"]
-                        .as_str()
-                        .unwrap_or("Not checked")
-                );
-                let mut entry = div()
-                    .v_flex()
-                    .gap_1()
-                    .child(
-                        Button::new(("playlist", index))
-                            .label(title.to_string())
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.selected_playlist = index;
-                                view.watch_page = 0;
-                                view.playlist_name.update(cx, |state, cx| {
-                                    state.set_value(rename_title.clone(), window, cx)
-                                });
-                                view.cache_visible_thumbnails(cx);
-                                cx.notify();
-                            })),
-                    )
-                    .child(div().text_sm().child(detail));
-                if let Some(error) = playlist["last_error"].as_str() {
-                    entry = entry.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().red)
-                            .child(error.to_string()),
-                    );
-                }
-                rail = rail.child(entry);
-            }
-        }
-        rail = rail.child(Input::new(&self.watch_url)).child(
-            Button::new("add-playlist")
-                .primary()
-                .label("Add playlist")
-                .on_click(cx.listener(|view, _, _, cx| {
-                    let url = view.watch_url.read(cx).value().to_string();
-                    if !url.trim().is_empty() {
-                        view.send("watchlist.add", json!({"url":url}));
-                        cx.notify();
-                    }
-                })),
-        );
-        let mut content = div()
-            .v_flex()
-            .gap_3()
-            .p_6()
-            .flex_1()
-            .max_w(px(1060.))
-            .overflow_y_scrollbar()
-            .child(div().text_2xl().font_semibold().child("Watchlist"));
-        if playlists.is_none_or(Vec::is_empty) {
-            let loading = self
-                .pending
-                .values()
-                .any(|command| command == "watchlist.load");
-            content = content.child(GroupBox::new().id("watchlist-empty").outline().child(
-                if loading {
-                    "Loading sources…"
-                } else {
-                    "Add a YouTube or Spotify playlist link to start."
-                },
-            ));
-        }
-        let refresh = self.launcher_params(cx);
-        content = content.child(
-            div()
-                .flex()
-                .gap_2()
-                .child(
-                    Button::new("watch-refresh")
-                        .primary()
-                        .label("Refresh")
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.start_job("watchlist.refresh", refresh.clone(), cx)
-                        })),
-                )
-                .child(
-                    Button::new("watch-reload")
-                        .label("Reload")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.send("watchlist.load", json!({}));
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    Button::new("cache-thumbnails")
-                        .label("Load thumbnails")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            let video_ids = view.visible_thumbnail_ids();
-                            if video_ids.is_empty() {
-                                view.status = "No missing thumbnails on this page".into();
-                                cx.notify();
-                            } else {
-                                for video_id in &video_ids {
-                                    view.thumbnail_attempted.insert(video_id.clone());
-                                }
-                                view.send("thumbnails.cache", json!({"video_ids":video_ids}));
-                                cx.notify();
-                            }
-                        })),
-                ),
-        );
-        if let Some(playlists) = playlists {
-            if let Some(playlist) = playlists.get(self.selected_playlist) {
-                let id = playlist["id"]
-                    .as_str()
-                    .or_else(|| playlist["playlist_id"].as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let title = playlist["title"]
-                    .as_str()
-                    .or_else(|| playlist["playlist_id"].as_str())
-                    .unwrap_or("Playlist");
-                let remove_title = title.to_string();
-                let source_url = playlist["url"].as_str().unwrap_or("").to_string();
-                let open_url = source_url.clone();
-                content = content
-                    .child(div().text_lg().font_semibold().child(title.to_string()))
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("open-source").label("Open source").on_click(
-                                    cx.listener(move |_, _, _, cx| cx.open_url(&open_url)),
-                                ),
-                            )
-                            .child(
-                                Button::new("copy-source")
-                                    .label("Copy source link")
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            source_url.clone(),
-                                        ))
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(Input::new(&self.playlist_name))
-                            .child(Button::new("rename-playlist").label("Rename").on_click(
-                                cx.listener({
-                                    let id = id.clone();
-                                    move |view, _, _, cx| {
-                                        let title = view.playlist_name.read(cx).value().to_string();
-                                        if !title.trim().is_empty() {
-                                            view.send(
-                                                "watchlist.rename",
-                                                json!({"playlist_id":id,"title":title}),
-                                            );
-                                            cx.notify();
-                                        }
-                                    }
-                                }),
-                            )),
-                    )
-                    .child(
-                        Button::new("remove-playlist")
-                            .danger()
-                            .label("Remove playlist")
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.request_action(
-                                    format!("Remove {remove_title} from the watchlist?"),
-                                    "watchlist.remove",
-                                    json!({"playlist_id":id}),
-                                    cx,
-                                );
-                            })),
-                    );
-                let items = playlist["items"].as_array();
-                let mut filters = div().flex().flex_wrap().gap_1();
-                for (index, label) in FILTERS.iter().enumerate() {
-                    let button =
-                        Button::new(("filter", index))
-                            .label(*label)
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                view.filter = index;
-                                view.watch_page = 0;
-                                view.cache_visible_thumbnails(cx);
-                                cx.notify();
-                            }));
-                    filters = filters.child(if self.filter == index {
-                        button.primary()
-                    } else {
-                        button
-                    });
-                }
-                content = content.child(filters);
-                if let Some(items) = items {
-                    let filtered: Vec<(usize, &Value)> = items
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, item)| {
-                            self.filter == 0
-                                || item["summary"]
-                                    .as_str()
-                                    .or_else(|| item["status"].as_str())
-                                    .map(|state| state.eq_ignore_ascii_case(FILTERS[self.filter]))
-                                    .unwrap_or(false)
-                        })
-                        .collect();
-                    let page_count = filtered.len().div_ceil(WATCH_PAGE_SIZE).max(1);
-                    let current = self.watch_page.min(page_count - 1);
-                    if filtered.is_empty() {
-                        let message = if playlist["kind"] == "spotify" && items.is_empty() {
-                            "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Workflow to get audio."
-                                .to_string()
-                        } else if items.is_empty() {
-                            if playlist["last_checked_at"].is_null() {
-                                "This playlist has not been checked. Select Refresh to read it."
-                                    .to_string()
-                            } else {
-                                "This playlist has no videos. Refresh it to check again."
-                                    .to_string()
-                            }
-                        } else {
-                            format!(
-                                "No items have the {} status. Select All to see every item.",
-                                FILTERS[self.filter]
-                            )
-                        };
-                        content = content.child(
-                            GroupBox::new()
-                                .id("watchlist-items-empty")
-                                .outline()
-                                .child(message),
-                        );
-                    }
-                    for (_, item) in filtered
-                        .into_iter()
-                        .skip(current * WATCH_PAGE_SIZE)
-                        .take(WATCH_PAGE_SIZE)
-                    {
-                        content = content.child(self.watch_item(item, playlist, cx));
-                    }
-                    content = content.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("previous")
-                                    .label("Previous")
-                                    .disabled(current == 0)
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.watch_page = view.watch_page.saturating_sub(1);
-                                        view.cache_visible_thumbnails(cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(format!("Page {} of {}", current + 1, page_count))
-                            .child(
-                                Button::new("next")
-                                    .label("Next")
-                                    .disabled(current + 1 >= page_count)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.watch_page = (view.watch_page + 1).min(page_count - 1);
-                                        view.cache_visible_thumbnails(cx);
-                                        cx.notify();
-                                    })),
-                            ),
-                    );
-                }
-            }
-        }
-        div()
-            .flex()
-            .size_full()
-            .child(rail)
-            .child(content)
-            .into_any_element()
-    }
-
-    fn watch_item(&self, item: &Value, playlist: &Value, cx: &mut Context<Self>) -> AnyElement {
-        let title = item["title"].as_str().unwrap_or("Untitled");
-        let position = item["position"].as_u64().unwrap_or(0) as usize;
-        let video_id = item["video_id"]
-            .as_str()
-            .or_else(|| item["id"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let playlist_id = playlist["id"]
-            .as_str()
-            .or_else(|| playlist["playlist_id"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let item_key = format!("{playlist_id}:{position}:{video_id}");
-        let actions_open = self.expanded_item_actions.as_deref() == Some(item_key.as_str());
-        let summary = item["summary"]
-            .as_str()
-            .or_else(|| item["status"].as_str())
-            .unwrap_or("Pending");
-        let summary_variant = match summary.to_ascii_lowercase().as_str() {
-            "processed" => TagVariant::Success,
-            "failed" => TagVariant::Danger,
-            "processing" => TagVariant::Info,
-            "unavailable" => TagVariant::Warning,
-            _ => TagVariant::Secondary,
-        };
-        let mut card = div()
-            .v_flex()
-            .gap_3()
-            .p_4()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
-            .bg(cx.theme().background)
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(div().font_semibold().child(title.to_string()))
-                    .child(
-                        Tag::new()
-                            .with_variant(summary_variant)
-                            .child(summary.to_string()),
-                    ),
-            );
-        let source_label = if item["kind"] == "spotify" {
-            "Spotify ID"
-        } else {
-            "YouTube ID"
-        };
-        let source_id = item["video_id"].as_str().unwrap_or("Unavailable");
-        card = card.child(
-            div()
-                .text_sm()
-                .text_color(cx.theme().muted_foreground)
-                .child(format!("{source_label}: {source_id}")),
-        );
-        if let Some(error) = item["last_error"].as_str() {
-            card = card.child(
-                div()
-                    .text_sm()
-                    .text_color(cx.theme().red)
-                    .child(error.to_string()),
-            );
-        }
-        if let Some(path) = item["thumbnail_path"].as_str() {
-            card = card.child(
-                img(PathBuf::from(path))
-                    .w(px(180.))
-                    .h(px(100.))
-                    .object_fit(ObjectFit::Cover),
-            );
-        }
-        let mut stages = div().flex().flex_wrap().gap_2();
-        for (stage, label) in [
-            ("download", "Download"),
-            ("quality", "Quality"),
-            ("parse", "Parse"),
-            ("split", "Split"),
-            ("organize", "Organize"),
-        ] {
-            let status = item["stages"][stage]["status"]
-                .as_str()
-                .unwrap_or("not_started");
-            let (variant, state) = match status {
-                "running" => (TagVariant::Info, "Running"),
-                "complete" => (TagVariant::Success, "Complete"),
-                "failed" => (TagVariant::Danger, "Failed"),
-                "skipped" => (TagVariant::Secondary, "Skipped"),
-                "stale" => (TagVariant::Warning, "Stale"),
-                _ => (TagVariant::Secondary, "Not started"),
-            };
-            stages = stages.child(
-                Tag::new()
-                    .with_variant(variant)
-                    .outline()
-                    .child(format!("{label}: {state}")),
-            );
-        }
-        card = card.child(stages);
-        let mut action_row = div().flex().flex_wrap().gap_2();
-        if let (Some(action), Some(label)) = (
-            item["primary_action"]["action"].as_str(),
-            item["primary_action"]["label"].as_str(),
-        ) {
-            let enabled = item["actions"][action]["enabled"].as_bool().unwrap_or(true);
-            let mut params = self
-                .launcher_params(cx)
-                .as_object()
-                .cloned()
-                .unwrap_or_default();
-            params.insert("playlist_id".into(), json!(playlist_id));
-            params.insert("position".into(), json!(position));
-            params.insert("video_id".into(), json!(video_id));
-            params.insert("action".into(), json!(action));
-            action_row = action_row.child(
-                Button::new(("primary-action", position))
-                    .primary()
-                    .label(label.to_string())
-                    .disabled(!enabled)
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.start_job("watchlist.action", Value::Object(params.clone()), cx);
-                    })),
-            );
-        }
-        let toggle_key = item_key.clone();
-        action_row = action_row.child(
-            Button::new(("item-more", position))
-                .label(if actions_open {
-                    "Close actions"
-                } else {
-                    "More actions"
-                })
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    view.expanded_item_actions =
-                        if view.expanded_item_actions.as_deref() == Some(toggle_key.as_str()) {
-                            None
-                        } else {
-                            Some(toggle_key.clone())
-                        };
-                    cx.notify();
-                })),
-        );
-        card = card.child(action_row);
-        if !actions_open {
-            return card.into_any_element();
-        }
-        let mut actions = div()
-            .v_flex()
-            .gap_2()
-            .pt_3()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .child(div().font_semibold().child("Commands"));
-        if let Some(url) = item["video_url"].as_str() {
-            let url = url.to_string();
-            actions = actions.child(
-                Button::new(("open-item", position))
-                    .label(if item["kind"] == "spotify" {
-                        "Open in Spotify"
-                    } else {
-                        "Open on YouTube"
-                    })
-                    .on_click(cx.listener(move |_, _, _, cx| cx.open_url(&url))),
-            );
-        }
-        for (action, label) in ITEM_ACTIONS {
-            let action = *action;
-            let label = *label;
-            let item_title = title.to_string();
-            let availability = &item["actions"][action];
-            let enabled = availability["enabled"].as_bool().unwrap_or(true);
-            let params = self.launcher_params(cx);
-            let mut params = params.as_object().cloned().unwrap_or_default();
-            params.insert("playlist_id".into(), json!(playlist_id));
-            params.insert("position".into(), json!(position));
-            params.insert("video_id".into(), json!(video_id));
-            params.insert("action".into(), json!(action));
-            let mut action_row = div().v_flex().gap_1().child(
-                Button::new((
-                    "item-action",
-                    position * ITEM_ACTIONS.len()
-                        + ITEM_ACTIONS
-                            .iter()
-                            .position(|(name, _)| *name == action)
-                            .unwrap_or(0),
-                ))
-                .label(label)
-                .disabled(!enabled)
-                .on_click(cx.listener(move |view, _, _, cx| {
-                    view.expanded_item_actions = None;
-                    let params = Value::Object(params.clone());
-                    if matches!(
-                        action,
-                        "download_again"
-                            | "parse_again"
-                            | "split_again"
-                            | "organize_again"
-                            | "run_all_again"
-                    ) {
-                        view.request_action(
-                            format!("{label} for {item_title}?"),
-                            "watchlist.action",
-                            params,
-                            cx,
-                        );
-                    } else {
-                        view.start_job("watchlist.action", params, cx);
-                    }
-                })),
-            );
-            if !enabled {
-                if let Some(reason) = availability["reason"].as_str() {
-                    action_row = action_row.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(reason.to_string()),
-                    );
-                }
-            }
-            actions = actions.child(action_row);
-        }
-        card.child(
-            GroupBox::new()
-                .id(("item-commands", position))
-                .outline()
-                .child(actions),
-        )
-        .into_any_element()
+                    .v_flex()
+                    .gap_2()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(cx.theme().sidebar_border)
+                    .child(style::overline("RECENT EVENTS", cx))
+                    .child(log),
+            )
+            .into_any_element()
     }
 
     fn library(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2493,25 +2015,16 @@ impl Render for Muzik {
             .size_full()
             .bg(cx.theme().muted)
             .child(self.header(cx))
-            .child(body)
-            .child(self.confirmation_view(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(body),
+            )
             .when(self.page != Page::Config, |this| {
-                this.child(
-                    div()
-                        .p_2()
-                        .bg(if self.error.is_some() {
-                            cx.theme().danger
-                        } else {
-                            cx.theme().secondary
-                        })
-                        .text_color(if self.error.is_some() {
-                            cx.theme().danger_foreground
-                        } else {
-                            cx.theme().secondary_foreground
-                        })
-                        .text_sm()
-                        .child(self.error.clone().unwrap_or_else(|| self.status.clone())),
-                )
+                this.child(self.status_bar(cx))
             })
     }
 }
@@ -2572,6 +2085,23 @@ fn import_match_summary(candidate: &Value) -> String {
     }
 }
 
+fn job_label(kind: Option<&str>) -> &'static str {
+    match kind {
+        Some("workflow.start") => "Workflow",
+        Some("watchlist.refresh") => "Watchlist refresh",
+        Some("watchlist.action") => "Item command",
+        Some("spotify.login") => "Spotify connection",
+        _ => "Job",
+    }
+}
+
+fn replaces_files(action: &str) -> bool {
+    matches!(
+        action,
+        "download_again" | "parse_again" | "split_again" | "organize_again" | "run_all_again"
+    )
+}
+
 fn describe(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -2584,12 +2114,7 @@ fn watch_page_count(playlist: &Value, filter: usize) -> usize {
     let matches = playlist["items"].as_array().map_or(0, |items| {
         items
             .iter()
-            .filter(|item| {
-                filter == 0
-                    || item["summary"]
-                        .as_str()
-                        .is_some_and(|status| status.eq_ignore_ascii_case(FILTERS[filter]))
-            })
+            .filter(|item| watchlist_view::matches_filter(item, filter))
             .count()
     });
     matches.div_ceil(WATCH_PAGE_SIZE).max(1)
@@ -2811,6 +2336,7 @@ fn main() {
     let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(|cx| {
         gpui_kit::init(cx);
+        style::apply_theme(cx);
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| Muzik::new(window, cx))
         })
@@ -2875,9 +2401,9 @@ mod tests {
         });
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
-            window.click("Config", cx);
+            window.within("pages").click(1usize, cx);
             window.click("save-config", cx);
-            window.click("Workflow", cx);
+            window.within("pages").click(0usize, cx);
             assert!(window.try_find("edit-config").is_some());
             assert!(window.try_find("save-config").is_none());
         })
