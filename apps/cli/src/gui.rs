@@ -7,7 +7,7 @@ pub fn open() -> io::Result<()> {
     let executable = find_binary().ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::NotFound,
-            "GPUI desktop binary is missing. Build rust/gpui_app or set MUZIK_GPUI_BIN.",
+            "GPUI desktop binary is missing. Build apps/gui or set MUZIK_GPUI_BIN.",
         )
     })?;
     let status = Command::new(executable).status()?;

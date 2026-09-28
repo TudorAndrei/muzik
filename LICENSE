@@ -5,4 +5,4 @@ Cargo.toml files. Those packages use the declared license.
 
 The CLI, desktop app, and muzik-workflow crate declare GPL-3.0-only. Each has
 a copy of the license text in its directory. The Apache-2.0 license text for
-the other licensed Rust crates is in rust/LICENSE.
+the other licensed Rust crates is in LICENSE-APACHE.

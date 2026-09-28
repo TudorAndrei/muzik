@@ -1,5 +1,5 @@
 [workspace]
-members = ["rust/crates/*", "rust/cli_app", "rust/gpui_app"]
+members = ["crates/*", "apps/cli", "apps/gui"]
 resolver = "2"
 
 [profile.release]

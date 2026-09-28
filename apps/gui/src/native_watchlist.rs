@@ -905,7 +905,7 @@ mod tests {
         let audio = directory.path().join("track.flac");
         fs::copy(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../crates/muzik-tags/tests/fixtures/blank.flac"),
+                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
             &audio,
         )?;
         let config = directory.path().join("config.yaml");
@@ -961,7 +961,7 @@ mod tests {
         let album = directory.path().join("replacement");
         fs::create_dir(&album)?;
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../crates/muzik-tags/tests/fixtures/blank.flac");
+            .join("../../crates/muzik-tags/tests/fixtures/blank.flac");
         for path in [&original, &album.join("one.flac"), &album.join("two.flac")] {
             fs::copy(&fixture, path)?;
         }

@@ -9,12 +9,12 @@ license = "GPL-3.0-only"
 gpui-kit = "=0.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-muzik-core = { path = "../crates/muzik-core" }
-muzik-import = { path = "../crates/muzik-import" }
-muzik-library = { path = "../crates/muzik-library" }
-muzik-tags = { path = "../crates/muzik-tags" }
-muzik-soulseek = { path = "../crates/muzik-soulseek" }
-muzik-workflow = { path = "../crates/muzik-workflow" }
+muzik-core = { path = "../../crates/muzik-core" }
+muzik-import = { path = "../../crates/muzik-import" }
+muzik-library = { path = "../../crates/muzik-library" }
+muzik-tags = { path = "../../crates/muzik-tags" }
+muzik-soulseek = { path = "../../crates/muzik-soulseek" }
+muzik-workflow = { path = "../../crates/muzik-workflow" }
 chrono = "0.4"
 ureq = "3.4.2"
 url = "2.5.8"

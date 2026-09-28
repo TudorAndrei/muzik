@@ -1,6 +1,6 @@
 # Desktop app
 
-`muzik gui` opens the Rust GPUI app in `rust/gpui_app`. The CLI finds
+`muzik gui` opens the Rust GPUI app in `apps/gui`. The CLI finds
 `muzik-gpui` beside its own binary or through `MUZIK_GPUI_BIN`.
 
 ## Run from a source checkout
@@ -10,7 +10,7 @@ mise run gui
 ```
 
 The app reads the same Beets config and SQLite library files as the CLI.
-Its Rust bridge in `rust/gpui_app/src/bridge.rs` accepts UI commands and sends
+Its Rust bridge in `apps/gui/src/bridge.rs` accepts UI commands and sends
 results, progress, and decision requests. The Rust workflow and watchlist
 services do the work outside the GPUI event loop.
 

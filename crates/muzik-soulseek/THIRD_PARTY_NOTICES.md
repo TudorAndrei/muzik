@@ -1,8 +1,8 @@
 # Third-party notices
 
-`rust/crates/muzik-soulseek/` links against `soulseek-rs-lib`, a dependency not
+`crates/muzik-soulseek/` links against `soulseek-rs-lib`, a dependency not
 authored by this project. Its license text and required notice are
-reproduced below, as `plans/rust-port/PLAN.md` requires.
+reproduced below.
 
 ## soulseek-rs-lib
 

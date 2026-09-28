@@ -492,7 +492,7 @@ mod tests {
         let statefile = temp.path().join("state.pickle");
         fs::write(
             &statefile,
-            include_bytes!("../../../cli_app/tests/fixtures/beets-state.pickle"),
+            include_bytes!("../../../apps/cli/tests/fixtures/beets-state.pickle"),
         )
         .unwrap();
         let entries = legacy_history(&statefile).unwrap();

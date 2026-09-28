@@ -11,8 +11,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("version must have MAJOR.MINOR.PATCH format".into());
     }
 
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let crates = root.join("rust/crates");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let crates = root.join("crates");
     let mut manifests = Vec::new();
     for entry in fs::read_dir(crates)? {
         let path = entry?.path().join("Cargo.toml");
@@ -20,8 +20,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             manifests.push(path);
         }
     }
-    manifests.push(root.join("rust/gpui_app/Cargo.toml"));
-    manifests.push(root.join("rust/cli_app/Cargo.toml"));
+    manifests.push(root.join("apps/gui/Cargo.toml"));
+    manifests.push(root.join("apps/cli/Cargo.toml"));
     manifests.sort();
     for manifest in manifests {
         set_version(&manifest, &version)?;

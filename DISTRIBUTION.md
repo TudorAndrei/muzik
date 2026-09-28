@@ -1,7 +1,7 @@
 # Distribution
 
 The Cargo workspace at the repository root builds two Rust programs:
-`muzik` in `rust/cli_app` and `muzik-gpui` in `rust/gpui_app`.
+`muzik` in `apps/cli` and `muzik-gpui` in `apps/gui`.
 
 ## Check a release
 

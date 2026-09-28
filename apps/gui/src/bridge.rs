@@ -795,7 +795,7 @@ mod tests {
         let audio = dir.path().join("track.flac");
         fs::copy(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../crates/muzik-tags/tests/fixtures/blank.flac"),
+                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
             &audio,
         )?;
         let database = dir.path().join("library.db");
@@ -871,7 +871,7 @@ mod tests {
         let audio = dir.path().join("track.flac");
         fs::copy(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../crates/muzik-tags/tests/fixtures/blank.flac"),
+                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
             &audio,
         )?;
         let database = dir.path().join("library.db");

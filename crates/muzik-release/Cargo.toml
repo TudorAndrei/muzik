@@ -3,7 +3,7 @@ name = "muzik-release"
 version = "0.1.0"
 edition = "2024"
 publish = false
-license-file = "../../../LICENSE"
+license-file = "../../LICENSE"
 
 [lints.clippy]
 unwrap_used = "deny"

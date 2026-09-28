@@ -44,6 +44,6 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust hk
-      - run: cargo test --manifest-path rust/gpui_app/Cargo.toml --locked
-      - run: cargo build --manifest-path rust/gpui_app/Cargo.toml --locked
+      - run: cargo test --manifest-path apps/gui/Cargo.toml --locked
+      - run: cargo build --manifest-path apps/gui/Cargo.toml --locked
       - run: target/debug/muzik-gpui --version
