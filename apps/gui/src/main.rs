@@ -989,37 +989,6 @@ impl Muzik {
                             cx.listener(|view, _, window, cx| view.pick_source(window, cx)),
                         )),
                 );
-        let output = self.defaults["output"]
-            .as_str()
-            .unwrap_or("Set a download folder");
-        let splits = self.defaults["splits"]
-            .as_str()
-            .unwrap_or("Set a splits folder");
-        let audio = self.defaults["audio_source"]
-            .as_str()
-            .unwrap_or(AudioSource::default().as_str());
-        let prefer = self.defaults["prefer"]
-            .as_str()
-            .unwrap_or(muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE);
-        let summary = div()
-            .v_flex()
-            .gap_3()
-            .child(
-                DescriptionList::horizontal()
-                    .columns(1)
-                    .label_width(px(120.))
-                    .item("Downloads", output.to_string(), 1)
-                    .item("Splits", splits.to_string(), 1)
-                    .item("Audio source", audio.to_string(), 1)
-                    .item("Prefer", prefer.to_string(), 1),
-            )
-            .child(
-                div().flex().child(
-                    Button::new("edit-config")
-                        .label("Edit config")
-                        .on_click(cx.listener(|view, _, window, cx| view.open_config(window, cx))),
-                ),
-            );
         let run = Button::new("run")
             .primary()
             .icon(IconName::Play)
@@ -1056,13 +1025,6 @@ impl Muzik {
                     .title("SOURCE")
                     .outline()
                     .child(source),
-            )
-            .child(
-                GroupBox::new()
-                    .id("workflow-config")
-                    .title("SAVED CONFIG")
-                    .outline()
-                    .child(summary),
             )
             .child(div().flex().justify_end().child(run));
         div()
@@ -1987,7 +1949,7 @@ mod tests {
             assert!(window.try_find("service-refresh").is_some());
             window.click("save-config", cx);
             window.within("pages").click(0usize, cx);
-            assert!(window.try_find("edit-config").is_some());
+            assert!(window.try_find("run").is_some());
             assert!(window.try_find("save-config").is_none());
         })
         .unwrap();
