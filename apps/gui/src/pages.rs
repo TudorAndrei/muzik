@@ -90,7 +90,7 @@ impl Muzik {
             _ => {
                 page = page.child(empty_state(
                     "No downloads yet",
-                    "Run a workflow, or set the download folder in Config.",
+                    "Run a workflow, or set the download folder in Settings.",
                     false,
                 ));
             }
@@ -98,46 +98,47 @@ impl Muzik {
         page_scroll(page)
     }
 
-    pub(crate) fn settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let checking = self
+    pub(crate) fn services_section(main: WeakEntity<Muzik>, cx: &App) -> AnyElement {
+        let Some(main_view) = main.upgrade() else {
+            return div().into_any_element();
+        };
+        let view = main_view.read(cx);
+        let checking = view
             .pending
             .values()
             .any(|command| command == "services.check");
-        let services = self.services["services"]
+        let services = view.services["services"]
             .as_array()
-            .or_else(|| self.services.as_array());
-        let mut page = page_frame().child(page_header(
-            "Services",
-            Button::new("service-refresh")
-                .ghost()
-                .icon(IconName::RefreshCw)
-                .label("Check again")
-                .disabled(checking)
-                .on_click(cx.listener(|view, _, _, cx| {
+            .or_else(|| view.services.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let check = Button::new("service-refresh")
+            .ghost()
+            .small()
+            .icon(IconName::RefreshCw)
+            .label("Check again")
+            .disabled(checking)
+            .on_click(move |_, _, cx| {
+                let _ = main.update(cx, |view, cx| {
                     view.send("services.check", json!({}));
                     cx.notify();
-                })),
-        ));
-        let Some(services) = services.filter(|all| !all.is_empty()) else {
-            return page_scroll(page.child(if checking {
-                empty_state(
-                    "Checking services",
-                    "Looking for the tools muzik uses.",
-                    true,
-                )
-            } else {
-                empty_state(
-                    "No service checks",
-                    "Select Check again to look for the tools muzik uses.",
-                    false,
-                )
-            }));
-        };
+                });
+            });
         let missing = services
             .iter()
             .filter(|service| service["available"] == false && service["optional"] != true)
             .count();
-        page = page.child(if missing == 0 {
+        let summary = if services.is_empty() {
+            style::meta(
+                if checking {
+                    "Checking services…"
+                } else {
+                    "No service checks yet."
+                },
+                cx,
+            )
+            .into_any_element()
+        } else if missing == 0 {
             style::meta("All required services are available.", cx).into_any_element()
         } else {
             Alert::warning(
@@ -147,9 +148,25 @@ impl Muzik {
                 ),
             )
             .into_any_element()
-        });
+        };
+        let mut section = GroupBox::new()
+            .id("settings-services")
+            .title("SERVICES")
+            .outline()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().flex_1().min_w_0().child(summary))
+                    .child(check),
+            );
+        if services.is_empty() {
+            return section.into_any_element();
+        }
         let mut body = TableBody::new();
-        for service in services {
+        for service in &services {
             let status = match service["available"].as_bool() {
                 Some(true) => Tag::success().child("Available"),
                 Some(false) if service["optional"] == true => {
@@ -175,21 +192,20 @@ impl Muzik {
                     .child(TableCell::new().text_right().child(status)),
             );
         }
-        page_scroll(
-            page.child(
-                Table::new()
-                    .accessibility_label("Services")
-                    .child(
-                        TableHeader::new().child(
-                            TableRow::new()
-                                .child(TableHead::new().child("Service"))
-                                .child(TableHead::new().child("Detail"))
-                                .child(TableHead::new().text_right().child("Status")),
-                        ),
-                    )
-                    .child(body),
-            ),
-        )
+        section = section.child(
+            Table::new()
+                .accessibility_label("Services")
+                .child(
+                    TableHeader::new().child(
+                        TableRow::new()
+                            .child(TableHead::new().child("Service"))
+                            .child(TableHead::new().child("Detail"))
+                            .child(TableHead::new().text_right().child("Status")),
+                    ),
+                )
+                .child(body),
+        );
+        section.into_any_element()
     }
 
     pub(crate) fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -278,7 +294,7 @@ impl Muzik {
                     )),
             )
             .child(
-                div().child(
+                div().flex().child(
                     Button::new("spotify-dashboard")
                         .ghost()
                         .icon(IconName::ExternalLink)
@@ -307,14 +323,17 @@ impl Muzik {
                     .title("CONNECTED ACCOUNT")
                     .outline()
                     .child(
-                        DescriptionList::horizontal().label_width(px(120.)).item(
-                            "Account",
-                            self.spotify["account_name"]
-                                .as_str()
-                                .unwrap_or("Spotify account")
-                                .to_string(),
-                            1,
-                        ),
+                        DescriptionList::horizontal()
+                            .columns(1)
+                            .label_width(px(120.))
+                            .item(
+                                "Account",
+                                self.spotify["account_name"]
+                                    .as_str()
+                                    .unwrap_or("Spotify account")
+                                    .to_string(),
+                                1,
+                            ),
                     )
                     .child(
                         div()
@@ -367,7 +386,7 @@ impl Muzik {
                     .v_flex()
                     .gap_2()
                     .child(
-                        div().child(
+                        div().flex().child(
                             Button::new("spotify-connect")
                                 .primary()
                                 .label("Connect to Spotify")

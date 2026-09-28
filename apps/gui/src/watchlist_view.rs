@@ -264,7 +264,7 @@ impl Muzik {
             .collect();
         if filtered.is_empty() {
             let message = if playlist["kind"] == "spotify" && items.is_empty() {
-                "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Config to get audio.".to_string()
+                "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Settings to get audio.".to_string()
             } else if items.is_empty() && playlist["last_checked_at"].is_null() {
                 "This playlist has not been checked. Select Refresh to read it.".to_string()
             } else if items.is_empty() {
@@ -391,7 +391,7 @@ impl Muzik {
             let enabled = item["actions"][action]["enabled"].as_bool().unwrap_or(true);
             let params = self.item_params(&playlist_id, position, &video_id, action, cx);
             card = card.child(
-                div().child(
+                div().flex().child(
                     Button::new(("primary-action", position))
                         .small()
                         .label(label.to_string())
@@ -486,11 +486,14 @@ fn item_sheet(
     }
     body = body.child(state);
     let states = style::stage_states(item);
-    let mut facts = DescriptionList::horizontal().label_width(px(110.)).item(
-        if spotify { "Spotify ID" } else { "YouTube ID" },
-        key.2.clone(),
-        1,
-    );
+    let mut facts = DescriptionList::horizontal()
+        .columns(1)
+        .label_width(px(110.))
+        .item(
+            if spotify { "Spotify ID" } else { "YouTube ID" },
+            key.2.clone(),
+            1,
+        );
     for ((_, label), state) in style::STAGES.iter().zip(states) {
         facts = facts.item(*label, state.word(), 1);
     }

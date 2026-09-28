@@ -18,12 +18,11 @@ services do the work outside the GPUI event loop.
 
 - **Workflow** accepts a URL or local path. It shows progress, logs, and
   decisions for download, split, and import work.
-- **Config** saves output paths, source choices, quality policy, and processing
-  options in `config.yaml`.
-- **Watchlist** shows YouTube and Spotify sources, item states, thumbnails,
-  filters, and item commands.
+- **Watchlist** shows YouTube and Spotify sources, item states, filters, and
+  item commands. The item sheet shows the thumbnail, IDs, and commands.
 - **Library** lists audio in the selected download directory.
-- **Settings** checks external services.
+- **Settings** saves output paths, source choices, quality policy, and
+  processing options in `config.yaml`, and checks external services.
 - **Spotify** stores a client ID, connects an account, and adds playlists or
   Liked Songs to the watchlist.
 

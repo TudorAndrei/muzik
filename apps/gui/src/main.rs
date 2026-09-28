@@ -39,16 +39,14 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
     Workflow,
-    Config,
     Watchlist,
     Library,
     Settings,
     Spotify,
 }
 
-const PAGES: [(Page, &str); 6] = [
+const PAGES: [(Page, &str); 5] = [
     (Page::Workflow, "Workflow"),
-    (Page::Config, "Config"),
     (Page::Watchlist, "Watchlist"),
     (Page::Library, "Library"),
     (Page::Settings, "Settings"),
@@ -330,13 +328,14 @@ impl Muzik {
             self.config_view =
                 Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
         }
-        self.page = Page::Config;
+        self.page = Page::Settings;
         self.error = None;
+        self.send("services.check", json!({}));
         cx.notify();
     }
 
     fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
-        if page == Page::Config {
+        if page == Page::Settings {
             self.open_config(window, cx);
             return;
         }
@@ -345,12 +344,11 @@ impl Muzik {
         match page {
             Page::Watchlist => self.send("watchlist.load", self.launcher_params(cx)),
             Page::Library => self.scan_library(cx),
-            Page::Settings => self.send("services.check", json!({})),
             Page::Spotify => {
                 self.send("watchlist.load", self.launcher_params(cx));
                 self.send("spotify.status", json!({}));
             }
-            Page::Workflow | Page::Config => {}
+            Page::Workflow | Page::Settings => {}
         }
         cx.notify();
     }
@@ -1008,6 +1006,7 @@ impl Muzik {
             .gap_3()
             .child(
                 DescriptionList::horizontal()
+                    .columns(1)
                     .label_width(px(120.))
                     .item("Downloads", output.to_string(), 1)
                     .item("Splits", splits.to_string(), 1)
@@ -1015,7 +1014,7 @@ impl Muzik {
                     .item("Prefer", prefer.to_string(), 1),
             )
             .child(
-                div().child(
+                div().flex().child(
                     Button::new("edit-config")
                         .label("Edit config")
                         .on_click(cx.listener(|view, _, window, cx| view.open_config(window, cx))),
@@ -1133,7 +1132,7 @@ impl Muzik {
             let id = id.clone();
             let job = job_label(self.job_kind.as_deref());
             panel = panel.child(
-                div().child(
+                div().flex().child(
                     Button::new("cancel-job")
                         .danger()
                         .small()
@@ -1504,9 +1503,9 @@ impl Render for ConfigView {
                     .border_b_1()
                     .border_color(cx.theme().border)
                     .bg(cx.theme().background)
-                    .child(style::page_title("Config"))
+                    .child(style::page_title("Settings"))
                     .child(style::meta(
-                        "Save these settings once. Workflow uses them for each run.",
+                        "Workflow uses these settings for each run. Services shows the tools muzik can use.",
                         cx,
                     )),
             )
@@ -1538,7 +1537,8 @@ impl Render for ConfigView {
                                 .outline()
                                 .child(tuning)
                                 .child(switches),
-                        ),
+                        )
+                        .child(Muzik::services_section(self.main.clone(), cx)),
                 ),
             )
             .child(
@@ -1566,7 +1566,7 @@ impl Render for Muzik {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
             Page::Workflow => self.workflow(cx),
-            Page::Config => div()
+            Page::Settings => div()
                 .flex_1()
                 .child(
                     self.config_view
@@ -1577,10 +1577,9 @@ impl Render for Muzik {
                 .into_any_element(),
             Page::Watchlist => self.watchlist(cx),
             Page::Library => self.library(cx),
-            Page::Settings => self.settings(cx),
             Page::Spotify => self.spotify(cx),
         };
-        let body = if !matches!(self.page, Page::Workflow | Page::Config)
+        let body = if !matches!(self.page, Page::Workflow | Page::Settings)
             && (self.job_id.is_some() || self.decision.is_some())
         {
             div()
@@ -1605,7 +1604,7 @@ impl Render for Muzik {
                     .overflow_hidden()
                     .child(body),
             )
-            .when(self.page != Page::Config, |this| {
+            .when(self.page != Page::Settings, |this| {
                 this.child(self.status_bar(cx))
             })
     }
@@ -1963,7 +1962,7 @@ mod tests {
     use std::collections::HashSet;
 
     #[gpui_kit::test]
-    fn config_tab_saves_without_repeating_workflow_fields(cx: &mut TestAppContext) {
+    fn settings_tab_saves_config_without_repeating_workflow_fields(cx: &mut TestAppContext) {
         let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
             gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1983,7 +1982,9 @@ mod tests {
         });
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
-            window.within("pages").click(1usize, cx);
+            window.within("pages").click(3usize, cx);
+            window.render_frame(cx);
+            assert!(window.try_find("service-refresh").is_some());
             window.click("save-config", cx);
             window.within("pages").click(0usize, cx);
             assert!(window.try_find("edit-config").is_some());
