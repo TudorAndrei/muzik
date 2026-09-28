@@ -1,6 +1,8 @@
 Copyright (c) 2026 TudorAndrei
 
-All rights reserved.
+All rights reserved, except for Rust packages that declare a license in their
+Cargo.toml files. Those packages use the declared license.
 
-Exception: The Rust CLI in rust/cli_app is licensed under GPL-3.0-only.
-Its license text is in rust/cli_app/LICENSE.
+The CLI, desktop app, and muzik-workflow crate declare GPL-3.0-only. Each has
+a copy of the license text in its directory. The Apache-2.0 license text for
+the other licensed Rust crates is in rust/LICENSE.

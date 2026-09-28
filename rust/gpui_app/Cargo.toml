@@ -3,7 +3,7 @@ name = "muzik-gpui"
 version = "0.1.0"
 edition = "2021"
 publish = false
-license-file = "../../LICENSE"
+license = "GPL-3.0-only"
 
 [dependencies]
 gpui-kit = "=0.7.0"

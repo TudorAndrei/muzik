@@ -22,6 +22,7 @@ Conventional Commits and selects the next version. The `muzik-release` hook
 sets each Cargo package version and updates `Cargo.lock`. The workflow builds
 the CLI and GPUI app for macOS arm64, macOS x86_64, and Linux x86_64. Each
 archive contains both programs, their license files, and the crate notices.
+Both programs are licensed under GPL-3.0-only.
 
 The two binaries must stay in the same directory so `muzik gui` can find the
 desktop app. The Rust `yt-dlp` crate starts the `yt-dlp` program. Install that

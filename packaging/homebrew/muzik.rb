@@ -4,7 +4,7 @@ class Muzik < Formula
   desc "Download, split, tag, and organize music"
   homepage "https://github.com/TudorAndrei/muzik"
   head "https://github.com/TudorAndrei/muzik.git", branch: "main"
-  license :cannot_represent # The CLI and desktop app have different license files.
+  license "GPL-3.0-only"
 
   depends_on :macos
   depends_on "rust" => :build
