@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.4.1 - 2026-09-29
+#### Bug Fixes
+- (**gui**) make Recent events readable - (4b76349) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.4.0 - (95c2ae5) - TudorAndrei
+
+- - -
+
 ## v2.4.0 - 2026-09-29
 #### Features
 - (**agent**) choose album matches and Soulseek downloads with Codex - (caa8819) - TudorAndrei
