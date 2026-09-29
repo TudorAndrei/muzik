@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.3.1 - 2026-09-29
+#### Bug Fixes
+- (**gui**) clear the playlist field after add and the decision after a job - (649c100) - TudorAndrei
+- (**watchlist**) read every playlist before processing items - (8eff9e9) - TudorAndrei
+
+- - -
+
 ## v2.3.0 - 2026-09-29
 #### Features
 - (**watchlist**) report each save during a refresh - (1f34aab) - TudorAndrei
