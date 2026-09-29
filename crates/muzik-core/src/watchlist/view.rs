@@ -87,7 +87,11 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn availability(item: &Value, action: &str, output: &Path) -> (bool, Option<&'static str>) {
+pub(super) fn availability(
+    item: &Value,
+    action: &str,
+    output: &Path,
+) -> (bool, Option<&'static str>) {
     let video_id = item.get("video_id").and_then(Value::as_str);
     let video_url = item.get("video_url").and_then(Value::as_str);
     if video_id.is_none_or(str::is_empty) || video_url.is_none_or(str::is_empty) {

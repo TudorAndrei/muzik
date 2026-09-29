@@ -5,6 +5,7 @@ use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 
 pub mod jobs;
 mod library_lookup;
@@ -20,7 +21,26 @@ pub struct Repository {
     path: PathBuf,
 }
 
+static WRITER: Mutex<()> = Mutex::new(());
+
 impl Repository {
+    pub fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
+        let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
+        work()
+    }
+
+    pub fn update<T>(
+        &self,
+        change: impl FnOnce(&mut Value) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.locked(|| {
+            let mut document = self.load()?;
+            let result = change(&mut document)?;
+            self.save(document)?;
+            Ok(result)
+        })
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self { path }
     }
@@ -72,6 +92,10 @@ impl Repository {
 
     pub fn add(&self, input: &str) -> Result<Value, String> {
         let source = parse_source(input)?;
+        self.locked(|| self.add_source(source))
+    }
+
+    fn add_source(&self, source: Value) -> Result<Value, String> {
         let mut document = self.load()?;
         let playlists = document
             .get_mut("playlists")
@@ -89,6 +113,10 @@ impl Repository {
     }
 
     pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
+        self.locked(|| self.rename_playlist(playlist_id, title))
+    }
+
+    fn rename_playlist(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
         let mut document = self.load()?;
         let playlists = document
             .get_mut("playlists")
@@ -117,6 +145,10 @@ impl Repository {
     }
 
     pub fn remove(&self, playlist_id: &str) -> Result<bool, String> {
+        self.locked(|| self.remove_playlist(playlist_id))
+    }
+
+    fn remove_playlist(&self, playlist_id: &str) -> Result<bool, String> {
         let mut document = self.load()?;
         let playlists = document
             .get_mut("playlists")

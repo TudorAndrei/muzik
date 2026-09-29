@@ -425,6 +425,127 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
     Ok(())
 }
 
+struct SplitFailure;
+
+impl Operations for SplitFailure {
+    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+        Err(JobError::Operation("unused".into()))
+    }
+
+    fn process(
+        &mut self,
+        _: &Value,
+        _: &Value,
+        _: &str,
+        _: &AtomicBool,
+    ) -> Result<Value, JobError> {
+        Err(JobError::Failed {
+            stage: "split".into(),
+            message: "split failed".into(),
+        })
+    }
+}
+
+#[test]
+fn a_failure_marks_the_stage_that_failed() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let mut saved = repository.load()?;
+    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
+    repository.save(saved)?;
+    let error = jobs::run_item(
+        &repository,
+        options(directory.path()),
+        ItemSelection {
+            playlist_id: "PL123",
+            position: 1,
+            video_id: Some("video_a"),
+            action: "run",
+        },
+        &mut SplitFailure,
+        &AtomicBool::new(false),
+    );
+    assert!(matches!(error, Err(JobError::Failed { .. })));
+    let stages = &repository.load()?["playlists"][0]["items"][0]["stages"];
+    assert_eq!(stages["split"]["status"], "failed");
+    assert_eq!(stages["split"]["error"], "split failed");
+    assert_eq!(stages["download"]["status"], "not_started");
+    Ok(())
+}
+
+#[test]
+fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let mut saved = repository.load()?;
+    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
+    saved["playlists"][0]["items"][0]["stages"]["download"]["status"] = json!("running");
+    repository.save(saved)?;
+    let mut fake = Fake {
+        processed: Vec::new(),
+        cancel_after_first: false,
+    };
+    let synced = jobs::sync(
+        &repository,
+        options(directory.path()),
+        &mut fake,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )?;
+    assert!(fake.processed.is_empty());
+    assert_eq!(
+        synced.pending,
+        [
+            jobs::PendingItem {
+                playlist_id: "PL123".into(),
+                position: 1,
+                video_id: Some("video_a".into()),
+                title: "video_a".into(),
+            },
+            jobs::PendingItem {
+                playlist_id: "PL123".into(),
+                position: 3,
+                video_id: Some("video_b".into()),
+                title: "video_b".into(),
+            },
+        ]
+    );
+    assert_eq!(
+        repository.load()?["playlists"][0]["items"][0]["stages"]["download"]["status"],
+        "running"
+    );
+    Ok(())
+}
+
+#[test]
+fn parallel_updates_keep_every_change() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = std::sync::Arc::new(Repository::new(directory.path().join("watchlist.json")));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let workers: Vec<_> = (0..8)
+        .map(|index| {
+            let repository = std::sync::Arc::clone(&repository);
+            std::thread::spawn(move || {
+                repository.update(|document| {
+                    document["playlists"][0]["processed_video_ids"]
+                        .as_array_mut()
+                        .ok_or("processed IDs are missing")?
+                        .push(json!(format!("video_{index}")));
+                    Ok(())
+                })
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().map_err(|_| "worker panicked")??;
+    }
+    let processed = repository.load()?["playlists"][0]["processed_video_ids"].clone();
+    assert_eq!(processed.as_array().map(Vec::len), Some(8));
+    Ok(())
+}
+
 struct RepeatDownload;
 
 impl Operations for RepeatDownload {
