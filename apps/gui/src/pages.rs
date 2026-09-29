@@ -128,84 +128,79 @@ impl Muzik {
             .iter()
             .filter(|service| service["available"] == false && service["optional"] != true)
             .count();
-        let summary = if services.is_empty() {
-            style::meta(
-                if checking {
-                    "Checking services…"
-                } else {
-                    "No service checks yet."
-                },
-                cx,
-            )
-            .into_any_element()
-        } else if missing == 0 {
-            style::meta("All required services are available.", cx).into_any_element()
-        } else {
-            Alert::warning(
-                "services-missing",
-                format!(
-                    "{missing} required service(s) unavailable. Jobs that need them will fail."
-                ),
-            )
-            .into_any_element()
-        };
         let mut section = GroupBox::new()
             .id("settings-services")
             .title("SERVICES")
             .outline()
-            .child(
+            .child(div().flex().justify_end().child(check));
+        if missing > 0 {
+            section = section.child(Alert::warning(
+                "services-missing",
+                format!(
+                    "{missing} required service(s) unavailable. Jobs that need them will fail."
+                ),
+            ));
+        }
+        if services.is_empty() {
+            return section
+                .child(style::meta(
+                    if checking {
+                        "Checking services…"
+                    } else {
+                        "No service checks yet."
+                    },
+                    cx,
+                ))
+                .into_any_element();
+        }
+        let theme = cx.theme();
+        let mut rows = div().v_flex();
+        for (index, service) in services.iter().enumerate() {
+            let (word, color) = match service["available"].as_bool() {
+                Some(true) => ("Available", theme.muted_foreground),
+                Some(false) if service["optional"] == true => ("Optional", theme.warning),
+                Some(false) => ("Unavailable", theme.danger),
+                None => ("Not set up", theme.muted_foreground),
+            };
+            let dot = match service["available"].as_bool() {
+                Some(true) => theme.success,
+                Some(false) => color,
+                None => theme.border,
+            };
+            rows = rows.child(
                 div()
+                    .id(("service", index))
                     .flex()
                     .items_center()
-                    .justify_between()
                     .gap_3()
-                    .child(div().flex_1().min_w_0().child(summary))
-                    .child(check),
-            );
-        if services.is_empty() {
-            return section.into_any_element();
-        }
-        let mut body = TableBody::new();
-        for service in &services {
-            let status = match service["available"].as_bool() {
-                Some(true) => Tag::success().child("Available"),
-                Some(false) if service["optional"] == true => {
-                    Tag::warning().child("Optional · unavailable")
-                }
-                Some(false) => Tag::danger().child("Unavailable"),
-                None => Tag::secondary().child("Not configured"),
-            };
-            body = body.child(
-                TableRow::new()
+                    .py_2()
+                    .when(index > 0, |row| row.border_t_1().border_color(theme.border))
                     .child(
-                        TableCell::new().child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child(service["name"].as_str().unwrap_or("Service").to_string()),
-                        ),
+                        div()
+                            .w(px(110.))
+                            .flex_none()
+                            .text_sm()
+                            .font_semibold()
+                            .child(service["name"].as_str().unwrap_or("Service").to_string()),
                     )
-                    .child(TableCell::new().child(style::meta(
-                        service["detail"].as_str().unwrap_or("").to_string(),
-                        cx,
-                    )))
-                    .child(TableCell::new().text_right().child(status)),
+                    .child(
+                        style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
+                            .flex_1()
+                            .min_w_0()
+                            .truncate(),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .items_center()
+                            .gap_1p5()
+                            .child(div().size(px(6.)).rounded_full().bg(dot))
+                            .child(div().text_xs().text_color(color).child(word)),
+                    ),
             );
         }
-        section = section.child(
-            Table::new()
-                .accessibility_label("Services")
-                .child(
-                    TableHeader::new().child(
-                        TableRow::new()
-                            .child(TableHead::new().child("Service"))
-                            .child(TableHead::new().child("Detail"))
-                            .child(TableHead::new().text_right().child("Status")),
-                    ),
-                )
-                .child(body),
-        );
-        section.into_any_element()
+        section.child(rows).into_any_element()
     }
 
     pub(crate) fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {

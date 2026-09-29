@@ -1,5 +1,3 @@
-//! Service checks used by the native Settings page.
-
 use muzik_core::app_config;
 use muzik_soulseek::session::{Session, SessionSettings};
 use serde::Serialize;
@@ -45,11 +43,7 @@ fn check_binary(
             ServiceStatus {
                 name,
                 available: Some(output.status.success()),
-                detail: if first_line.is_empty() {
-                    executable.to_owned()
-                } else {
-                    first_line
-                },
+                detail: version(&first_line).unwrap_or(first_line),
                 optional,
             }
         }
@@ -57,7 +51,7 @@ fn check_binary(
             name,
             available: Some(false),
             detail: if error.kind() == std::io::ErrorKind::NotFound {
-                format!("Not found on PATH (install {executable}).")
+                format!("Not installed. Install {executable}.")
             } else {
                 format!("Cannot run {executable}: {error}")
             },
@@ -66,13 +60,25 @@ fn check_binary(
     }
 }
 
+fn version(line: &str) -> Option<String> {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    let after_version = words
+        .iter()
+        .position(|word| word.eq_ignore_ascii_case("version"))
+        .and_then(|index| words.get(index + 1));
+    after_version
+        .or_else(|| words.last())
+        .filter(|word| word.chars().any(|character| character.is_ascii_digit()))
+        .map(|word| (*word).to_owned())
+}
+
 fn check_soulseek() -> ServiceStatus {
     let config = app_config::load(&app_config::path()).unwrap_or(Value::Null);
     let Some(settings) = SessionSettings::configured(&config) else {
         return ServiceStatus {
             name: "Soulseek",
             available: None,
-            detail: "Not configured (set Soulseek username and password).".into(),
+            detail: "Add your account in the Soulseek section.".into(),
             optional: true,
         };
     };
@@ -85,13 +91,13 @@ fn check_soulseek() -> ServiceStatus {
         Ok(_session) => ServiceStatus {
             name: "Soulseek",
             available: Some(true),
-            detail: format!("Connected: {host}:{port}"),
+            detail: format!("{host}:{port}"),
             optional: true,
         },
         Err(error) => ServiceStatus {
             name: "Soulseek",
             available: Some(false),
-            detail: format!("Unreachable: {error}"),
+            detail: format!("Cannot connect: {error}"),
             optional: true,
         },
     }
@@ -99,7 +105,7 @@ fn check_soulseek() -> ServiceStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::check_binary;
+    use super::{check_binary, version};
 
     #[test]
     fn missing_command_is_unavailable() {
@@ -111,6 +117,17 @@ mod tests {
         );
         assert_eq!(status.available, Some(false));
         assert!(status.optional);
-        assert!(status.detail.contains("Not found"));
+        assert!(status.detail.contains("Not installed"));
+    }
+
+    #[test]
+    fn detail_keeps_only_the_version() {
+        assert_eq!(
+            version("ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"),
+            Some("9.0.2".into())
+        );
+        assert_eq!(version("bandsnatch 0.3.3"), Some("0.3.3".into()));
+        assert_eq!(version("2026.08.19"), Some("2026.08.19".into()));
+        assert_eq!(version("usage: tool"), None);
     }
 }
