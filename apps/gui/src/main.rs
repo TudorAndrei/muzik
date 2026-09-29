@@ -1456,10 +1456,7 @@ impl Muzik {
             if let Some(note) = choices::agent_note(&decision["payload"]["agent"]) {
                 review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
             }
-            let suggested = decision["payload"]["agent"]["suggestion"]
-                .as_u64()
-                .and_then(|index| usize::try_from(index).ok())
-                .or((kind != Some(DecisionKind::ChapterEdit)).then_some(0));
+            let suggested = choices::suggestion(decision);
             let mut buttons = div().v_flex().gap_1p5();
             for (index, option) in choices::choices(decision).into_iter().enumerate() {
                 let value = option.value.clone();
@@ -2274,24 +2271,7 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
         Some(score) if score >= 60 => theme.warning,
         _ => theme.muted_foreground,
     };
-    let mut label = div().flex().items_center().gap_2().child(
-        div()
-            .flex_1()
-            .min_w_0()
-            .text_sm()
-            .font_semibold()
-            .truncate()
-            .child(option.label.clone()),
-    );
-    if highlight {
-        label = label.child(
-            div()
-                .flex_none()
-                .text_xs()
-                .text_color(theme.primary)
-                .child("Suggested"),
-        );
-    }
+    let label = div().text_sm().font_semibold().child(option.label.clone());
     let mut row = div()
         .id(("decision", index))
         .flex()
@@ -2314,9 +2294,18 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
                 .flex_1()
                 .min_w_0()
                 .gap_0p5()
+                .when(highlight, |column| {
+                    column.child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(theme.primary)
+                            .child("SUGGESTED"),
+                    )
+                })
                 .child(label)
                 .when(!option.meta.is_empty(), |column| {
-                    column.child(style::meta(option.meta.clone(), cx).truncate())
+                    column.child(style::meta(option.meta.clone(), cx))
                 }),
         );
     if let Some(score) = option.score {

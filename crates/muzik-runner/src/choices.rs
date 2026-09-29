@@ -56,14 +56,23 @@ pub fn agent_note(agent: &Value) -> Option<String> {
     }
     let reason = agent["reason"].as_str()?;
     let confidence = (agent["confidence"].as_f64().unwrap_or(0.0) * 100.0).round();
-    Some(format!("{model} is not sure ({confidence}%): {reason}"))
+    Some(match agent["suggestion"].as_u64() {
+        Some(index) => format!(
+            "{model} suggests option {} but is only {confidence}% sure. {reason}",
+            index + 1
+        ),
+        None => format!("{model} found no good match. {reason}"),
+    })
 }
 
 pub fn suggestion(question: &Value) -> Option<usize> {
-    question["payload"]["agent"]["suggestion"]
-        .as_u64()
-        .and_then(|index| usize::try_from(index).ok())
-        .or((kind(question) != Some(DecisionKind::ChapterEdit)).then_some(0))
+    let agent = &question["payload"]["agent"];
+    if agent.is_object() {
+        return agent["suggestion"]
+            .as_u64()
+            .and_then(|index| usize::try_from(index).ok());
+    }
+    (kind(question) != Some(DecisionKind::ChapterEdit)).then_some(0)
 }
 
 pub fn details(question: &Value) -> Vec<String> {
@@ -285,8 +294,26 @@ fn fact(value: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{choices, details};
+    use super::{agent_note, choices, details, suggestion};
     use serde_json::json;
+
+    #[test]
+    fn a_model_that_finds_no_match_suggests_nothing() {
+        let unsure = json!({"model":"gpt","suggestion":null,"confidence":0.98,"reason":"No release has that title."});
+        let question = json!({"kind":"import_match","payload":{"task":{"matches":[{"candidate_id":"release:1"}]},"agent":unsure}});
+        assert_eq!(suggestion(&question), None);
+        assert_eq!(
+            agent_note(&unsure).as_deref(),
+            Some("gpt found no good match. No release has that title.")
+        );
+        let partial = json!({"model":"gpt","suggestion":1,"confidence":0.4,"reason":"Maybe."});
+        assert_eq!(
+            agent_note(&partial).as_deref(),
+            Some("gpt suggests option 2 but is only 40% sure. Maybe.")
+        );
+        let plain = json!({"kind":"import_match","payload":{"task":{"matches":[]}}});
+        assert_eq!(suggestion(&plain), Some(0));
+    }
 
     #[test]
     fn soulseek_review_shows_candidate_quality_and_selects_its_index() {
