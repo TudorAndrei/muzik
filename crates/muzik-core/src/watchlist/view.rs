@@ -48,6 +48,8 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
         "Unavailable"
     } else if statuses.contains(&"running") {
         "Processing"
+    } else if statuses.contains(&"waiting") {
+        "Waiting"
     } else if statuses.contains(&"failed") {
         "Failed"
     } else if statuses
@@ -58,7 +60,7 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
     } else {
         "Pending"
     };
-    let primary = if !available || summary == "Processed" {
+    let primary = if !available || matches!(summary, "Processed" | "Waiting") {
         Value::Null
     } else if statuses.contains(&"failed") {
         json!({"action": "retry", "label": "Retry"})

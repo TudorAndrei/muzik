@@ -112,6 +112,87 @@ fn refresh_keeps_prior_state_and_processes_each_video_once(
     Ok(())
 }
 
+struct AsksOnFirst {
+    processed: Vec<String>,
+}
+
+impl Operations for AsksOnFirst {
+    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+        Ok(LoadedSource {
+            title: None,
+            items: vec![card(1, "video_a"), card(2, "video_b")],
+        })
+    }
+
+    fn process(
+        &mut self,
+        _: &Value,
+        item: &Value,
+        _: &str,
+        _: &AtomicBool,
+    ) -> Result<Value, JobError> {
+        let id = item["video_id"].as_str().unwrap_or("").to_owned();
+        self.processed.push(id.clone());
+        if id == "video_a" {
+            return Err(JobError::Waiting {
+                stage: "organize".into(),
+                question: json!({"kind": "import_match", "payload": {"task": {}}}),
+            });
+        }
+        let mut updated = item.clone();
+        for stage in ["download", "parse", "organize"] {
+            updated["stages"][stage]["status"] = json!("complete");
+        }
+        for stage in ["quality", "split"] {
+            updated["stages"][stage]["status"] = json!("skipped");
+        }
+        Ok(updated)
+    }
+}
+
+#[test]
+fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let mut fake = AsksOnFirst {
+        processed: Vec::new(),
+    };
+    let cancelled = AtomicBool::new(false);
+    let result = jobs::refresh(
+        &repository,
+        options(directory.path()),
+        &mut fake,
+        &cancelled,
+        &mut |_| {},
+    )?;
+    assert_eq!(fake.processed, ["video_a", "video_b"]);
+    assert_eq!(result["summary"]["waiting_videos"], 1);
+    assert_eq!(result["summary"]["failed_videos"], 0);
+    let saved = repository.load()?;
+    let waiting = &saved["playlists"][0]["items"][0]["stages"]["organize"];
+    assert_eq!(waiting["status"], "waiting");
+    assert_eq!(waiting["question"]["kind"], "import_match");
+    assert_eq!(
+        result["watchlist"]["playlists"][0]["items"][0]["summary"],
+        "Waiting"
+    );
+    fake.processed.clear();
+    jobs::refresh(
+        &repository,
+        options(directory.path()),
+        &mut fake,
+        &cancelled,
+        &mut |_| {},
+    )?;
+    assert!(fake.processed.is_empty());
+    assert_eq!(
+        repository.load()?["playlists"][0]["items"][0]["stages"]["organize"]["status"],
+        "waiting"
+    );
+    Ok(())
+}
+
 struct CallLog(Vec<String>);
 
 impl Operations for CallLog {
@@ -182,6 +263,35 @@ impl Operations for ActionFailure {
     ) -> Result<Value, JobError> {
         Err(JobError::Operation("download failed".into()))
     }
+}
+
+#[test]
+fn an_action_that_needs_a_choice_parks_the_item() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let mut saved = repository.load()?;
+    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
+    repository.save(saved)?;
+    let result = jobs::action(
+        &repository,
+        options(directory.path()),
+        ItemSelection {
+            playlist_id: "PL123",
+            position: 1,
+            video_id: Some("video_a"),
+            action: "run",
+        },
+        &mut AsksOnFirst {
+            processed: Vec::new(),
+        },
+        &AtomicBool::new(false),
+    )?;
+    assert_eq!(result["action"]["waiting_stage"], "organize");
+    let stage = &repository.load()?["playlists"][0]["items"][0]["stages"]["organize"];
+    assert_eq!(stage["status"], "waiting");
+    assert_eq!(stage["question"]["kind"], "import_match");
+    Ok(())
 }
 
 #[test]

@@ -79,6 +79,12 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
                     stage["status"] = json!("not_started");
                 }
             }
+            if item["stages"]
+                .as_object()
+                .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "waiting"))
+            {
+                continue;
+            }
             // Explicit repeat actions invalidate later stages. Older cache records
             // must not turn these stages back into completed work.
             if item["stages"]

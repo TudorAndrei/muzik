@@ -13,6 +13,8 @@ pub enum JobError {
     Cancelled,
     #[error("{0}")]
     Operation(String),
+    #[error("waiting for a choice in the {stage} stage")]
+    Waiting { stage: String, question: Value },
 }
 
 impl From<String> for JobError {
@@ -76,6 +78,7 @@ pub fn refresh(
     let mut pending = 0;
     let mut completed = 0;
     let mut failed = 0;
+    let mut waiting = 0;
     let mut errors = 0;
     let mut loaded_playlists = Vec::new();
     for index in 0..count {
@@ -166,6 +169,22 @@ pub fn refresh(
                     completed += 1;
                 }
                 Err(JobError::Cancelled) => return Err(JobError::Cancelled),
+                Err(JobError::Waiting { stage, question }) => {
+                    if let Some(items) = document["playlists"][index]["items"].as_array_mut() {
+                        for card in items
+                            .iter_mut()
+                            .filter(|card| item_key(card) == Some(key.as_str()))
+                        {
+                            mark_waiting(card, &stage, "refresh", &question);
+                        }
+                    }
+                    waiting += 1;
+                    emit(
+                        on_event,
+                        "item_waiting",
+                        json!({"playlist_id":id, "item_key":key, "stage":stage, "question":question}),
+                    );
+                }
                 Err(error) => {
                     if let Some(items) = document["playlists"][index]["items"].as_array_mut() {
                         for card in items
@@ -193,7 +212,7 @@ pub fn refresh(
         "progress_finished",
         json!({"task_id":"watchlist-refresh", "success":failed == 0 && errors == 0}),
     );
-    let summary = json!({"playlists_checked":count, "pending_videos":pending, "completed_videos":completed, "failed_videos":failed, "playlist_errors":errors});
+    let summary = json!({"playlists_checked":count, "pending_videos":pending, "completed_videos":completed, "failed_videos":failed, "waiting_videos":waiting, "playlist_errors":errors});
     Ok(json!({"summary":summary, "watchlist":view(document, options.output, options.cache)?}))
 }
 
@@ -321,6 +340,18 @@ pub fn action(
                 json!({"action":{"action":action,"completed_stage":stage}, "watchlist":view(document, options.output, options.cache)?}),
             )
         }
+        Err(JobError::Waiting {
+            stage: waiting_stage,
+            question,
+        }) => {
+            let target = &mut document["playlists"][playlist_index]["items"][item_index];
+            *target = item;
+            mark_waiting(target, &waiting_stage, action, &question);
+            save(repository, &document, options.dry_run)?;
+            Ok(
+                json!({"action":{"action":action,"waiting_stage":waiting_stage}, "watchlist":view(document, options.output, options.cache)?}),
+            )
+        }
         Err(error) => {
             let target = &mut document["playlists"][playlist_index]["items"][item_index];
             *target = item;
@@ -386,6 +417,7 @@ fn pending_ids(playlist: &Value) -> Vec<String> {
         .as_array()
         .into_iter()
         .flatten()
+        .filter(|item| !is_waiting(item))
         .filter_map(item_key)
         .filter(|key| !processed.contains(*key) && seen.insert((*key).to_owned()))
         .map(str::to_owned)
@@ -415,6 +447,18 @@ fn all_done(item: &Value) -> bool {
             .values()
             .all(|stage| matches!(stage["status"].as_str(), Some("complete" | "skipped")))
     })
+}
+
+fn is_waiting(item: &Value) -> bool {
+    item["stages"]
+        .as_object()
+        .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "waiting"))
+}
+
+fn mark_waiting(item: &mut Value, stage: &str, action: &str, question: &Value) {
+    item["last_action"] = json!(action);
+    item["last_error"] = Value::Null;
+    item["stages"][stage] = json!({"status":"waiting", "updated_at":now(), "path":item["stages"][stage]["path"].clone(), "question":question});
 }
 
 fn mark_failed(item: &mut Value, stage: &str, action: &str, message: &str) {

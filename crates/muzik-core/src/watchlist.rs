@@ -223,7 +223,7 @@ fn normalize_stage(value: &mut Value) -> Result<(), String> {
         .or_insert_with(|| json!("not_started"));
     if !matches!(
         status.as_str(),
-        Some("not_started" | "running" | "complete" | "failed" | "skipped" | "stale")
+        Some("not_started" | "running" | "complete" | "failed" | "skipped" | "stale" | "waiting")
     ) {
         return Err("unknown stage status".into());
     }
