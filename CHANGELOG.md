@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.7.0 - 2026-09-29
+#### Features
+- (**watchlist**) skip private and removed YouTube videos - (3b10710) - TudorAndrei
+#### Bug Fixes
+- (**split**) reuse a complete earlier split and remove the CLI flag from the app message - (93c216d) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.6.0 - (02e8967) - TudorAndrei
+
+- - -
+
 ## v2.6.0 - 2026-09-29
 #### Features
 - skip albums already in the library unless the duplicates setting says otherwise - (d396305) - TudorAndrei
