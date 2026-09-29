@@ -172,6 +172,10 @@ impl SourceKind {
     }
 }
 
+pub fn is_unavailable(item: &Value) -> bool {
+    item["unavailable"] == true || item["video_id"].as_str().is_none_or(str::is_empty)
+}
+
 pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
     item["stages"][stage.as_ref()]["status"]
         .as_str()?
@@ -408,6 +412,12 @@ fn normalize_item(value: &mut Value) -> Result<(), String> {
         optional_string(item, key)?;
     }
     kind(item)?;
+    if item
+        .get("unavailable")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        return Err("unavailable must be a boolean".into());
+    }
     let track = item.entry("track").or_insert(Value::Null);
     if !track.is_null() && !track.is_object() {
         return Err("track must be an object or null".into());

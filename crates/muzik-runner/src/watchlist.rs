@@ -832,9 +832,11 @@ fn youtube_items(playlist: &Value, source: &Value) -> LoadedSource {
         let id = entry["id"].as_str().or_else(|| entry["url"].as_str())?;
         if id.len() != 11 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) { return None; }
         let saved = old.get(id).copied();
-        let title = entry["title"].as_str().filter(|title| !title.is_empty()).or_else(|| saved.and_then(|item| item["title"].as_str())).unwrap_or(id);
+        let listed_title = entry["title"].as_str().filter(|title| !title.is_empty() && !(title.starts_with('[') && title.ends_with(" video]")));
+        let unavailable = listed_title.is_none() && entry["duration"].is_null();
+        let title = listed_title.or_else(|| saved.and_then(|item| item["title"].as_str())).unwrap_or(id);
         let thumbnail = entry["thumbnail"].as_str().or_else(|| entry["thumbnails"].as_array().and_then(|images| images.last()).and_then(|image| image["url"].as_str())).map(str::to_owned).or_else(|| saved.and_then(|item| item["thumbnail_url"].as_str()).map(str::to_owned));
-        Some(json!({"position":index + 1,"title":title,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"thumbnail_url":thumbnail,"kind":SourceKind::Youtube}))
+        Some(json!({"position":index + 1,"title":title,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"thumbnail_url":thumbnail,"kind":SourceKind::Youtube,"unavailable":unavailable}))
     }).collect();
     LoadedSource {
         title: source["title"]
@@ -1119,6 +1121,25 @@ mod tests {
             loaded.items[0]["thumbnail_url"],
             "https://example.test/image.jpg"
         );
+    }
+
+    #[test]
+    fn a_private_video_without_title_and_duration_is_unavailable() {
+        let loaded = youtube_items(
+            &json!({"items":[]}),
+            &json!({"entries":[
+                {"id":"abcdefghijk","title":null,"duration":null},
+                {"id":"bcdefghijkl","title":"[Private video]","duration":null},
+                {"id":"cdefghijklm","title":"Song","duration":245.0}
+            ]}),
+        );
+        let flags: Vec<_> = loaded
+            .items
+            .iter()
+            .map(|item| item["unavailable"].clone())
+            .collect();
+        assert_eq!(flags, [json!(true), json!(true), json!(false)]);
+        assert_eq!(loaded.items[1]["title"], "bcdefghijkl");
     }
 
     #[test]

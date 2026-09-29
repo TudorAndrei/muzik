@@ -2,8 +2,8 @@
 
 use super::view::availability;
 use super::{
-    reconcile, stage_status, stage_statuses, view, ItemAction, ReconcileOptions, Repository,
-    SourceKind, Stage, StageStatus,
+    is_unavailable, reconcile, stage_status, stage_statuses, view, ItemAction, ReconcileOptions,
+    Repository, SourceKind, Stage, StageStatus,
 };
 use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
@@ -512,7 +512,7 @@ fn pending_ids(playlist: &Value) -> Vec<String> {
         .as_array()
         .into_iter()
         .flatten()
-        .filter(|item| !is_waiting(item))
+        .filter(|item| !is_waiting(item) && !is_unavailable(item))
         .filter_map(item_key)
         .filter(|key| !processed.contains(*key) && seen.insert((*key).to_owned()))
         .map(str::to_owned)

@@ -1,4 +1,6 @@
-use super::{normalize, stage_statuses, ItemAction, SourceKind, Stage, StageStatus};
+use super::{
+    is_unavailable, normalize, stage_statuses, ItemAction, SourceKind, Stage, StageStatus,
+};
 use crate::chapters;
 use crate::thumbnails;
 use serde::{Deserialize, Serialize};
@@ -53,10 +55,7 @@ pub fn view(document: Value, output: &Path, cache: &Path) -> Result<Value, Strin
 }
 
 fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
-    let available = item
-        .get("video_id")
-        .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty());
+    let available = !is_unavailable(item);
     item["stages"]
         .as_object()
         .ok_or("item stages are missing")?;
@@ -109,6 +108,9 @@ pub(super) fn availability(
     action: ItemAction,
     output: &Path,
 ) -> (bool, Option<&'static str>) {
+    if item["unavailable"] == true {
+        return (false, Some("This video is private or was removed."));
+    }
     let video_id = item.get("video_id").and_then(Value::as_str);
     let video_url = item.get("video_url").and_then(Value::as_str);
     if video_id.is_none_or(str::is_empty) || video_url.is_none_or(str::is_empty) {

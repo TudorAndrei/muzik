@@ -520,6 +520,59 @@ fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std
     Ok(())
 }
 
+struct PrivateSecond;
+
+impl Operations for PrivateSecond {
+    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+        let mut private = card(2, "video_b");
+        private["unavailable"] = json!(true);
+        Ok(LoadedSource {
+            title: None,
+            items: vec![card(1, "video_a"), private],
+        })
+    }
+
+    fn process(
+        &mut self,
+        _: &Value,
+        _: &Value,
+        _: ItemAction,
+        _: &AtomicBool,
+    ) -> Result<Value, JobError> {
+        Err(JobError::Operation("unused".into()))
+    }
+}
+
+#[test]
+fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let synced = jobs::sync(
+        &repository,
+        options(directory.path()),
+        &mut PrivateSecond,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )?;
+    assert_eq!(
+        synced
+            .pending
+            .iter()
+            .map(|item| item.position)
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    let visible =
+        muzik_core::watchlist::view(repository.load()?, directory.path(), directory.path())?;
+    let private = &visible["playlists"][0]["items"][1];
+    assert_eq!(private["summary"], "Unavailable");
+    assert_eq!(private["primary_action"], Value::Null);
+    assert_eq!(private["actions"]["retry"]["enabled"], false);
+    Ok(())
+}
+
 #[test]
 fn parallel_updates_keep_every_change() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
