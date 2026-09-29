@@ -22,7 +22,6 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::tag::Tag;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -327,6 +326,7 @@ impl Muzik {
             let status = self.config_status.clone();
             self.config_view =
                 Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
+            self.send("soulseek.get", json!({}));
         }
         self.page = Page::Settings;
         self.error = None;
@@ -610,7 +610,7 @@ impl Muzik {
                         .unwrap_or("Request failed")
                         .into();
                     self.error = Some(self.status.clone());
-                    if command == "config.save" {
+                    if matches!(command.as_str(), "config.save" | "soulseek.save") {
                         *self.config_status.borrow_mut() = self.status.clone();
                     }
                     if self.job_kind.as_deref() == Some(command.as_str()) {
@@ -645,6 +645,16 @@ impl Muzik {
                     "services.check" => {
                         self.services = result.clone();
                         self.status = "Services checked".into();
+                    }
+                    "soulseek.get" | "soulseek.save" => {
+                        if let Some(view) = self.config_view.clone() {
+                            view.update(_cx, |view, cx| view.set_soulseek(result, window, cx));
+                        }
+                        if command == "soulseek.save" {
+                            *self.config_status.borrow_mut() =
+                                "Config and Soulseek account saved".into();
+                            self.send("services.check", json!({}));
+                        }
                     }
                     "spotify.status"
                     | "spotify.set_client_id"
@@ -1235,7 +1245,16 @@ struct ConfigView {
     fields: Vec<Field>,
     choices: Vec<Choice>,
     switches: Vec<ConfigSwitch>,
+    soulseek: SoulseekFields,
     status: Rc<RefCell<String>>,
+}
+
+struct SoulseekFields {
+    username: Entity<InputState>,
+    password: Entity<InputState>,
+    host: Entity<InputState>,
+    port: Entity<InputState>,
+    has_password: bool,
 }
 
 impl ConfigView {
@@ -1324,13 +1343,73 @@ impl ConfigView {
                 enabled: defaults[*key].as_bool().unwrap_or(*initial),
             })
             .collect();
+        let soulseek = SoulseekFields {
+            username: cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
+            password: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Password")
+                    .masked(true)
+            }),
+            host: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("server.slsknet.org")
+                    .default_value("server.slsknet.org")
+            }),
+            port: cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("2416")
+                    .default_value("2416")
+                    .step(1.)
+                    .min(1.)
+                    .max(65535.)
+            }),
+            has_password: false,
+        };
         Self {
             main: main.downgrade(),
             fields,
             choices,
             switches,
+            soulseek,
             status,
         }
+    }
+
+    fn set_soulseek(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        let text = |key: &str| describe(&settings[key]);
+        for (state, value) in [
+            (&self.soulseek.username, text("username")),
+            (&self.soulseek.host, text("server_host")),
+            (&self.soulseek.port, text("server_port")),
+        ] {
+            if !value.is_empty() {
+                state.update(cx, |state, cx| state.set_value(value, window, cx));
+            }
+        }
+        self.soulseek.has_password = settings["has_password"] == true;
+        let placeholder = if self.soulseek.has_password {
+            "Saved. Type a new one to change it."
+        } else {
+            "Password"
+        };
+        self.soulseek.password.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            state.set_placeholder(placeholder, window, cx);
+        });
+        cx.notify();
+    }
+
+    fn soulseek_params(&self, cx: &App) -> Option<Value> {
+        let username = self.soulseek.username.read(cx).value().trim().to_string();
+        if username.is_empty() {
+            return None;
+        }
+        Some(json!({
+            "username": username,
+            "password": self.soulseek.password.read(cx).value().to_string(),
+            "server_host": self.soulseek.host.read(cx).value().trim().to_string(),
+            "server_port": self.soulseek.port.read(cx).value().trim().to_string(),
+        }))
     }
 
     fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1378,10 +1457,14 @@ impl ConfigView {
         for switch in &self.switches {
             params.insert(switch.key.into(), json!(switch.enabled));
         }
+        let soulseek = self.soulseek_params(cx);
         if let Some(main) = self.main.upgrade() {
             main.update(cx, |main, cx| {
                 main.error = None;
                 main.send("config.save", Value::Object(params));
+                if let Some(soulseek) = soulseek {
+                    main.send("soulseek.save", soulseek);
+                }
                 cx.notify();
             });
         }
@@ -1491,6 +1574,32 @@ impl Render for ConfigView {
                                 .title("SOURCES AND QUALITY")
                                 .outline()
                                 .child(choices),
+                        )
+                        .child(
+                            GroupBox::new()
+                                .id("config-soulseek")
+                                .title("SOULSEEK")
+                                .outline()
+                                .child(style::meta(
+                                    "Your Soulseek account. Workflow uses it when Audio source is soulseek or as a fallback.",
+                                    cx,
+                                ))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap_4()
+                                        .child(labeled("Username", 240., Input::new(&self.soulseek.username)))
+                                        .child(labeled("Password", 240., Input::new(&self.soulseek.password))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_wrap()
+                                        .gap_4()
+                                        .child(labeled("Server", 240., Input::new(&self.soulseek.host)))
+                                        .child(labeled("Port", 140., NumberInput::new(&self.soulseek.port))),
+                                ),
                         )
                         .child(
                             GroupBox::new()
@@ -1626,6 +1735,15 @@ fn import_match_summary(candidate: &Value) -> String {
         Some(distance) => format!("{artist} — {album} · difference {distance:.3}"),
         None => format!("{artist} — {album}"),
     }
+}
+
+fn labeled(label: &'static str, width: f32, control: impl IntoElement) -> Div {
+    div()
+        .v_flex()
+        .gap_1()
+        .w(px(width))
+        .child(div().text_sm().font_semibold().child(label))
+        .child(control)
 }
 
 fn job_label(kind: Option<&str>) -> &'static str {
