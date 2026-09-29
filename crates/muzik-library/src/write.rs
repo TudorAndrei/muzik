@@ -23,10 +23,10 @@ impl Library {
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )?;
+        crate::register_functions(&connection)?;
         connection.execute_batch("BEGIN IMMEDIATE")?;
         connection.execute_batch(include_str!("schema.sql"))?;
         connection.execute_batch("COMMIT")?;
-        crate::register_functions(&connection)?;
         Ok(Self {
             connection,
             path: path.to_path_buf(),

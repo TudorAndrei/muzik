@@ -7,6 +7,7 @@ const FLAGS: FunctionFlags = FunctionFlags::SQLITE_UTF8.union(FunctionFlags::SQL
 
 /// Register the three scalar functions used by beets query SQL.
 pub fn register_functions(connection: &Connection) -> Result<(), Error> {
+    connection.busy_timeout(std::time::Duration::from_secs(30))?;
     connection.create_scalar_function("regexp", 2, FLAGS, |ctx| {
         let value = as_text(ctx, 0)?;
         let pattern = ctx.get::<String>(1)?;
