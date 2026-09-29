@@ -718,6 +718,10 @@ impl Muzik {
                     "job.event" => {
                         let kind = data["event"].as_str().unwrap_or("Update");
                         let payload = &data["data"];
+                        if kind == "watchlist_saved" {
+                            self.send("watchlist.load", self.launcher_params(_cx));
+                            return;
+                        }
                         self.record_job_event(kind, payload);
                         if self.logs.len() > 300 {
                             self.logs.drain(..100);
@@ -1129,23 +1133,62 @@ impl Muzik {
             );
         }
         if let Some(decision) = &self.decision {
+            let kind = decision["kind"].as_str().unwrap_or("");
             let mut review = div()
+                .id("decision")
                 .v_flex()
-                .gap_2()
-                .max_h(px(440.))
-                .overflow_y_scrollbar()
-                .child(div().font_semibold().child(format!(
-                    "Choose: {}",
-                    decision["kind"].as_str().unwrap_or("decision")
-                )));
-            for detail in decision_details(decision) {
-                review = review.child(div().text_sm().child(detail));
+                .gap_3()
+                .p_3()
+                .rounded_md()
+                .border_1()
+                .border_color(cx.theme().warning)
+                .bg(cx.theme().background)
+                .child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .child(style::overline("DECISION NEEDED", cx))
+                        .child(div().text_sm().font_semibold().child(decision_title(kind))),
+                );
+            if let Some(note) = decision_note(decision) {
+                review = review.child(style::meta(note, cx));
             }
+            let mut buttons = div().v_flex().gap_1p5();
             for (index, (label, value)) in decision_choices(decision).into_iter().enumerate() {
-                review =
-                    review.child(Button::new(("decision", index)).label(label).on_click(
-                        cx.listener(move |view, _, _, cx| view.reply(value.clone(), cx)),
-                    ));
+                let button = Button::new(("decision", index))
+                    .label(label)
+                    .w_full()
+                    .on_click(cx.listener(move |view, _, _, cx| view.reply(value.clone(), cx)));
+                buttons = buttons.child(if index == 0 && kind != "chapter_edit" {
+                    button.primary()
+                } else {
+                    button
+                });
+            }
+            review = review.child(buttons);
+            let details = decision_details(decision);
+            if !details.is_empty() {
+                let mut list = div()
+                    .v_flex()
+                    .gap_1()
+                    .max_h(px(160.))
+                    .overflow_y_scrollbar();
+                for detail in details.iter().take(6) {
+                    list = list.child(style::meta(short_detail(detail), cx));
+                }
+                if details.len() > 6 {
+                    list = list.child(style::meta(format!("{} more", details.len() - 6), cx));
+                }
+                review = review.child(
+                    div()
+                        .v_flex()
+                        .gap_1()
+                        .pt_2()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .child(style::overline("DETAILS", cx))
+                        .child(list),
+                );
             }
             if decision["kind"] == "chapter_edit" {
                 let mut rows = div().v_flex().gap_2().max_h(px(300.));
@@ -1907,6 +1950,43 @@ fn decision_details(decision: &Value) -> Vec<String> {
     }
 }
 
+fn decision_title(kind: &str) -> &'static str {
+    match kind {
+        "soulseek_candidate" => "Choose a Soulseek download",
+        "chapter_review" => "Check the chapters",
+        "chapter_edit" => "Edit the chapters",
+        "quality_replacement" => "Replace the file with a better one?",
+        "import_match" => "Choose the album tags",
+        "import_duplicate" => "This album is already in the library",
+        _ => "Choose an option",
+    }
+}
+
+fn decision_note(decision: &Value) -> Option<&'static str> {
+    let matches = decision["payload"]["task"]["matches"]
+        .as_array()
+        .map_or(0, Vec::len);
+    match decision["kind"].as_str() {
+        Some("import_match") if matches == 0 => {
+            Some("No online release matches these files. Keep the current tags, or skip the album.")
+        }
+        Some("import_match") => Some("Pick the release that matches these files."),
+        Some("soulseek_candidate") => Some("The best match is first."),
+        _ => None,
+    }
+}
+
+fn short_detail(detail: &str) -> String {
+    if detail.starts_with('/') {
+        std::path::Path::new(detail).file_name().map_or_else(
+            || detail.to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+    } else {
+        detail.to_owned()
+    }
+}
+
 fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
     let payload = &decision["payload"];
     match decision["kind"].as_str().unwrap_or("") {
@@ -1933,10 +2013,14 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             choices.push(("Skip these candidates".into(), Value::Null));
             choices
         }
-        "chapter_review" => ["accept", "edit", "reject"]
-            .into_iter()
-            .map(|value| (value.to_string(), json!(value)))
-            .collect(),
+        "chapter_review" => [
+            ("Use these chapters", "accept"),
+            ("Edit the chapters", "edit"),
+            ("Do not split", "reject"),
+        ]
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), json!(value)))
+        .collect(),
         "chapter_edit" => vec![
             ("Keep original chapters".into(), payload["chapters"].clone()),
             ("Cancel chapter edit".into(), Value::Null),
@@ -1973,10 +2057,14 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
             choices.push(("Skip".into(), Value::Null));
             choices
         }
-        "import_duplicate" => ["skip", "keep_all", "remove_old"]
-            .into_iter()
-            .map(|value| (value.replace('_', " "), json!(value)))
-            .collect(),
+        "import_duplicate" => [
+            ("Skip the new files", "skip"),
+            ("Keep both", "keep_all"),
+            ("Replace the old files", "remove_old"),
+        ]
+        .into_iter()
+        .map(|(label, value)| (label.to_string(), json!(value)))
+        .collect(),
         _ => Vec::new(),
     }
 }
