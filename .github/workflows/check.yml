@@ -31,13 +31,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Install GPUI Linux libraries
-        uses: awalsh128/cache-apt-pkgs-action@v1
-        with:
-          packages: >-
-            gcc g++ clang ffmpeg libfontconfig-dev libwayland-dev
-            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc g++ clang ffmpeg libfontconfig-dev libwayland-dev \
+            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
-          version: 1
       - uses: jdx/mise-action@v4
       - uses: Swatinem/rust-cache@v2
         with:
