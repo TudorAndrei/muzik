@@ -27,11 +27,15 @@ description = "Build the Rust CLI and desktop app"
 run = "cargo build --locked -p muzik-cli -p muzik-gpui"
 
 [tasks.check]
-description = "Run the complete locked verification gate"
+description = "Run format, Clippy, tests, and license checks"
 run = """
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
-cargo build --workspace --release --locked
 cargo deny check licenses
 """
+
+[tasks.check-release]
+description = "Run the complete locked verification gate with the release build"
+depends = ["check"]
+run = "cargo build --workspace --release --locked"

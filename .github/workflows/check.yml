@@ -7,6 +7,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   commits:
     runs-on: ubuntu-latest
@@ -27,12 +31,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Install GPUI Linux libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc g++ clang ffmpeg libfontconfig-dev libwayland-dev \
-            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: >-
+            gcc g++ clang ffmpeg libfontconfig-dev libwayland-dev
+            libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev
             libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
+          version: 1
       - uses: jdx/mise-action@v4
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: mise run check
 
   gpui-macos:
@@ -44,6 +54,9 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust hk
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-bin: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --manifest-path apps/gui/Cargo.toml --locked
-      - run: cargo build --manifest-path apps/gui/Cargo.toml --locked
-      - run: target/debug/muzik-gpui --version
+      - run: cargo run --manifest-path apps/gui/Cargo.toml --locked -- --version
