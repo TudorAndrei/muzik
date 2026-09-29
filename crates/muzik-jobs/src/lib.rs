@@ -160,8 +160,8 @@ impl Store {
             .query_row(
                 &format!(
                     "UPDATE jobs SET status = 'running', updated_at = ?1
-                     WHERE id = (SELECT id FROM jobs WHERE status = 'queued'
-                                 AND queue IN (SELECT value FROM json_each(?2)) ORDER BY id LIMIT 1)
+                     WHERE id = (SELECT jobs.id FROM jobs JOIN json_each(?2) AS names ON names.value = jobs.queue
+                                 WHERE jobs.status = 'queued' ORDER BY names.key, jobs.id LIMIT 1)
                      RETURNING {COLUMNS}"
                 ),
                 params![now(), names],
@@ -247,6 +247,20 @@ impl Store {
             .map_err(text)?;
         let rows = statement
             .query_map(params![status.as_str()], job)
+            .map_err(text)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+    }
+
+    pub fn find_open(&self, kind: &str, item_key: &str) -> Result<Vec<Job>, String> {
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM jobs WHERE kind = ?1 AND item_key = ?2
+                 AND status IN ('queued', 'running', 'waiting') ORDER BY id"
+            ))
+            .map_err(text)?;
+        let rows = statement
+            .query_map(params![kind, item_key], job)
             .map_err(text)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(text)
     }
@@ -386,6 +400,27 @@ mod tests {
             Some(first)
         );
         assert_eq!(store.list_open()?.len(), 2);
+        let older = store.enqueue(&job("item", "c", &params))?;
+        let newer = store.enqueue(&NewJob {
+            queue: "sync",
+            ..job("refresh", "again", &params)
+        })?;
+        assert_eq!(
+            store
+                .find_open("item", "c")?
+                .iter()
+                .map(|job| job.id)
+                .collect::<Vec<_>>(),
+            [older]
+        );
+        assert_eq!(
+            store.claim_any(&["sync", "process"])?.map(|job| job.id),
+            Some(newer)
+        );
+        assert_eq!(
+            store.claim_any(&["sync", "process"])?.map(|job| job.id),
+            Some(older)
+        );
         Ok(())
     }
 
