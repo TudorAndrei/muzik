@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.1.0 - 2026-09-29
+#### Features
+- (**cli**) remove the install-app and gui commands - (0f1eb4e) - TudorAndrei
+- (**gui**) find Homebrew and mise tools when opened from Finder - (dcd7561) - TudorAndrei
+- (**release**) publish the CLI and Muzik.app as separate downloads - (5e91ba7) - TudorAndrei
+#### Bug Fixes
+- (**ci**) build Intel macOS releases and publish existing tags - (2fa6d5a) - TudorAndrei
+#### Continuous Integration
+- build releases only for macOS arm64 and Linux x86_64 - (ae2c32b) - TudorAndrei
+
+- - -
+
 ## v2.0.0 - 2026-09-29
 #### Features
 - (**branding**) switch to waveform logo - (9fe75e3) - TudorAndrei
