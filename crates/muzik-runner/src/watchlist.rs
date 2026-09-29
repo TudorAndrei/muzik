@@ -1,6 +1,6 @@
 //! Rust source and audio operations for saved watchlist jobs.
 
-use crate::queues::{self, Gate};
+use crate::gates::{self, Gate};
 use crate::{local_workflow, remote_workflow};
 use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
@@ -199,12 +199,12 @@ impl Operations for Adapter<'_, '_> {
     ) -> Result<Value, JobError> {
         check_cancelled(cancelled)?;
         self.parked.replace(None);
-        queues::take_stage();
+        gates::take_stage();
         let result = match SourceKind::of(item) {
             SourceKind::Spotify => self.process_spotify(playlist, item, action, cancelled),
             SourceKind::Youtube => self.process_youtube(item, action, cancelled),
         };
-        let stage = queues::take_stage();
+        let stage = gates::take_stage();
         result.map_err(|error| {
             let Some(parked) = self.parked.replace(None) else {
                 return match (error, stage) {
@@ -324,7 +324,7 @@ impl Adapter<'_, '_> {
             .ok_or_else(|| JobError::Operation("Downloaded audio is not available.".into()))?;
         if action == ItemAction::CheckQualityAgain {
             set_path(&mut updated, Stage::Download, json!(audio));
-            let _permit = queues::enter(Gate::Process, Stage::Quality, cancelled)
+            let _permit = gates::enter(Gate::Process, Stage::Quality, cancelled)
                 .map_err(|_| JobError::Cancelled)?;
             let result = check_youtube_quality(
                 vec![audio],
@@ -346,7 +346,7 @@ impl Adapter<'_, '_> {
             return Ok(updated);
         }
         if action == ItemAction::ParseAgain {
-            queues::mark_stage(Stage::Parse);
+            gates::mark_stage(Stage::Parse);
             let video_url = required(item, "video_url")?;
             let chapter_path = refresh_chapters(&audio, video_url, cancelled, self.decide)?;
             set_stage(&mut updated, Stage::Parse, StageStatus::Complete);

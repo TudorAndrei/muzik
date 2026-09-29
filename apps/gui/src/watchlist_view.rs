@@ -414,7 +414,7 @@ impl Muzik {
     }
 
     fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
-        self.queued_items.contains(&bridge::item_key(
+        self.queued_items.contains(&muzik_runner::item_key(
             &json!({"playlist_id":playlist_id,"position":position,"video_id":video_id}),
         ))
     }

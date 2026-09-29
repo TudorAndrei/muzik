@@ -23,7 +23,7 @@ impl Gate {
         self as usize
     }
 
-    fn limit(self) -> usize {
+    pub fn limit(self) -> usize {
         match self {
             Self::Download => 2,
             Self::Process | Self::Import => 1,

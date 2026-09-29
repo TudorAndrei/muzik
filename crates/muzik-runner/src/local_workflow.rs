@@ -1,6 +1,6 @@
 //! Local audio workflow adapter with native split and Beets import.
 
-use crate::queues::{self, Gate};
+use crate::gates::{self, Gate};
 use muzik_core::watchlist::Stage;
 use muzik_core::{
     chapters::Chapter, paths, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer,
@@ -155,7 +155,7 @@ impl WorkflowOperations for LocalOperations<'_> {
         chapters: &[Chapter],
         _: &AtomicBool,
     ) -> Result<ChapterReview, String> {
-        queues::mark_stage(Stage::Parse);
+        gates::mark_stage(Stage::Parse);
         let chapters = chapters.iter().map(chapter_record).collect::<Vec<_>>();
         let answer = (self.decide)(
             DecisionKind::ChapterReview,
@@ -195,7 +195,7 @@ impl WorkflowOperations for LocalOperations<'_> {
     }
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
-        let _permit = queues::enter(Gate::Import, Stage::Organize, self.cancelled)?;
+        let _permit = gates::enter(Gate::Import, Stage::Organize, self.cancelled)?;
         if options.tag_only {
             let count =
                 beets::write_library_tags(target, options.config.as_deref(), options.dry_run)?;
@@ -284,7 +284,7 @@ impl WorkflowOperations for LocalOperations<'_> {
         cancelled: &AtomicBool,
         on_progress: &mut dyn FnMut(SplitProgress),
     ) -> Result<(), String> {
-        let _permit = queues::enter(Gate::Process, Stage::Split, cancelled)?;
+        let _permit = gates::enter(Gate::Process, Stage::Split, cancelled)?;
         let settings = splitter::SplitOptions {
             jobs: options.jobs,
             keep_source: options.keep_source,

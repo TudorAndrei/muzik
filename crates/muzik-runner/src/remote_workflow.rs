@@ -1,7 +1,7 @@
-//! Remote acquisition for native desktop workflow jobs.
+//! Remote acquisition for queued workflow jobs.
 
+use crate::gates::{self, Gate};
 use crate::local_workflow;
-use crate::queues::{self, Gate};
 use muzik_core::watchlist::Stage;
 use muzik_core::{app_config, chapters::Chapter, paths, DecisionKind};
 use muzik_soulseek::job::{JobOutcome, JobState};
@@ -232,7 +232,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
                 pre_split_dirs: Vec::new(),
             });
         }
-        let _permit = queues::enter(Gate::Process, Stage::Quality, cancelled)?;
+        let _permit = gates::enter(Gate::Process, Stage::Quality, cancelled)?;
         let result = muzik_workflow::quality::check_youtube_quality(
             audio_files.to_vec(),
             options.quality_policy,
@@ -342,7 +342,7 @@ pub(crate) fn soulseek_download(
     if cancelled.load(Ordering::SeqCst) {
         return Err("Soulseek search cancelled".into());
     }
-    let _permit = queues::enter(Gate::Download, Stage::Download, cancelled)?;
+    let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)?;
     let config = app_config::load(&app_config::path())?;
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
@@ -539,7 +539,7 @@ pub(crate) fn download(
     force: bool,
     cancelled: &AtomicBool,
 ) -> Result<Vec<PathBuf>, muzik_workflow::Error> {
-    let _permit = queues::enter(Gate::Download, Stage::Download, cancelled)
+    let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
         .map_err(|_| muzik_workflow::Error::Cancelled)?;
     std::fs::create_dir_all(output)?;
     let output = std::fs::canonicalize(output)?;

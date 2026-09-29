@@ -4667,24 +4667,17 @@ version = "2.4.1"
 dependencies = [
  "chrono",
  "gpui-kit",
- "muzik-agent",
  "muzik-core",
- "muzik-import",
  "muzik-jobs",
- "muzik-library",
+ "muzik-runner",
  "muzik-soulseek",
- "muzik-tags",
- "muzik-workflow",
- "regex",
  "serde",
  "serde_json",
  "strum",
  "strum_macros",
  "tempfile",
- "tokio",
  "ureq",
  "url",
- "yt-dlp",
 ]
 
 [[package]]
@@ -4768,6 +4761,25 @@ dependencies = [
 [[package]]
 name = "muzik-release"
 version = "2.4.1"
+
+[[package]]
+name = "muzik-runner"
+version = "2.4.1"
+dependencies = [
+ "muzik-agent",
+ "muzik-core",
+ "muzik-import",
+ "muzik-jobs",
+ "muzik-library",
+ "muzik-soulseek",
+ "muzik-workflow",
+ "serde_json",
+ "strum",
+ "strum_macros",
+ "tempfile",
+ "tokio",
+ "yt-dlp",
+]
 
 [[package]]
 name = "muzik-soulseek"

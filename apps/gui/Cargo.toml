@@ -9,23 +9,16 @@ license = "GPL-3.0-only"
 gpui-kit = "=0.7.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-muzik-agent = { path = "../../crates/muzik-agent" }
 muzik-core = { path = "../../crates/muzik-core" }
-muzik-import = { path = "../../crates/muzik-import" }
 muzik-jobs = { path = "../../crates/muzik-jobs" }
-muzik-library = { path = "../../crates/muzik-library" }
-muzik-tags = { path = "../../crates/muzik-tags" }
+muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
-muzik-workflow = { path = "../../crates/muzik-workflow" }
 chrono = "0.4"
 ureq = "3.4.2"
 url = "2.5.8"
-tokio = { version = "1", features = ["rt", "time", "macros", "process"] }
-yt-dlp = { version = "2.8.3", default-features = false }
-tempfile = "3"
-regex = "1"
 strum = "0.28"
 strum_macros = "0.28"
 
 [dev-dependencies]
 gpui-kit = { version = "=0.7.0", features = ["test-support"] }
+tempfile = "3"

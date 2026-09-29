@@ -1,38 +1,29 @@
 //! JSON protocol for the Rust desktop application.
-use crate::{
-    local_workflow, native, native_watchlist, queues, remote_workflow, thumbnails, watchlist,
-};
-use muzik_core::watchlist::jobs::JobError;
-use muzik_core::watchlist::{ItemAction, Stage};
-use muzik_core::{app_config, paths, spotify, watchlist::Repository, DecisionKind};
-use muzik_jobs::{Job, Kind, NewJob, Queue, Status, Store};
+use crate::{native, thumbnails, watchlist};
+use muzik_core::{app_config, spotify, watchlist::Repository};
+use muzik_jobs::CancelRequest;
+use muzik_runner::{gates, parse_job_id, EnqueueError, Jobs, Options, Prompt, Runner};
 use serde_json::{json, Value};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use strum_macros::AsRefStr;
+use std::time::Duration;
 
 const WORKERS: usize = 5;
-const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
 
-#[derive(Clone, Copy, AsRefStr)]
-#[strum(serialize_all = "snake_case")]
-enum Source {
-    Workflow,
-    Native,
-    Agent,
-}
+type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
 
 pub struct Bridge {
     output: Receiver<Value>,
     native_output: Sender<Value>,
     thumbnail_pending: Arc<Mutex<HashSet<String>>>,
     login: Arc<Mutex<Option<NativeLogin>>>,
-    shared: Arc<Shared>,
+    jobs: Arc<Jobs>,
+    runner: Option<Runner>,
+    decisions: Decisions,
+    generation: Arc<AtomicU64>,
     watchlist_gate: Arc<Mutex<()>>,
     next_id: u64,
 }
@@ -42,84 +33,56 @@ struct NativeLogin {
     cancel: Arc<AtomicBool>,
 }
 
-struct Shared {
-    jobs: Mutex<Store>,
-    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
-    decisions: Mutex<HashMap<String, Sender<Value>>>,
-    idle: Mutex<()>,
-    wake: Condvar,
-    stop: AtomicBool,
-    generation: Arc<AtomicU64>,
-    sender: Sender<Value>,
-}
-
-impl Shared {
-    fn store(&self) -> MutexGuard<'_, Store> {
-        self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn send(&self, message: Value) {
-        let _ = self.sender.send(message);
-    }
-
-    fn event(&self, job_id: &str, source: Source, event: &Value) {
-        self.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":source.as_ref(),"event":event["event"],"data":event["data"]}}));
-    }
-
-    fn publish(&self) {
-        let snapshot = jobs_snapshot(&self.store());
-        self.send(json!({"type":"event","event":"jobs.updated","data":snapshot}));
-    }
-
-    fn wake(&self) {
-        self.wake.notify_all();
-    }
-
-    fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
-        self.running.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-impl Drop for Bridge {
-    fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
-        for cancel in self.shared.running().values() {
-            cancel.store(true, Ordering::SeqCst);
-        }
-        self.shared.wake();
-    }
-}
-
 impl Bridge {
     pub fn start() -> Result<Self, String> {
+        Self::with_runner(true)
+    }
+
+    fn with_runner(run: bool) -> Result<Self, String> {
         let (events, output) = mpsc::channel::<Value>();
-        let shared = Arc::new(Shared {
-            jobs: Mutex::new(open_jobs()?),
-            running: Arc::new(Mutex::new(HashMap::new())),
-            decisions: Mutex::new(HashMap::new()),
-            idle: Mutex::new(()),
-            wake: Condvar::new(),
-            stop: AtomicBool::new(false),
-            generation: Arc::new(AtomicU64::new(0)),
-            sender: events.clone(),
+        let jobs = Arc::new(if cfg!(test) {
+            Jobs::in_memory()?
+        } else {
+            Jobs::open()?
         });
-        let gates = Mutex::new(events.clone());
-        queues::listen(move |snapshot| {
-            if let Ok(sender) = gates.lock() {
-                let _ =
-                    sender.send(json!({"type":"event","event":"queues.updated","data":snapshot}));
-            }
-        });
-        for _ in 0..WORKERS {
-            let shared = Arc::clone(&shared);
-            thread::spawn(move || work(&shared));
+        let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
+        let generation = Arc::new(AtomicU64::new(0));
+        let runner = if run {
+            let sink = Mutex::new(events.clone());
+            let asker = Mutex::new(events.clone());
+            let pending = Arc::clone(&decisions);
+            let asked = AtomicU64::new(0);
+            Runner::start(
+                Arc::clone(&jobs),
+                Options {
+                    workers: WORKERS,
+                    sink: Arc::new(move |message| {
+                        if let Ok(sender) = sink.lock() {
+                            let _ = sender.send(message);
+                        }
+                    }),
+                    ask: Arc::new(move |prompt| {
+                        let number = asked.fetch_add(1, Ordering::SeqCst) + 1;
+                        ask(&asker, &pending, &prompt, number)
+                    }),
+                    generation: Arc::clone(&generation),
+                },
+            )?
+        } else {
+            None
+        };
+        if run && runner.is_none() {
+            let _ = events.send(json!({"type":"event","event":"jobs.remote","data":{"message":"Another muzik process runs the queue. New jobs go into its queue."}}));
         }
         Ok(Self {
             output,
             native_output: events,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             login: Arc::new(Mutex::new(None)),
-            shared,
+            jobs,
+            runner,
+            decisions,
+            generation,
             watchlist_gate: Arc::new(Mutex::new(())),
             next_id: 1,
         })
@@ -141,6 +104,20 @@ impl Bridge {
         Ok(id.to_owned())
     }
 
+    fn changed(&self) {
+        match &self.runner {
+            Some(runner) => {
+                runner.publish();
+                runner.wake();
+            }
+            None => {
+                let _ = self.native_output.send(
+                    json!({"type":"event","event":"jobs.updated","data":self.jobs.snapshot()}),
+                );
+            }
+        }
+    }
+
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
@@ -149,24 +126,24 @@ impl Bridge {
             "decision.reply" => return self.reply(&id, &params),
             "job.cancel" => return self.cancel(&id, &params),
             "jobs.list" => {
-                let mut snapshot = jobs_snapshot(&self.shared.store());
-                snapshot["gates"] = queues::snapshot();
+                let mut snapshot = self.jobs.snapshot();
+                snapshot["gates"] = gates::snapshot();
+                snapshot["runner"] = json!(self.runner.is_some());
                 return self.accept(&id, snapshot);
             }
             "jobs.answer" => return self.answer(&id, &params),
-            "workflow.start" => return self.start_workflow(&id, params),
-            "watchlist.refresh" => {
-                return self.enqueue(
-                    &id,
-                    &NewJob {
-                        kind: Kind::Refresh,
-                        item_key: "refresh",
-                        title: "Watchlist check",
-                        params: &params,
-                    },
-                )
+            "workflow.start" => {
+                let queued = self.jobs.workflow(&params);
+                return self.queued(&id, queued);
             }
-            "watchlist.action" => return self.start_item(&id, params),
+            "watchlist.refresh" => {
+                let queued = self.jobs.refresh(&params);
+                return self.queued(&id, queued);
+            }
+            "watchlist.action" => {
+                let queued = self.jobs.item(&params);
+                return self.queued(&id, queued);
+            }
             _ => {}
         }
         if command == "thumbnails.cache" {
@@ -206,12 +183,12 @@ impl Bridge {
                 .watchlist_gate
                 .lock()
                 .map_err(|_| "Watchlist state is unavailable")?;
-            let generation = self.shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
             let response_id = id.clone();
             let sender = self.native_output.clone();
             let login = Arc::clone(&self.login);
-            let running = Arc::clone(&self.shared.running);
-            let latest = Arc::clone(&self.shared.generation);
+            let jobs = Arc::clone(&self.jobs);
+            let latest = Arc::clone(&self.generation);
             let gate = Arc::clone(&self.watchlist_gate);
             let repository = Repository::new(Repository::default_path());
             thread::spawn(move || {
@@ -221,7 +198,7 @@ impl Bridge {
                     params,
                     repository,
                     login,
-                    running,
+                    jobs,
                     latest,
                     gate,
                     generation,
@@ -239,7 +216,7 @@ impl Bridge {
                 .map_err(|_| "Watchlist state is unavailable")?;
             let response = native_response(&id, command, &params);
             if response["ok"] == true {
-                self.shared.generation.fetch_add(1, Ordering::SeqCst);
+                self.generation.fetch_add(1, Ordering::SeqCst);
             }
             self.respond(response)?;
             return Ok(id);
@@ -268,6 +245,19 @@ impl Bridge {
         )
     }
 
+    fn queued(&self, id: &str, queued: Result<i64, EnqueueError>) -> Result<String, String> {
+        match queued {
+            Ok(number) => {
+                self.accept(id, json!({"job_id":muzik_runner::job_id(number)}))?;
+                self.changed();
+                Ok(id.to_owned())
+            }
+            Err(EnqueueError::Invalid(message)) => self.reject(id, "invalid_request", message),
+            Err(EnqueueError::Busy(message)) => self.reject(id, "job_active", message),
+            Err(EnqueueError::Store(message)) => self.reject(id, "operation_failed", message),
+        }
+    }
+
     fn reply(&self, id: &str, params: &Value) -> Result<String, String> {
         let decision_id = params
             .get("decision_id")
@@ -281,7 +271,6 @@ impl Bridge {
             );
         }
         let reply = self
-            .shared
             .decisions
             .lock()
             .map_err(|_| "Decision state is unavailable")?
@@ -303,20 +292,31 @@ impl Bridge {
         if job_id.is_empty() {
             return self.reject(id, "invalid_request", "job_id must be a non-empty string.");
         }
-        if let Some(cancel) = self.shared.running().get(job_id) {
-            cancel.store(true, Ordering::SeqCst);
+        if self
+            .runner
+            .as_ref()
+            .is_some_and(|runner| runner.cancel(job_id))
+        {
             return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
         }
-        let queued = job_id
-            .strip_prefix("queue-")
-            .and_then(|number| number.parse::<i64>().ok());
-        if let Some(number) = queued {
-            if self.shared.store().cancel_open(number)? {
-                self.accept(id, json!({"job_id":job_id,"cancel_requested":true}))?;
-                self.shared
-                    .send(json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}));
-                self.shared.publish();
-                return Ok(id.to_owned());
+        if let Some(number) = job_id
+            .starts_with("queue-")
+            .then(|| parse_job_id(job_id))
+            .flatten()
+        {
+            match self.jobs.cancel(number)? {
+                CancelRequest::Removed => {
+                    self.accept(id, json!({"job_id":job_id,"cancel_requested":true}))?;
+                    self.respond(
+                        json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}),
+                    )?;
+                    self.changed();
+                    return Ok(id.to_owned());
+                }
+                CancelRequest::Requested => {
+                    return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
+                }
+                CancelRequest::NotOpen => {}
             }
         }
         let login = self
@@ -334,87 +334,9 @@ impl Bridge {
         let (Some(job_id), Some(value)) = (params["id"].as_i64(), params.get("value")) else {
             return self.reject(id, "invalid_request", "id and value are required.");
         };
-        let answered = {
-            let store = self.shared.store();
-            let kind = store
-                .get(job_id)?
-                .and_then(|job| job.question)
-                .map(|question| question["kind"].clone())
-                .unwrap_or(Value::Null);
-            store.answer(job_id, &json!({"kind":kind,"value":value}))?
-        };
+        let answered = self.jobs.answer(job_id, value)?;
         self.accept(id, json!({"answered":answered}))?;
-        self.shared.publish();
-        self.shared.wake();
-        Ok(id.to_owned())
-    }
-
-    fn start_workflow(&self, id: &str, params: Value) -> Result<String, String> {
-        let raw = params["raw"].as_str().unwrap_or("").trim().to_owned();
-        if raw.is_empty() {
-            return self.reject(id, "invalid_request", "Enter a URL or path.");
-        }
-        let checked = local_workflow::supported(&params)
-            .map(|request| request.map(drop))
-            .or_else(|| remote_workflow::supported(&params).map(|request| request.map(drop)));
-        match checked {
-            Some(Ok(())) => {}
-            Some(Err(message)) => return self.reject(id, "invalid_request", message),
-            None => return self.reject(id, "invalid_request", "Enter a URL or path."),
-        }
-        let key = format!("{raw}#{}", unique());
-        self.enqueue(
-            id,
-            &NewJob {
-                kind: Kind::Workflow,
-                item_key: &key,
-                title: &raw,
-                params: &params,
-            },
-        )
-    }
-
-    fn start_item(&self, id: &str, params: Value) -> Result<String, String> {
-        if let Err(message) = validate_item(&params) {
-            return self.reject(id, "invalid_request", message);
-        }
-        let key = item_key(&params);
-        {
-            let store = self.shared.store();
-            for open in store.find_open(Kind::Item, &key)? {
-                if open.status == Status::Waiting {
-                    store.cancel_open(open.id)?;
-                } else {
-                    drop(store);
-                    return self.reject(
-                        id,
-                        "job_active",
-                        "This item already has a job in the queue.",
-                    );
-                }
-            }
-        }
-        let title = params["title"]
-            .as_str()
-            .or_else(|| params["video_id"].as_str())
-            .unwrap_or("Item")
-            .to_owned();
-        self.enqueue(
-            id,
-            &NewJob {
-                kind: Kind::Item,
-                item_key: &key,
-                title: &title,
-                params: &params,
-            },
-        )
-    }
-
-    fn enqueue(&self, id: &str, job: &NewJob<'_>) -> Result<String, String> {
-        let number = self.shared.store().enqueue(job)?;
-        self.accept(id, json!({"job_id":format!("queue-{number}")}))?;
-        self.shared.publish();
-        self.shared.wake();
+        self.changed();
         Ok(id.to_owned())
     }
 
@@ -492,357 +414,39 @@ impl Bridge {
     }
 }
 
-fn work(shared: &Arc<Shared>) {
-    while !shared.stop.load(Ordering::SeqCst) {
-        let claimed = shared.store().claim_any(&QUEUES).ok().flatten();
-        let Some(job) = claimed else {
-            let idle = shared.idle.lock().unwrap_or_else(PoisonError::into_inner);
-            let _ = shared.wake.wait_timeout(idle, Duration::from_secs(1));
-            continue;
-        };
-        run_job(shared, job);
-    }
-}
-
-type Outcome = Result<Value, (bool, String)>;
-
-fn run_job(shared: &Arc<Shared>, job: Job) {
-    let job_id = format!("queue-{}", job.id);
-    let cancel = Arc::new(AtomicBool::new(false));
-    shared.running().insert(job_id.clone(), Arc::clone(&cancel));
-    shared.generation.fetch_add(1, Ordering::SeqCst);
-    queues::set_label(&job.title);
-    shared.send(json!({"type":"event","event":"job.started","data":{"job_id":job_id,"title":job.title,"kind":job.kind.as_ref()}}));
-    shared.publish();
-    let result = match job.kind {
-        Kind::Refresh => run_refresh(shared, &job, &job_id, &cancel),
-        Kind::Item => run_item(shared, &job, &job_id, &cancel),
-        Kind::Workflow => run_workflow(shared, &job, &job_id, &cancel),
-    };
-    {
-        let store = shared.store();
-        let _ = match &result {
-            Ok(_) => store.finish(job.id),
-            Err((true, _)) if job.question.is_some() => store.reopen(job.id),
-            Err((true, _)) => store.cancel(job.id),
-            Err((false, message)) => store.fail(job.id, message),
-        };
-    }
-    shared.running().remove(&job_id);
-    shared.generation.fetch_add(1, Ordering::SeqCst);
-    shared.send(match result {
-        Ok(result) => {
-            json!({"type":"event","event":"job.completed","data":{"job_id":job_id,"result":result}})
+fn ask(
+    sender: &Mutex<Sender<Value>>,
+    decisions: &Decisions,
+    prompt: &Prompt<'_>,
+    number: u64,
+) -> Result<Value, String> {
+    let decision_id = format!("{}-decision-{number}", prompt.job_id);
+    let (reply, receiver) = mpsc::channel();
+    decisions
+        .lock()
+        .map_err(|_| "Decision state is unavailable")?
+        .insert(decision_id.clone(), reply);
+    sender
+        .lock()
+        .map_err(|_| "Rust backend is not available")?
+        .send(json!({"type":"event","event":"decision.request","data":{"job_id":prompt.job_id,"decision_id":decision_id,"kind":prompt.kind,"payload":prompt.payload}}))
+        .map_err(|_| "Rust backend is not available")?;
+    let answer = loop {
+        if prompt.cancelled.load(Ordering::SeqCst) {
+            break Err("import cancelled".to_owned());
         }
-        Err((true, _)) => json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}),
-        Err((false, message)) => {
-            json!({"type":"event","event":"job.failed","data":{"job_id":job_id,"error":{"code":"operation_failed","message":message}}})
-        }
-    });
-    shared.publish();
-}
-
-fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let pending = native_watchlist::sync(&job.params, cancel, &mut |event| {
-        shared.event(job_id, Source::Workflow, &event);
-    })
-    .map_err(job_error)?;
-    let mut queued = 0;
-    {
-        let store = shared.store();
-        for item in &pending {
-            let mut params = job.params.clone();
-            params["playlist_id"] = json!(item.playlist_id);
-            params["position"] = json!(item.position);
-            params["video_id"] = json!(item.video_id);
-            params["title"] = json!(item.title);
-            params["action"] = json!(ItemAction::Run);
-            let key = item_key(&params);
-            if store
-                .find_open(Kind::Item, &key)
-                .map_err(|error| (false, error))?
-                .is_empty()
-            {
-                store
-                    .enqueue(&NewJob {
-                        kind: Kind::Item,
-                        item_key: &key,
-                        title: &item.title,
-                        params: &params,
-                    })
-                    .map_err(|error| (false, error))?;
-                queued += 1;
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(value) => break Ok(value),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                break Err("The decision is not pending.".to_owned())
             }
         }
-    }
-    shared.event(
-        job_id,
-        Source::Workflow,
-        &json!({"event":"message","data":{"message":format!("Queued {queued} item(s).")}}),
-    );
-    shared.wake();
-    Ok(json!({"pending":pending.len(),"queued":queued}))
-}
-
-fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let parked = RefCell::new(None);
-    let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
-        let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
-        Some((kind, answer["value"].clone()))
-    }));
-    let mut workflow_event = |event: Value| {
-        if event["event"] == "item_waiting" {
-            let _ = park_item(&shared.store(), &job.params, &event["data"]);
-            shared.publish();
-        }
-        shared.event(job_id, Source::Workflow, &event);
     };
-    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
-    let mut decide = |kind: DecisionKind, mut payload: Value| {
-        let answered = {
-            let mut resume = resume.borrow_mut();
-            match resume.as_ref() {
-                Some((asked, _)) if *asked == kind => resume.take(),
-                _ => None,
-            }
-        };
-        if let Some((_, value)) = answered {
-            return Ok(value);
-        }
-        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
-            return Ok(value);
-        }
-        parked.replace(Some(native_watchlist::Parked { kind, payload }));
-        Err("waiting for a choice".to_owned())
-    };
-    native_watchlist::action(
-        &job.params,
-        cancel,
-        &mut workflow_event,
-        &mut import_event,
-        &mut decide,
-        &parked,
-    )
-    .map_err(job_error)
-}
-
-fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let mut decision_number = 0_usize;
-    let mut workflow_event = |event: Value| shared.event(job_id, Source::Workflow, &event);
-    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
-    let mut decide = |kind: DecisionKind, mut payload: Value| {
-        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
-            return Ok(value);
-        }
-        decision_number += 1;
-        let decision_id = format!("{job_id}-decision-{decision_number}");
-        let (reply, receiver) = mpsc::channel();
-        shared
-            .decisions
-            .lock()
-            .map_err(|_| "Decision state is unavailable")?
-            .insert(decision_id.clone(), reply);
-        shared.send(json!({"type":"event","event":"decision.request","data":{"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload}}));
-        let answer = queues::suspended(|| loop {
-            if cancel.load(Ordering::SeqCst) {
-                break Err("import cancelled".to_owned());
-            }
-            match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(value) => break Ok(value),
-                Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => {
-                    break Err("The decision is not pending.".to_owned())
-                }
-            }
-        });
-        if let Ok(mut decisions) = shared.decisions.lock() {
-            decisions.remove(&decision_id);
-        }
-        answer
-    };
-    let workflow_failure = |error: muzik_workflow::Error| {
-        (
-            matches!(error, muzik_workflow::Error::Cancelled),
-            error.to_string(),
-        )
-    };
-    if let Some(local) = local_workflow::supported(&job.params) {
-        let local = local.map_err(|message| (false, message))?;
-        return local_workflow::run(
-            local,
-            cancel,
-            &mut workflow_event,
-            &mut import_event,
-            &mut decide,
-        )
-        .map_err(workflow_failure);
+    if let Ok(mut decisions) = decisions.lock() {
+        decisions.remove(&decision_id);
     }
-    let remote = remote_workflow::supported(&job.params)
-        .ok_or((false, "Enter a URL or path.".to_owned()))?
-        .map_err(|message| (false, message))?;
-    remote_workflow::run(
-        remote,
-        cancel,
-        &mut workflow_event,
-        &mut import_event,
-        &mut decide,
-    )
-    .map_err(workflow_failure)
-}
-
-fn ask_agent(
-    shared: &Shared,
-    job_id: &str,
-    kind: DecisionKind,
-    payload: &mut Value,
-) -> Option<Value> {
-    let model = agent_model(kind, payload)?;
-    let message = |event: &str, data: Value| {
-        shared.event(job_id, Source::Agent, &json!({"event":event,"data":data}));
-    };
-    if muzik_agent::strong_match(kind, payload).is_none() {
-        message(
-            "message",
-            json!({"message":format!("Asking {model} to choose.")}),
-        );
-    }
-    match muzik_agent::decide(kind, payload, &model) {
-        Ok(muzik_agent::Outcome::Decided(choice)) => {
-            message(
-                "agent_decided",
-                json!({"kind":kind,"label":choice.label,"confidence":choice.confidence,"reason":choice.reason}),
-            );
-            Some(choice.value)
-        }
-        Ok(muzik_agent::Outcome::Unsure {
-            suggestion,
-            confidence,
-            reason,
-        }) => {
-            payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
-            None
-        }
-        Err(error) => {
-            payload["agent"] = json!({"model":model,"error":error});
-            None
-        }
-    }
-}
-
-fn job_error(error: JobError) -> (bool, String) {
-    (matches!(error, JobError::Cancelled), error.to_string())
-}
-
-fn validate_item(params: &Value) -> Result<(), String> {
-    params
-        .get("playlist_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("playlist_id must be a non-empty string.")?;
-    if params
-        .get("position")
-        .is_none_or(|value| value.as_i64().is_none() && value.as_u64().is_none())
-    {
-        return Err("position must be an integer.".into());
-    }
-    let action = params
-        .get("action")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("action must be a non-empty string.")?;
-    action
-        .parse::<ItemAction>()
-        .map_err(|_| format!("'{action}' is not a valid ItemAction"))?;
-    Ok(())
-}
-
-pub(crate) fn item_key(params: &Value) -> String {
-    format!(
-        "{}:{}:{}",
-        params["playlist_id"].as_str().unwrap_or(""),
-        params["position"],
-        params["video_id"].as_str().unwrap_or("")
-    )
-}
-
-fn unique() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos())
-}
-
-fn open_jobs() -> Result<Store, String> {
-    let store = if cfg!(test) {
-        Store::open_in_memory()
-    } else {
-        Store::open(&paths::data_dir().join("jobs.db")).or_else(|_| Store::open_in_memory())
-    }?;
-    store.recover()?;
-    Ok(store)
-}
-
-fn jobs_snapshot(store: &Store) -> Value {
-    let open: Vec<Value> = store
-        .list_open()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|job| {
-            json!({"job_id":format!("queue-{}", job.id),"title":job.title,"kind":job.kind.as_ref(),"status":job.status.as_ref(),"item":(job.kind == Kind::Item).then_some(job.item_key)})
-        })
-        .collect();
-    let waiting: Vec<Value> = store
-        .list(Status::Waiting)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|job| {
-            let question = job.question.unwrap_or(Value::Null);
-            json!({"id":job.id,"title":job.title,"kind":question["kind"],"payload":question["payload"],"item":job.item_key})
-        })
-        .collect();
-    json!({"open":open,"waiting":waiting})
-}
-
-fn park_item(store: &Store, params: &Value, data: &Value) -> Result<i64, String> {
-    let stage = data["stage"]
-        .as_str()
-        .and_then(|stage| stage.parse::<Stage>().ok())
-        .unwrap_or(Stage::Download);
-    let mut params = params.clone();
-    params["playlist_id"] = data["playlist_id"].clone();
-    params["position"] = data["position"].clone();
-    params["video_id"] = json!(data["video_id"].as_str().unwrap_or(""));
-    params["action"] = json!(stage.resume_action());
-    let key = item_key(&params);
-    let title = data["title"]
-        .as_str()
-        .or_else(|| params["title"].as_str())
-        .unwrap_or("Item")
-        .to_owned();
-    store.park(
-        &NewJob {
-            kind: Kind::Item,
-            item_key: &key,
-            title: &title,
-            params: &params,
-        },
-        &data["question"],
-    )
-}
-
-fn agent_model(kind: DecisionKind, payload: &Value) -> Option<String> {
-    if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
-        return None;
-    }
-    let settings = app_config::load_gui_defaults(&app_config::path()).ok()?;
-    if settings["auto_decide"] != true {
-        return None;
-    }
-    let model = settings["agent_model"]
-        .as_str()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .unwrap_or(muzik_agent::DEFAULT_MODEL);
-    Some(model.to_owned())
+    answer
 }
 
 struct WatchlistLoad {
@@ -851,7 +455,7 @@ struct WatchlistLoad {
     params: Value,
     repository: Repository,
     login: Arc<Mutex<Option<NativeLogin>>>,
-    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    jobs: Arc<Jobs>,
     latest: Arc<AtomicU64>,
     gate: Arc<Mutex<()>>,
     generation: u64,
@@ -864,11 +468,7 @@ impl WatchlistLoad {
             .lock()
             .map_err(|_| "Spotify login state is unavailable")?
             .is_some()
-            || !self
-                .running
-                .lock()
-                .map_err(|_| "Job state is unavailable")?
-                .is_empty()
+            || self.jobs.has_running()
             || self.generation != self.latest.load(Ordering::SeqCst))
     }
 }
@@ -961,6 +561,7 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 mod tests {
     use super::{load_watchlist, Bridge, NativeLogin, WatchlistLoad};
     use muzik_core::watchlist::Repository;
+    use muzik_runner::Jobs;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::fs;
@@ -1114,11 +715,10 @@ mod tests {
                     let job = message["data"]["job_id"].as_str().unwrap_or("").to_owned();
                     assert_eq!(message["data"]["kind"], "import_match");
                     asked.insert(job, ());
-                    let id = bridge.send(
+                    bridge.send(
                         "decision.reply",
                         json!({"decision_id":message["data"]["decision_id"],"value":"as_is"}),
                     )?;
-                    let _ = id;
                 }
                 "job.completed" if jobs.iter().any(|job| message["data"]["job_id"] == *job) => {
                     done += 1;
@@ -1172,24 +772,8 @@ mod tests {
     }
 
     #[test]
-    fn cancel_reaches_a_running_job() -> TestResult {
-        let mut bridge = Bridge::start()?;
-        let cancel = Arc::new(AtomicBool::new(false));
-        bridge
-            .shared
-            .running()
-            .insert("queue-test".into(), Arc::clone(&cancel));
-        let id = bridge.send("job.cancel", json!({"job_id":"queue-test"}))?;
-        assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
-        assert!(cancel.load(Ordering::SeqCst));
-        Ok(())
-    }
-
-    #[test]
     fn cancel_removes_a_queued_item_job() -> TestResult {
-        let mut bridge = Bridge::start()?;
-        bridge.shared.stop.store(true, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(1200));
+        let mut bridge = Bridge::with_runner(false)?;
         let params = json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run","title":"Song"});
         let id = bridge.send("watchlist.action", params.clone())?;
         let job_id = response(&bridge, &id)?["result"]["job_id"]
@@ -1201,7 +785,7 @@ mod tests {
         let id = bridge.send("jobs.list", json!({}))?;
         let listed = response(&bridge, &id)?;
         assert_eq!(listed["result"]["open"][0]["job_id"], job_id);
-        assert_eq!(listed["result"]["open"][0]["item"], "PL1:2:abcdefghijk");
+        assert_eq!(listed["result"]["runner"], false);
         let id = bridge.send("job.cancel", json!({"job_id":job_id}))?;
         assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
         let id = bridge.send("jobs.list", json!({}))?;
@@ -1249,7 +833,7 @@ mod tests {
             params: json!({"output": dir.path().join("downloads"), "splits": dir.path().join("splits"), "quality_policy":"off", "no_split":false, "no_organize":false}),
             repository,
             login: Arc::new(Mutex::new(None)),
-            running: Arc::new(Mutex::new(HashMap::new())),
+            jobs: Arc::new(Jobs::in_memory()?),
             latest: Arc::new(AtomicU64::new(1)),
             gate: Arc::new(Mutex::new(())),
             generation: 1,
@@ -1275,40 +859,6 @@ mod tests {
         let mut bridge = Bridge::start()?;
         let id = bridge.send("unknown.command", json!({}))?;
         assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
-        Ok(())
-    }
-
-    #[test]
-    fn a_parked_choice_waits_for_an_answer_and_then_queues() -> TestResult {
-        let mut bridge = Bridge::start()?;
-        bridge.shared.stop.store(true, Ordering::SeqCst);
-        std::thread::sleep(Duration::from_millis(1200));
-        let question = json!({"kind":"import_match","payload":{"matches":[]}});
-        let job_id = super::park_item(
-            &bridge.shared.store(),
-            &json!({"output":"/music"}),
-            &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","title":"Album","stage":"organize","question":question}),
-        )?;
-        let id = bridge.send("jobs.list", json!({}))?;
-        assert_eq!(
-            response(&bridge, &id)?["result"]["waiting"],
-            json!([{"id":job_id,"title":"Album","kind":"import_match","payload":{"matches":[]},"item":"PL1:3:abcdefghijk"}])
-        );
-        let id = bridge.send("jobs.answer", json!({"id":job_id,"value":"release:1"}))?;
-        assert_eq!(response(&bridge, &id)?["result"]["answered"], true);
-        let job = bridge
-            .shared
-            .store()
-            .claim(muzik_jobs::Queue::Item)?
-            .ok_or("job is not queued")?;
-        assert_eq!(
-            job.answer,
-            Some(json!({"kind":"import_match","value":"release:1"}))
-        );
-        assert_eq!(
-            job.params,
-            json!({"output":"/music","playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"organize_again"})
-        );
         Ok(())
     }
 }
