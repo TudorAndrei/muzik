@@ -6,12 +6,14 @@ mod download;
 mod downloaded;
 mod import;
 mod init;
+mod jobs;
 mod organize;
 mod soulseek;
 mod split;
 mod spotify;
 use muzik_core::paths;
 mod validate;
+mod watchlist;
 mod workflow;
 
 use std::path::PathBuf;
@@ -44,6 +46,8 @@ enum Command {
     Init,
     /// Import audio into a beets-compatible library.
     Import(Import),
+    /// Show, answer, cancel, and run queued jobs.
+    Jobs(Jobs),
     /// Import audio by default, or write tags from the music library.
     Organize(Organize),
     /// Manage a Spotify account.
@@ -54,6 +58,8 @@ enum Command {
     Split(Split),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
+    /// Manage watched playlists and queue their items.
+    Watchlist(Watchlist),
     /// Download or process audio, split chapters, and organize tracks.
     Workflow(Workflow),
 }
@@ -236,6 +242,106 @@ struct Workflow {
     /// Select the highest-ranked Soulseek result without a prompt.
     #[usage(long)]
     no_interactive: bool,
+    /// Add the run to the shared job queue instead of running it now.
+    #[usage(long)]
+    queue: bool,
+}
+
+#[derive(Args)]
+struct Jobs {
+    #[usage(subcommand)]
+    command: JobsCommand,
+}
+
+#[derive(Subcommands)]
+enum JobsCommand {
+    /// List queued, running, and waiting jobs.
+    List,
+    /// Show the choices of a waiting job.
+    Show(JobId),
+    /// Answer a waiting job and put it back in the queue.
+    Answer(JobAnswer),
+    /// Remove a queued job or stop a running one.
+    Cancel(JobId),
+    /// Run queued jobs until the queue is empty.
+    Run,
+}
+
+#[derive(Args)]
+struct JobId {
+    /// Job ID, such as queue-12.
+    id: String,
+}
+
+#[derive(Args)]
+struct JobAnswer {
+    /// Job ID, such as queue-12.
+    id: String,
+    /// Number of the choice shown by `muzik jobs show`.
+    choice: Option<usize>,
+    /// Answer value as JSON, instead of a choice number.
+    #[usage(long)]
+    value: Option<String>,
+}
+
+#[derive(Args)]
+struct Watchlist {
+    #[usage(subcommand)]
+    command: WatchlistCommand,
+}
+
+#[derive(Subcommands)]
+enum WatchlistCommand {
+    /// List watched playlists and the state of their items.
+    List(WatchlistList),
+    /// Add a YouTube playlist, a Spotify playlist or album, or liked.
+    Add(WatchlistAdd),
+    /// Remove a playlist from the watchlist.
+    Remove(WatchlistRemove),
+    /// Check all playlists and queue their pending items.
+    Refresh(WatchlistRefresh),
+    /// Queue a command for one item.
+    Item(WatchlistItem),
+}
+
+#[derive(Args)]
+struct WatchlistList {
+    /// Show each item.
+    #[usage(long, short = 'i')]
+    items: bool,
+}
+
+#[derive(Args)]
+struct WatchlistAdd {
+    /// Playlist URL or Spotify reference.
+    url: String,
+}
+
+#[derive(Args)]
+struct WatchlistRemove {
+    /// Playlist ID shown by `muzik watchlist list`.
+    playlist_id: String,
+}
+
+#[derive(Args)]
+struct WatchlistRefresh {
+    /// Only add the jobs to the queue.
+    #[usage(long)]
+    queue_only: bool,
+}
+
+#[derive(Args)]
+struct WatchlistItem {
+    /// Playlist ID shown by `muzik watchlist list`.
+    playlist_id: String,
+    /// Item position shown by `muzik watchlist list --items`.
+    position: u64,
+    /// Command: run, retry, download_again, check_quality_again, parse_again, split_again, organize_again, or run_all_again.
+    #[usage(long, short = 'a', default = "run")]
+    action: String,
+    /// Only add the job to the queue.
+    #[usage(long)]
+    queue_only: bool,
 }
 
 #[derive(Args)]
@@ -555,6 +661,13 @@ async fn run(command: Command) -> Result<(), String> {
         }
         Command::Init => init::run().map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
+        Command::Jobs(args) => match args.command {
+            JobsCommand::List => jobs::list(),
+            JobsCommand::Show(args) => jobs::show(&args.id),
+            JobsCommand::Answer(args) => jobs::answer(&args.id, args.choice, args.value.as_deref()),
+            JobsCommand::Cancel(args) => jobs::cancel(&args.id),
+            JobsCommand::Run => jobs::run(),
+        },
         Command::Organize(args) => organize::run(&args),
         Command::Spotify(args) => match args.command {
             SpotifyCommand::Login(args) => spotify::login(args.port),
@@ -575,6 +688,19 @@ async fn run(command: Command) -> Result<(), String> {
         },
         Command::Split(args) => split::run(&args).map(|_| ()),
         Command::Validate(args) => validate::run(&args),
+        Command::Watchlist(args) => match args.command {
+            WatchlistCommand::List(args) => watchlist::list(args.items),
+            WatchlistCommand::Add(args) => watchlist::add(&args.url),
+            WatchlistCommand::Remove(args) => watchlist::remove(&args.playlist_id),
+            WatchlistCommand::Refresh(args) => watchlist::refresh(args.queue_only),
+            WatchlistCommand::Item(args) => watchlist::item(
+                &args.playlist_id,
+                args.position,
+                &args.action,
+                args.queue_only,
+            ),
+        },
+        Command::Workflow(args) if args.queue => workflow::queue(&args),
         Command::Workflow(args) => workflow::run(&args),
     }
 }

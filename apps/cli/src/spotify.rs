@@ -99,7 +99,7 @@ pub fn watch(reference: &str) -> Result<(), String> {
                 .and_then(serde_json::Value::as_str)
         })
         .unwrap_or("playlist");
-    println!("Added {name}. Open the Watchlist tab, or run a refresh, to sync it.");
+    println!("Added {name}. Run `muzik watchlist refresh` to sync it.");
     Ok(())
 }
 

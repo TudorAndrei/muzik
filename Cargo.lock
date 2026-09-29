@@ -4621,7 +4621,9 @@ version = "2.4.1"
 dependencies = [
  "muzik-core",
  "muzik-import",
+ "muzik-jobs",
  "muzik-library",
+ "muzik-runner",
  "muzik-soulseek",
  "muzik-tags",
  "muzik-workflow",

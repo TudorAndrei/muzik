@@ -16,6 +16,61 @@ use yt_dlp::executor::Executor;
 
 use crate::{Download, Organize, SoulseekDownload, Workflow, download, organize, soulseek, split};
 
+pub fn queue(args: &Workflow) -> Result<(), String> {
+    if args.compilation {
+        return Err("--compilation does not work with --queue yet.".into());
+    }
+    let absolute = |path: &Path| {
+        std::path::absolute(path)
+            .map(|path| path.to_string_lossy().into_owned())
+            .map_err(|error| error.to_string())
+    };
+    let raw = if matches!(classify_input(&args.raw), WorkflowInput::Local(_)) {
+        absolute(Path::new(&args.raw))?
+    } else {
+        args.raw.clone()
+    };
+    let mut params = serde_json::Map::new();
+    for (key, path) in [
+        ("output", &args.output),
+        ("splits", &args.splits),
+        ("config", &args.config),
+    ] {
+        if let Some(path) = path {
+            params.insert(key.into(), serde_json::json!(absolute(path)?));
+        }
+    }
+    params.extend(
+        serde_json::json!({
+            "raw": raw,
+            "review": args.review,
+            "no_split": args.no_split,
+            "no_organize": args.no_organize,
+            "tag_only": args.tag_only,
+            "dry_run": args.dry_run,
+            "jobs": args.jobs,
+            "keep_source": args.keep_source,
+            "force": args.force,
+            "audio_source": args.audio_source,
+            "metadata_source": args.metadata_source,
+            "quality_policy": args.quality_policy,
+            "min_bitrate": args.min_bitrate,
+            "prefer": args.prefer,
+            "fallback": args.fallback,
+            "interactive": !args.no_interactive,
+        })
+        .as_object()
+        .cloned()
+        .unwrap_or_default(),
+    );
+    let jobs = crate::jobs::open()?;
+    let id = jobs
+        .workflow(&serde_json::Value::Object(params))
+        .map_err(|error| error.to_string())?;
+    println!("Queued {} as {}.", args.raw, muzik_runner::job_id(id));
+    crate::jobs::drain(&jobs)
+}
+
 pub fn run(args: &Workflow) -> Result<(), String> {
     let input = classify_input(&args.raw);
     let request = WorkflowRequest {
@@ -515,6 +570,7 @@ mod tests {
             prefer: "lossless".into(),
             fallback: muzik_core::AudioFallback::default(),
             no_interactive: false,
+            queue: false,
         })?;
         assert!(audio.exists());
         assert!(!splits.exists());
