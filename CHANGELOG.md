@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.6.0 - 2026-09-29
+#### Features
+- skip albums already in the library unless the duplicates setting says otherwise - (d396305) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.5.0 - (5aa295a) - TudorAndrei
+
+- - -
+
 ## v2.5.0 - 2026-09-29
 #### Features
 - (**cli**) add jobs and watchlist commands on the shared queue - (7d126d1) - TudorAndrei
