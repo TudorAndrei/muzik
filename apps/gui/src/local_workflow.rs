@@ -3,7 +3,7 @@
 use muzik_core::{chapters::Chapter, paths, splitter};
 use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
-use muzik_import::plan::AlbumPlan;
+use muzik_import::plan::{AlbumPlan, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_workflow::{
     classify_input, run_workflow_with_events, ChapterReview, SplitProgress, SplitTask,
@@ -225,11 +225,8 @@ impl WorkflowOperations for LocalOperations<'_> {
                     Some(id) => album
                         .candidates
                         .iter()
-                        .enumerate()
-                        .find_map(|(candidate, _)| {
-                            (id == format!("native:{index}:match:{candidate}"))
-                                .then_some(MatchDecision::Candidate(candidate))
-                        })
+                        .position(|candidate| candidate_id(candidate) == id)
+                        .map(MatchDecision::Candidate)
                         .ok_or("Select a valid match ID.")?,
                     None if answer.is_null() => MatchDecision::Skip,
                     _ => return Err("Select a valid match ID.".into()),
@@ -378,8 +375,8 @@ fn album_task(index: usize, album: &AlbumPlan) -> Value {
         "current_artist":current.map(|item| item.artist.as_str()),
         "current_album":current.map(|item| item.album.as_str()),
         "current_year":current.map(|item| item.year),
-        "matches":album.candidates.iter().enumerate().map(|(candidate, item)| json!({
-            "candidate_id":format!("native:{index}:match:{candidate}"),
+        "matches":album.candidates.iter().map(|item| json!({
+            "candidate_id":candidate_id(item),
             "artist":item.release.artist,
             "album":item.release.title,
             "year":item.release.year,
@@ -391,6 +388,10 @@ fn album_task(index: usize, album: &AlbumPlan) -> Value {
             "score":match_score(item.distance),
         })).collect::<Vec<_>>(),
     })
+}
+
+fn candidate_id(candidate: &PlannedCandidate) -> String {
+    format!("release:{}", candidate.release.id.0)
 }
 
 fn match_score(distance: f64) -> u64 {
