@@ -1,6 +1,7 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde_json::Value;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
@@ -103,6 +104,36 @@ pub struct Job {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelRequest {
+    Removed,
+    Requested,
+    NotOpen,
+}
+
+pub struct RunnerLock {
+    _file: File,
+}
+
+impl RunnerLock {
+    pub fn try_acquire(path: &Path) -> Result<Option<Self>, String> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)
+            .map_err(|error| error.to_string())?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error.to_string()),
+        }
+    }
+}
+
 pub struct Store {
     connection: Connection,
 }
@@ -128,7 +159,50 @@ impl Store {
             .busy_timeout(Duration::from_secs(5))
             .map_err(text)?;
         connection.execute_batch(SCHEMA).map_err(text)?;
+        let has_cancel: bool = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'cancel_requested'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|count| count > 0)
+            .map_err(text)?;
+        if !has_cancel {
+            connection
+                .execute_batch(
+                    "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
+                )
+                .map_err(text)?;
+        }
         Ok(Self { connection })
+    }
+
+    pub fn request_cancel(&self, id: i64) -> Result<CancelRequest, String> {
+        if self.cancel_open(id)? {
+            return Ok(CancelRequest::Removed);
+        }
+        let changed = self
+            .connection
+            .execute(
+                "UPDATE jobs SET cancel_requested = 1, updated_at = ?1
+                 WHERE id = ?2 AND status = 'running'",
+                params![now(), id],
+            )
+            .map_err(text)?;
+        Ok(if changed == 1 {
+            CancelRequest::Requested
+        } else {
+            CancelRequest::NotOpen
+        })
+    }
+
+    pub fn cancel_requests(&self) -> Result<Vec<i64>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id FROM jobs WHERE status = 'running' AND cancel_requested = 1")
+            .map_err(text)?;
+        let rows = statement.query_map([], |row| row.get(0)).map_err(text)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(text)
     }
 
     pub fn recover(&self) -> Result<usize, String> {
@@ -182,7 +256,7 @@ impl Store {
         self.connection
             .query_row(
                 &format!(
-                    "UPDATE jobs SET status = 'running', updated_at = ?1
+                    "UPDATE jobs SET status = 'running', cancel_requested = 0, updated_at = ?1
                      WHERE id = (SELECT jobs.id FROM jobs JOIN json_each(?2) AS names ON names.value = jobs.queue
                                  WHERE jobs.status = 'queued' ORDER BY names.key, jobs.id LIMIT 1)
                      RETURNING {COLUMNS}"
@@ -365,7 +439,7 @@ fn text(error: rusqlite::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, NewJob, Queue, Status, Store};
+    use super::{CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
     fn job<'a>(kind: Kind, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
@@ -477,6 +551,34 @@ mod tests {
         store.claim(Queue::Item)?;
         store.finish(id)?;
         assert_eq!(store.get(id)?.map(|job| job.status), Some(Status::Done));
+        Ok(())
+    }
+
+    #[test]
+    fn a_cancel_removes_a_queued_job_and_flags_a_running_one() -> Result<(), String> {
+        let store = Store::open_in_memory()?;
+        let params = json!({});
+        let queued = store.enqueue(&job(Kind::Item, "a", &params))?;
+        let running = store.enqueue(&job(Kind::Workflow, "b", &params))?;
+        store.claim(Queue::Workflow)?;
+        assert_eq!(store.request_cancel(queued)?, CancelRequest::Removed);
+        assert_eq!(store.request_cancel(running)?, CancelRequest::Requested);
+        assert_eq!(store.cancel_requests()?, [running]);
+        store.cancel(running)?;
+        assert_eq!(store.request_cancel(running)?, CancelRequest::NotOpen);
+        assert!(store.cancel_requests()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn one_runner_holds_the_lock() -> Result<(), String> {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let path = directory.path().join("jobs.lock");
+        let first = RunnerLock::try_acquire(&path)?;
+        assert!(first.is_some());
+        assert!(RunnerLock::try_acquire(&path)?.is_none());
+        drop(first);
+        assert!(RunnerLock::try_acquire(&path)?.is_some());
         Ok(())
     }
 
