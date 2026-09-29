@@ -511,7 +511,7 @@ impl Muzik {
             None => String::new(),
         };
         if !line.is_empty() {
-            self.logs.push(short_text(&line, 180));
+            self.logs.push(short_text(&shorten_paths(&line), 180));
         }
     }
 
@@ -1285,17 +1285,22 @@ impl Muzik {
                     .child(summary),
             );
         }
-        let mut log = div()
-            .v_flex()
-            .gap_1()
-            .min_h(px(120.))
-            .max_h(px(220.))
-            .overflow_y_scrollbar();
+        let mut log = div().v_flex().gap_1p5();
         if self.logs.is_empty() {
             log = log.child(style::meta("Job updates will appear here.", cx));
         }
-        for (index, line) in self.logs.iter().rev().take(100).enumerate() {
-            log = log.child(style::mono(line.clone(), cx).id(("log", index)));
+        for (index, line) in self.logs.iter().rev().take(50).enumerate() {
+            log = log.child(
+                div()
+                    .id(("log", index))
+                    .text_xs()
+                    .text_color(if index == 0 {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    })
+                    .child(line.clone()),
+            );
         }
         panel
             .child(
@@ -1766,6 +1771,23 @@ impl Render for Muzik {
                 this.child(self.status_bar(cx))
             })
     }
+}
+
+fn shorten_paths(line: &str) -> String {
+    let Some(start) = line
+        .find('/')
+        .filter(|start| *start == 0 || line[..*start].ends_with(' '))
+    else {
+        return line.to_owned();
+    };
+    let path = std::path::Path::new(&line[start..]);
+    if path.components().count() < 3 {
+        return line.to_owned();
+    }
+    path.file_name().map_or_else(
+        || line.to_owned(),
+        |name| format!("{}{}", &line[..start], name.to_string_lossy()),
+    )
 }
 
 fn short_text(value: &str, limit: usize) -> String {
@@ -2328,7 +2350,7 @@ fn check_backend() -> Result<(), String> {
 mod tests {
     use super::{
         activity_section, candidate_summary, decision_choices, decision_details,
-        merge_thumbnail_paths, tool_path, ActivityProgress, Muzik,
+        merge_thumbnail_paths, shorten_paths, tool_path, ActivityProgress, Muzik,
     };
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
@@ -2499,6 +2521,16 @@ mod tests {
             ..ActivityProgress::default()
         };
         assert_eq!(progress.percentage(), 100.);
+    }
+
+    #[test]
+    fn event_lines_show_the_folder_name_instead_of_the_full_path() {
+        assert_eq!(
+            shorten_paths("Import group 1 of 1: /Users/tudor/Library/Application Support/muzik/splits/GENDEMA - sassy things [Full album] [wiih44Gfi2M]"),
+            "Import group 1 of 1: GENDEMA - sassy things [Full album] [wiih44Gfi2M]"
+        );
+        assert_eq!(shorten_paths("Split 3/12 tracks"), "Split 3/12 tracks");
+        assert_eq!(shorten_paths("Started import"), "Started import");
     }
 
     #[test]

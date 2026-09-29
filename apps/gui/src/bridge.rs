@@ -344,10 +344,12 @@ impl Bridge {
                     let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"agent","event":event,"data":data}}));
                 };
                 if let Some(model) = agent_model(kind, &payload) {
-                    job_message(
-                        "message",
-                        json!({"message":format!("Asking {model} to choose.")}),
-                    );
+                    if muzik_agent::strong_match(kind, &payload).is_none() {
+                        job_message(
+                            "message",
+                            json!({"message":format!("Asking {model} to choose.")}),
+                        );
+                    }
                     match muzik_agent::decide(kind, &payload, &model) {
                         Ok(muzik_agent::Outcome::Decided(choice)) => {
                             job_message(
