@@ -132,6 +132,7 @@ const SWITCHES: &[(&str, &str, bool)] = &[
     ("keep_source", "Keep source", false),
     ("force", "Force", false),
     ("interactive", "Interactive", true),
+    ("auto_decide", "Choose automatically", true),
 ];
 const FILTERS: &[&str] = &[
     "All",
@@ -478,6 +479,15 @@ impl Muzik {
                 );
                 self.job_status = message.clone();
                 message
+            }
+            "agent_decided" => {
+                let label = describe(&payload["label"]);
+                self.job_status = format!("Chose {label}");
+                format!(
+                    "Chose {label} ({:.0}%): {}",
+                    payload["confidence"].as_f64().unwrap_or(0.0) * 100.0,
+                    describe(&payload["reason"])
+                )
             }
             "import_started" => {
                 self.job_status = "Import started".into();
@@ -1159,17 +1169,28 @@ impl Muzik {
             if let Some(note) = decision_note(decision) {
                 review = review.child(style::meta(note, cx));
             }
+            if let Some(note) = agent_note(&decision["payload"]["agent"]) {
+                review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
+            }
+            let suggested = decision["payload"]["agent"]["suggestion"]
+                .as_u64()
+                .and_then(|index| usize::try_from(index).ok())
+                .or((kind != "chapter_edit").then_some(0));
             let mut buttons = div().v_flex().gap_1p5();
-            for (index, (label, value)) in decision_choices(decision).into_iter().enumerate() {
-                let button = Button::new(("decision", index))
-                    .label(label)
-                    .w_full()
-                    .on_click(cx.listener(move |view, _, _, cx| view.reply(value.clone(), cx)));
-                buttons = buttons.child(if index == 0 && kind != "chapter_edit" {
-                    button.primary()
+            for (index, option) in decision_choices(decision).into_iter().enumerate() {
+                let value = option.value.clone();
+                let reply = cx.listener(move |view, _, _, cx| view.reply(value.clone(), cx));
+                let highlight = suggested == Some(index);
+                if option.score.is_none() && option.meta.is_empty() {
+                    let button = Button::new(("decision", index))
+                        .label(option.label)
+                        .w_full()
+                        .on_click(reply);
+                    buttons = buttons.child(if highlight { button.primary() } else { button });
                 } else {
-                    button
-                });
+                    buttons =
+                        buttons.child(decision_row(index, &option, highlight, cx).on_click(reply));
+                }
             }
             review = review.child(buttons);
             let details = decision_details(decision);
@@ -1323,6 +1344,7 @@ impl ConfigView {
             ("config", "Beets config"),
             ("jobs", "Jobs"),
             ("min_bitrate", "Min bitrate"),
+            ("agent_model", "Model"),
         ]
         .into_iter()
         .map(|(key, label)| {
@@ -1528,6 +1550,10 @@ impl Render for ConfigView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut destinations = div().v_flex().gap_3();
         let mut tuning = div().flex().flex_wrap().gap_4();
+        let mut agent = div().v_flex().gap_3().child(style::meta(
+            "Muzik asks this Codex model to pick album matches and Soulseek downloads. It asks you when the model is not sure.",
+            cx,
+        ));
         for (index, field) in self.fields.iter().enumerate() {
             let numeric = matches!(field.key, "jobs" | "min_bitrate");
             let control = if numeric {
@@ -1557,6 +1583,8 @@ impl Render for ConfigView {
                 .child(row);
             if numeric {
                 tuning = tuning.child(div().w(px(180.)).child(field_view));
+            } else if field.key == "agent_model" {
+                agent = agent.child(div().w(px(240.)).child(field_view));
             } else {
                 destinations = destinations.child(field_view);
             }
@@ -1574,17 +1602,18 @@ impl Render for ConfigView {
         }
         let mut switches = div().flex().flex_wrap().gap_x_6().gap_y_3();
         for (index, switch) in self.switches.iter().enumerate() {
-            switches = switches.child(
-                div().w(px(200.)).child(
-                    Switch::new(("config-switch", index))
-                        .label(switch.label)
-                        .checked(switch.enabled)
-                        .on_click(cx.listener(move |view, checked: &bool, _, cx| {
-                            view.switches[index].enabled = *checked;
-                            cx.notify();
-                        })),
-                ),
-            );
+            let control = Switch::new(("config-switch", index))
+                .label(switch.label)
+                .checked(switch.enabled)
+                .on_click(cx.listener(move |view, checked: &bool, _, cx| {
+                    view.switches[index].enabled = *checked;
+                    cx.notify();
+                }));
+            if switch.key == "auto_decide" {
+                agent = agent.child(control);
+            } else {
+                switches = switches.child(div().w(px(200.)).child(control));
+            }
         }
         let status = self.status.borrow().clone();
         div()
@@ -1625,6 +1654,13 @@ impl Render for ConfigView {
                                 .title("SOURCES AND QUALITY")
                                 .outline()
                                 .child(choices),
+                        )
+                        .child(
+                            GroupBox::new()
+                                .id("config-agent")
+                                .title("AI DECISIONS")
+                                .outline()
+                                .child(agent),
                         )
                         .child(
                             GroupBox::new()
@@ -1982,6 +2018,81 @@ fn decision_note(decision: &Value) -> Option<&'static str> {
     }
 }
 
+fn agent_note(agent: &Value) -> Option<String> {
+    let model = agent["model"].as_str().unwrap_or("The assistant");
+    if let Some(error) = agent["error"].as_str() {
+        return Some(format!("{model} could not choose: {error}"));
+    }
+    let reason = agent["reason"].as_str()?;
+    let confidence = (agent["confidence"].as_f64().unwrap_or(0.0) * 100.0).round();
+    Some(format!("{model} is not sure ({confidence}%): {reason}"))
+}
+
+fn decision_row(index: usize, option: &DecisionOption, highlight: bool, cx: &App) -> Stateful<Div> {
+    let theme = cx.theme();
+    let score_color = match option.score {
+        Some(score) if score >= 85 => theme.success,
+        Some(score) if score >= 60 => theme.warning,
+        _ => theme.muted_foreground,
+    };
+    let mut label = div().flex().items_center().gap_2().child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .text_sm()
+            .font_semibold()
+            .truncate()
+            .child(option.label.clone()),
+    );
+    if highlight {
+        label = label.child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(theme.primary)
+                .child("Suggested"),
+        );
+    }
+    let mut row = div()
+        .id(("decision", index))
+        .flex()
+        .items_center()
+        .gap_3()
+        .px_3()
+        .py_2()
+        .rounded_md()
+        .border_1()
+        .border_color(if highlight {
+            theme.primary
+        } else {
+            theme.border
+        })
+        .cursor_pointer()
+        .hover(|row| row.bg(theme.accent))
+        .child(
+            div()
+                .v_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_0p5()
+                .child(label)
+                .when(!option.meta.is_empty(), |column| {
+                    column.child(style::meta(option.meta.clone(), cx).truncate())
+                }),
+        );
+    if let Some(score) = option.score {
+        row = row.child(
+            div()
+                .flex_none()
+                .text_sm()
+                .font_semibold()
+                .text_color(score_color)
+                .child(format!("{score}%")),
+        );
+    }
+    row
+}
+
 fn short_detail(detail: &str) -> String {
     if detail.starts_with('/') {
         std::path::Path::new(detail).file_name().map_or_else(
@@ -1993,84 +2104,136 @@ fn short_detail(detail: &str) -> String {
     }
 }
 
-fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
+struct DecisionOption {
+    label: String,
+    meta: String,
+    score: Option<u64>,
+    value: Value,
+}
+
+impl DecisionOption {
+    fn plain(label: &str, value: Value) -> Self {
+        Self {
+            label: label.to_owned(),
+            meta: String::new(),
+            score: None,
+            value,
+        }
+    }
+}
+
+fn joined_facts(parts: impl IntoIterator<Item = String>) -> String {
+    parts
+        .into_iter()
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn fact(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Number(number) => number.to_string(),
+        _ => String::new(),
+    }
+}
+
+fn decision_choices(decision: &Value) -> Vec<DecisionOption> {
     let payload = &decision["payload"];
     match decision["kind"].as_str().unwrap_or("") {
         "soulseek_candidate" => {
-            let mut choices: Vec<(String, Value)> = payload["candidates"]
+            let candidates: Vec<&Value> = payload["candidates"]
                 .as_array()
                 .into_iter()
                 .flatten()
+                .collect();
+            let best = candidates
+                .iter()
+                .filter_map(|candidate| candidate["score"].as_f64())
+                .fold(0.0_f64, f64::max);
+            let mut choices: Vec<DecisionOption> = candidates
+                .iter()
                 .enumerate()
-                .map(|(index, candidate)| {
-                    (
+                .map(|(index, candidate)| DecisionOption {
+                    label: candidate["title"]
+                        .as_str()
+                        .or_else(|| candidate["name"].as_str())
+                        .unwrap_or("Candidate")
+                        .to_owned(),
+                    meta: joined_facts([
+                        fact(&candidate["quality"]["format"]),
                         format!(
-                            "{}: {}",
-                            index + 1,
-                            candidate["title"]
-                                .as_str()
-                                .or_else(|| candidate["name"].as_str())
-                                .unwrap_or("Candidate")
+                            "{} files",
+                            candidate["files"].as_array().map_or(0, Vec::len)
                         ),
-                        json!(index),
-                    )
+                        format!("user {}", fact(&candidate["user"])),
+                    ]),
+                    score: candidate["score"]
+                        .as_f64()
+                        .filter(|_| best > 0.0)
+                        .map(|score| ((score / best).clamp(0.0, 1.0) * 100.0).round() as u64),
+                    value: json!(index),
                 })
                 .collect();
-            choices.push(("Skip these candidates".into(), Value::Null));
+            choices.push(DecisionOption::plain("Skip these downloads", Value::Null));
             choices
         }
-        "chapter_review" => [
-            ("Use these chapters", "accept"),
-            ("Edit the chapters", "edit"),
-            ("Do not split", "reject"),
-        ]
-        .into_iter()
-        .map(|(label, value)| (label.to_string(), json!(value)))
-        .collect(),
+        "chapter_review" => vec![
+            DecisionOption::plain("Use these chapters", json!("accept")),
+            DecisionOption::plain("Edit the chapters", json!("edit")),
+            DecisionOption::plain("Do not split", json!("reject")),
+        ],
         "chapter_edit" => vec![
-            ("Keep original chapters".into(), payload["chapters"].clone()),
-            ("Cancel chapter edit".into(), Value::Null),
+            DecisionOption::plain("Keep original chapters", payload["chapters"].clone()),
+            DecisionOption::plain("Cancel chapter edit", Value::Null),
         ],
         "quality_replacement" => vec![
-            ("Replace file".into(), json!(true)),
-            ("Keep current file".into(), json!(false)),
+            DecisionOption::plain("Replace file", json!(true)),
+            DecisionOption::plain("Keep current file", json!(false)),
         ],
         "import_match" => {
-            let mut choices: Vec<(String, Value)> = payload["task"]["matches"]
+            let mut choices: Vec<DecisionOption> = payload["task"]["matches"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|candidate| {
-                    candidate["candidate_id"].as_str().map(|id| {
-                        (
-                            format!(
-                                "{} — {} · distance {}",
-                                candidate["artist"].as_str().unwrap_or("Unknown artist"),
-                                candidate["album"]
-                                    .as_str()
-                                    .or_else(|| candidate["title"].as_str())
-                                    .unwrap_or("Unknown release"),
-                                candidate["distance"]
-                                    .as_f64()
-                                    .map_or_else(|| "?".to_string(), |value| format!("{value:.3}"))
-                            ),
-                            json!(id),
-                        )
+                    let id = candidate["candidate_id"].as_str()?;
+                    Some(DecisionOption {
+                        label: format!(
+                            "{} — {}",
+                            candidate["artist"].as_str().unwrap_or("Unknown artist"),
+                            candidate["album"]
+                                .as_str()
+                                .or_else(|| candidate["title"].as_str())
+                                .unwrap_or("Unknown release")
+                        ),
+                        meta: joined_facts([
+                            fact(&candidate["year"]),
+                            fact(&candidate["country"]),
+                            fact(&candidate["media"]),
+                            fact(&candidate["label"]),
+                            candidate["track_count"]
+                                .as_u64()
+                                .map_or_else(String::new, |count| format!("{count} tracks")),
+                        ]),
+                        score: candidate["score"].as_u64().or_else(|| {
+                            candidate["distance"].as_f64().map(|distance| {
+                                ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
+                            })
+                        }),
+                        value: json!(id),
                     })
                 })
                 .collect();
-            choices.push(("Keep current tags".into(), json!("as_is")));
-            choices.push(("Skip".into(), Value::Null));
+            choices.push(DecisionOption::plain("Keep current tags", json!("as_is")));
+            choices.push(DecisionOption::plain("Skip", Value::Null));
             choices
         }
-        "import_duplicate" => [
-            ("Skip the new files", "skip"),
-            ("Keep both", "keep_all"),
-            ("Replace the old files", "remove_old"),
-        ]
-        .into_iter()
-        .map(|(label, value)| (label.to_string(), json!(value)))
-        .collect(),
+        "import_duplicate" => vec![
+            DecisionOption::plain("Skip the new files", json!("skip")),
+            DecisionOption::plain("Keep both", json!("keep_all")),
+            DecisionOption::plain("Replace the old files", json!("remove_old")),
+        ],
         _ => Vec::new(),
     }
 }
@@ -2221,8 +2384,11 @@ mod tests {
         assert!(details[0].contains("91"));
         assert!(details[0].contains("FLAC"));
         assert!(details[0].contains("Music/Album"));
-        assert_eq!(decision_choices(&decision)[0].1, json!(0));
-        assert_eq!(decision_choices(&decision).last().unwrap().1, json!(null));
+        let choices = decision_choices(&decision);
+        assert_eq!(choices[0].value, json!(0));
+        assert_eq!(choices[0].score, Some(100));
+        assert!(choices[0].meta.contains("FLAC"));
+        assert_eq!(choices.last().unwrap().value, json!(null));
     }
 
     #[test]
@@ -2240,7 +2406,7 @@ mod tests {
         assert_eq!(
             decision_choices(&decision)
                 .into_iter()
-                .map(|(_, value)| value)
+                .map(|option| option.value)
                 .collect::<Vec<_>>(),
             vec![json!("skip"), json!("keep_all"), json!("remove_old")]
         );

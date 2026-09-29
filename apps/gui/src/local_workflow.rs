@@ -382,9 +382,19 @@ fn album_task(index: usize, album: &AlbumPlan) -> Value {
             "candidate_id":format!("native:{index}:match:{candidate}"),
             "artist":item.release.artist,
             "album":item.release.title,
+            "year":item.release.year,
+            "country":item.release.country,
+            "media":item.release.media,
+            "label":item.release.label,
+            "track_count":item.release.tracks.len(),
             "distance":item.distance,
+            "score":match_score(item.distance),
         })).collect::<Vec<_>>(),
     })
+}
+
+fn match_score(distance: f64) -> u64 {
+    ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
 }
 
 pub(crate) fn event_record(event: WorkflowEvent) -> Value {
