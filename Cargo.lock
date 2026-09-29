@@ -4702,6 +4702,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "muzik-jobs"
+version = "2.4.1"
+dependencies = [
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "muzik-library"
 version = "2.4.1"
 dependencies = [
