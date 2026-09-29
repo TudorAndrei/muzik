@@ -4665,6 +4665,7 @@ dependencies = [
  "muzik-agent",
  "muzik-core",
  "muzik-import",
+ "muzik-jobs",
  "muzik-library",
  "muzik-soulseek",
  "muzik-tags",

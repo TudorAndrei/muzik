@@ -37,6 +37,13 @@ menu can run the next stage, retry a failed stage, or repeat a selected stage.
 The app asks before a command replaces local files. A command that changes an
 early stage can make later stages stale.
 
+A watchlist job does not stop when an item needs a choice. The item goes to
+the Waiting state, and the job continues with the next item. **Needs you** in
+Activity lists the waiting items. When you answer, the app keeps the answer in
+`jobs.db` in the data folder and runs the waiting stage again with it. If you
+cancel that run, the item waits again. An answer that is not used yet stays
+in the queue after the app closes.
+
 ## AI decisions
 
 When **Choose automatically** is on in Settings, the app picks album matches

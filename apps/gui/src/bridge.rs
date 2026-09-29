@@ -1,7 +1,9 @@
 //! JSON protocol for the Rust desktop application.
 use crate::{local_workflow, native, native_watchlist, remote_workflow, thumbnails, watchlist};
-use muzik_core::{app_config, spotify, watchlist::Repository};
+use muzik_core::{app_config, paths, spotify, watchlist::Repository};
+use muzik_jobs::{NewJob, Status, Store};
 use serde_json::{json, Value};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -18,6 +20,7 @@ pub struct Bridge {
     local_decision: Arc<Mutex<Option<NativeDecision>>>,
     watchlist_generation: Arc<AtomicU64>,
     watchlist_gate: Arc<Mutex<()>>,
+    jobs: Option<Arc<Mutex<Store>>>,
     next_id: u64,
 }
 
@@ -50,6 +53,7 @@ impl Bridge {
             local_decision: Arc::new(Mutex::new(None)),
             watchlist_generation: Arc::new(AtomicU64::new(0)),
             watchlist_gate: Arc::new(Mutex::new(())),
+            jobs: open_jobs().ok().map(|store| Arc::new(Mutex::new(store))),
             next_id: 1,
         })
     }
@@ -57,6 +61,9 @@ impl Bridge {
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
+        if command.starts_with("jobs.") {
+            return self.queue_command(id, command, &params);
+        }
         if command == "spotify.login" {
             return self.start_spotify_login(id, params);
         }
@@ -291,6 +298,83 @@ impl Bridge {
         Ok(id)
     }
 
+    fn queue_command(
+        &mut self,
+        id: String,
+        command: &str,
+        params: &Value,
+    ) -> Result<String, String> {
+        let Some(jobs) = self.jobs.clone() else {
+            self.native_output
+                .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":"The job queue is not available."}}))
+                .map_err(|_| "Rust backend is not available".to_owned())?;
+            return Ok(id);
+        };
+        let store = jobs.lock().map_err(|_| "Job queue is unavailable")?;
+        let result = match command {
+            "jobs.waiting" => store.list(Status::Waiting).map(|waiting| {
+                let jobs: Vec<Value> = waiting
+                    .into_iter()
+                    .map(|job| {
+                        let question = job.question.unwrap_or(Value::Null);
+                        json!({"id":job.id,"title":job.title,"kind":question["kind"],"payload":question["payload"]})
+                    })
+                    .collect();
+                json!({"jobs":jobs})
+            }),
+            "jobs.answer" => match (params["id"].as_i64(), params.get("value")) {
+                (Some(job_id), Some(value)) => store.get(job_id).and_then(|job| {
+                    let kind = job
+                        .and_then(|job| job.question)
+                        .map(|question| question["kind"].clone())
+                        .unwrap_or(Value::Null);
+                    store
+                        .answer(job_id, &json!({"kind":kind,"value":value}))
+                        .map(|answered| json!({"answered":answered}))
+                }),
+                _ => Err("id and value are required.".into()),
+            },
+            "jobs.next" => {
+                let busy = self
+                    .login
+                    .lock()
+                    .map_err(|_| "Spotify login state is unavailable")?
+                    .is_some()
+                    || self
+                        .local_job
+                        .lock()
+                        .map_err(|_| "Local job state is unavailable")?
+                        .is_some();
+                match if busy { Ok(None) } else { store.claim(QUEUE) } {
+                    Ok(Some(job)) => {
+                        drop(store);
+                        let mut params = job.params;
+                        params["answer"] = job.answer.unwrap_or(Value::Null);
+                        params["queue_job_id"] = json!(job.id);
+                        self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
+                        return self.start_native_workflow(
+                            id,
+                            Ok(NativeWorkflowRequest::WatchlistAction(params)),
+                        );
+                    }
+                    Ok(None) => Ok(json!({"job_id":null})),
+                    Err(error) => Err(error),
+                }
+            }
+            _ => Err(format!("Unknown command: {command}")),
+        };
+        let response = match result {
+            Ok(result) => json!({"id":id,"type":"response","ok":true,"result":result}),
+            Err(message) => {
+                json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}})
+            }
+        };
+        self.native_output
+            .send(response)
+            .map_err(|_| "Rust backend is not available".to_owned())?;
+        Ok(id)
+    }
+
     fn start_native_workflow(
         &mut self,
         id: String,
@@ -331,15 +415,42 @@ impl Bridge {
         let sender = self.native_output.clone();
         let active = Arc::clone(&self.local_job);
         let pending = Arc::clone(&self.local_decision);
+        let jobs = self.jobs.clone();
         thread::spawn(move || {
             let mut decision_number = 0_usize;
+            let parked = RefCell::new(None);
+            let (parks, queue_job, resume) = match &request {
+                NativeWorkflowRequest::WatchlistRefresh(params)
+                | NativeWorkflowRequest::WatchlistAction(params) => (
+                    jobs.is_some(),
+                    params["queue_job_id"].as_i64(),
+                    Some(params["answer"].clone()).filter(|answer| answer["kind"].is_string()),
+                ),
+                _ => (false, None, None),
+            };
+            let resume = RefCell::new(resume);
             let mut workflow_event = |event: Value| {
+                if event["event"] == "item_waiting" {
+                    if let Some(store) = jobs.as_ref().and_then(|jobs| jobs.lock().ok()) {
+                        let _ = park_item(&store, &event["data"]);
+                    }
+                }
                 let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"workflow","event":event["event"],"data":event["data"]}}));
             };
             let mut import_event = |event: Value| {
                 let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"native","event":event["event"],"data":event["data"]}}));
             };
             let mut decide = |kind: &str, mut payload: Value| {
+                let answered = {
+                    let mut resume = resume.borrow_mut();
+                    match resume.as_ref() {
+                        Some(answer) if answer["kind"] == kind => resume.take(),
+                        _ => None,
+                    }
+                };
+                if let Some(answer) = answered {
+                    return Ok(answer["value"].clone());
+                }
                 let job_message = |event: &str, data: Value| {
                     let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"agent","event":event,"data":data}}));
                 };
@@ -369,6 +480,10 @@ impl Bridge {
                             payload["agent"] = json!({"model":model,"error":error});
                         }
                     }
+                }
+                if parks {
+                    parked.replace(Some(json!({"kind":kind,"payload":payload})));
+                    return Err("waiting for a choice".to_owned());
                 }
                 decision_number += 1;
                 let decision_id = format!("{job_id}-decision-{decision_number}");
@@ -439,6 +554,7 @@ impl Bridge {
                     &mut workflow_event,
                     &mut import_event,
                     &mut decide,
+                    &parked,
                 )
                 .map_err(|error| {
                     (
@@ -452,6 +568,7 @@ impl Bridge {
                     &mut workflow_event,
                     &mut import_event,
                     &mut decide,
+                    &parked,
                 )
                 .map_err(|error| {
                     (
@@ -460,6 +577,15 @@ impl Bridge {
                     )
                 }),
             };
+            if let (Some(queue_job), Some(store)) =
+                (queue_job, jobs.as_ref().and_then(|jobs| jobs.lock().ok()))
+            {
+                let _ = match &result {
+                    Ok(_) => store.finish(queue_job),
+                    Err((true, _)) => store.reopen(queue_job),
+                    Err((false, message)) => store.fail(queue_job, message),
+                };
+            }
             if let Ok(mut state) = active.lock() {
                 *state = None;
             }
@@ -611,6 +737,50 @@ fn validate_workflow_command(command: &str, params: &Value) -> Result<(), String
         _ => {}
     }
     Ok(())
+}
+
+const QUEUE: &str = "watchlist";
+
+fn open_jobs() -> Result<Store, String> {
+    let store = if cfg!(test) {
+        Store::open_in_memory()?
+    } else {
+        Store::open(&paths::data_dir().join("jobs.db"))?
+    };
+    store.recover()?;
+    Ok(store)
+}
+
+fn park_item(store: &Store, data: &Value) -> Result<i64, String> {
+    let video_id = data["video_id"].as_str().unwrap_or("");
+    let item_key = format!(
+        "{}:{}:{video_id}",
+        describe(&data["playlist_id"]),
+        data["position"]
+    );
+    let stage = data["stage"].as_str().unwrap_or("download");
+    let params = json!({
+        "playlist_id":data["playlist_id"],
+        "position":data["position"],
+        "video_id":video_id,
+        "action":native_watchlist::resume_action(stage),
+    });
+    store.park(
+        &NewJob {
+            queue: QUEUE,
+            kind: "resume",
+            item_key: &item_key,
+            title: data["title"].as_str().unwrap_or(video_id),
+            params: &params,
+        },
+        &data["question"],
+    )
+}
+
+fn describe(value: &Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
 }
 
 fn agent_model(kind: &str, payload: &Value) -> Option<String> {
@@ -1088,6 +1258,49 @@ mod tests {
         let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
         assert_eq!(response["id"], id);
         assert_eq!(response["error"]["code"], "invalid_request");
+        Ok(())
+    }
+
+    #[test]
+    fn a_parked_choice_waits_for_an_answer_and_then_resumes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut bridge = Bridge::start()?;
+        let jobs = bridge.jobs.clone().ok_or("job queue is missing")?;
+        let question = json!({"kind":"import_match","payload":{"matches":[]}});
+        let job_id = {
+            let store = jobs.lock().map_err(|_| "job queue is locked")?;
+            super::park_item(
+                &store,
+                &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","title":"Album","stage":"organize","question":question}),
+            )?
+        };
+        let id = bridge.send("jobs.waiting", json!({}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["id"], id);
+        assert_eq!(
+            response["result"]["jobs"],
+            json!([{"id":job_id,"title":"Album","kind":"import_match","payload":{"matches":[]}}])
+        );
+        bridge.send("jobs.answer", json!({"id":job_id,"value":"release:1"}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["result"]["answered"], true);
+        *bridge.local_job.lock().map_err(|_| "job state is locked")? = Some(NativeLogin {
+            job_id: "busy".into(),
+            cancel: Arc::new(AtomicBool::new(false)),
+        });
+        bridge.send("jobs.next", json!({}))?;
+        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
+        assert_eq!(response["result"]["job_id"], serde_json::Value::Null);
+        let store = jobs.lock().map_err(|_| "job queue is locked")?;
+        let job = store.claim(super::QUEUE)?.ok_or("job is not queued")?;
+        assert_eq!(
+            job.answer,
+            Some(json!({"kind":"import_match","value":"release:1"}))
+        );
+        assert_eq!(
+            job.params,
+            json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"organize_again"})
+        );
         Ok(())
     }
 }

@@ -75,7 +75,8 @@ pub fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text.into())
 }
 
-pub fn overline(text: &'static str, cx: &App) -> Div {
+pub fn overline(text: impl Into<SharedString>, cx: &App) -> Div {
+    let text = text.into();
     div()
         .text_size(px(11.))
         .font_semibold()
@@ -87,6 +88,7 @@ pub fn overline(text: &'static str, cx: &App) -> Div {
 pub enum StageState {
     NotStarted,
     Running,
+    Waiting,
     Complete,
     Failed,
     Skipped,
@@ -97,6 +99,7 @@ impl StageState {
     pub fn parse(status: &str) -> Self {
         match status {
             "running" => Self::Running,
+            "waiting" => Self::Waiting,
             "complete" => Self::Complete,
             "failed" => Self::Failed,
             "skipped" => Self::Skipped,
@@ -109,6 +112,7 @@ impl StageState {
         match self {
             Self::NotStarted => "Not started",
             Self::Running => "Running",
+            Self::Waiting => "Waiting for you",
             Self::Complete => "Complete",
             Self::Failed => "Failed",
             Self::Skipped => "Skipped",
@@ -133,6 +137,9 @@ pub fn stage_headline(states: &[StageState; 5]) -> (String, Option<Tone>) {
     }
     if let Some(stage) = named(StageState::Running) {
         return (format!("{stage} running"), Some(Tone::Info));
+    }
+    if let Some(stage) = named(StageState::Waiting) {
+        return (format!("{stage} waits for you"), Some(Tone::Warning));
     }
     if let Some(stage) = named(StageState::Stale) {
         return (format!("{stage} stale"), Some(Tone::Warning));
@@ -162,6 +169,7 @@ pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyEleme
         let bar = match state {
             StageState::NotStarted => bar.bg(theme.border),
             StageState::Running => bar.bg(theme.info),
+            StageState::Waiting => bar.bg(theme.warning.opacity(0.4)),
             StageState::Complete => bar.bg(theme.success),
             StageState::Failed => bar.bg(theme.danger),
             StageState::Stale => bar.bg(theme.warning),

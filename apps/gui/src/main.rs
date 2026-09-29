@@ -138,6 +138,7 @@ const FILTERS: &[&str] = &[
     "All",
     "Pending",
     "Processing",
+    "Waiting",
     "Failed",
     "Processed",
     "Unavailable",
@@ -179,6 +180,7 @@ struct Muzik {
     activity_sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Value>,
+    waiting: Vec<Value>,
     watchlist: Value,
     selected_playlist: usize,
     filter: usize,
@@ -221,6 +223,7 @@ impl Muzik {
             activity_sections: Vec::new(),
             logs: Vec::new(),
             decision: None,
+            waiting: Vec::new(),
             watchlist: Value::Null,
             selected_playlist: 0,
             filter: 0,
@@ -237,6 +240,8 @@ impl Muzik {
                 Ok(bridge) => {
                     this.bridge = Some(bridge);
                     this.send("hello", json!({}));
+                    this.send("jobs.waiting", json!({}));
+                    this.send("jobs.next", json!({}));
                 }
                 Err(error) => this.status = error,
             }
@@ -480,6 +485,11 @@ impl Muzik {
                 self.job_status = message.clone();
                 message
             }
+            "item_waiting" => format!(
+                "{} waits for you: {}",
+                describe(&payload["title"]),
+                decision_title(payload["question"]["kind"].as_str().unwrap_or(""))
+            ),
             "agent_decided" => {
                 let label = describe(&payload["label"]);
                 self.job_status = format!("Chose {label}");
@@ -697,6 +707,26 @@ impl Muzik {
                         }
                         self.status = "Spotify ready".into();
                     }
+                    "jobs.waiting" => {
+                        self.waiting = result["jobs"].as_array().cloned().unwrap_or_default();
+                    }
+                    "jobs.answer" => {
+                        self.send("jobs.waiting", json!({}));
+                        self.send("jobs.next", json!({}));
+                    }
+                    "jobs.next" => {
+                        if let Some(id) = result["job_id"].as_str() {
+                            if !self.completed_jobs.remove(id) {
+                                self.job_id = Some(id.to_string());
+                                self.job_kind = Some("watchlist.action".into());
+                                self.job_status = "Resuming".into();
+                                self.progress.clear();
+                                self.progress_state = ActivityProgress::default();
+                                self.activity_sections.clear();
+                                self.logs.clear();
+                            }
+                        }
+                    }
                     "workflow.start" | "watchlist.refresh" | "watchlist.action"
                     | "spotify.login" => {
                         if let Some(id) = result["job_id"].as_str() {
@@ -736,34 +766,16 @@ impl Muzik {
                             self.send("watchlist.load", self.launcher_params(_cx));
                             return;
                         }
+                        if kind == "item_waiting" {
+                            self.send("jobs.waiting", json!({}));
+                        }
                         self.record_job_event(kind, payload);
                         if self.logs.len() > 300 {
                             self.logs.drain(..100);
                         }
                     }
                     "decision.request" => {
-                        self.chapter_rows.clear();
-                        if data["kind"] == "chapter_edit" {
-                            if let Some(chapters) = data["payload"]["chapters"].as_array() {
-                                for chapter in chapters {
-                                    let mut make = |key: &'static str| {
-                                        let value = describe(&chapter[key]);
-                                        _cx.new(|cx| {
-                                            InputState::new(window, cx)
-                                                .placeholder(key)
-                                                .default_value(value)
-                                        })
-                                    };
-                                    self.chapter_rows.push(ChapterRow {
-                                        index: make("index"),
-                                        start: make("start"),
-                                        end: make("end"),
-                                        title: make("title"),
-                                    });
-                                }
-                            }
-                        }
-                        self.decision = Some(data.clone());
+                        self.open_decision(data.clone(), window, _cx);
                         self.job_status = "Decision needed".into();
                     }
                     "job.completed" | "job.failed" | "job.cancelled" => {
@@ -774,6 +786,7 @@ impl Muzik {
                                     | "watchlist.refresh"
                                     | "watchlist.action"
                                     | "spotify.login"
+                                    | "jobs.next"
                             )
                         }) {
                             if let Some(id) = data["job_id"].as_str() {
@@ -781,8 +794,16 @@ impl Muzik {
                             }
                         }
                         self.job_id = None;
-                        self.decision = None;
-                        self.chapter_rows.clear();
+                        if self
+                            .decision
+                            .as_ref()
+                            .is_none_or(|decision| decision["queue_job"].is_null())
+                        {
+                            self.decision = None;
+                            self.chapter_rows.clear();
+                        }
+                        self.send("jobs.waiting", json!({}));
+                        self.send("jobs.next", json!({}));
                         self.job_status = event.trim_start_matches("job.").into();
                         let failure = if event == "job.failed" {
                             Some(
@@ -906,9 +927,53 @@ impl Muzik {
         merge_thumbnail_paths(&mut self.watchlist, &visible, data);
     }
 
+    fn open_decision(&mut self, data: Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.chapter_rows.clear();
+        if data["kind"] == "chapter_edit" {
+            if let Some(chapters) = data["payload"]["chapters"].as_array() {
+                for chapter in chapters {
+                    let mut make = |key: &'static str| {
+                        let value = describe(&chapter[key]);
+                        cx.new(|cx| {
+                            InputState::new(window, cx)
+                                .placeholder(key)
+                                .default_value(value)
+                        })
+                    };
+                    self.chapter_rows.push(ChapterRow {
+                        index: make("index"),
+                        start: make("start"),
+                        end: make("end"),
+                        title: make("title"),
+                    });
+                }
+            }
+        }
+        self.decision = Some(data);
+    }
+
+    fn open_waiting(&mut self, job: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_decision(
+            json!({"queue_job":job["id"],"title":job["title"],"kind":job["kind"],"payload":job["payload"]}),
+            window,
+            cx,
+        );
+        cx.notify();
+    }
+
     fn reply(&mut self, value: Value, cx: &mut Context<Self>) {
         if let Some(decision) = self.decision.take() {
             self.chapter_rows.clear();
+            if !decision["queue_job"].is_null() {
+                self.waiting
+                    .retain(|job| job["id"] != decision["queue_job"]);
+                self.send(
+                    "jobs.answer",
+                    json!({"id":decision["queue_job"],"value":value}),
+                );
+                cx.notify();
+                return;
+            }
             self.send(
                 "decision.reply",
                 json!({"decision_id":decision["decision_id"],"value":value}),
@@ -1164,7 +1229,10 @@ impl Muzik {
                         .v_flex()
                         .gap_1()
                         .child(style::overline("DECISION NEEDED", cx))
-                        .child(div().text_sm().font_semibold().child(decision_title(kind))),
+                        .child(div().text_sm().font_semibold().child(decision_title(kind)))
+                        .when_some(decision["title"].as_str(), |this, title| {
+                            this.child(style::meta(short_text(title, 80), cx))
+                        }),
                 );
             if let Some(note) = decision_note(decision) {
                 review = review.child(style::meta(note, cx));
@@ -1249,7 +1317,64 @@ impl Muzik {
                             .on_click(cx.listener(|view, _, _, cx| view.submit_chapters(cx))),
                     );
             }
+            if !decision["queue_job"].is_null() {
+                review = review.child(
+                    div().flex().child(
+                        Button::new("decision-later")
+                            .ghost()
+                            .small()
+                            .label("Later")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.decision = None;
+                                view.chapter_rows.clear();
+                                cx.notify();
+                            })),
+                    ),
+                );
+            }
             panel = panel.child(review);
+        }
+        if !self.waiting.is_empty() {
+            let open = self
+                .decision
+                .as_ref()
+                .map_or(Value::Null, |decision| decision["queue_job"].clone());
+            let mut inbox = div().v_flex().gap_1p5().child(style::overline(
+                format!("NEEDS YOU ({})", self.waiting.len()),
+                cx,
+            ));
+            for (index, job) in self.waiting.iter().enumerate() {
+                let kind = job["kind"].as_str().unwrap_or("");
+                let job = job.clone();
+                inbox = inbox.child(
+                    div()
+                        .id(("waiting", index))
+                        .v_flex()
+                        .gap_0p5()
+                        .p_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(if job["id"] == open {
+                            cx.theme().warning
+                        } else {
+                            cx.theme().border
+                        })
+                        .bg(cx.theme().background)
+                        .cursor_pointer()
+                        .hover(|this| this.bg(cx.theme().accent))
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_semibold()
+                                .child(short_text(job["title"].as_str().unwrap_or("Item"), 60)),
+                        )
+                        .child(style::meta(decision_title(kind), cx))
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            view.open_waiting(&job, window, cx)
+                        })),
+                );
+            }
+            panel = panel.child(inbox);
         }
         for (index, section) in self.activity_sections.iter().enumerate() {
             let mut summary = div().v_flex().gap_1().child(
@@ -1743,7 +1868,7 @@ impl Render for Muzik {
             Page::Spotify => self.spotify(cx),
         };
         let body = if !matches!(self.page, Page::Workflow | Page::Settings)
-            && (self.job_id.is_some() || self.decision.is_some())
+            && (self.job_id.is_some() || self.decision.is_some() || !self.waiting.is_empty())
         {
             div()
                 .flex()

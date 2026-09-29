@@ -22,6 +22,7 @@ pub fn refresh(
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    parked: &RefCell<Option<Value>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(params)?;
     let events = RefCell::new(on_event);
@@ -30,6 +31,7 @@ pub fn refresh(
         events: &events,
         on_import_event,
         decide,
+        parked,
         cancelled,
     };
     jobs::refresh(
@@ -49,6 +51,7 @@ pub fn action(
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    parked: &RefCell<Option<Value>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(params)?;
     let playlist_id = required(params, "playlist_id")?;
@@ -64,6 +67,7 @@ pub fn action(
         events: &events,
         on_import_event,
         decide,
+        parked,
         cancelled,
     };
     jobs::action(
@@ -144,7 +148,26 @@ struct Adapter<'a, 'b> {
     events: &'a RefCell<&'b mut dyn FnMut(Value)>,
     on_import_event: &'a mut dyn FnMut(Value),
     decide: &'a mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    parked: &'a RefCell<Option<Value>>,
     cancelled: &'a AtomicBool,
+}
+
+pub(crate) fn choice_stage(kind: &str) -> &'static str {
+    match kind {
+        "import_match" | "import_duplicate" => "organize",
+        "chapter_review" | "chapter_edit" => "parse",
+        "quality_replacement" => "quality",
+        _ => "download",
+    }
+}
+
+pub(crate) fn resume_action(stage: &str) -> &'static str {
+    match stage {
+        "organize" => "organize_again",
+        "parse" => "parse_again",
+        "quality" => "check_quality_again",
+        _ => "run",
+    }
 }
 
 impl Operations for Adapter<'_, '_> {
@@ -170,10 +193,30 @@ impl Operations for Adapter<'_, '_> {
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         check_cancelled(cancelled)?;
-        if item["kind"] == "spotify" {
-            return self.process_spotify(playlist, item, action, cancelled);
-        }
-        self.process_youtube(item, action, cancelled)
+        self.parked.replace(None);
+        let result = if item["kind"] == "spotify" {
+            self.process_spotify(playlist, item, action, cancelled)
+        } else {
+            self.process_youtube(item, action, cancelled)
+        };
+        result.map_err(|error| {
+            let Some(question) = self.parked.replace(None) else {
+                return error;
+            };
+            let stage = choice_stage(question["kind"].as_str().unwrap_or(""));
+            (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
+                "playlist_id":playlist["playlist_id"],
+                "position":item["position"],
+                "video_id":item["video_id"].as_str().or_else(|| item["entry_id"].as_str()),
+                "title":item["title"],
+                "stage":stage,
+                "question":question,
+            }}));
+            JobError::Waiting {
+                stage: stage.into(),
+                question,
+            }
+        })
     }
 }
 
@@ -934,11 +977,13 @@ mod tests {
         let mut imported = |_| {};
         let mut decide = |_: &str, _: serde_json::Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);
+        let parked = std::cell::RefCell::new(None);
         let mut adapter = super::Adapter {
             prepared: &prepared,
             events: &events,
             on_import_event: &mut imported,
             decide: &mut decide,
+            parked: &parked,
             cancelled: &cancelled,
         };
         let result = adapter.process_spotify(
@@ -1009,11 +1054,13 @@ mod tests {
         let mut imported = |_| {};
         let mut decide = |_: &str, _: serde_json::Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);
+        let parked = std::cell::RefCell::new(None);
         let mut adapter = super::Adapter {
             prepared: &prepared,
             events: &events,
             on_import_event: &mut imported,
             decide: &mut decide,
+            parked: &parked,
             cancelled: &cancelled,
         };
         let result = adapter.process_youtube(&item, "retry", &cancelled)?;

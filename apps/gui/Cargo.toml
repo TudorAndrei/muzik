@@ -12,6 +12,7 @@ serde_json = "1"
 muzik-agent = { path = "../../crates/muzik-agent" }
 muzik-core = { path = "../../crates/muzik-core" }
 muzik-import = { path = "../../crates/muzik-import" }
+muzik-jobs = { path = "../../crates/muzik-jobs" }
 muzik-library = { path = "../../crates/muzik-library" }
 muzik-tags = { path = "../../crates/muzik-tags" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
