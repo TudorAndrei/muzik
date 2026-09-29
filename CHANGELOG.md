@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.2.1 - 2026-09-29
+#### Bug Fixes
+- (**gui**) quit with Command-Q and when the window closes - (de6a033) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.2.0 - (2031708) - TudorAndrei
+
+- - -
+
 ## v2.2.0 - 2026-09-29
 #### Features
 - (**gui**) show services as a compact list - (452ca5c) - TudorAndrei
