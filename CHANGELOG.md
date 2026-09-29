@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.2.0 - 2026-09-29
+#### Features
+- (**gui**) show services as a compact list - (452ca5c) - TudorAndrei
+- (**gui**) configure the Soulseek account in Settings - (b79165c) - TudorAndrei
+#### Bug Fixes
+- (**homebrew**) use postflight_steps in the cask - (9291742) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) set the v2.1.0 app hash in the cask - (53d71ff) - TudorAndrei
+
+- - -
+
 ## v2.1.0 - 2026-09-29
 #### Features
 - (**cli**) remove the install-app and gui commands - (0f1eb4e) - TudorAndrei
