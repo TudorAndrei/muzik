@@ -1,20 +1,39 @@
-use super::normalize;
+use super::{normalize, stage_statuses, ItemAction, SourceKind, Stage, StageStatus};
 use crate::chapters;
 use crate::thumbnails;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
-const ACTIONS: [&str; 8] = [
-    "run",
-    "retry",
-    "download_again",
-    "check_quality_again",
-    "parse_again",
-    "split_again",
-    "organize_again",
-    "run_all_again",
-];
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+pub enum Summary {
+    Pending,
+    Processing,
+    Waiting,
+    Failed,
+    Processed,
+    Unavailable,
+}
+
+impl Summary {
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+}
 
 /// Add the fields used by the saved watchlist cards without changing the file.
 pub fn view(document: Value, output: &Path, cache: &Path) -> Result<Value, String> {
@@ -38,36 +57,31 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
         .get("video_id")
         .and_then(Value::as_str)
         .is_some_and(|id| !id.is_empty());
-    let statuses: Vec<&str> = item["stages"]
+    item["stages"]
         .as_object()
-        .ok_or("item stages are missing")?
-        .values()
-        .filter_map(|stage| stage.get("status").and_then(Value::as_str))
-        .collect();
+        .ok_or("item stages are missing")?;
+    let statuses = stage_statuses(item);
     let summary = if !available {
-        "Unavailable"
-    } else if statuses.contains(&"running") {
-        "Processing"
-    } else if statuses.contains(&"waiting") {
-        "Waiting"
-    } else if statuses.contains(&"failed") {
-        "Failed"
-    } else if statuses
-        .iter()
-        .all(|status| matches!(*status, "complete" | "skipped"))
-    {
-        "Processed"
+        Summary::Unavailable
+    } else if statuses.contains(&StageStatus::Running) {
+        Summary::Processing
+    } else if statuses.contains(&StageStatus::Waiting) {
+        Summary::Waiting
+    } else if statuses.contains(&StageStatus::Failed) {
+        Summary::Failed
+    } else if statuses.iter().all(|status| status.is_done()) {
+        Summary::Processed
     } else {
-        "Pending"
+        Summary::Pending
     };
-    let primary = if !available || matches!(summary, "Processed" | "Waiting") {
+    let primary = if !available || matches!(summary, Summary::Processed | Summary::Waiting) {
         Value::Null
-    } else if statuses.contains(&"failed") {
-        json!({"action": "retry", "label": "Retry"})
-    } else if statuses.contains(&"stale") {
-        json!({"action": "run", "label": "Resume"})
+    } else if statuses.contains(&StageStatus::Failed) {
+        json!({"action": ItemAction::Retry, "label": "Retry"})
+    } else if statuses.contains(&StageStatus::Stale) {
+        json!({"action": ItemAction::Run, "label": "Resume"})
     } else {
-        json!({"action": "run", "label": "Run"})
+        json!({"action": ItemAction::Run, "label": "Run"})
     };
     let thumbnail = item
         .get("video_id")
@@ -75,9 +89,12 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
         .and_then(|id| thumbnails::cached_path(id, cache))
         .map(|path| path.to_string_lossy().into_owned());
     let mut actions = serde_json::Map::new();
-    for name in ACTIONS {
-        let (enabled, reason) = availability(item, name, output);
-        actions.insert(name.into(), json!({"enabled": enabled, "reason": reason}));
+    for action in ItemAction::ALL {
+        let (enabled, reason) = availability(item, *action, output);
+        actions.insert(
+            action.to_string(),
+            json!({"enabled": enabled, "reason": reason}),
+        );
     }
     let fields = item.as_object_mut().ok_or("item is not an object")?;
     fields.insert("thumbnail_path".into(), json!(thumbnail));
@@ -89,7 +106,7 @@ fn enrich(item: &mut Value, output: &Path, cache: &Path) -> Result<(), String> {
 
 pub(super) fn availability(
     item: &Value,
-    action: &str,
+    action: ItemAction,
     output: &Path,
 ) -> (bool, Option<&'static str>) {
     let video_id = item.get("video_id").and_then(Value::as_str);
@@ -97,7 +114,7 @@ pub(super) fn availability(
     if video_id.is_none_or(str::is_empty) || video_url.is_none_or(str::is_empty) {
         return (false, Some("This playlist item is unavailable."));
     }
-    let spotify = item.get("kind").and_then(Value::as_str) == Some("spotify");
+    let spotify = SourceKind::of(item) == SourceKind::Spotify;
     if spotify
         && item.get("track").is_none_or(|track| {
             track.is_null() || track.as_object().is_some_and(serde_json::Map::is_empty)
@@ -105,12 +122,12 @@ pub(super) fn availability(
     {
         return (false, Some("This track has no saved Spotify metadata."));
     }
-    if matches!(action, "run" | "retry" | "download_again" | "run_all_again") {
+    if action.stage() == Stage::Download {
         return (true, None);
     }
     let audio = audio_path(item, output);
-    if action == "organize_again" {
-        let split = item["stages"]["split"]["path"]
+    if action == ItemAction::OrganizeAgain {
+        let split = item["stages"][Stage::Split.as_ref()]["path"]
             .as_str()
             .map(PathBuf::from)
             .filter(|path| path.exists());
@@ -135,7 +152,7 @@ pub(super) fn availability(
             Some("Download this video before you run this command."),
         );
     };
-    if action == "split_again"
+    if action == ItemAction::SplitAgain
         && !chapters::find_chapters(&audio).is_ok_and(|chapters| !chapters.is_empty())
     {
         return (
@@ -147,7 +164,7 @@ pub(super) fn availability(
 }
 
 fn audio_path(item: &Value, output: &Path) -> Option<PathBuf> {
-    item["stages"]["download"]["path"]
+    item["stages"][Stage::Download.as_ref()]["path"]
         .as_str()
         .map(PathBuf::from)
         .filter(|path| path.is_file())

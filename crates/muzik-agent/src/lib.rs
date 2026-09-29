@@ -1,9 +1,11 @@
+use muzik_core::DecisionKind;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use strum_macros::EnumString;
 
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
 const STRONG_DISTANCE: f64 = 0.10;
@@ -31,11 +33,22 @@ pub enum Outcome {
     },
 }
 
-pub fn supports(kind: &str) -> bool {
-    matches!(kind, "import_match" | "soulseek_candidate")
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString)]
+#[strum(serialize_all = "snake_case")]
+enum Action {
+    Pick,
+    Keep,
+    Ask,
 }
 
-pub fn decide(kind: &str, payload: &Value, model: &str) -> Result<Outcome, String> {
+pub fn supports(kind: DecisionKind) -> bool {
+    matches!(
+        kind,
+        DecisionKind::ImportMatch | DecisionKind::SoulseekCandidate
+    )
+}
+
+pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcome, String> {
     if let Some(choice) = strong_match(kind, payload) {
         return Ok(Outcome::Decided(choice));
     }
@@ -47,8 +60,8 @@ pub fn decide(kind: &str, payload: &Value, model: &str) -> Result<Outcome, Strin
     Ok(interpret(kind, &answer, &options))
 }
 
-pub fn strong_match(kind: &str, payload: &Value) -> Option<Choice> {
-    if kind != "import_match" {
+pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
+    if kind != DecisionKind::ImportMatch {
         return None;
     }
     let best = payload["task"]["matches"]
@@ -64,16 +77,16 @@ pub fn strong_match(kind: &str, payload: &Value) -> Option<Choice> {
     })
 }
 
-pub fn options(kind: &str, payload: &Value) -> Vec<(String, Value)> {
+pub fn options(kind: DecisionKind, payload: &Value) -> Vec<(String, Value)> {
     match kind {
-        "import_match" => payload["task"]["matches"]
+        DecisionKind::ImportMatch => payload["task"]["matches"]
             .as_array()
             .into_iter()
             .flatten()
             .filter(|item| item["candidate_id"].is_string())
             .map(|item| (release_label(item), item["candidate_id"].clone()))
             .collect(),
-        "soulseek_candidate" => payload["candidates"]
+        DecisionKind::SoulseekCandidate => payload["candidates"]
             .as_array()
             .into_iter()
             .flatten()
@@ -89,10 +102,10 @@ pub fn options(kind: &str, payload: &Value) -> Vec<(String, Value)> {
     }
 }
 
-pub fn prompt(kind: &str, payload: &Value, options: &[(String, Value)]) -> String {
+pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) -> String {
     let mut text = String::new();
     match kind {
-        "import_match" => {
+        DecisionKind::ImportMatch => {
             let task = &payload["task"];
             let paths: Vec<&str> = task["paths"]
                 .as_array()
@@ -186,7 +199,7 @@ pub fn prompt(kind: &str, payload: &Value, options: &[(String, Value)]) -> Strin
     text
 }
 
-pub fn interpret(kind: &str, answer: &Value, options: &[(String, Value)]) -> Outcome {
+pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]) -> Outcome {
     let confidence = answer["confidence"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
     let reason = answer["reason"].as_str().unwrap_or("").trim().to_owned();
     let index = answer["index"]
@@ -194,8 +207,11 @@ pub fn interpret(kind: &str, answer: &Value, options: &[(String, Value)]) -> Out
         .and_then(|index| usize::try_from(index).ok())
         .filter(|index| *index < options.len());
     let confident = confidence >= MIN_CONFIDENCE;
-    match (answer["action"].as_str(), index) {
-        (Some("pick"), Some(index)) if confident => {
+    let action = answer["action"]
+        .as_str()
+        .and_then(|action| action.parse::<Action>().ok());
+    match (action, index) {
+        (Some(Action::Pick), Some(index)) if confident => {
             let (label, value) = &options[index];
             Outcome::Decided(Choice {
                 value: value.clone(),
@@ -204,18 +220,20 @@ pub fn interpret(kind: &str, answer: &Value, options: &[(String, Value)]) -> Out
                 reason,
             })
         }
-        (Some("keep"), _) if confident && kind == "import_match" => Outcome::Decided(Choice {
-            value: json!("as_is"),
-            label: "Keep current tags".into(),
-            confidence,
-            reason,
-        }),
-        (Some("pick"), suggestion) => Outcome::Unsure {
+        (Some(Action::Keep), _) if confident && kind == DecisionKind::ImportMatch => {
+            Outcome::Decided(Choice {
+                value: json!("as_is"),
+                label: "Keep current tags".into(),
+                confidence,
+                reason,
+            })
+        }
+        (Some(Action::Pick), suggestion) => Outcome::Unsure {
             suggestion,
             confidence,
             reason,
         },
-        _ => Outcome::Unsure {
+        (Some(Action::Keep | Action::Ask) | None, _) => Outcome::Unsure {
             suggestion: None,
             confidence,
             reason,
@@ -319,6 +337,7 @@ fn text_or(value: &Value, fallback: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Outcome, interpret, options, prompt, strong_match};
+    use muzik_core::DecisionKind;
     use serde_json::json;
 
     fn album() -> serde_json::Value {
@@ -335,7 +354,7 @@ mod tests {
     #[test]
     #[ignore = "calls the real Codex CLI and uses the account quota"]
     fn live_codex_picks_the_same_release() -> Result<(), String> {
-        let outcome = super::decide("import_match", &album(), super::DEFAULT_MODEL)?;
+        let outcome = super::decide(DecisionKind::ImportMatch, &album(), super::DEFAULT_MODEL)?;
         assert!(
             matches!(&outcome, Outcome::Decided(choice) if choice.value == json!("m0")),
             "{outcome:?}"
@@ -347,15 +366,19 @@ mod tests {
     fn close_match_is_chosen_without_the_model() {
         let mut payload = album();
         payload["task"]["matches"][1]["distance"] = json!(0.08);
-        let choice = strong_match("import_match", &payload);
+        let choice = strong_match(DecisionKind::ImportMatch, &payload);
         assert_eq!(choice.map(|choice| choice.value), Some(json!("m1")));
-        assert!(strong_match("import_match", &album()).is_none());
+        assert!(strong_match(DecisionKind::ImportMatch, &album()).is_none());
     }
 
     #[test]
     fn prompt_names_the_folder_files_and_numbered_candidates() {
         let payload = album();
-        let text = prompt("import_match", &payload, &options("import_match", &payload));
+        let text = prompt(
+            DecisionKind::ImportMatch,
+            &payload,
+            &options(DecisionKind::ImportMatch, &payload),
+        );
         assert!(text.contains("Source folder: Sunburst (1980)"));
         assert!(text.contains("- 01-sunburst"));
         assert!(text.contains("[0] Sunburst — Sunburst · 1980 · JP · 5 tracks · distance 0.310"));
@@ -365,15 +388,15 @@ mod tests {
     #[test]
     fn confident_pick_decides_and_low_confidence_asks() {
         let payload = album();
-        let options = options("import_match", &payload);
+        let options = options(DecisionKind::ImportMatch, &payload);
         let picked = interpret(
-            "import_match",
+            DecisionKind::ImportMatch,
             &json!({"action": "pick", "index": 0, "confidence": 0.9, "reason": "Same release."}),
             &options,
         );
         assert!(matches!(picked, Outcome::Decided(choice) if choice.value == json!("m0")));
         let unsure = interpret(
-            "import_match",
+            DecisionKind::ImportMatch,
             &json!({"action": "pick", "index": 1, "confidence": 0.4, "reason": "Maybe."}),
             &options,
         );
@@ -390,9 +413,9 @@ mod tests {
     #[test]
     fn invented_index_and_keep_for_downloads_ask_the_user() {
         let payload = album();
-        let choices = options("import_match", &payload);
+        let choices = options(DecisionKind::ImportMatch, &payload);
         let invented = interpret(
-            "import_match",
+            DecisionKind::ImportMatch,
             &json!({"action": "pick", "index": 7, "confidence": 0.99, "reason": ""}),
             &choices,
         );
@@ -404,16 +427,16 @@ mod tests {
             }
         ));
         let keep = interpret(
-            "import_match",
+            DecisionKind::ImportMatch,
             &json!({"action": "keep", "index": -1, "confidence": 0.8, "reason": "No match."}),
             &choices,
         );
         assert!(matches!(keep, Outcome::Decided(choice) if choice.value == json!("as_is")));
         let download = json!({"query": "Sunburst", "candidates": [{"title": "a.flac"}]});
         let keep_download = interpret(
-            "soulseek_candidate",
+            DecisionKind::SoulseekCandidate,
             &json!({"action": "keep", "index": -1, "confidence": 0.9, "reason": ""}),
-            &options("soulseek_candidate", &download),
+            &options(DecisionKind::SoulseekCandidate, &download),
         );
         assert!(matches!(keep_download, Outcome::Unsure { .. }));
     }

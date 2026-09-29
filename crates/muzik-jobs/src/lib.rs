@@ -1,7 +1,9 @@
-use rusqlite::{Connection, OptionalExtension, Row, params};
+use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
+use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde_json::Value;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS jobs (
@@ -24,7 +26,8 @@ CREATE INDEX IF NOT EXISTS jobs_by_item ON jobs (item_key, kind, status);
 
 const COLUMNS: &str = "id, queue, kind, item_key, title, status, params, question, answer, error";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, AsRefStr, Display, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 pub enum Status {
     Queued,
     Running,
@@ -34,34 +37,53 @@ pub enum Status {
     Cancelled,
 }
 
-impl Status {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Waiting => "waiting",
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, AsRefStr, Display, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum Queue {
+    Sync,
+    Workflow,
+    Item,
+}
 
-    fn parse(text: &str) -> Self {
-        match text {
-            "queued" => Self::Queued,
-            "running" => Self::Running,
-            "waiting" => Self::Waiting,
-            "done" => Self::Done,
-            "cancelled" => Self::Cancelled,
-            _ => Self::Failed,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, AsRefStr, Display, EnumString, IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
+pub enum Kind {
+    Refresh,
+    Workflow,
+    Item,
+}
+
+impl Kind {
+    pub fn queue(self) -> Queue {
+        match self {
+            Self::Refresh => Queue::Sync,
+            Self::Workflow => Queue::Workflow,
+            Self::Item => Queue::Item,
         }
     }
 }
 
+macro_rules! sql_text {
+    ($($name:ident),+) => {$(
+        impl ToSql for $name {
+            fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+                Ok(<&'static str>::from(*self).into())
+            }
+        }
+
+        impl FromSql for $name {
+            fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+                value.as_str()?.parse().map_err(|_| FromSqlError::InvalidType)
+            }
+        }
+    )+};
+}
+
+sql_text!(Status, Queue, Kind);
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NewJob<'a> {
-    pub queue: &'a str,
-    pub kind: &'a str,
+    pub kind: Kind,
     pub item_key: &'a str,
     pub title: &'a str,
     pub params: &'a Value,
@@ -70,8 +92,8 @@ pub struct NewJob<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Job {
     pub id: i64,
-    pub queue: String,
-    pub kind: String,
+    pub queue: Queue,
+    pub kind: Kind,
     pub item_key: String,
     pub title: String,
     pub status: Status,
@@ -150,12 +172,13 @@ impl Store {
         }
     }
 
-    pub fn claim(&self, queue: &str) -> Result<Option<Job>, String> {
+    pub fn claim(&self, queue: Queue) -> Result<Option<Job>, String> {
         self.claim_any(&[queue])
     }
 
-    pub fn claim_any(&self, queues: &[&str]) -> Result<Option<Job>, String> {
-        let names = serde_json::to_string(queues).map_err(|error| error.to_string())?;
+    pub fn claim_any(&self, queues: &[Queue]) -> Result<Option<Job>, String> {
+        let names: Vec<&str> = queues.iter().map(|queue| queue.as_ref()).collect();
+        let names = serde_json::to_string(&names).map_err(|error| error.to_string())?;
         self.connection
             .query_row(
                 &format!(
@@ -245,13 +268,11 @@ impl Store {
                 "SELECT {COLUMNS} FROM jobs WHERE status = ?1 ORDER BY id"
             ))
             .map_err(text)?;
-        let rows = statement
-            .query_map(params![status.as_str()], job)
-            .map_err(text)?;
+        let rows = statement.query_map(params![status], job).map_err(text)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(text)
     }
 
-    pub fn find_open(&self, kind: &str, item_key: &str) -> Result<Vec<Job>, String> {
+    pub fn find_open(&self, kind: Kind, item_key: &str) -> Result<Vec<Job>, String> {
         let mut statement = self
             .connection
             .prepare(&format!(
@@ -265,7 +286,7 @@ impl Store {
         rows.collect::<Result<Vec<_>, _>>().map_err(text)
     }
 
-    fn open_job(&self, kind: &str, item_key: &str) -> Result<Option<i64>, String> {
+    fn open_job(&self, kind: Kind, item_key: &str) -> Result<Option<i64>, String> {
         self.connection
             .query_row(
                 "SELECT id FROM jobs WHERE kind = ?1 AND item_key = ?2
@@ -289,11 +310,11 @@ impl Store {
                 "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
                 params![
-                    job.queue,
+                    job.kind.queue(),
                     job.kind,
                     job.item_key,
                     job.title,
-                    status.as_str(),
+                    status,
                     job.params.to_string(),
                     question,
                     time
@@ -307,7 +328,7 @@ impl Store {
         self.connection
             .execute(
                 "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
-                params![status.as_str(), error, now(), id],
+                params![status, error, now(), id],
             )
             .map(|_| ())
             .map_err(text)
@@ -322,7 +343,7 @@ fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
         kind: row.get(2)?,
         item_key: row.get(3)?,
         title: row.get(4)?,
-        status: Status::parse(&row.get::<_, String>(5)?),
+        status: row.get(5)?,
         params: json(row.get(6)?).unwrap_or(Value::Null),
         question: json(row.get(7)?),
         answer: json(row.get(8)?),
@@ -344,12 +365,11 @@ fn text(error: rusqlite::Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NewJob, Status, Store};
+    use super::{Kind, NewJob, Queue, Status, Store};
     use serde_json::json;
 
-    fn job<'a>(kind: &'a str, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
+    fn job<'a>(kind: Kind, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
         NewJob {
-            queue: "process",
             kind,
             item_key,
             title: "Album",
@@ -361,13 +381,17 @@ mod tests {
     fn claim_takes_the_oldest_queued_job_once() -> Result<(), String> {
         let store = Store::open_in_memory()?;
         let params = json!({});
-        let first = store.enqueue(&job("resume", "a", &params))?;
-        let second = store.enqueue(&job("resume", "b", &params))?;
-        assert_eq!(store.enqueue(&job("resume", "a", &params))?, first);
-        assert_eq!(store.claim("process")?.map(|job| job.id), Some(first));
-        assert_eq!(store.claim("process")?.map(|job| job.id), Some(second));
-        assert_eq!(store.claim("process")?, None);
-        assert_eq!(store.claim("download")?, None);
+        let first = store.enqueue(&job(Kind::Item, "a", &params))?;
+        let second = store.enqueue(&job(Kind::Item, "b", &params))?;
+        assert_eq!(store.enqueue(&job(Kind::Item, "a", &params))?, first);
+        let claimed = store.claim(Queue::Item)?.ok_or("job was not queued")?;
+        assert_eq!(
+            (claimed.id, claimed.queue, claimed.kind),
+            (first, Queue::Item, Kind::Item)
+        );
+        assert_eq!(store.claim(Queue::Item)?.map(|job| job.id), Some(second));
+        assert_eq!(store.claim(Queue::Item)?, None);
+        assert_eq!(store.claim(Queue::Workflow)?, None);
         Ok(())
     }
 
@@ -375,12 +399,9 @@ mod tests {
     fn claim_any_takes_the_oldest_job_of_the_named_queues() -> Result<(), String> {
         let store = Store::open_in_memory()?;
         let params = json!({});
-        let first = store.enqueue(&NewJob {
-            queue: "sync",
-            ..job("refresh", "refresh", &params)
-        })?;
-        let second = store.enqueue(&job("item", "a", &params))?;
-        let third = store.enqueue(&job("item", "b", &params))?;
+        let first = store.enqueue(&job(Kind::Refresh, "refresh", &params))?;
+        let second = store.enqueue(&job(Kind::Item, "a", &params))?;
+        let third = store.enqueue(&job(Kind::Item, "b", &params))?;
         assert_eq!(
             store
                 .list_open()?
@@ -391,34 +412,37 @@ mod tests {
         );
         assert!(store.cancel_open(second)?);
         assert_eq!(
-            store.claim_any(&["process"])?.map(|job| job.id),
+            store.claim_any(&[Queue::Item])?.map(|job| job.id),
             Some(third)
         );
         assert!(!store.cancel_open(third)?);
         assert_eq!(
-            store.claim_any(&["process", "sync"])?.map(|job| job.id),
+            store
+                .claim_any(&[Queue::Item, Queue::Sync])?
+                .map(|job| job.id),
             Some(first)
         );
         assert_eq!(store.list_open()?.len(), 2);
-        let older = store.enqueue(&job("item", "c", &params))?;
-        let newer = store.enqueue(&NewJob {
-            queue: "sync",
-            ..job("refresh", "again", &params)
-        })?;
+        let older = store.enqueue(&job(Kind::Item, "c", &params))?;
+        let newer = store.enqueue(&job(Kind::Refresh, "again", &params))?;
         assert_eq!(
             store
-                .find_open("item", "c")?
+                .find_open(Kind::Item, "c")?
                 .iter()
                 .map(|job| job.id)
                 .collect::<Vec<_>>(),
             [older]
         );
         assert_eq!(
-            store.claim_any(&["sync", "process"])?.map(|job| job.id),
+            store
+                .claim_any(&[Queue::Sync, Queue::Item])?
+                .map(|job| job.id),
             Some(newer)
         );
         assert_eq!(
-            store.claim_any(&["sync", "process"])?.map(|job| job.id),
+            store
+                .claim_any(&[Queue::Sync, Queue::Item])?
+                .map(|job| job.id),
             Some(older)
         );
         Ok(())
@@ -429,19 +453,19 @@ mod tests {
         let store = Store::open_in_memory()?;
         let params = json!({"playlist_id": "PL1", "position": 3});
         let id = store.park(
-            &job("resume", "PL1:3", &params),
+            &job(Kind::Item, "PL1:3", &params),
             &json!({"kind": "import_match"}),
         )?;
-        assert_eq!(store.claim("process")?, None);
+        assert_eq!(store.claim(Queue::Item)?, None);
         assert_eq!(store.list(Status::Waiting)?.len(), 1);
         let again = store.park(
-            &job("resume", "PL1:3", &params),
+            &job(Kind::Item, "PL1:3", &params),
             &json!({"kind": "chapter_review"}),
         )?;
         assert_eq!(again, id);
         assert!(store.answer(id, &json!("as_is"))?);
         assert!(!store.answer(id, &json!("skip"))?);
-        let claimed = store.claim("process")?.ok_or("job was not queued")?;
+        let claimed = store.claim(Queue::Item)?.ok_or("job was not queued")?;
         assert_eq!(claimed.answer, Some(json!("as_is")));
         assert_eq!(claimed.question, Some(json!({"kind": "chapter_review"})));
         assert_eq!(claimed.params, params);
@@ -450,7 +474,7 @@ mod tests {
         assert_eq!(reopened.status, Status::Waiting);
         assert_eq!(reopened.answer, None);
         assert!(store.answer(id, &json!("as_is"))?);
-        store.claim("process")?;
+        store.claim(Queue::Item)?;
         store.finish(id)?;
         assert_eq!(store.get(id)?.map(|job| job.status), Some(Status::Done));
         Ok(())
@@ -463,13 +487,13 @@ mod tests {
         let params = json!({});
         let id = {
             let store = Store::open(&path)?;
-            let id = store.enqueue(&job("resume", "a", &params))?;
-            store.claim("process")?;
+            let id = store.enqueue(&job(Kind::Workflow, "a", &params))?;
+            store.claim(Queue::Workflow)?;
             id
         };
         let store = Store::open(&path)?;
         assert_eq!(store.recover()?, 1);
-        assert_eq!(store.claim("process")?.map(|job| job.id), Some(id));
+        assert_eq!(store.claim(Queue::Workflow)?.map(|job| job.id), Some(id));
         Ok(())
     }
 }

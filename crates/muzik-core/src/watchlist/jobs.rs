@@ -1,7 +1,10 @@
 //! Durable watchlist jobs. Callers supply source and audio operations.
 
 use super::view::availability;
-use super::{reconcile, view, ReconcileOptions, Repository};
+use super::{
+    reconcile, stage_status, stage_statuses, view, ItemAction, ReconcileOptions, Repository,
+    SourceKind, Stage, StageStatus,
+};
 use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -15,9 +18,9 @@ pub enum JobError {
     #[error("{0}")]
     Operation(String),
     #[error("waiting for a choice in the {stage} stage")]
-    Waiting { stage: String, question: Value },
+    Waiting { stage: Stage, question: Value },
     #[error("{message}")]
-    Failed { stage: String, message: String },
+    Failed { stage: Stage, message: String },
 }
 
 impl From<String> for JobError {
@@ -35,7 +38,7 @@ pub struct ItemSelection<'a> {
     pub playlist_id: &'a str,
     pub position: u64,
     pub video_id: Option<&'a str>,
-    pub action: &'a str,
+    pub action: ItemAction,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,7 +50,7 @@ pub struct PendingItem {
 }
 
 impl PendingItem {
-    pub fn selection<'a>(&'a self, action: &'a str) -> ItemSelection<'a> {
+    pub fn selection(&self, action: ItemAction) -> ItemSelection<'_> {
         ItemSelection {
             playlist_id: &self.playlist_id,
             position: self.position,
@@ -66,8 +69,8 @@ pub struct Synced {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ItemOutcome {
-    Completed { stage: String },
-    Waiting { stage: String },
+    Completed { stage: Stage },
+    Waiting { stage: Stage },
 }
 
 /// Implement source lookup and item processing with Rust adapters.
@@ -78,7 +81,7 @@ pub trait Operations {
         &mut self,
         playlist: &Value,
         item: &Value,
-        action: &str,
+        action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError>;
 }
@@ -192,7 +195,7 @@ pub fn refresh(
             match run_item(
                 repository,
                 options,
-                item.selection("run"),
+                item.selection(ItemAction::Run),
                 operations,
                 cancelled,
             ) {
@@ -237,7 +240,7 @@ pub fn action(
         let (_, _, item) = find_item(&document, &selection)?;
         check_available(&item, action, options.output)?;
         return Ok(
-            json!({"action":{"action":action,"planned_stage":target_stage(action),"dry_run":true},
+            json!({"action":{"action":action,"planned_stage":action.stage(),"dry_run":true},
             "watchlist":view(document, options.output, options.cache)?}),
         );
     }
@@ -260,22 +263,7 @@ pub fn run_item(
 ) -> Result<ItemOutcome, JobError> {
     check_cancelled(cancelled)?;
     let action = selection.action;
-    if !matches!(
-        action,
-        "run"
-            | "retry"
-            | "download_again"
-            | "check_quality_again"
-            | "parse_again"
-            | "split_again"
-            | "organize_again"
-            | "run_all_again"
-    ) {
-        return Err(JobError::Operation(format!(
-            "Unknown item action: {action}"
-        )));
-    }
-    let stage = target_stage(action);
+    let stage = action.stage();
     let (playlist, item) = repository.update(|document| {
         let (playlist_index, item_index, item) = find_item(document, &selection)?;
         check_available(&item, action, options.output)?;
@@ -283,8 +271,7 @@ pub fn run_item(
         let target = &mut document["playlists"][playlist_index]["items"][item_index];
         target["last_action"] = json!(action);
         target["last_error"] = Value::Null;
-        target["stages"][stage] =
-            json!({"status":"running", "updated_at":now(), "path":null, "error":null});
+        set_stage(target, stage, StageStatus::Running, None);
         Ok((playlist, item))
     })?;
     let result = operations.process(&playlist, &item, action, cancelled);
@@ -304,9 +291,8 @@ pub fn run_item(
                 target["position"] = json!(selection.position);
                 target["last_action"] = json!(action);
                 target["last_error"] = Value::Null;
-                if target["stages"][stage]["status"] == "running" {
-                    target["stages"][stage] =
-                        json!({"status":"complete", "updated_at":now(), "path":null, "error":null});
+                if stage_status(target, stage) == Some(StageStatus::Running) {
+                    set_stage(target, stage, StageStatus::Complete, None);
                 }
                 if let Some(key) = &key {
                     let finished = all_done(target);
@@ -334,13 +320,13 @@ pub fn run_item(
                 question,
             }) => {
                 *target = item.clone();
-                mark_waiting(target, waiting, action, question);
+                mark_waiting(target, *waiting, action, question);
             }
             Err(JobError::Cancelled) => *target = item.clone(),
             Err(error) => {
                 *target = item.clone();
                 let failed = match error {
-                    JobError::Failed { stage, .. } => stage.as_str(),
+                    JobError::Failed { stage, .. } => *stage,
                     _ => stage,
                 };
                 mark_failed(target, failed, action, &error.to_string());
@@ -349,22 +335,15 @@ pub fn run_item(
         Ok(())
     })?;
     match result {
-        Ok(_) => Ok(ItemOutcome::Completed {
-            stage: stage.to_owned(),
-        }),
+        Ok(_) => Ok(ItemOutcome::Completed { stage }),
         Err(JobError::Waiting { stage, .. }) => Ok(ItemOutcome::Waiting { stage }),
         Err(error) => Err(error),
     }
 }
 
-fn target_stage(action: &str) -> &'static str {
-    match action {
-        "check_quality_again" => "quality",
-        "parse_again" => "parse",
-        "split_again" => "split",
-        "organize_again" => "organize",
-        _ => "download",
-    }
+fn set_stage(item: &mut Value, stage: Stage, status: StageStatus, error: Option<&str>) {
+    item["stages"][stage.as_ref()] =
+        json!({"status":status, "updated_at":now(), "path":null, "error":error});
 }
 
 fn find_playlist<'a>(document: &'a mut Value, id: &str) -> Option<&'a mut Value> {
@@ -399,7 +378,7 @@ fn find_item(
     Ok((playlist_index, item_index, item))
 }
 
-fn check_available(item: &Value, action: &str, output: &Path) -> Result<(), String> {
+fn check_available(item: &Value, action: ItemAction, output: &Path) -> Result<(), String> {
     let (enabled, reason) = availability(item, action, output);
     if enabled {
         Ok(())
@@ -444,16 +423,22 @@ fn reconcile_keeping_running(
             .flatten()
             .enumerate()
         {
-            for (name, stage) in item["stages"].as_object().into_iter().flatten() {
-                if stage["status"] == "running" {
-                    running.push((playlist_index, item_index, name.clone(), stage.clone()));
+            for stage in Stage::ALL {
+                if stage_status(item, *stage) == Some(StageStatus::Running) {
+                    running.push((
+                        playlist_index,
+                        item_index,
+                        *stage,
+                        item["stages"][stage.as_ref()].clone(),
+                    ));
                 }
             }
         }
     }
     reconcile(document, options)?;
-    for (playlist_index, item_index, name, stage) in running {
-        document["playlists"][playlist_index]["items"][item_index]["stages"][name.as_str()] = stage;
+    for (playlist_index, item_index, stage, record) in running {
+        document["playlists"][playlist_index]["items"][item_index]["stages"][stage.as_ref()] =
+            record;
     }
     Ok(())
 }
@@ -535,10 +520,9 @@ fn pending_ids(playlist: &Value) -> Vec<String> {
 }
 
 fn item_key(item: &Value) -> Option<&str> {
-    let field = if item["kind"] == "spotify" {
-        "entry_id"
-    } else {
-        "video_id"
+    let field = match SourceKind::of(item) {
+        SourceKind::Spotify => "entry_id",
+        SourceKind::Youtube => "video_id",
     };
     item[field].as_str().filter(|value| !value.is_empty())
 }
@@ -552,30 +536,26 @@ fn add_processed(playlist: &mut Value, key: &str) {
 }
 
 fn all_done(item: &Value) -> bool {
-    item["stages"].as_object().is_some_and(|stages| {
-        stages
-            .values()
-            .all(|stage| matches!(stage["status"].as_str(), Some("complete" | "skipped")))
-    })
+    Stage::ALL
+        .iter()
+        .all(|stage| stage_status(item, *stage).is_some_and(StageStatus::is_done))
 }
 
 fn is_waiting(item: &Value) -> bool {
-    item["stages"]
-        .as_object()
-        .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "waiting"))
+    stage_statuses(item).contains(&StageStatus::Waiting)
 }
 
-fn mark_waiting(item: &mut Value, stage: &str, action: &str, question: &Value) {
+fn mark_waiting(item: &mut Value, stage: Stage, action: ItemAction, question: &Value) {
     item["last_action"] = json!(action);
     item["last_error"] = Value::Null;
-    item["stages"][stage] = json!({"status":"waiting", "updated_at":now(), "path":item["stages"][stage]["path"].clone(), "question":question});
+    let path = item["stages"][stage.as_ref()]["path"].clone();
+    item["stages"][stage.as_ref()] = json!({"status":StageStatus::Waiting, "updated_at":now(), "path":path, "question":question});
 }
 
-fn mark_failed(item: &mut Value, stage: &str, action: &str, message: &str) {
+fn mark_failed(item: &mut Value, stage: Stage, action: ItemAction, message: &str) {
     item["last_action"] = json!(action);
     item["last_error"] = json!(message);
-    item["stages"][stage] =
-        json!({"status":"failed", "updated_at":now(), "path":null, "error":message});
+    set_stage(item, stage, StageStatus::Failed, Some(message));
 }
 
 fn now() -> String {

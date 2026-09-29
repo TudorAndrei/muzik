@@ -1,10 +1,12 @@
 use super::library_lookup::MusicLibrary;
-use super::normalize;
 use super::view::{find_audio, is_audio};
+use super::{normalize, stage_status, SourceKind, Stage, StageStatus};
+use crate::QualityPolicy;
 use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
+use strum_macros::{AsRefStr, EnumString};
 
 /// Refresh saved stage state from the existing local workflow cache and files.
 /// Save the document with `Repository::save` after this call succeeds.
@@ -16,7 +18,19 @@ pub struct ReconcileOptions<'a> {
     pub config: Option<&'a Path>,
     pub no_organize: bool,
     pub no_split: bool,
-    pub quality_policy: &'a str,
+    pub quality_policy: QualityPolicy,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[strum(serialize_all = "snake_case")]
+enum CacheStatus {
+    Downloaded,
+    Split,
+    Organized,
+}
+
+fn cache_status(entry: &Value) -> Option<CacheStatus> {
+    entry["status"].as_str()?.parse().ok()
 }
 
 pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<(), String> {
@@ -38,7 +52,7 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
         let id = playlist["playlist_id"]
             .as_str()
             .ok_or("playlist ID is missing")?;
-        let spotify = playlist["kind"] == "spotify";
+        let spotify = SourceKind::of(playlist) == SourceKind::Spotify;
         let state_id = if spotify {
             let short = id.rsplit(':').next().unwrap_or(id);
             format!(
@@ -69,33 +83,27 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
         let items = playlist["items"]
             .as_array_mut()
             .ok_or("playlist items are missing")?;
-        let waiting: Vec<(usize, String, Value)> = items
+        let waiting: Vec<(usize, Stage, Value)> = items
             .iter()
             .enumerate()
             .flat_map(|(index, item)| {
-                item["stages"]
-                    .as_object()
-                    .into_iter()
-                    .flatten()
-                    .filter(|(_, stage)| stage["status"] == "waiting")
-                    .map(move |(name, stage)| (index, name.clone(), stage.clone()))
+                Stage::ALL
+                    .iter()
+                    .filter(|stage| stage_status(item, **stage) == Some(StageStatus::Waiting))
+                    .map(move |stage| (index, *stage, item["stages"][stage.as_ref()].clone()))
             })
             .collect();
         for item in items.iter_mut() {
-            for stage in item["stages"]
-                .as_object_mut()
-                .ok_or("item stages are missing")?
-                .values_mut()
-            {
-                if stage["status"] == "running" {
-                    stage["status"] = json!("not_started");
+            for stage in Stage::ALL {
+                if stage_status(item, *stage) == Some(StageStatus::Running) {
+                    set_status(item, *stage, StageStatus::NotStarted);
                 }
             }
             // Explicit repeat actions invalidate later stages. Older cache records
             // must not turn these stages back into completed work.
-            if item["stages"]
-                .as_object()
-                .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "stale"))
+            if Stage::ALL
+                .iter()
+                .any(|stage| stage_status(item, *stage) == Some(StageStatus::Stale))
             {
                 let key = if spotify { "entry_id" } else { "video_id" };
                 if let Some(id) = item[key].as_str() {
@@ -104,27 +112,31 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
                 continue;
             }
             if spotify {
-                for name in ["quality", "parse", "split"] {
-                    set_status(item, name, "skipped");
+                for stage in [Stage::Quality, Stage::Parse, Stage::Split] {
+                    set_status(item, stage, StageStatus::Skipped);
                 }
                 let entry_id = item["entry_id"].as_str().unwrap_or("").to_owned();
                 let entry = videos
                     .and_then(|values| values.get(&entry_id))
                     .cloned()
                     .unwrap_or(Value::Null);
-                if matches!(entry["status"].as_str(), Some("downloaded" | "organized")) {
+                let status = cache_status(&entry);
+                if matches!(
+                    status,
+                    Some(CacheStatus::Downloaded | CacheStatus::Organized)
+                ) {
                     let path = entry["files"]
                         .as_array()
                         .and_then(|files| files.first())
                         .and_then(Value::as_str);
-                    set_stage(item, "download", "complete", path);
-                    if entry["status"] == "organized" {
-                        set_status(item, "organize", "complete");
+                    set_stage(item, Stage::Download, StageStatus::Complete, path);
+                    if status == Some(CacheStatus::Organized) {
+                        set_status(item, Stage::Organize, StageStatus::Complete);
                         if !entry_id.is_empty() && !processed_ids.contains(&entry_id) {
                             processed_ids.push(entry_id);
                         }
                     } else if no_organize {
-                        set_status(item, "organize", "skipped");
+                        set_status(item, Stage::Organize, StageStatus::Skipped);
                     }
                 }
                 continue;
@@ -154,49 +166,49 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
             if entry.is_null() {
                 entry = legacy_entry(cache, splits, &video_id);
             }
-            let status = entry["status"].as_str().unwrap_or("").to_owned();
-            if matches!(status.as_str(), "downloaded" | "split" | "organized") {
+            let status = cache_status(&entry);
+            if status.is_some() {
                 let path = entry["audio_file"].as_str().or_else(|| {
                     entry["files"]
                         .as_array()
                         .and_then(|files| files.first())
                         .and_then(Value::as_str)
                 });
-                set_stage(item, "download", "complete", path);
+                set_stage(item, Stage::Download, StageStatus::Complete, path);
             } else if let Some(path) = find_audio(output, &video_id) {
-                set_stage(item, "download", "complete", path.to_str());
+                set_stage(item, Stage::Download, StageStatus::Complete, path.to_str());
             } else if let Some(path) = music_library
                 .as_ref()
                 .and_then(|library| library.find(&video_id, item["title"].as_str().unwrap_or("")))
             {
-                set_stage(item, "download", "complete", path.to_str());
-                set_status(item, "parse", "complete");
-                set_status(item, "split", "skipped");
-                set_status(item, "organize", "complete");
+                set_stage(item, Stage::Download, StageStatus::Complete, path.to_str());
+                set_status(item, Stage::Parse, StageStatus::Complete);
+                set_status(item, Stage::Split, StageStatus::Skipped);
+                set_status(item, Stage::Organize, StageStatus::Complete);
                 processed_ids.push(video_id.clone());
             }
-            if matches!(status.as_str(), "split" | "organized") {
-                set_status(item, "parse", "complete");
+            if matches!(status, Some(CacheStatus::Split | CacheStatus::Organized)) {
+                set_status(item, Stage::Parse, StageStatus::Complete);
                 let split = entry["split_dir"].as_str();
                 set_stage(
                     item,
-                    "split",
+                    Stage::Split,
                     if split.is_some() {
-                        "complete"
+                        StageStatus::Complete
                     } else {
-                        "skipped"
+                        StageStatus::Skipped
                     },
                     split,
                 );
             }
-            if status == "organized" {
-                set_status(item, "organize", "complete");
+            if status == Some(CacheStatus::Organized) {
+                set_status(item, Stage::Organize, StageStatus::Complete);
                 processed_ids.push(video_id);
             }
         }
-        for (index, name, stage) in waiting {
+        for (index, stage, record) in waiting {
             let item = &mut items[index];
-            item["stages"][name.as_str()] = stage;
+            item["stages"][stage.as_ref()] = record;
             for key in ["video_id", "entry_id"] {
                 if let Some(id) = item[key].as_str() {
                     processed_ids.retain(|processed| processed != id);
@@ -237,17 +249,17 @@ fn legacy_entry(cache: &Path, splits: &Path, id: &str) -> Value {
     }
     let path = PathBuf::from(value.trim());
     if path.is_file() {
-        return json!({"status": "downloaded", "audio_file": value});
+        return json!({"status": CacheStatus::Downloaded.as_ref(), "audio_file": value});
     }
     let split = splits.join(path.file_stem().unwrap_or_default());
     if split.exists() {
-        return json!({"status": "split", "audio_file": value, "split_dir": split});
+        return json!({"status": CacheStatus::Split.as_ref(), "audio_file": value, "split_dir": split});
     }
-    json!({"status": "organized", "audio_file": value})
+    json!({"status": CacheStatus::Organized.as_ref(), "audio_file": value})
 }
 
 fn remaining_organize_target(entry: &Value, splits: &Path) -> Option<PathBuf> {
-    if entry["status"] != "organized" {
+    if cache_status(entry) != Some(CacheStatus::Organized) {
         return None;
     }
     let audio = entry["audio_file"].as_str().map(PathBuf::from);
@@ -284,12 +296,12 @@ fn contains_audio(path: &Path) -> bool {
         })
 }
 
-fn set_status(item: &mut Value, name: &str, status: &str) {
-    item["stages"][name]["status"] = json!(status);
+fn set_status(item: &mut Value, stage: Stage, status: StageStatus) {
+    super::set_stage_status(item, stage, status);
 }
 
-fn set_stage(item: &mut Value, name: &str, status: &str, path: Option<&str>) {
-    item["stages"][name] =
+fn set_stage(item: &mut Value, stage: Stage, status: StageStatus, path: Option<&str>) {
+    item["stages"][stage.as_ref()] =
         json!({"status": status, "updated_at": null, "path": path, "error": null});
 }
 
@@ -298,15 +310,20 @@ fn mark_organize_failed(item: &mut Value, entry: &Value, target: &Path) {
     let updated_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     item["last_action"] = json!("refresh");
     item["last_error"] = json!(message);
-    set_stage(item, "download", "complete", entry["audio_file"].as_str());
-    set_stage(item, "parse", "complete", None);
     set_stage(
         item,
-        "split",
+        Stage::Download,
+        StageStatus::Complete,
+        entry["audio_file"].as_str(),
+    );
+    set_stage(item, Stage::Parse, StageStatus::Complete, None);
+    set_stage(
+        item,
+        Stage::Split,
         if target.is_dir() {
-            "complete"
+            StageStatus::Complete
         } else {
-            "skipped"
+            StageStatus::Skipped
         },
         if target.is_dir() {
             target.to_str()
@@ -314,37 +331,53 @@ fn mark_organize_failed(item: &mut Value, entry: &Value, target: &Path) {
             None
         },
     );
-    for name in ["download", "parse", "split"] {
-        item["stages"][name]["updated_at"] = json!(updated_at);
+    for stage in [Stage::Download, Stage::Parse, Stage::Split] {
+        item["stages"][stage.as_ref()]["updated_at"] = json!(updated_at);
     }
-    item["stages"]["organize"] =
-        json!({"status": "failed", "updated_at": updated_at, "path": null, "error": message});
+    item["stages"][Stage::Organize.as_ref()] = json!({"status": StageStatus::Failed, "updated_at": updated_at, "path": null, "error": message});
 }
 
-fn mark_completed(item: &mut Value, no_organize: bool, no_split: bool, quality_policy: &str) {
+fn mark_completed(
+    item: &mut Value,
+    no_organize: bool,
+    no_split: bool,
+    quality_policy: QualityPolicy,
+) {
     let updated_at = Local::now().to_rfc3339_opts(SecondsFormat::Secs, false);
     item["last_action"] = json!("refresh");
     item["last_error"] = Value::Null;
-    set_status(item, "download", "complete");
+    set_status(item, Stage::Download, StageStatus::Complete);
     set_status(
         item,
-        "quality",
-        if quality_policy == "off" {
-            "skipped"
+        Stage::Quality,
+        if quality_policy == QualityPolicy::Off {
+            StageStatus::Skipped
         } else {
-            "complete"
+            StageStatus::Complete
         },
     );
-    set_status(item, "parse", if no_split { "skipped" } else { "complete" });
-    if no_split || item["stages"]["split"]["status"] != "complete" {
-        set_status(item, "split", "skipped");
+    set_status(
+        item,
+        Stage::Parse,
+        if no_split {
+            StageStatus::Skipped
+        } else {
+            StageStatus::Complete
+        },
+    );
+    if no_split || stage_status(item, Stage::Split) != Some(StageStatus::Complete) {
+        set_status(item, Stage::Split, StageStatus::Skipped);
     }
     set_status(
         item,
-        "organize",
-        if no_organize { "skipped" } else { "complete" },
+        Stage::Organize,
+        if no_organize {
+            StageStatus::Skipped
+        } else {
+            StageStatus::Complete
+        },
     );
-    for name in ["download", "quality", "parse", "split", "organize"] {
-        item["stages"][name]["updated_at"] = json!(updated_at);
+    for stage in Stage::ALL {
+        item["stages"][stage.as_ref()]["updated_at"] = json!(updated_at);
     }
 }

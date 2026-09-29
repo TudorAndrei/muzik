@@ -2,7 +2,7 @@
 
 use muzik_core::chapters::sidecar_path;
 use muzik_core::quality::{self, MeasuredQuality, QualityDecision};
-use muzik_core::{QualityPolicy, app_config, paths};
+use muzik_core::{DecisionKind, QualityPolicy, app_config, paths};
 use muzik_soulseek::job::{JobHandle, JobOutcome, JobState};
 use muzik_soulseek::ranking::{format as file_format, rank, search_query};
 use muzik_soulseek::session::{Session, SessionSettings};
@@ -66,7 +66,7 @@ pub fn check_youtube_quality(
     prefer: &str,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult, String> {
     let mut backend = SoulseekBackend { session: None };
     check_with_backend(
@@ -90,7 +90,7 @@ fn check_with_backend(
     prefer: &str,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult, String> {
     let keep = QualityUpgradeResult::keep(&audio_files);
     if policy == QualityPolicy::Off || audio_files.is_empty() {
@@ -169,7 +169,7 @@ fn check_with_backend(
     );
     if quality_decision == QualityDecision::Ask {
         let answer = decide(
-            "quality_replacement",
+            DecisionKind::QualityReplacement,
             json!({"current":primary,"candidate":candidate_payload(&candidate)}),
         )?;
         check_cancelled(cancelled)?;
@@ -718,7 +718,7 @@ mod tests {
             &AtomicBool::new(false),
             &mut |_| {},
             &mut |kind, _| {
-                assert_eq!(kind, "quality_replacement");
+                assert_eq!(kind, muzik_core::DecisionKind::QualityReplacement);
                 Ok(json!(answer))
             },
         )

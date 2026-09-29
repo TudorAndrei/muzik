@@ -1,4 +1,5 @@
 use muzik_core::watchlist::{reconcile, view, ReconcileOptions, Repository};
+use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::fs;
 
@@ -37,7 +38,7 @@ fn reconcile_fills_finished_stages_and_keeps_the_waiting_one(
             config: None,
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     let stages = &document["playlists"][0]["items"][0]["stages"];
@@ -224,7 +225,7 @@ fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed(
             config: None,
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     let playlist = &document["playlists"][0];
@@ -244,7 +245,7 @@ fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed(
             config: None,
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     assert_eq!(
@@ -289,7 +290,7 @@ fn retained_source_with_empty_split_dir_keeps_processed_state(
             config: None,
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     assert_eq!(
@@ -329,7 +330,7 @@ fn reconcile_finds_existing_source_id_in_beets_library() -> Result<(), Box<dyn s
             config: Some(&config),
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     assert_eq!(
@@ -385,7 +386,7 @@ fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> Result<(), Box<dyn 
             config: None,
             no_organize: true,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
     )?;
     assert_eq!(

@@ -4,6 +4,7 @@ pub mod app_config;
 pub mod chapters;
 mod config;
 pub mod config_choices;
+mod decision;
 pub mod downloads;
 pub mod paths;
 pub mod quality;
@@ -15,4 +16,5 @@ pub mod watchlist;
 
 pub use config::{default_config_path, BeetsConfig, Error as ConfigError};
 pub use config_choices::{AudioFallback, AudioSource, ChoiceError, MetadataSource, QualityPolicy};
+pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
 pub use types::{AlbumId, LocalTrack, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

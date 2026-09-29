@@ -83,7 +83,9 @@ static SHARED: Mutex<Shared> = Mutex::new(None);
 
 impl Session {
     pub fn shared(settings: SessionSettings) -> Result<Arc<Self>, BridgeError> {
-        let mut shared = SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut shared = SHARED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((current, session)) = shared.as_ref() {
             if *current == settings {
                 return Ok(Arc::clone(session));

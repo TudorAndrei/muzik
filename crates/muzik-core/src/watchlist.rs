@@ -1,11 +1,13 @@
 //! Versioned watchlist data shared with the existing application.
 
 use crate::paths;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 pub mod jobs;
 mod library_lookup;
@@ -13,9 +15,180 @@ mod reconcile;
 mod view;
 
 pub use reconcile::{reconcile, ReconcileOptions};
-pub use view::view;
+pub use view::{view, Summary};
 
-const STAGES: [&str; 5] = ["download", "quality", "parse", "split", "organize"];
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum Stage {
+    Download,
+    Quality,
+    Parse,
+    Split,
+    Organize,
+}
+
+impl Stage {
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+
+    pub fn resume_action(self) -> ItemAction {
+        match self {
+            Self::Organize => ItemAction::OrganizeAgain,
+            Self::Parse => ItemAction::ParseAgain,
+            Self::Quality => ItemAction::CheckQualityAgain,
+            Self::Download | Self::Split => ItemAction::Run,
+        }
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum StageStatus {
+    NotStarted,
+    Running,
+    Waiting,
+    Complete,
+    Failed,
+    Skipped,
+    Stale,
+}
+
+impl StageStatus {
+    pub fn is_done(self) -> bool {
+        matches!(self, Self::Complete | Self::Skipped)
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantArray,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ItemAction {
+    Run,
+    Retry,
+    DownloadAgain,
+    CheckQualityAgain,
+    ParseAgain,
+    SplitAgain,
+    OrganizeAgain,
+    RunAllAgain,
+}
+
+impl ItemAction {
+    pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+
+    pub fn stage(self) -> Stage {
+        match self {
+            Self::CheckQualityAgain => Stage::Quality,
+            Self::ParseAgain => Stage::Parse,
+            Self::SplitAgain => Stage::Split,
+            Self::OrganizeAgain => Stage::Organize,
+            Self::Run | Self::Retry | Self::DownloadAgain | Self::RunAllAgain => Stage::Download,
+        }
+    }
+
+    pub fn replaces_files(self) -> bool {
+        matches!(
+            self,
+            Self::DownloadAgain
+                | Self::ParseAgain
+                | Self::SplitAgain
+                | Self::OrganizeAgain
+                | Self::RunAllAgain
+        )
+    }
+}
+
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum SourceKind {
+    #[default]
+    Youtube,
+    Spotify,
+}
+
+impl SourceKind {
+    pub fn of(value: &Value) -> Self {
+        value["kind"]
+            .as_str()
+            .and_then(|kind| kind.parse().ok())
+            .unwrap_or_default()
+    }
+}
+
+pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
+    item["stages"][stage.as_ref()]["status"]
+        .as_str()?
+        .parse()
+        .ok()
+}
+
+pub fn set_stage_status(item: &mut Value, stage: Stage, status: StageStatus) {
+    item["stages"][stage.as_ref()]["status"] = json!(status);
+}
+
+pub fn stage_statuses(item: &Value) -> Vec<StageStatus> {
+    Stage::ALL
+        .iter()
+        .filter_map(|stage| stage_status(item, *stage))
+        .collect()
+}
 
 pub struct Repository {
     path: PathBuf,
@@ -241,7 +414,8 @@ fn normalize_item(value: &mut Value) -> Result<(), String> {
     }
     let stages = item.entry("stages").or_insert_with(|| json!({}));
     let stages = stages.as_object_mut().ok_or("stages must be an object")?;
-    for name in STAGES {
+    for stage in Stage::ALL {
+        let name = stage.as_ref();
         let record = stages.entry(name).or_insert_with(|| json!({}));
         normalize_stage(record).map_err(|error| format!("stages.{name}: {error}"))?;
     }
@@ -252,11 +426,11 @@ fn normalize_stage(value: &mut Value) -> Result<(), String> {
     let record = value.as_object_mut().ok_or("stage must be an object")?;
     let status = record
         .entry("status")
-        .or_insert_with(|| json!("not_started"));
-    if !matches!(
-        status.as_str(),
-        Some("not_started" | "running" | "complete" | "failed" | "skipped" | "stale" | "waiting")
-    ) {
+        .or_insert_with(|| json!(StageStatus::NotStarted));
+    if status
+        .as_str()
+        .is_none_or(|status| status.parse::<StageStatus>().is_err())
+    {
         return Err("unknown stage status".into());
     }
     for key in ["updated_at", "path", "error"] {
@@ -287,8 +461,13 @@ fn optional_string(map: &mut Map<String, Value>, key: &str) -> Result<(), String
 }
 
 fn kind(map: &mut Map<String, Value>) -> Result<(), String> {
-    let value = map.entry("kind").or_insert_with(|| json!("youtube"));
-    if matches!(value.as_str(), Some("youtube" | "spotify")) {
+    let value = map
+        .entry("kind")
+        .or_insert_with(|| json!(SourceKind::Youtube));
+    if value
+        .as_str()
+        .is_some_and(|kind| kind.parse::<SourceKind>().is_ok())
+    {
         Ok(())
     } else {
         Err("unknown source kind".into())
@@ -305,7 +484,7 @@ pub fn parse_source(input: &str) -> Result<Value, String> {
         return Ok(playlist(
             "spotify:liked",
             "https://open.spotify.com/collection/tracks",
-            "spotify",
+            SourceKind::Spotify,
             Some("Liked Songs"),
         ));
     }
@@ -319,7 +498,7 @@ pub fn parse_source(input: &str) -> Result<Value, String> {
                 return Ok(playlist(
                     id,
                     &format!("https://www.youtube.com/playlist?list={id}"),
-                    "youtube",
+                    SourceKind::Youtube,
                     None,
                 ));
             }
@@ -346,7 +525,7 @@ pub fn parse_source(input: &str) -> Result<Value, String> {
             return Ok(playlist(
                 &format!("spotify:{kind}:{id}"),
                 &format!("https://open.spotify.com/{kind}/{id}"),
-                "spotify",
+                SourceKind::Spotify,
                 None,
             ));
         }
@@ -354,7 +533,7 @@ pub fn parse_source(input: &str) -> Result<Value, String> {
     Err("enter a YouTube playlist URL, Spotify playlist or album link, or liked".into())
 }
 
-fn playlist(id: &str, url: &str, kind: &str, title: Option<&str>) -> Value {
+fn playlist(id: &str, url: &str, kind: SourceKind, title: Option<&str>) -> Value {
     json!({
         "playlist_id": id,
         "url": url,

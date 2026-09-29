@@ -1,8 +1,7 @@
 //! Shared values for the workflow settings stored in config files.
 
 use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::str::FromStr;
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantNames};
 
 /// An invalid value for a workflow setting.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
@@ -19,70 +18,57 @@ pub const DEFAULT_AUDIO_PREFERENCE: &str = "lossless";
 pub const PREFERRED_AUDIO_CHOICES: &[&str] = &["lossless", "best", "mp3", "flac", "mp3-320", "any"];
 
 macro_rules! config_choice {
-    (
-        $(#[$doc:meta])*
-        $name:ident, $setting:literal, $default:ident,
-        $( $variant:ident => $value:literal ),+ $(,)?
-    ) => {
-        $(#[$doc])*
-        #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, usage::ValueEnum)]
-        #[serde(rename_all = "lowercase")]
-        pub enum $name {
-            $( $variant, )+
-        }
-
+    ($name:ident, $setting:literal, $error:ident) => {
         impl $name {
             /// Values accepted in config files and command-line arguments.
-            pub const CHOICES: &'static [&'static str] = &[$( $value, )+];
+            pub const CHOICES: &'static [&'static str] = <Self as strum::VariantNames>::VARIANTS;
 
-            pub const fn as_str(self) -> &'static str {
-                match self {
-                    $(Self::$variant => $value,)+
-                }
+            pub fn as_str(self) -> &'static str {
+                self.into()
             }
         }
 
-        impl Default for $name {
-            fn default() -> Self {
-                Self::$default
-            }
-        }
-
-        impl AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
-
-        impl fmt::Display for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str(self.as_str())
-            }
-        }
-
-        impl FromStr for $name {
-            type Err = ChoiceError;
-
-            fn from_str(value: &str) -> Result<Self, Self::Err> {
-                match value {
-                    $( $value => Ok(Self::$variant), )+
-                    _ => Err(ChoiceError {
-                        setting: $setting,
-                        value: value.to_owned(),
-                    }),
-                }
+        fn $error(value: &str) -> ChoiceError {
+            ChoiceError {
+                setting: $setting,
+                value: value.to_owned(),
             }
         }
     };
 }
 
-config_choice! {
-    /// Audio source for search and Spotify export tracks.
-    AudioSource, "audio source", Youtube,
-    Youtube => "youtube",
-    Soulseek => "soulseek",
-    Auto => "auto",
+/// Audio source for search and Spotify export tracks.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(
+    serialize_all = "lowercase",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = audio_source_error
+)]
+pub enum AudioSource {
+    #[default]
+    Youtube,
+    Soulseek,
+    Auto,
 }
+
+config_choice!(AudioSource, "audio source", audio_source_error);
 
 /// Return the allowed values for a workflow config field.
 pub fn choices_for_field(field: &str) -> Option<&'static [&'static str]> {
@@ -95,33 +81,108 @@ pub fn choices_for_field(field: &str) -> Option<&'static [&'static str]> {
     }
 }
 
-config_choice! {
-    /// Source to try when Soulseek has no acceptable result.
-    AudioFallback, "audio fallback", Youtube,
-    Youtube => "youtube",
-    None => "none",
+/// Source to try when Soulseek has no acceptable result.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(
+    serialize_all = "lowercase",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = audio_fallback_error
+)]
+pub enum AudioFallback {
+    #[default]
+    Youtube,
+    None,
 }
 
-config_choice! {
-    /// Source for track and chapter metadata.
-    MetadataSource, "metadata source", Auto,
-    None => "none",
-    Youtube => "youtube",
-    Musicbrainz => "musicbrainz",
-    Auto => "auto",
+config_choice!(AudioFallback, "audio fallback", audio_fallback_error);
+
+/// Source for track and chapter metadata.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(
+    serialize_all = "lowercase",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = metadata_source_error
+)]
+pub enum MetadataSource {
+    None,
+    Youtube,
+    Musicbrainz,
+    #[default]
+    Auto,
 }
 
-config_choice! {
-    /// Response to a measured audio quality gap.
-    QualityPolicy, "quality policy", Off,
-    Off => "off",
-    Ask => "ask",
-    Auto => "auto",
+config_choice!(MetadataSource, "metadata source", metadata_source_error);
+
+/// Response to a measured audio quality gap.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(
+    serialize_all = "lowercase",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = quality_policy_error
+)]
+pub enum QualityPolicy {
+    #[default]
+    Off,
+    Ask,
+    Auto,
 }
+
+config_choice!(QualityPolicy, "quality policy", quality_policy_error);
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioFallback, AudioSource, MetadataSource, QualityPolicy};
+    use super::{AudioFallback, AudioSource, ChoiceError, MetadataSource, QualityPolicy};
 
     #[test]
     fn choices_parse_and_serialize_as_config_strings() -> Result<(), Box<dyn std::error::Error>> {
@@ -144,6 +205,13 @@ mod tests {
         check!(AudioFallback);
         check!(MetadataSource);
         check!(QualityPolicy);
+        assert_eq!(
+            "lossy".parse::<QualityPolicy>(),
+            Err(ChoiceError {
+                setting: "quality policy",
+                value: "lossy".into(),
+            })
+        );
         Ok(())
     }
 

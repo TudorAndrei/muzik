@@ -25,3 +25,5 @@ regex = "1"
 muzik-tags = { path = "../muzik-tags" }
 unicode-normalization = "0.1"
 usage = { package = "usage-rs", version = "6.11.1" }
+strum = "0.28"
+strum_macros = "0.28"

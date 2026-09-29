@@ -1,7 +1,8 @@
 use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations,
 };
-use muzik_core::watchlist::{ReconcileOptions, Repository};
+use muzik_core::watchlist::{ItemAction, ReconcileOptions, Repository, Stage};
+use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,7 +23,7 @@ impl Operations for Fake {
         &mut self,
         _: &Value,
         item: &Value,
-        _: &str,
+        _: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         let id = item["video_id"]
@@ -57,7 +58,7 @@ fn options<'a>(directory: &'a std::path::Path) -> JobOptions<'a> {
             config: None,
             no_organize: false,
             no_split: false,
-            quality_policy: "off",
+            quality_policy: QualityPolicy::Off,
         },
         output: directory,
         cache: directory,
@@ -128,14 +129,14 @@ impl Operations for AsksOnFirst {
         &mut self,
         _: &Value,
         item: &Value,
-        _: &str,
+        _: ItemAction,
         _: &AtomicBool,
     ) -> Result<Value, JobError> {
         let id = item["video_id"].as_str().unwrap_or("").to_owned();
         self.processed.push(id.clone());
         if id == "video_a" {
             return Err(JobError::Waiting {
-                stage: "organize".into(),
+                stage: Stage::Organize,
                 question: json!({"kind": "import_match", "payload": {"task": {}}}),
             });
         }
@@ -209,7 +210,7 @@ impl Operations for CallLog {
         &mut self,
         _: &Value,
         item: &Value,
-        _: &str,
+        _: ItemAction,
         _: &AtomicBool,
     ) -> Result<Value, JobError> {
         self.0.push(format!(
@@ -258,7 +259,7 @@ impl Operations for ActionFailure {
         &mut self,
         _: &Value,
         _: &Value,
-        _: &str,
+        _: ItemAction,
         _: &AtomicBool,
     ) -> Result<Value, JobError> {
         Err(JobError::Operation("download failed".into()))
@@ -280,7 +281,7 @@ fn an_action_that_needs_a_choice_parks_the_item() -> Result<(), Box<dyn std::err
             playlist_id: "PL123",
             position: 1,
             video_id: Some("video_a"),
-            action: "run",
+            action: ItemAction::Run,
         },
         &mut AsksOnFirst {
             processed: Vec::new(),
@@ -309,7 +310,7 @@ fn failed_action_saves_its_target_stage() -> Result<(), Box<dyn std::error::Erro
             playlist_id: "PL123",
             position: 1,
             video_id: Some("video_a"),
-            action: "run",
+            action: ItemAction::Run,
         },
         &mut ActionFailure,
         &AtomicBool::new(false),
@@ -371,7 +372,7 @@ fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Err
             playlist_id: "PL123",
             position: 1,
             video_id: Some("other"),
-            action: "run",
+            action: ItemAction::Run,
         },
         &mut fake,
         &AtomicBool::new(false),
@@ -414,7 +415,7 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
             playlist_id: "PL123",
             position: 1,
             video_id: Some("video_a"),
-            action: "download_again",
+            action: ItemAction::DownloadAgain,
         },
         &mut fake,
         &AtomicBool::new(false),
@@ -436,11 +437,11 @@ impl Operations for SplitFailure {
         &mut self,
         _: &Value,
         _: &Value,
-        _: &str,
+        _: ItemAction,
         _: &AtomicBool,
     ) -> Result<Value, JobError> {
         Err(JobError::Failed {
-            stage: "split".into(),
+            stage: Stage::Split,
             message: "split failed".into(),
         })
     }
@@ -461,7 +462,7 @@ fn a_failure_marks_the_stage_that_failed() -> Result<(), Box<dyn std::error::Err
             playlist_id: "PL123",
             position: 1,
             video_id: Some("video_a"),
-            action: "run",
+            action: ItemAction::Run,
         },
         &mut SplitFailure,
         &AtomicBool::new(false),
@@ -556,7 +557,7 @@ impl Operations for RepeatDownload {
         &mut self,
         _: &Value,
         item: &Value,
-        _: &str,
+        _: ItemAction,
         _: &AtomicBool,
     ) -> Result<Value, JobError> {
         let mut item = item.clone();
@@ -591,7 +592,7 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation(
             playlist_id: "PL123",
             position: 1,
             video_id: Some("video_a"),
-            action: "download_again",
+            action: ItemAction::DownloadAgain,
         },
         &mut RepeatDownload,
         &AtomicBool::new(false),
