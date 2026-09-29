@@ -1,13 +1,9 @@
-//! Native command-line entry point.
-
 mod archive;
 mod bandcamp;
 mod cache;
 mod config;
-mod desktop;
 mod download;
 mod downloaded;
-mod gui;
 mod import;
 mod init;
 mod organize;
@@ -44,12 +40,8 @@ enum Command {
     Download(Download),
     /// Show downloaded audio files.
     Downloaded(Downloaded),
-    /// Open the desktop app.
-    Gui,
     /// Create app directories and library defaults.
     Init,
-    /// Install the macOS desktop app bundle.
-    InstallApp(InstallApp),
     /// Import audio into a beets-compatible library.
     Import(Import),
     /// Import audio by default, or write tags from the music library.
@@ -244,13 +236,6 @@ struct Workflow {
     /// Select the highest-ranked Soulseek result without a prompt.
     #[usage(long)]
     no_interactive: bool,
-}
-
-#[derive(Args)]
-struct InstallApp {
-    /// Install to ~/Applications instead of /Applications.
-    #[usage(long)]
-    user: bool,
 }
 
 #[derive(Args)]
@@ -568,9 +553,7 @@ async fn run(command: Command) -> Result<(), String> {
             let output = args.output.unwrap_or_else(paths::download_dir);
             downloaded::list(&output).map_err(|error| error.to_string())
         }
-        Command::Gui => gui::open().map_err(|error| error.to_string()),
         Command::Init => init::run().map_err(|error| error.to_string()),
-        Command::InstallApp(args) => desktop::install(args.user).map_err(|error| error.to_string()),
         Command::Import(args) => import::run(&args),
         Command::Organize(args) => organize::run(&args),
         Command::Spotify(args) => match args.command {
