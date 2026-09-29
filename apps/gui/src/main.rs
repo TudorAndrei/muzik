@@ -35,6 +35,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+actions!(muzik, [Quit]);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
     Workflow,
@@ -2007,6 +2009,15 @@ fn main() {
     app.run(|cx| {
         gpui_kit::init(cx);
         style::apply_theme(cx);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.set_menus([Menu::new("Muzik").items([MenuItem::action("Quit Muzik", Quit)])]);
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| Muzik::new(window, cx))
         })
