@@ -37,6 +37,19 @@ menu can run the next stage, retry a failed stage, or repeat a selected stage.
 The app asks before a command replaces local files. A command that changes an
 early stage can make later stages stale.
 
+## AI decisions
+
+When **Choose automatically** is on in Settings, the app picks album matches
+and Soulseek downloads itself. An album match with a distance of 0.10 or less
+is applied at once. Other choices go to `codex exec` with the model from
+Settings (default `gpt-6-luna`, low reasoning) and a JSON schema. The app
+uses an answer with a confidence of 0.65 or more. It asks you when the model
+is not sure, fails, or does not answer within two minutes, and it shows the
+model's suggestion and reason. Recent events lists each automatic choice.
+
+The Codex CLI must be installed and logged in. Run the live check with
+`cargo test -p muzik-agent -- --ignored`; it uses the account quota.
+
 ## Cancellation
 
 One long job runs at a time. `job.cancel` marks the Rust job for cancellation.

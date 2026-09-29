@@ -33,7 +33,9 @@ pub fn gui_defaults() -> Value {
         "fallback": AudioFallback::default(),
         "interactive": true,
         "quality_policy": QualityPolicy::default(),
-        "min_bitrate": 256
+        "min_bitrate": 256,
+        "auto_decide": true,
+        "agent_model": "gpt-6-luna"
     })
 }
 

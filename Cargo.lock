@@ -4605,6 +4605,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "muzik-agent"
+version = "2.3.1"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "muzik-cli"
 version = "2.3.1"
 dependencies = [
@@ -4654,6 +4662,7 @@ version = "2.3.1"
 dependencies = [
  "chrono",
  "gpui-kit",
+ "muzik-agent",
  "muzik-core",
  "muzik-import",
  "muzik-library",

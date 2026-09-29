@@ -375,7 +375,10 @@ pub(crate) fn soulseek_download(
             .iter()
             .map(|item| candidate_row(&item.candidate, item.score))
             .collect::<Vec<_>>();
-        let answer = decide("soulseek_candidate", json!({"candidates":rows}))?;
+        let answer = decide(
+            "soulseek_candidate",
+            json!({"query":query,"candidates":rows}),
+        )?;
         let index = answer
             .as_u64()
             .or_else(|| answer.get("index").and_then(Value::as_u64))

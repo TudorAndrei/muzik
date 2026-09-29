@@ -339,7 +339,35 @@ impl Bridge {
             let mut import_event = |event: Value| {
                 let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"native","event":event["event"],"data":event["data"]}}));
             };
-            let mut decide = |kind: &str, payload: Value| {
+            let mut decide = |kind: &str, mut payload: Value| {
+                let job_message = |event: &str, data: Value| {
+                    let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"agent","event":event,"data":data}}));
+                };
+                if let Some(model) = agent_model(kind, &payload) {
+                    job_message(
+                        "message",
+                        json!({"message":format!("Asking {model} to choose.")}),
+                    );
+                    match muzik_agent::decide(kind, &payload, &model) {
+                        Ok(muzik_agent::Outcome::Decided(choice)) => {
+                            job_message(
+                                "agent_decided",
+                                json!({"kind":kind,"label":choice.label,"confidence":choice.confidence,"reason":choice.reason}),
+                            );
+                            return Ok(choice.value);
+                        }
+                        Ok(muzik_agent::Outcome::Unsure {
+                            suggestion,
+                            confidence,
+                            reason,
+                        }) => {
+                            payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
+                        }
+                        Err(error) => {
+                            payload["agent"] = json!({"model":model,"error":error});
+                        }
+                    }
+                }
                 decision_number += 1;
                 let decision_id = format!("{job_id}-decision-{decision_number}");
                 let (reply, receiver) = mpsc::channel();
@@ -581,6 +609,22 @@ fn validate_workflow_command(command: &str, params: &Value) -> Result<(), String
         _ => {}
     }
     Ok(())
+}
+
+fn agent_model(kind: &str, payload: &Value) -> Option<String> {
+    if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
+        return None;
+    }
+    let settings = app_config::load_gui_defaults(&app_config::path()).ok()?;
+    if settings["auto_decide"] != true {
+        return None;
+    }
+    let model = settings["agent_model"]
+        .as_str()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or(muzik_agent::DEFAULT_MODEL);
+    Some(model.to_owned())
 }
 
 struct WatchlistLoad {
