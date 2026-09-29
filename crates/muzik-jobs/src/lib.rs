@@ -151,17 +151,45 @@ impl Store {
     }
 
     pub fn claim(&self, queue: &str) -> Result<Option<Job>, String> {
+        self.claim_any(&[queue])
+    }
+
+    pub fn claim_any(&self, queues: &[&str]) -> Result<Option<Job>, String> {
+        let names = serde_json::to_string(queues).map_err(|error| error.to_string())?;
         self.connection
             .query_row(
                 &format!(
                     "UPDATE jobs SET status = 'running', updated_at = ?1
-                     WHERE id = (SELECT id FROM jobs WHERE queue = ?2 AND status = 'queued' ORDER BY id LIMIT 1)
+                     WHERE id = (SELECT id FROM jobs WHERE status = 'queued'
+                                 AND queue IN (SELECT value FROM json_each(?2)) ORDER BY id LIMIT 1)
                      RETURNING {COLUMNS}"
                 ),
-                params![now(), queue],
+                params![now(), names],
                 job,
             )
             .optional()
+            .map_err(text)
+    }
+
+    pub fn list_open(&self) -> Result<Vec<Job>, String> {
+        let mut statement = self
+            .connection
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM jobs WHERE status IN ('queued', 'running') ORDER BY id"
+            ))
+            .map_err(text)?;
+        let rows = statement.query_map([], job).map_err(text)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+    }
+
+    pub fn cancel_open(&self, id: i64) -> Result<bool, String> {
+        self.connection
+            .execute(
+                "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+                 WHERE id = ?2 AND status IN ('queued', 'waiting')",
+                params![now(), id],
+            )
+            .map(|changed| changed == 1)
             .map_err(text)
     }
 
@@ -326,6 +354,38 @@ mod tests {
         assert_eq!(store.claim("process")?.map(|job| job.id), Some(second));
         assert_eq!(store.claim("process")?, None);
         assert_eq!(store.claim("download")?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn claim_any_takes_the_oldest_job_of_the_named_queues() -> Result<(), String> {
+        let store = Store::open_in_memory()?;
+        let params = json!({});
+        let first = store.enqueue(&NewJob {
+            queue: "sync",
+            ..job("refresh", "refresh", &params)
+        })?;
+        let second = store.enqueue(&job("item", "a", &params))?;
+        let third = store.enqueue(&job("item", "b", &params))?;
+        assert_eq!(
+            store
+                .list_open()?
+                .iter()
+                .map(|job| job.id)
+                .collect::<Vec<_>>(),
+            [first, second, third]
+        );
+        assert!(store.cancel_open(second)?);
+        assert_eq!(
+            store.claim_any(&["process"])?.map(|job| job.id),
+            Some(third)
+        );
+        assert!(!store.cancel_open(third)?);
+        assert_eq!(
+            store.claim_any(&["process", "sync"])?.map(|job| job.id),
+            Some(first)
+        );
+        assert_eq!(store.list_open()?.len(), 2);
         Ok(())
     }
 
