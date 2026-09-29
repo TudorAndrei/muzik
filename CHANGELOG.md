@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.7.1 - 2026-09-29
+#### Bug Fixes
+- (**gui**) show the full release name and suggest only what the model picked - (f43aa54) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.7.0 - (e3e99aa) - TudorAndrei
+
+- - -
+
 ## v2.7.0 - 2026-09-29
 #### Features
 - (**watchlist**) skip private and removed YouTube videos - (3b10710) - TudorAndrei
