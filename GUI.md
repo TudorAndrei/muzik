@@ -44,29 +44,12 @@ that run, the item waits again.
 
 ## Queues
 
-All jobs go into a queue in `jobs.db` in the data folder:
-
-- A refresh checks the playlists, then adds one job for each pending item.
-- An item command adds one job for that item. An item can have one open job.
-- A Workflow run is also a queue job.
-
-Five workers take jobs in this order: playlist checks, Workflow runs, items.
-Each stage waits for its resource:
-
-| Gate | Stages | At the same time |
-| --- | --- | --- |
-| Download | YouTube and Soulseek downloads | 2 |
-| Process | Quality check, split | 1 |
-| Import | Organize into the library | 1 |
-
-So one item can import while two others download. Activity shows each gate
+The app and the CLI share one job queue. See
+[Job queue](README.md#job-queue) for the queues, the gates, and the CLI
+commands. The app runs the queue while it is open. Activity shows each gate
 with its active and waiting items, and a list of the running and queued jobs.
-All jobs use one Soulseek login. Writes to `watchlist.json` go through one
-lock, so parallel jobs do not overwrite each other. A job that was running when
-the app closed goes back into the queue when the app starts again.
-
-A Workflow run that asks you a question releases its gates while it waits, so
-other jobs continue.
+If a CLI command runs the queue when the app starts, the app only adds jobs,
+and the status bar says so.
 
 ## AI decisions
 

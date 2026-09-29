@@ -158,6 +158,11 @@ files provide metadata; the selected audio source acquires each track.
 |---------|-------------|
 | `muzik init` | Create app directories and configure the music library |
 | `muzik workflow <url-or-path>` | Full pipeline: acquire → split → import by default |
+| `muzik workflow <url-or-path> --queue` | Add the run to the shared job queue, then run the queue |
+| `muzik watchlist list` \| `add` \| `remove` | Show and change the watched playlists |
+| `muzik watchlist refresh` | Check all playlists, queue their pending items, and run the queue |
+| `muzik watchlist item <playlist> <position> --action <action>` | Queue one command for one item |
+| `muzik jobs list` \| `show` \| `answer` \| `cancel` \| `run` | Show, answer, stop, and run queued jobs |
 | `muzik download <url>` | Download audio from YouTube via yt-dlp |
 | `muzik downloaded` | List audio already in the output folder |
 | `muzik soulseek check` | Verify the embedded Soulseek client can connect and log in |
@@ -272,6 +277,57 @@ If a command is not available, the card shows the missing input.
 **Load thumbnails** stores valid JPEG or PNG images in the normal muzik cache.
 The viewer uses cached images when it starts and does not request them from the
 network. The current `muzik cache` commands list and clean these files.
+
+## Job queue
+
+The CLI and the desktop app use the same job queue in `jobs.db` in the data
+folder:
+
+- A watchlist refresh checks the playlists, then adds one job for each pending
+  item.
+- An item command adds one job for that item. An item can have one open job.
+- A workflow run from the app, or from `muzik workflow --queue`, is also a
+  queue job.
+
+One process at a time runs the queue. It holds `jobs.lock` in the data folder.
+When the app is open, it runs the queue, and a CLI command only adds jobs. When
+the app is closed, the CLI command runs the queue until it is empty. Every
+process can list, answer, and cancel jobs.
+
+Five workers take jobs in this order: playlist checks, workflow runs, items.
+Each stage waits for its resource:
+
+| Gate | Stages | At the same time |
+| --- | --- | --- |
+| Download | YouTube and Soulseek downloads | 2 |
+| Process | Quality check, split | 1 |
+| Import | Organize into the library | 1 |
+
+So one item can import while two others download. All jobs of a process use
+one Soulseek login. Writes to `watchlist.json` go through one lock, so parallel
+jobs do not overwrite each other. A job that was running when its process
+stopped goes back into the queue when the queue runs again.
+
+An item does not stop other items when it needs a choice. The item goes to the
+Waiting state. Find it with `muzik jobs list` or in **Needs you** in the app.
+Answer it with `muzik jobs show <id>` and `muzik jobs answer <id> <number>`, or
+in the app. The answer puts the item back in the queue, and the waiting stage
+runs again with that answer.
+
+A workflow run that asks a question waits for the answer in the app, or in the
+terminal for the CLI. It releases its gates while it waits, so other jobs
+continue.
+
+`muzik jobs cancel <id>` takes a queued job out of the queue, or stops a
+running job at a safe point. The job keeps completed files and saved state.
+
+```sh
+muzik watchlist add "https://www.youtube.com/playlist?list=PL..."
+muzik watchlist refresh
+muzik jobs list
+muzik jobs show queue-12
+muzik jobs answer queue-12 1
+```
 
 ## Avoiding re-downloads
 
