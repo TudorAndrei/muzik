@@ -80,14 +80,22 @@ fn refresh_keeps_prior_state_and_processes_each_video_once(
         cancel_after_first: false,
     };
     let cancelled = AtomicBool::new(false);
+    let mut events = Vec::new();
     let result = jobs::refresh(
         &repository,
         options(directory.path()),
         &mut fake,
         &cancelled,
-        &mut |_| {},
+        &mut |event| events.push(event),
     )?;
     assert_eq!(fake.processed, ["video_a", "video_b"]);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["event"] == "watchlist_saved")
+            .count(),
+        3
+    );
     assert_eq!(result["summary"]["completed_videos"], 2);
     assert_eq!(
         result["watchlist"]["playlists"][0]["title"],

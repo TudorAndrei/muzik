@@ -89,6 +89,7 @@ pub fn refresh(
                 saved["last_checked_at"] = json!(now());
                 saved["last_error"] = json!(error.to_string());
                 save(repository, &document, options.dry_run)?;
+                emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
                 errors += 1;
                 emit(
                     on_event,
@@ -113,6 +114,7 @@ pub fn refresh(
         saved["last_error"] = Value::Null;
         reconcile(&mut document, options.reconcile)?;
         save(repository, &document, options.dry_run)?;
+        emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
         let ids = pending_ids(&document["playlists"][index]);
         pending += ids.len();
         emit(
@@ -169,6 +171,7 @@ pub fn refresh(
                 }
             }
             save(repository, &document, options.dry_run)?;
+            emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
         }
         emit(
             on_event,
