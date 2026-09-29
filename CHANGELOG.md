@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.4.0 - 2026-09-29
+#### Features
+- (**agent**) choose album matches and Soulseek downloads with Codex - (caa8819) - TudorAndrei
+- (**gui**) show match scores and the AI suggestion in decisions - (763c0cc) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.3.1 - (109ec37) - TudorAndrei
+
+- - -
+
 ## v2.3.1 - 2026-09-29
 #### Bug Fixes
 - (**gui**) clear the playlist field after add and the decision after a job - (649c100) - TudorAndrei
