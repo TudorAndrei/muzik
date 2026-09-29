@@ -342,7 +342,7 @@ pub(crate) fn soulseek_download(
     let config = app_config::load(&app_config::path())?;
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
-    let session = Session::connect(settings).map_err(|error| error.to_string())?;
+    let session = Session::shared(settings).map_err(|error| error.to_string())?;
     let search_timeout = configured_timeout(
         &config,
         "MUZIK_SOULSEEK_SEARCH_TIMEOUT",
@@ -362,7 +362,10 @@ pub(crate) fn soulseek_download(
             JobState::Completed(JobOutcome::Download(_)) => {
                 return Err("Soulseek returned a download for a search.".into())
             }
-            JobState::Failed(error) => return Err(error),
+            JobState::Failed(error) => {
+                Session::forget_shared();
+                return Err(error);
+            }
             JobState::Cancelled => return Err("Soulseek search cancelled".into()),
         }
     };

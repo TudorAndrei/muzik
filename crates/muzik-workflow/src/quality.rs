@@ -447,7 +447,7 @@ fn quality_download_dir() -> Result<PathBuf, String> {
 }
 
 struct SoulseekBackend {
-    session: Option<Session>,
+    session: Option<std::sync::Arc<Session>>,
 }
 
 impl SoulseekBackend {
@@ -456,10 +456,10 @@ impl SoulseekBackend {
             let config = app_config::load(&app_config::path())?;
             let settings = SessionSettings::configured(&config)
                 .ok_or("Set Soulseek credentials in configuration first.")?;
-            self.session = Some(Session::connect(settings).map_err(|error| error.to_string())?);
+            self.session = Some(Session::shared(settings).map_err(|error| error.to_string())?);
         }
         self.session
-            .as_ref()
+            .as_deref()
             .ok_or("Soulseek session is not available".into())
     }
 }

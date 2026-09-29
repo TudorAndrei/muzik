@@ -87,7 +87,7 @@ fn check_soulseek() -> ServiceStatus {
         .clone()
         .unwrap_or_else(|| "server.slsknet.org".into());
     let port = settings.server_port.unwrap_or(2416);
-    match Session::connect(settings) {
+    match Session::shared(settings) {
         Ok(_session) => ServiceStatus {
             name: "Soulseek",
             available: Some(true),

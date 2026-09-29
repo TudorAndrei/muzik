@@ -8,7 +8,7 @@
 
 use std::env;
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -21,6 +21,7 @@ use crate::error::BridgeError;
 use crate::job::{JobHandle, JobOutcome, JobState};
 use crate::types::{Candidate, DownloadProgress, DownloadTarget};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSettings {
     pub username: String,
     pub password: String,
@@ -76,7 +77,30 @@ pub struct Session {
     client: Arc<Client>,
 }
 
+type Shared = Option<(SessionSettings, Arc<Session>)>;
+
+static SHARED: Mutex<Shared> = Mutex::new(None);
+
 impl Session {
+    pub fn shared(settings: SessionSettings) -> Result<Arc<Self>, BridgeError> {
+        let mut shared = SHARED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((current, session)) = shared.as_ref() {
+            if *current == settings {
+                return Ok(Arc::clone(session));
+            }
+        }
+        let session = Arc::new(Self::connect(settings.clone())?);
+        *shared = Some((settings, Arc::clone(&session)));
+        Ok(session)
+    }
+
+    pub fn forget_shared() {
+        SHARED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     pub fn connect(settings: SessionSettings) -> Result<Self, BridgeError> {
         tracing::debug!("connect to Soulseek server");
         let mut client_settings = ClientSettings::new(settings.username, settings.password);
