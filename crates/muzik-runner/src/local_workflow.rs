@@ -4,7 +4,7 @@ use crate::gates::{self, Gate};
 use muzik_core::watchlist::Stage;
 use muzik_core::{
     chapters::Chapter, paths, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer,
-    KEEP_CURRENT_TAGS,
+    DuplicatePolicy, KEEP_CURRENT_TAGS,
 };
 use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
@@ -76,6 +76,9 @@ pub(crate) fn parse(raw: &str, params: &Value) -> Result<LocalRequest, String> {
     }
     if let Some(value) = params.get("quality_policy") {
         options.quality_policy = choice(value, "quality_policy")?;
+    }
+    if let Some(value) = params.get("duplicates") {
+        options.duplicates = choice(value, "duplicates")?;
     }
     if let Some(value) = params.get("prefer") {
         options.prefer = value.as_str().ok_or("prefer must be a string")?.to_owned();
@@ -246,21 +249,25 @@ impl WorkflowOperations for LocalOperations<'_> {
                 None
             } else if options.force {
                 Some(DuplicateDecision::Replace)
-            } else if options.interactive {
-                let answer = (self.decide)(
-                    DecisionKind::ImportDuplicate,
-                    json!({"task":task,"duplicates":duplicate_views(album, &preview.paths.library)?}),
-                )?;
-                Some(
-                    match answer.as_str().and_then(|answer| answer.parse().ok()) {
-                        Some(DuplicateAnswer::Skip) => DuplicateDecision::Skip,
-                        Some(DuplicateAnswer::KeepAll) => DuplicateDecision::Keep,
-                        Some(DuplicateAnswer::RemoveOld) => DuplicateDecision::Replace,
-                        None => return Err("Select a valid duplicate action.".into()),
-                    },
-                )
             } else {
-                Some(DuplicateDecision::Skip)
+                Some(match options.duplicates {
+                    DuplicatePolicy::Skip => DuplicateDecision::Skip,
+                    DuplicatePolicy::KeepAll => DuplicateDecision::Keep,
+                    DuplicatePolicy::RemoveOld => DuplicateDecision::Replace,
+                    DuplicatePolicy::Ask if !options.interactive => DuplicateDecision::Skip,
+                    DuplicatePolicy::Ask => {
+                        let answer = (self.decide)(
+                            DecisionKind::ImportDuplicate,
+                            json!({"task":task,"duplicates":duplicate_views(album, &preview.paths.library)?}),
+                        )?;
+                        match answer.as_str().and_then(|answer| answer.parse().ok()) {
+                            Some(DuplicateAnswer::Skip) => DuplicateDecision::Skip,
+                            Some(DuplicateAnswer::KeepAll) => DuplicateDecision::Keep,
+                            Some(DuplicateAnswer::RemoveOld) => DuplicateDecision::Replace,
+                            None => return Err("Select a valid duplicate action.".into()),
+                        }
+                    }
+                })
             };
             decisions.push(AlbumDecision { choice, duplicate });
         }
@@ -446,7 +453,7 @@ pub(crate) fn event_record(event: WorkflowEvent) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{parse, run, supported};
-    use muzik_core::{ChapterAnswer, DecisionKind};
+    use muzik_core::{ChapterAnswer, DecisionKind, DuplicatePolicy};
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -470,6 +477,64 @@ mod tests {
         assert_eq!(request.options.quality_policy.as_str(), "ask");
         assert_eq!(request.options.min_bitrate, 192);
         assert_eq!(request.options.prefer, "flac");
+        Ok(())
+    }
+
+    #[test]
+    fn a_duplicate_album_is_skipped_by_default_without_a_question(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let config = dir.path().join("config.yaml");
+        let database = dir.path().join("library.db");
+        fs::write(
+            &config,
+            format!(
+                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
+                dir.path().join("Music").display(),
+                database.display(),
+                dir.path().join("state.pickle").display()
+            ),
+        )?;
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/muzik-tags/tests/fixtures/mediafile.flac");
+        let mut asked = Vec::new();
+        for round in 0..2 {
+            let audio = dir.path().join(format!("round-{round}")).join("track.flac");
+            fs::create_dir_all(audio.parent().ok_or("no parent")?)?;
+            fs::copy(&fixture, &audio)?;
+            let request =
+                supported(&json!({"raw":audio,"config":config,"no_split":true,"interactive":true}))
+                    .ok_or("local request was not selected")??;
+            assert_eq!(request.options.duplicates, DuplicatePolicy::Skip);
+            run(
+                request,
+                &AtomicBool::new(false),
+                &mut |_| {},
+                &mut |_| {},
+                &mut |kind, _| {
+                    asked.push(kind);
+                    Ok(json!(muzik_core::KEEP_CURRENT_TAGS))
+                },
+            )?;
+        }
+        assert_eq!(
+            asked,
+            [DecisionKind::ImportMatch, DecisionKind::ImportMatch]
+        );
+        assert_eq!(
+            muzik_library::Library::open_read_only(&database)?
+                .items()?
+                .len(),
+            1
+        );
+        let probe = dir.path().join("probe.flac");
+        fs::write(&probe, b"audio")?;
+        let request = supported(&json!({"raw":probe,"duplicates":"ask"}))
+            .ok_or("local request was not selected")??;
+        assert_eq!(request.options.duplicates, DuplicatePolicy::Ask);
+        assert!(supported(&json!({"raw":probe,"duplicates":"merge"}))
+            .ok_or("local request was not selected")?
+            .is_err());
         Ok(())
     }
 

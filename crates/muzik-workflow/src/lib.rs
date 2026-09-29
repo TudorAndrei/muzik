@@ -6,7 +6,7 @@
 use muzik_core::chapters::{self, Chapter};
 use muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE;
 pub use muzik_core::splitter::SplitProgress;
-pub use muzik_core::{AudioFallback, AudioSource, MetadataSource, QualityPolicy};
+pub use muzik_core::{AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy};
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -44,6 +44,7 @@ pub struct WorkflowOptions {
     pub interactive: bool,
     pub quality_policy: QualityPolicy,
     pub min_bitrate: u32,
+    pub duplicates: DuplicatePolicy,
 }
 
 impl Default for WorkflowOptions {
@@ -66,6 +67,7 @@ impl Default for WorkflowOptions {
             interactive: true,
             quality_policy: QualityPolicy::default(),
             min_bitrate: 256,
+            duplicates: DuplicatePolicy::default(),
         }
     }
 }

@@ -15,6 +15,8 @@ mod types;
 pub mod watchlist;
 
 pub use config::{default_config_path, BeetsConfig, Error as ConfigError};
-pub use config_choices::{AudioFallback, AudioSource, ChoiceError, MetadataSource, QualityPolicy};
+pub use config_choices::{
+    AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, QualityPolicy,
+};
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
 pub use types::{AlbumId, LocalTrack, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

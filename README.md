@@ -314,6 +314,11 @@ Answer it with `muzik jobs show <id>` and `muzik jobs answer <id> <number>`, or
 in the app. The answer puts the item back in the queue, and the waiting stage
 runs again with that answer.
 
+When an album is already in the library, a queued job uses the **Album already
+in library** setting (`duplicates` in the `native_gui` config section):
+`skip` (the default), `ask`, `keep_all`, or `remove_old`. Only `ask` shows a
+question.
+
 A workflow run that asks a question waits for the answer in the app, or in the
 terminal for the CLI. It releases its gates while it waits, so other jobs
 continue.

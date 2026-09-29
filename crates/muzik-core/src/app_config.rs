@@ -1,7 +1,7 @@
 //! Read and update the existing muzik config file.
 
 use crate::config_choices::{
-    choices_for_field, AudioFallback, AudioSource, MetadataSource, QualityPolicy,
+    choices_for_field, AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy,
     DEFAULT_AUDIO_PREFERENCE,
 };
 use crate::paths;
@@ -33,6 +33,7 @@ pub fn gui_defaults() -> Value {
         "fallback": AudioFallback::default(),
         "interactive": true,
         "quality_policy": QualityPolicy::default(),
+        "duplicates": DuplicatePolicy::default(),
         "min_bitrate": 256,
         "auto_decide": true,
         "agent_model": "gpt-6-luna"

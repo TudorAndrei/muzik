@@ -99,6 +99,7 @@ pub fn run(args: &Workflow) -> Result<(), String> {
         prefer: args.prefer.clone(),
         fallback: args.fallback,
         interactive: !args.no_interactive,
+        ..WorkflowOptions::default()
     };
     let mut operations = CliOperations {
         compilation: args.compilation,

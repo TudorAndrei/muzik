@@ -24,7 +24,9 @@ use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use muzik_core::watchlist::{ItemAction, SourceKind, Summary};
-use muzik_core::{AudioFallback, AudioSource, DecisionKind, MetadataSource, QualityPolicy};
+use muzik_core::{
+    AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
+};
 use muzik_jobs::Status as JobStatus;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use serde_json::{json, Map, Value};
@@ -190,6 +192,11 @@ const CHOICES: &[(&str, &str, &[&str])] = &[
     ),
     ("fallback", "Fallback", AudioFallback::CHOICES),
     ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
+    (
+        "duplicates",
+        "Album already in library",
+        DuplicatePolicy::CHOICES,
+    ),
 ];
 const SWITCHES: &[(&str, &str, bool)] = &[
     ("review", "Review chapters", false),

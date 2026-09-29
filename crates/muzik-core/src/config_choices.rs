@@ -77,6 +77,7 @@ pub fn choices_for_field(field: &str) -> Option<&'static [&'static str]> {
         "fallback" => Some(AudioFallback::CHOICES),
         "metadata_source" => Some(MetadataSource::CHOICES),
         "quality_policy" => Some(QualityPolicy::CHOICES),
+        "duplicates" => Some(DuplicatePolicy::CHOICES),
         _ => None,
     }
 }
@@ -180,9 +181,45 @@ pub enum QualityPolicy {
 
 config_choice!(QualityPolicy, "quality policy", quality_policy_error);
 
+/// Response to an album that is already in the library.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(
+    serialize_all = "snake_case",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = duplicate_policy_error
+)]
+pub enum DuplicatePolicy {
+    #[default]
+    Skip,
+    Ask,
+    KeepAll,
+    RemoveOld,
+}
+
+config_choice!(DuplicatePolicy, "duplicate policy", duplicate_policy_error);
+
 #[cfg(test)]
 mod tests {
-    use super::{AudioFallback, AudioSource, ChoiceError, MetadataSource, QualityPolicy};
+    use super::{
+        AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, QualityPolicy,
+    };
 
     #[test]
     fn choices_parse_and_serialize_as_config_strings() -> Result<(), Box<dyn std::error::Error>> {
@@ -205,6 +242,7 @@ mod tests {
         check!(AudioFallback);
         check!(MetadataSource);
         check!(QualityPolicy);
+        check!(DuplicatePolicy);
         assert_eq!(
             "lossy".parse::<QualityPolicy>(),
             Err(ChoiceError {
@@ -221,5 +259,6 @@ mod tests {
         assert_eq!(AudioFallback::default(), AudioFallback::Youtube);
         assert_eq!(MetadataSource::default(), MetadataSource::Auto);
         assert_eq!(QualityPolicy::default(), QualityPolicy::Off);
+        assert_eq!(DuplicatePolicy::default(), DuplicatePolicy::Skip);
     }
 }
