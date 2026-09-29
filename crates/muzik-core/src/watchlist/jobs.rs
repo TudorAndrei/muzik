@@ -77,6 +77,7 @@ pub fn refresh(
     let mut completed = 0;
     let mut failed = 0;
     let mut errors = 0;
+    let mut loaded_playlists = Vec::new();
     for index in 0..count {
         check_cancelled(cancelled)?;
         let playlist = document["playlists"][index].clone();
@@ -115,6 +116,13 @@ pub fn refresh(
         reconcile(&mut document, options.reconcile)?;
         save(repository, &document, options.dry_run)?;
         emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
+        loaded_playlists.push(index);
+    }
+    for index in loaded_playlists {
+        let id = document["playlists"][index]["playlist_id"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned();
         let ids = pending_ids(&document["playlists"][index]);
         pending += ids.len();
         emit(

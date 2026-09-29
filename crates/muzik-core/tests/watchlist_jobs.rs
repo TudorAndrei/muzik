@@ -112,6 +112,60 @@ fn refresh_keeps_prior_state_and_processes_each_video_once(
     Ok(())
 }
 
+struct CallLog(Vec<String>);
+
+impl Operations for CallLog {
+    fn load(&mut self, playlist: &Value) -> Result<LoadedSource, JobError> {
+        let id = playlist["playlist_id"].as_str().unwrap_or("");
+        self.0.push(format!("load {id}"));
+        Ok(LoadedSource {
+            title: None,
+            items: vec![card(1, &format!("video_{id}"))],
+        })
+    }
+
+    fn process(
+        &mut self,
+        _: &Value,
+        item: &Value,
+        _: &str,
+        _: &AtomicBool,
+    ) -> Result<Value, JobError> {
+        self.0.push(format!(
+            "process {}",
+            item["video_id"].as_str().unwrap_or("")
+        ));
+        Ok(item.clone())
+    }
+}
+
+#[test]
+fn refresh_reads_every_playlist_before_it_processes_items() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("watchlist.json"));
+    repository.add("https://www.youtube.com/playlist?list=PLone")?;
+    repository.add("https://www.youtube.com/playlist?list=PLtwo")?;
+    let mut log = CallLog(Vec::new());
+    jobs::refresh(
+        &repository,
+        options(directory.path()),
+        &mut log,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )?;
+    assert_eq!(
+        log.0,
+        [
+            "load PLone",
+            "load PLtwo",
+            "process video_PLone",
+            "process video_PLtwo"
+        ]
+    );
+    Ok(())
+}
+
 struct ActionFailure;
 
 impl Operations for ActionFailure {
