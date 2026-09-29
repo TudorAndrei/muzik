@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.3.0 - 2026-09-29
+#### Features
+- (**watchlist**) report each save during a refresh - (1f34aab) - TudorAndrei
+#### Bug Fixes
+- (**gui**) show decision choices first and reload the watchlist during jobs - (8eeee1b) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.2.1 - (5e130ad) - TudorAndrei
+
+- - -
+
 ## v2.2.1 - 2026-09-29
 #### Bug Fixes
 - (**gui**) quit with Command-Q and when the window closes - (de6a033) - TudorAndrei

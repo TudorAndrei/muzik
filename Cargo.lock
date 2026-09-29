@@ -4606,7 +4606,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-cli"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "muzik-core",
  "muzik-import",
@@ -4626,7 +4626,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-core"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4650,7 +4650,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-gpui"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "chrono",
  "gpui-kit",
@@ -4672,7 +4672,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-import"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "deunicode",
  "fancy-regex",
@@ -4694,7 +4694,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-library"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "deunicode",
  "fancy-regex",
@@ -4709,7 +4709,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-match"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "chrono",
  "deunicode",
@@ -4725,7 +4725,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-metadata"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "backon",
  "governor",
@@ -4739,11 +4739,11 @@ dependencies = [
 
 [[package]]
 name = "muzik-release"
-version = "2.2.1"
+version = "2.3.0"
 
 [[package]]
 name = "muzik-soulseek"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4754,7 +4754,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-tags"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "lofty 0.25.4",
  "serde",
@@ -4765,7 +4765,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-workflow"
-version = "2.2.1"
+version = "2.3.0"
 dependencies = [
  "csv",
  "muzik-core",
