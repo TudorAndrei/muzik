@@ -2,6 +2,33 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.5.0 - 2026-09-29
+#### Features
+- (**cli**) add jobs and watchlist commands on the shared queue - (7d126d1) - TudorAndrei
+- (**gui**) run jobs from queues with download, process and import gates - (75c8f7b) - TudorAndrei
+- (**gui**) park watchlist choices and resume them from the job queue - (3b77116) - TudorAndrei
+- (**jobs**) add a runner lock and cancel requests across processes - (e6177a4) - TudorAndrei
+- (**jobs**) claim queues in priority order and find open jobs of an item - (c98a563) - TudorAndrei
+- (**jobs**) claim from several queues and cancel open jobs - (106eede) - TudorAndrei
+- (**jobs**) reopen a resumed job so its question stays - (f778ed9) - TudorAndrei
+- (**jobs**) add a SQLite job queue for background work - (de11143) - TudorAndrei
+- (**soulseek**) share one login between all jobs - (17d0d50) - TudorAndrei
+- (**watchlist**) sync playlists apart from item runs and write the file in one step - (788acc2) - TudorAndrei
+- (**watchlist**) park items that wait for a choice - (4ff588b) - TudorAndrei
+#### Bug Fixes
+- (**import**) identify album match choices by release ID - (68f705e) - TudorAndrei
+- (**library**) wait for a busy beets database instead of failing - (9cc6842) - TudorAndrei
+- (**watchlist**) record finished stages of a waiting item - (59d32fc) - TudorAndrei
+#### Documentation
+- describe the shared job queue for the CLI and the app - (b37352a) - TudorAndrei
+#### Refactoring
+- move the job queue runtime into a shared muzik-runner crate - (b54ffe1) - TudorAndrei
+- use strum enums for fixed string choices - (f7b3168) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.4.1 - (2f8b065) - TudorAndrei
+
+- - -
+
 ## v2.4.1 - 2026-09-29
 #### Bug Fixes
 - (**gui**) make Recent events readable - (4b76349) - TudorAndrei
