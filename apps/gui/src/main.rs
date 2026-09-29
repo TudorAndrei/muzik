@@ -638,6 +638,10 @@ impl Muzik {
                         self.status = "Watchlist ready".into();
                     }
                     "watchlist.add" | "watchlist.remove" | "watchlist.rename" => {
+                        if command == "watchlist.add" {
+                            self.watch_url
+                                .update(_cx, |state, cx| state.set_value("", window, cx));
+                        }
                         self.send("watchlist.load", self.launcher_params(_cx));
                     }
                     "library.scan" => {
@@ -767,6 +771,8 @@ impl Muzik {
                             }
                         }
                         self.job_id = None;
+                        self.decision = None;
+                        self.chapter_rows.clear();
                         self.job_status = event.trim_start_matches("job.").into();
                         let failure = if event == "job.failed" {
                             Some(
