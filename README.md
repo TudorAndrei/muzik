@@ -140,13 +140,14 @@ cargo run --locked -p muzik-cli -- init
 
 ## Development
 
-Run the complete locked local and CI verification gate with:
+Run the locked checks that CI runs on each push:
 
 ```sh
 mise run check
 ```
 
-The same checks run in CI and as individual pre-push hooks.
+Add the release build with `mise run check-release`. The same checks run in CI
+and as individual pre-push hooks.
 
 ## Workflow source policy
 

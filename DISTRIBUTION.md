@@ -5,13 +5,15 @@ The Cargo workspace at the repository root builds two Rust programs:
 
 ## Check a release
 
-Run the same gate used by CI:
+Run the complete gate:
 
 ```sh
-mise run check
+mise run check-release
 ```
 
-This checks format, Clippy, Rust tests, the release build, and Cargo licenses.
+This checks format, Clippy, Rust tests, and Cargo licenses, then builds the
+release binaries. CI runs `mise run check` on each push. The `Release` workflow
+starts only after that check passed on the same commit.
 The CLI and app read existing Beets config files and SQLite libraries. Check
 both programs against copies of real Beets data before a public release.
 

@@ -44,7 +44,8 @@ The job stops at a safe point and keeps completed files and saved state.
 
 ## Verification
 
-Run `mise run check` for the Rust checks. Run
-`target/debug/muzik-gpui --check-backend` to check the startup path. Before
+Run `mise run check` for the Rust checks, or `mise run check-release` to add
+the release build. Run `target/debug/muzik-gpui --check-backend` to check the
+startup path. Before
 release, open the installed app and check input, focus, decisions,
 cancellation, resize, and light and dark themes on each supported platform.
