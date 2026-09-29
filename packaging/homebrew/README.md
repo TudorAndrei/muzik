@@ -1,29 +1,23 @@
 # Homebrew tap for muzik
 
-`muzik.rb` builds the Rust CLI and GPUI app on macOS. It installs `ffmpeg`,
-`yt-dlp`, and the upstream Rust `bandsnatch` program as dependencies. It does
-not build or install Python.
-
-The old stable formula points to a Python release. The new formula builds the
-current `main` branch until a Rust release tag exists.
-
-## Install from the Rust source
-
-Copy this formula to `Formula/muzik.rb` in the `TudorAndrei/homebrew-muzik` tap.
-Then run:
+`Casks/muzik.rb` installs `Muzik.app` from the release zip and installs
+`ffmpeg` and `yt-dlp`. It is for Apple silicon Macs. The app is not signed, so
+the cask removes the download quarantine flag after install.
 
 ```sh
-brew install --HEAD TudorAndrei/muzik/muzik
-muzik --help
-muzik gui
+brew install --cask tudorandrei/muzik/muzik
 ```
 
-Homebrew builds both Rust programs from the locked Cargo workspace. Existing
-Beets config files and SQLite library files remain in their normal data
-locations. The formula does not change them.
+The command-line program comes from mise, not from Homebrew:
 
-## Add a stable version after the first Rust release
+```toml
+[tools]
+"github:TudorAndrei/muzik" = { version = "latest", matching = "muzik-cli" }
+```
 
-Add a `url` for the tagged GitHub source archive and its SHA-256 to the tap
-formula. Keep the `head` entry for source builds. Check the new formula with
-`brew audit --strict` and `brew test` before you publish it in the tap.
+## Update the tap after a release
+
+1. Copy `Casks/muzik.rb` to `Casks/muzik.rb` in `TudorAndrei/homebrew-muzik`.
+2. Set `version` to the release version without the `v`.
+3. Set `sha256` to the value in `Muzik-v<version>-aarch64-apple-darwin.zip.sha256`.
+4. Run `brew audit --cask --strict tudorandrei/muzik/muzik`, then push.

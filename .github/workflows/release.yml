@@ -106,36 +106,50 @@ jobs:
           key: ${{ matrix.target }}
       - name: Build Rust apps
         run: cargo build --release --locked -p muzik-cli -p muzik-gpui
-      - name: Package apps and license files
+      - name: Package the CLI, the desktop app, and license files
         env:
           TAG: ${{ needs.version.outputs.tag }}
           TARGET: ${{ matrix.target }}
         run: |
-          mkdir -p dist/package
-          cp target/release/muzik target/release/muzik-gpui dist/package/
-          cp LICENSE LICENSE-APACHE NOTICE dist/package/
-          cp apps/cli/LICENSE dist/package/CLI-LICENSE
-          cp apps/gui/LICENSE dist/package/GPUI-LICENSE
-          mkdir -p dist/package/apps/cli dist/package/apps/gui
-          cp apps/cli/LICENSE dist/package/apps/cli/LICENSE
-          cp apps/gui/LICENSE dist/package/apps/gui/LICENSE
-          for source in crates/*/LICENSE crates/*/NOTICE crates/*/THIRD_PARTY_NOTICES.md; do
-            if [ -f "$source" ]; then
-              mkdir -p "dist/package/$(dirname "$source")"
-              cp "$source" "dist/package/$source"
+          licenses() {
+            cp LICENSE LICENSE-APACHE NOTICE "$1/"
+            mkdir -p "$1/apps/cli" "$1/apps/gui"
+            cp apps/cli/LICENSE "$1/apps/cli/LICENSE"
+            cp apps/gui/LICENSE "$1/apps/gui/LICENSE"
+            for source in crates/*/LICENSE crates/*/NOTICE crates/*/THIRD_PARTY_NOTICES.md; do
+              if [ -f "$source" ]; then
+                mkdir -p "$1/$(dirname "$source")"
+                cp "$source" "$1/$source"
+              fi
+            done
+            test -f "$1/crates/muzik-library/NOTICE"
+            test -f "$1/crates/muzik-soulseek/THIRD_PARTY_NOTICES.md"
+            test -f "$1/crates/muzik-workflow/LICENSE"
+          }
+          mkdir -p dist/cli dist/app
+          cp target/release/muzik dist/cli/
+          licenses dist/cli
+          tar -czf "dist/muzik-cli-${TAG}-${TARGET}.tar.gz" -C dist/cli .
+          licenses dist/app
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            packaging/macos/build-app.sh target/release/muzik-gpui "$TAG" dist/app
+            ditto -c -k --sequesterRsrc dist/app "dist/Muzik-${TAG}-${TARGET}.zip"
+          else
+            cp target/release/muzik-gpui dist/app/
+            tar -czf "dist/muzik-gpui-${TAG}-${TARGET}.tar.gz" -C dist/app .
+          fi
+          cd dist
+          for archive in *.tar.gz *.zip; do
+            if [ -f "$archive" ]; then
+              shasum -a 256 "$archive" > "$archive.sha256"
             fi
           done
-          test -f dist/package/crates/muzik-library/NOTICE
-          test -f dist/package/crates/muzik-soulseek/THIRD_PARTY_NOTICES.md
-          test -f dist/package/crates/muzik-workflow/LICENSE
-          test -f dist/package/apps/gui/LICENSE
-          tar -czf "dist/muzik-${TAG}-${TARGET}.tar.gz" -C dist/package .
-          shasum -a 256 "dist/muzik-${TAG}-${TARGET}.tar.gz" > "dist/muzik-${TAG}-${TARGET}.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
           name: muzik-${{ matrix.target }}
           path: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256
           if-no-files-found: error
 

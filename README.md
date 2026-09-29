@@ -88,7 +88,7 @@ muzik workflow "https://youtube.com/watch?v=..." --quality-policy ask
 muzik workflow "https://youtube.com/watch?v=..." --quality-policy auto --min-bitrate 192
 ```
 
-In `muzik gui`, the launcher exposes the same **Quality policy** and **Min
+In the desktop app, the launcher exposes the same **Quality policy** and **Min
 bitrate** fields. With `ask`, the desktop app asks you before it replaces a
 YouTube file.
 
@@ -101,33 +101,25 @@ later run can skip them. See [SPOTIFY.md](SPOTIFY.md).
 
 ## Install
 
-Download the archive for your system from the
-[latest GitHub release](https://github.com/TudorAndrei/muzik/releases/latest).
-Extract `muzik` and `muzik-gpui` to the same directory:
+### Desktop app on macOS
+
+Homebrew installs `Muzik.app` in `/Applications`, with `ffmpeg` and `yt-dlp`:
 
 ```sh
-tar -xzf muzik-<version>-<target>.tar.gz
-./muzik gui
+brew install --cask tudorandrei/muzik/muzik
 ```
 
-On macOS, the Rust source formula in this repository can build both programs:
+### Command-line program
 
-```sh
-brew install --HEAD TudorAndrei/muzik/muzik
+mise installs only the `muzik` command-line program:
+
+```toml
+[tools]
+"github:TudorAndrei/muzik" = { version = "latest", matching = "muzik-cli" }
 ```
 
-### macOS app in Applications
-
-After installing, add a desktop entry so the interface opens from Launchpad,
-Spotlight, or Finder:
-
-```sh
-muzik install-app          # writes to /Applications, falls back to ~/Applications
-muzik install-app --user   # force ~/Applications
-```
-
-The bundle launches `muzik gui` from the current install. Re-run the command
-after reinstalling muzik to point the entry at the new location.
+Each [GitHub release](https://github.com/TudorAndrei/muzik/releases/latest) also
+has `muzik-cli-<version>-<target>.tar.gz`, and a `muzik-gpui` archive for Linux.
 
 For development, install from a source checkout:
 
@@ -183,7 +175,6 @@ files provide metadata; the selected audio source acquires each track.
 | `muzik import <dir>` | Import audio into a Beets-compatible library |
 | `muzik archive <dir>` | Process existing downloaded files (split + import by default) |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
-| `muzik gui` | Open the GPUI Kit desktop interface |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage music library configuration |
 
@@ -218,8 +209,8 @@ Build and run the desktop interface from a source checkout with:
 mise run gui
 ```
 
-The release archive contains both programs. Run `muzik gui` when both are in
-the same directory.
+On macOS, install the app with Homebrew. On Linux, run `muzik-gpui` from its
+release archive.
 
 The interface provides a workflow launcher, pipeline progress and logs, source
 candidate tables, chapter review and editing, and album match and duplicate

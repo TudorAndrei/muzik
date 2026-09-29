@@ -22,15 +22,24 @@ both programs against copies of real Beets data before a public release.
 The `Release` GitHub Actions workflow runs by request. Cocogitto reads
 Conventional Commits and selects the next version. The `muzik-release` hook
 sets each Cargo package version and updates `Cargo.lock`. The workflow builds
-the CLI and GPUI app for macOS arm64 and Linux x86_64. Each
-archive contains both programs, their license files, and the crate notices.
-Both programs are licensed under GPL-3.0-only.
+for macOS arm64 and Linux x86_64 and publishes:
 
-The two binaries must stay in the same directory so `muzik gui` can find the
-desktop app. The Rust `yt-dlp` crate starts the `yt-dlp` program. Install that
-program and `ffmpeg` on `PATH`. Install the upstream Rust
-`bandsnatch` program to use the Bandcamp command.
+- `muzik-cli-<tag>-<target>.tar.gz`: the command-line program only.
+- `Muzik-<tag>-aarch64-apple-darwin.zip`: `Muzik.app`, built by
+  `packaging/macos/build-app.sh`.
+- `muzik-gpui-<tag>-x86_64-unknown-linux-gnu.tar.gz`: the Linux desktop program.
 
-The Homebrew formula in `packaging/homebrew` builds the Rust programs from
-`main` with `brew install --HEAD`. Add a stable source URL and hash to the
-external tap after the first Rust release.
+Each archive has the license files and crate notices. Both programs are
+licensed under GPL-3.0-only.
+
+The CLI and the desktop app are separate programs. The app adds the Homebrew
+and mise tool folders to its `PATH`, so it finds `ffmpeg` and `yt-dlp` when it
+opens from Finder. Install the upstream Rust `bandsnatch`
+program to use the Bandcamp command.
+
+## Publish to Homebrew and mise
+
+After a release, copy `packaging/homebrew/Casks/muzik.rb` to the
+`TudorAndrei/homebrew-muzik` tap. Set `version` and the `sha256` of the
+`Muzik-…zip` file from its `.sha256` asset. mise needs no change: it reads the
+`muzik-cli` archive of the latest release.

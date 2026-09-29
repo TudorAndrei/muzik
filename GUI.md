@@ -1,7 +1,7 @@
 # Desktop app
 
-`muzik gui` opens the Rust GPUI app in `apps/gui`. The CLI finds
-`muzik-gpui` beside its own binary or through `MUZIK_GPUI_BIN`.
+The Rust GPUI app in `apps/gui` builds `muzik-gpui`. It is separate from the
+`muzik` command-line program. Homebrew installs it on macOS as `Muzik.app`.
 
 ## Run from a source checkout
 
