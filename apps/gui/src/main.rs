@@ -1862,6 +1862,15 @@ fn decision_choices(decision: &Value) -> Vec<(String, Value)> {
 }
 
 fn main() {
+    if cfg!(target_os = "macos") {
+        let path = tool_path(
+            std::env::var_os("PATH"),
+            std::env::var_os("HOME").map(PathBuf::from),
+        );
+        if let Ok(path) = std::env::join_paths(path) {
+            std::env::set_var("PATH", path);
+        }
+    }
     match std::env::args().nth(1).as_deref() {
         Some("--version") => {
             println!("muzik-gpui {}", env!("CARGO_PKG_VERSION"));
@@ -1885,6 +1894,23 @@ fn main() {
         })
         .expect("open main window");
     });
+}
+
+fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = current
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    let extra = [
+        Some(PathBuf::from("/opt/homebrew/bin")),
+        Some(PathBuf::from("/usr/local/bin")),
+        home.map(|home| home.join(".local/share/mise/shims")),
+    ];
+    for directory in extra.into_iter().flatten() {
+        if !paths.contains(&directory) {
+            paths.push(directory);
+        }
+    }
+    paths
 }
 
 fn check_backend() -> Result<(), String> {
@@ -1916,7 +1942,7 @@ fn check_backend() -> Result<(), String> {
 mod tests {
     use super::{
         activity_section, candidate_summary, decision_choices, decision_details,
-        merge_thumbnail_paths, ActivityProgress, Muzik,
+        merge_thumbnail_paths, tool_path, ActivityProgress, Muzik,
     };
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
@@ -2084,5 +2110,24 @@ mod tests {
             ..ActivityProgress::default()
         };
         assert_eq!(progress.percentage(), 100.);
+    }
+
+    #[test]
+    fn app_path_adds_homebrew_and_mise_tools_once() {
+        let path = tool_path(
+            Some("/usr/bin:/opt/homebrew/bin".into()),
+            Some(std::path::PathBuf::from("/Users/listener")),
+        );
+        assert_eq!(
+            path,
+            [
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/Users/listener/.local/share/mise/shims"
+            ]
+            .map(std::path::PathBuf::from)
+            .to_vec()
+        );
     }
 }
