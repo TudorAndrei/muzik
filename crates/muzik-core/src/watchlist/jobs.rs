@@ -179,11 +179,6 @@ pub fn refresh(
                         }
                     }
                     waiting += 1;
-                    emit(
-                        on_event,
-                        "item_waiting",
-                        json!({"playlist_id":id, "item_key":key, "stage":stage, "question":question}),
-                    );
                 }
                 Err(error) => {
                     if let Some(items) = document["playlists"][index]["items"].as_array_mut() {

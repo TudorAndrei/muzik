@@ -176,6 +176,17 @@ impl Store {
             .map_err(text)
     }
 
+    pub fn reopen(&self, id: i64) -> Result<(), String> {
+        self.connection
+            .execute(
+                "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
+                 WHERE id = ?2 AND question IS NOT NULL",
+                params![now(), id],
+            )
+            .map(|_| ())
+            .map_err(text)
+    }
+
     pub fn finish(&self, id: i64) -> Result<(), String> {
         self.set_status(id, Status::Done, None)
     }
@@ -339,7 +350,13 @@ mod tests {
         assert_eq!(claimed.answer, Some(json!("as_is")));
         assert_eq!(claimed.question, Some(json!({"kind": "chapter_review"})));
         assert_eq!(claimed.params, params);
-        store.finish(claimed.id)?;
+        store.reopen(claimed.id)?;
+        let reopened = store.get(id)?.ok_or("job is missing")?;
+        assert_eq!(reopened.status, Status::Waiting);
+        assert_eq!(reopened.answer, None);
+        assert!(store.answer(id, &json!("as_is"))?);
+        store.claim("process")?;
+        store.finish(id)?;
         assert_eq!(store.get(id)?.map(|job| job.status), Some(Status::Done));
         Ok(())
     }
