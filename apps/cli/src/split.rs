@@ -41,10 +41,19 @@ pub fn run(args: &Split) -> Result<PathBuf, String> {
         chapters.len(),
         output.display()
     );
-    let output = splitter::split_audio(&args.path, &chapters, &output, &options)
-        .map_err(|error| error.to_string())?;
+    let output =
+        splitter::split_audio(&args.path, &chapters, &output, &options).map_err(split_error)?;
     println!("Split complete: {}", output.display());
     Ok(output)
+}
+
+pub(crate) fn split_error(error: splitter::SplitError) -> String {
+    match error {
+        splitter::SplitError::OutputNotEmpty(_) => {
+            format!("{error} Use --force to replace them.")
+        }
+        other => other.to_string(),
+    }
 }
 
 pub(crate) fn show_chapters(chapters: &[Chapter]) {

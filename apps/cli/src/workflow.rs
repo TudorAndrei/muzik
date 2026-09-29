@@ -396,7 +396,7 @@ impl WorkflowOperations for CliOperations {
             task.output.display()
         );
         let actual = splitter::split_audio(&task.source, &chapters, &task.output, &settings)
-            .map_err(|error| error.to_string())?;
+            .map_err(split::split_error)?;
         if actual != task.output {
             return Err(format!(
                 "The split cache points to {}, but this workflow needs {}.",

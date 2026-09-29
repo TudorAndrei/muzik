@@ -307,7 +307,12 @@ impl WorkflowOperations for LocalOperations<'_> {
             cancelled,
             on_progress,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| match error {
+            splitter::SplitError::OutputNotEmpty(_) => format!(
+                "{error} Select Split again in the item menu, or turn on Force, to replace them."
+            ),
+            other => other.to_string(),
+        })?;
         if actual != task.output {
             return Err(format!(
                 "The split cache points to {}, but this workflow needs {}.",

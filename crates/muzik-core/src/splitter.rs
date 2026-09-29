@@ -46,8 +46,8 @@ pub enum SplitError {
     InvalidChapter(String),
     #[error("output path is not a directory: {0}")]
     OutputNotDirectory(PathBuf),
-    #[error("output directory is not empty; use --force")]
-    OutputNotEmpty,
+    #[error("The split folder {} already has other files.", .0.display())]
+    OutputNotEmpty(PathBuf),
     #[error("output directory contains the source audio file")]
     OutputContainsSource,
     #[error("failed to split {0} track(s): {1}")]
@@ -171,7 +171,18 @@ fn split_audio_with_binary(
         }
         if fs::read_dir(output)?.next().is_some() {
             if !options.force {
-                return Err(SplitError::OutputNotEmpty);
+                let complete = chapters.iter().all(|chapter| {
+                    fs::metadata(output.join(expected_track_name(
+                        &source,
+                        chapter,
+                        options.compilation,
+                    )))
+                    .is_ok_and(|file| file.is_file() && file.len() > 0)
+                });
+                if complete {
+                    return finish(&source, output, cache_file.as_deref(), options.keep_source);
+                }
+                return Err(SplitError::OutputNotEmpty(output.to_path_buf()));
             }
             fs::remove_dir_all(output)?;
         }
@@ -265,15 +276,24 @@ fn split_audio_with_binary(
     }
     // The following file updates form the final commit step. Cancellation is
     // observed before this step, so it cannot leave a removed source behind.
-    place_cover(&source, output);
+    finish(&source, output, cache_file.as_deref(), options.keep_source)
+}
+
+fn finish(
+    source: &Path,
+    output: &Path,
+    cache_file: Option<&Path>,
+    keep_source: bool,
+) -> Result<PathBuf, SplitError> {
+    place_cover(source, output);
     if let Some(cache_file) = cache_file {
         if let Some(parent) = cache_file.parent() {
             fs::create_dir_all(parent)?;
         }
         fs::write(cache_file, output.to_string_lossy().as_bytes())?;
     }
-    if !options.keep_source {
-        fs::remove_file(&source)?;
+    if !keep_source {
+        fs::remove_file(source)?;
         for extension in [
             ".chapters.txt",
             ".info.json",
@@ -283,7 +303,7 @@ fn split_audio_with_binary(
             ".png",
             ".webp",
         ] {
-            let sidecar = sidecar_path(&source, extension);
+            let sidecar = sidecar_path(source, extension);
             if sidecar.exists() {
                 fs::remove_file(sidecar)?;
             }
@@ -354,6 +374,25 @@ struct SplitTrackContext<'a> {
     ffmpeg: &'a Path,
 }
 
+fn track_file_name(source: &Path, index: u32, title: &str) -> String {
+    let mut name = format!("{index:02}-{}", safe_filename(title));
+    if let Some(extension) = source.extension().and_then(|ext| ext.to_str()) {
+        name.push('.');
+        name.push_str(extension);
+    }
+    name
+}
+
+fn expected_track_name(source: &Path, chapter: &Chapter, compilation: bool) -> String {
+    let title = if compilation {
+        parse_artist_title(&chapter.title).map_or(chapter.title.as_str(), |(_, title)| title)
+    } else {
+        chapter.title.as_str()
+    };
+    let (title, _) = strip_featured(title);
+    track_file_name(source, chapter.index, &title)
+}
+
 fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, io::Error> {
     let SplitTrackContext {
         source,
@@ -383,12 +422,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         artist.push_str(" feat. ");
         artist.push_str(&featured.join(", "));
     }
-    let mut name = format!("{:02}-{}", chapter.index, safe_filename(&title));
-    if let Some(extension) = source.extension().and_then(|ext| ext.to_str()) {
-        name.push('.');
-        name.push_str(extension);
-    }
-    let destination = output.join(name);
+    let destination = output.join(track_file_name(source, chapter.index, &title));
     let mut command = Command::new(ffmpeg);
     command
         .arg("-i")
@@ -770,6 +804,71 @@ mod tests {
         assert!(matches!(result, Err(SplitError::Cancelled)));
         assert!(source.exists());
         assert!(sidecar.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_complete_earlier_split_is_reused_and_a_partial_one_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("album.opus");
+        fs::write(&source, b"downloaded again").unwrap();
+        fs::write(
+            sidecar_path(&source, ".chapters.txt"),
+            "0:00 One\n1:00 Two\n",
+        )
+        .unwrap();
+        let binary = temp.path().join("ffmpeg");
+        fs::write(&binary, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let chapters = [
+            Chapter {
+                index: 1,
+                start: 0,
+                end: Some(60),
+                title: "One".into(),
+            },
+            Chapter {
+                index: 2,
+                start: 60,
+                end: None,
+                title: "Two (feat. Guest)".into(),
+            },
+        ];
+        let output = temp.path().join("splits");
+        fs::create_dir_all(&output).unwrap();
+        fs::write(output.join("01-one.opus"), b"track").unwrap();
+        let options = SplitOptions {
+            keep_source: true,
+            cache_dir: Some(temp.path().join("cache")),
+            ..SplitOptions::default()
+        };
+        let split = |options: &SplitOptions| {
+            split_audio_with_binary(
+                &source,
+                &chapters,
+                &output,
+                options,
+                &AtomicBool::new(false),
+                &mut |_| {},
+                &binary,
+            )
+        };
+        assert!(matches!(
+            split(&options),
+            Err(SplitError::OutputNotEmpty(folder)) if folder == output
+        ));
+        fs::write(output.join("02-two.opus"), b"track").unwrap();
+        assert_eq!(split(&options).unwrap(), output);
+        assert!(source.exists());
+        let options = SplitOptions {
+            keep_source: false,
+            cache_dir: Some(temp.path().join("fresh cache")),
+            ..options
+        };
+        assert_eq!(split(&options).unwrap(), output);
+        assert!(!source.exists());
     }
 
     #[test]
