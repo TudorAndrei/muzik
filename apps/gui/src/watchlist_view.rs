@@ -60,7 +60,7 @@ impl Muzik {
         let refresh = Button::new("watch-refresh")
             .icon(IconName::RefreshCw)
             .label("Refresh")
-            .disabled(!has_playlists || self.job_kind.is_some())
+            .disabled(!has_playlists || self.has_run(RunKind::Refresh))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.start_job("watchlist.refresh", refresh_params.clone(), cx)
             }));
@@ -247,7 +247,9 @@ impl Muzik {
                 .pill()
                 .small()
                 .selected_index(self.filter)
-                .children(FILTERS.iter().map(|label| Tab::new().label(*label)))
+                .children(
+                    (0..=Summary::ALL.len()).map(|filter| Tab::new().label(filter_label(filter))),
+                )
                 .on_click(cx.listener(|view, index: &usize, _, cx| {
                     view.filter = *index;
                     view.watch_page = 0;
@@ -263,7 +265,7 @@ impl Muzik {
             .filter(|item| matches_filter(item, self.filter))
             .collect();
         if filtered.is_empty() {
-            let message = if playlist["kind"] == "spotify" && items.is_empty() {
+            let message = if SourceKind::of(playlist) == SourceKind::Spotify && items.is_empty() {
                 "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Settings to get audio.".to_string()
             } else if items.is_empty() && playlist["last_checked_at"].is_null() {
                 "This playlist has not been checked. Select Refresh to read it.".to_string()
@@ -272,7 +274,7 @@ impl Muzik {
             } else {
                 format!(
                     "No items have the {} status. Select All to see every item.",
-                    FILTERS[self.filter]
+                    filter_label(self.filter)
                 )
             };
             return section
@@ -375,27 +377,33 @@ impl Muzik {
                             })),
                     ),
             );
+        let queued = self.is_queued(&playlist_id, position, &video_id);
         let mut state =
             div()
                 .v_flex()
                 .gap_1()
                 .child(style::stage_track(("stages", position), item, cx));
+        if queued {
+            state = state.child(style::meta("In the queue", cx));
+        }
         if let Some(error) = item["last_error"].as_str() {
             state = state.child(div().text_sm().child(error.to_string()));
         }
         card = card.child(state);
-        if let (Some(action), Some(label)) = (
-            item["primary_action"]["action"].as_str(),
-            item["primary_action"]["label"].as_str(),
-        ) {
-            let enabled = item["actions"][action]["enabled"].as_bool().unwrap_or(true);
+        let primary = item["primary_action"]["action"]
+            .as_str()
+            .and_then(|action| action.parse::<ItemAction>().ok());
+        if let (Some(action), Some(label)) = (primary, item["primary_action"]["label"].as_str()) {
+            let enabled = item["actions"][action.as_ref()]["enabled"]
+                .as_bool()
+                .unwrap_or(true);
             let params = self.item_params(&playlist_id, position, &video_id, action, cx);
             card = card.child(
                 div().flex().child(
                     Button::new(("primary-action", position))
                         .small()
                         .label(label.to_string())
-                        .disabled(!enabled)
+                        .disabled(!enabled || queued)
                         .on_click(cx.listener(move |view, _, _, cx| {
                             view.start_job("watchlist.action", params.clone(), cx);
                         })),
@@ -405,12 +413,18 @@ impl Muzik {
         card.into_any_element()
     }
 
+    fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
+        self.queued_items.contains(&bridge::item_key(
+            &json!({"playlist_id":playlist_id,"position":position,"video_id":video_id}),
+        ))
+    }
+
     fn item_params(
         &self,
         playlist_id: &str,
         position: usize,
         video_id: &str,
-        action: &str,
+        action: ItemAction,
         cx: &App,
     ) -> Value {
         let mut params = self
@@ -466,7 +480,7 @@ fn item_sheet(
     cx: &App,
 ) -> Sheet {
     let title = item["title"].as_str().unwrap_or("Untitled").to_string();
-    let spotify = item["kind"] == "spotify";
+    let spotify = SourceKind::of(item) == SourceKind::Spotify;
     let mut body = div().v_flex().gap_5();
     if let Some(path) = item["thumbnail_path"].as_str() {
         body = body.child(
@@ -494,8 +508,8 @@ fn item_sheet(
             key.2.clone(),
             1,
         );
-    for ((_, label), state) in style::STAGES.iter().zip(states) {
-        facts = facts.item(*label, state.word(), 1);
+    for (stage, state) in states {
+        facts = facts.item(style::stage_label(stage), style::status_word(state), 1);
     }
     let mut links = div().flex().items_center().gap_2().child(
         Clipboard::new("copy-item-id")
@@ -527,14 +541,13 @@ fn item_sheet(
         .border_t_1()
         .border_color(cx.theme().border)
         .child(style::overline("COMMANDS", cx));
-    for (index, (action, label)) in ITEM_ACTIONS.iter().enumerate() {
-        let availability = &item["actions"][*action];
+    for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
+        let availability = &item["actions"][action.as_ref()];
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
         let params = entity
             .read(cx)
             .item_params(&key.0, key.1, &key.2, action, cx);
-        let action = *action;
-        let label = *label;
+        let label = action_label(action);
         let item_title = title.clone();
         let view = view.clone();
         let mut row = div().v_flex().gap_1().child(
@@ -547,7 +560,7 @@ fn item_sheet(
                     let params = params.clone();
                     let item_title = item_title.clone();
                     let _ = view.update(cx, |view, cx| {
-                        if replaces_files(action) {
+                        if action.replaces_files() {
                             view.request_action(
                                 PendingAction {
                                     title: format!("{label} for “{item_title}”?"),
@@ -621,9 +634,11 @@ fn item_video_id(item: &Value) -> String {
 }
 
 pub(crate) fn matches_filter(item: &Value, filter: usize) -> bool {
-    filter == 0
-        || item["summary"]
-            .as_str()
-            .or_else(|| item["status"].as_str())
-            .is_some_and(|state| state.eq_ignore_ascii_case(FILTERS[filter]))
+    let Some(wanted) = filter_summary(filter) else {
+        return true;
+    };
+    item["summary"]
+        .as_str()
+        .and_then(|summary| summary.parse::<Summary>().ok())
+        == Some(wanted)
 }

@@ -64,7 +64,7 @@ impl Options {
                 config: self.config.as_deref(),
                 no_organize: self.no_organize,
                 no_split: self.no_split,
-                quality_policy: self.quality_policy.as_ref(),
+                quality_policy: self.quality_policy,
             },
         )?;
         Ok(document)

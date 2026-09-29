@@ -2,18 +2,11 @@ use gpui_kit::component::theme::{Theme, ThemeRegistry};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::*;
+use muzik_core::watchlist::{stage_status, Stage, StageStatus};
 use serde_json::Value;
 
 const THEME: &str = include_str!("../themes/muzik.json");
 const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-v2.png");
-
-pub const STAGES: [(&str, &str); 5] = [
-    ("download", "Download"),
-    ("quality", "Quality"),
-    ("parse", "Parse"),
-    ("split", "Split"),
-    ("organize", "Organize"),
-];
 
 pub fn apply_theme(cx: &mut App) {
     if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME) {
@@ -84,98 +77,89 @@ pub fn overline(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text)
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum StageState {
-    NotStarted,
-    Running,
-    Waiting,
-    Complete,
-    Failed,
-    Skipped,
-    Stale,
-}
-
-impl StageState {
-    pub fn parse(status: &str) -> Self {
-        match status {
-            "running" => Self::Running,
-            "waiting" => Self::Waiting,
-            "complete" => Self::Complete,
-            "failed" => Self::Failed,
-            "skipped" => Self::Skipped,
-            "stale" => Self::Stale,
-            _ => Self::NotStarted,
-        }
-    }
-
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::NotStarted => "Not started",
-            Self::Running => "Running",
-            Self::Waiting => "Waiting for you",
-            Self::Complete => "Complete",
-            Self::Failed => "Failed",
-            Self::Skipped => "Skipped",
-            Self::Stale => "Stale",
-        }
+pub fn stage_label(stage: Stage) -> &'static str {
+    match stage {
+        Stage::Download => "Download",
+        Stage::Quality => "Quality",
+        Stage::Parse => "Parse",
+        Stage::Split => "Split",
+        Stage::Organize => "Organize",
     }
 }
 
-pub fn stage_states(item: &Value) -> [StageState; 5] {
-    STAGES.map(|(key, _)| StageState::parse(item["stages"][key]["status"].as_str().unwrap_or("")))
+pub fn status_word(status: StageStatus) -> &'static str {
+    match status {
+        StageStatus::NotStarted => "Not started",
+        StageStatus::Running => "Running",
+        StageStatus::Waiting => "Waiting for you",
+        StageStatus::Complete => "Complete",
+        StageStatus::Failed => "Failed",
+        StageStatus::Skipped => "Skipped",
+        StageStatus::Stale => "Stale",
+    }
 }
 
-pub fn stage_headline(states: &[StageState; 5]) -> (String, Option<Tone>) {
-    let named = |state: StageState| {
+pub fn stage_states(item: &Value) -> Vec<(Stage, StageStatus)> {
+    Stage::ALL
+        .iter()
+        .map(|stage| {
+            (
+                *stage,
+                stage_status(item, *stage).unwrap_or(StageStatus::NotStarted),
+            )
+        })
+        .collect()
+}
+
+pub fn stage_headline(states: &[(Stage, StageStatus)]) -> (String, Option<Tone>) {
+    let named = |wanted: StageStatus| {
         states
             .iter()
-            .position(|current| *current == state)
-            .map(|index| STAGES[index].1)
+            .find(|(_, status)| *status == wanted)
+            .map(|(stage, _)| stage_label(*stage))
     };
-    if let Some(stage) = named(StageState::Failed) {
+    if let Some(stage) = named(StageStatus::Failed) {
         return (format!("{stage} failed"), Some(Tone::Danger));
     }
-    if let Some(stage) = named(StageState::Running) {
+    if let Some(stage) = named(StageStatus::Running) {
         return (format!("{stage} running"), Some(Tone::Info));
     }
-    if let Some(stage) = named(StageState::Waiting) {
+    if let Some(stage) = named(StageStatus::Waiting) {
         return (format!("{stage} waits for you"), Some(Tone::Warning));
     }
-    if let Some(stage) = named(StageState::Stale) {
+    if let Some(stage) = named(StageStatus::Stale) {
         return (format!("{stage} stale"), Some(Tone::Warning));
+    }
+    if states.iter().all(|(_, status)| status.is_done()) {
+        return ("Done".into(), None);
     }
     if states
         .iter()
-        .all(|state| matches!(state, StageState::Complete | StageState::Skipped))
+        .all(|(_, status)| *status == StageStatus::NotStarted)
     {
-        return ("Done".into(), None);
-    }
-    if states.iter().all(|state| *state == StageState::NotStarted) {
         return ("Not started".into(), None);
     }
-    let done = states
-        .iter()
-        .filter(|state| matches!(state, StageState::Complete | StageState::Skipped))
-        .count();
-    (format!("{done} of 5 stages done"), None)
+    let done = states.iter().filter(|(_, status)| status.is_done()).count();
+    (format!("{done} of {} stages done", states.len()), None)
 }
 
 pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyElement {
     let states = stage_states(item);
     let theme = cx.theme();
     let mut bars = div().id(id).flex().gap(px(3.)).flex_none();
-    for ((_, label), state) in STAGES.iter().zip(states) {
+    for (stage, state) in states.iter().copied() {
+        let label = stage_label(stage);
         let bar = div().w(px(18.)).h(px(4.)).rounded(px(2.));
         let bar = match state {
-            StageState::NotStarted => bar.bg(theme.border),
-            StageState::Running => bar.bg(theme.info),
-            StageState::Waiting => bar.bg(theme.warning.opacity(0.4)),
-            StageState::Complete => bar.bg(theme.success),
-            StageState::Failed => bar.bg(theme.danger),
-            StageState::Stale => bar.bg(theme.warning),
-            StageState::Skipped => bar.border_1().border_color(theme.input),
+            StageStatus::NotStarted => bar.bg(theme.border),
+            StageStatus::Running => bar.bg(theme.info),
+            StageStatus::Waiting => bar.bg(theme.warning.opacity(0.4)),
+            StageStatus::Complete => bar.bg(theme.success),
+            StageStatus::Failed => bar.bg(theme.danger),
+            StageStatus::Stale => bar.bg(theme.warning),
+            StageStatus::Skipped => bar.border_1().border_color(theme.input),
         };
-        let tip: SharedString = format!("{label} · {}", state.word()).into();
+        let tip: SharedString = format!("{label} · {}", status_word(state)).into();
         bars = bars.child(
             div()
                 .id(SharedString::from(format!("stage-{label}")))
@@ -202,7 +186,8 @@ pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyEleme
 
 #[cfg(test)]
 mod tests {
-    use super::{stage_headline, stage_states, StageState, Tone};
+    use super::{stage_headline, stage_states, Tone};
+    use muzik_core::watchlist::{Stage, StageStatus};
     use serde_json::json;
 
     #[test]
@@ -215,7 +200,7 @@ mod tests {
             "organize": {"status": "stale"}
         }});
         let states = stage_states(&item);
-        assert_eq!(states[1], StageState::Skipped);
+        assert_eq!(states[1], (Stage::Quality, StageStatus::Skipped));
         assert_eq!(
             stage_headline(&states),
             ("Split failed".to_string(), Some(Tone::Danger))

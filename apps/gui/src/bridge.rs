@@ -1,26 +1,39 @@
 //! JSON protocol for the Rust desktop application.
-use crate::{local_workflow, native, native_watchlist, remote_workflow, thumbnails, watchlist};
-use muzik_core::{app_config, paths, spotify, watchlist::Repository};
-use muzik_jobs::{NewJob, Status, Store};
+use crate::{
+    local_workflow, native, native_watchlist, queues, remote_workflow, thumbnails, watchlist,
+};
+use muzik_core::watchlist::jobs::JobError;
+use muzik_core::watchlist::{ItemAction, Stage};
+use muzik_core::{app_config, paths, spotify, watchlist::Repository, DecisionKind};
+use muzik_jobs::{Job, Kind, NewJob, Queue, Status, Store};
 use serde_json::{json, Value};
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use strum_macros::AsRefStr;
+
+const WORKERS: usize = 5;
+const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
+
+#[derive(Clone, Copy, AsRefStr)]
+#[strum(serialize_all = "snake_case")]
+enum Source {
+    Workflow,
+    Native,
+    Agent,
+}
 
 pub struct Bridge {
     output: Receiver<Value>,
     native_output: Sender<Value>,
     thumbnail_pending: Arc<Mutex<HashSet<String>>>,
     login: Arc<Mutex<Option<NativeLogin>>>,
-    local_job: Arc<Mutex<Option<NativeLogin>>>,
-    local_decision: Arc<Mutex<Option<NativeDecision>>>,
-    watchlist_generation: Arc<AtomicU64>,
+    shared: Arc<Shared>,
     watchlist_gate: Arc<Mutex<()>>,
-    jobs: Option<Arc<Mutex<Store>>>,
     next_id: u64,
 }
 
@@ -29,122 +42,137 @@ struct NativeLogin {
     cancel: Arc<AtomicBool>,
 }
 
-struct NativeDecision {
-    id: String,
-    reply: Sender<Value>,
+struct Shared {
+    jobs: Mutex<Store>,
+    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    decisions: Mutex<HashMap<String, Sender<Value>>>,
+    idle: Mutex<()>,
+    wake: Condvar,
+    stop: AtomicBool,
+    generation: Arc<AtomicU64>,
+    sender: Sender<Value>,
 }
 
-enum NativeWorkflowRequest {
-    Local(local_workflow::LocalRequest),
-    Remote(remote_workflow::RemoteRequest),
-    WatchlistRefresh(Value),
-    WatchlistAction(Value),
+impl Shared {
+    fn store(&self) -> MutexGuard<'_, Store> {
+        self.jobs.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn send(&self, message: Value) {
+        let _ = self.sender.send(message);
+    }
+
+    fn event(&self, job_id: &str, source: Source, event: &Value) {
+        self.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":source.as_ref(),"event":event["event"],"data":event["data"]}}));
+    }
+
+    fn publish(&self) {
+        let snapshot = jobs_snapshot(&self.store());
+        self.send(json!({"type":"event","event":"jobs.updated","data":snapshot}));
+    }
+
+    fn wake(&self) {
+        self.wake.notify_all();
+    }
+
+    fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Drop for Bridge {
+    fn drop(&mut self) {
+        self.shared.stop.store(true, Ordering::SeqCst);
+        for cancel in self.shared.running().values() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        self.shared.wake();
+    }
 }
 
 impl Bridge {
     pub fn start() -> Result<Self, String> {
         let (events, output) = mpsc::channel::<Value>();
+        let shared = Arc::new(Shared {
+            jobs: Mutex::new(open_jobs()?),
+            running: Arc::new(Mutex::new(HashMap::new())),
+            decisions: Mutex::new(HashMap::new()),
+            idle: Mutex::new(()),
+            wake: Condvar::new(),
+            stop: AtomicBool::new(false),
+            generation: Arc::new(AtomicU64::new(0)),
+            sender: events.clone(),
+        });
+        let gates = Mutex::new(events.clone());
+        queues::listen(move |snapshot| {
+            if let Ok(sender) = gates.lock() {
+                let _ =
+                    sender.send(json!({"type":"event","event":"queues.updated","data":snapshot}));
+            }
+        });
+        for _ in 0..WORKERS {
+            let shared = Arc::clone(&shared);
+            thread::spawn(move || work(&shared));
+        }
         Ok(Self {
             output,
             native_output: events,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             login: Arc::new(Mutex::new(None)),
-            local_job: Arc::new(Mutex::new(None)),
-            local_decision: Arc::new(Mutex::new(None)),
-            watchlist_generation: Arc::new(AtomicU64::new(0)),
+            shared,
             watchlist_gate: Arc::new(Mutex::new(())),
-            jobs: open_jobs().ok().map(|store| Arc::new(Mutex::new(store))),
             next_id: 1,
         })
+    }
+
+    fn respond(&self, message: Value) -> Result<(), String> {
+        self.native_output
+            .send(message)
+            .map_err(|_| "Rust backend is not available".to_owned())
+    }
+
+    fn reject(&self, id: &str, code: &str, message: impl Into<String>) -> Result<String, String> {
+        self.respond(json!({"id":id,"type":"response","ok":false,"error":{"code":code,"message":message.into()}}))?;
+        Ok(id.to_owned())
+    }
+
+    fn accept(&self, id: &str, result: Value) -> Result<String, String> {
+        self.respond(json!({"id":id,"type":"response","ok":true,"result":result}))?;
+        Ok(id.to_owned())
     }
 
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
-        if command.starts_with("jobs.") {
-            return self.queue_command(id, command, &params);
-        }
-        if command == "spotify.login" {
-            return self.start_spotify_login(id, params);
-        }
-        if command == "decision.reply" {
-            let decision_id = params
-                .get("decision_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let mut pending = self
-                .local_decision
-                .lock()
-                .map_err(|_| "Local decision state is unavailable")?;
-            if decision_id.is_empty() {
-                self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"decision_id must be a non-empty string."}}))
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
+        match command {
+            "spotify.login" => return self.start_spotify_login(id, params),
+            "decision.reply" => return self.reply(&id, &params),
+            "job.cancel" => return self.cancel(&id, &params),
+            "jobs.list" => {
+                let mut snapshot = jobs_snapshot(&self.shared.store());
+                snapshot["gates"] = queues::snapshot();
+                return self.accept(&id, snapshot);
             }
-            if pending
-                .as_ref()
-                .is_some_and(|decision| decision.id == decision_id)
-            {
-                let decision = pending
-                    .take()
-                    .ok_or("Local decision state is unavailable")?;
-                let sent = decision
-                    .reply
-                    .send(params.get("value").cloned().unwrap_or(Value::Null))
-                    .is_ok();
-                let response = if sent {
-                    json!({"id":id,"type":"response","ok":true,"result":{"decision_id":decision_id}})
-                } else {
-                    json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"The decision is not pending."}})
-                };
-                self.native_output
-                    .send(response)
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
+            "jobs.answer" => return self.answer(&id, &params),
+            "workflow.start" => return self.start_workflow(&id, params),
+            "watchlist.refresh" => {
+                return self.enqueue(
+                    &id,
+                    &NewJob {
+                        kind: Kind::Refresh,
+                        item_key: "refresh",
+                        title: "Watchlist check",
+                        params: &params,
+                    },
+                )
             }
-            self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"The decision is not pending."}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
-        }
-        if command == "job.cancel" {
-            let job_id = params.get("job_id").and_then(Value::as_str).unwrap_or("");
-            let local = self
-                .local_job
-                .lock()
-                .map_err(|_| "Local job state is unavailable")?;
-            if let Some(active) = local.as_ref().filter(|active| active.job_id == job_id) {
-                active.cancel.store(true, Ordering::SeqCst);
-                self.native_output
-                    .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id,"cancel_requested":true}}))
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
-            }
-            drop(local);
-            let login = self
-                .login
-                .lock()
-                .map_err(|_| "Spotify login is not available")?;
-            if let Some(active) = login.as_ref().filter(|active| active.job_id == job_id) {
-                active.cancel.store(true, Ordering::Relaxed);
-                self.native_output
-                    .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id,"cancel_requested":true}}))
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
-            }
-            self.native_output
-                .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"The job is not active."}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
+            "watchlist.action" => return self.start_item(&id, params),
+            _ => {}
         }
         if command == "thumbnails.cache" {
             let ids = match thumbnails::validate_ids(&params) {
                 Ok(ids) => ids,
-                Err(message) => {
-                    self.native_output
-                        .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}))
-                        .map_err(|_| "Rust backend is not available".to_owned())?;
-                    return Ok(id);
-                }
+                Err(message) => return self.reject(&id, "invalid_request", message),
             };
             let mut pending = self
                 .thumbnail_pending
@@ -154,10 +182,7 @@ impl Bridge {
                 .into_iter()
                 .filter(|id| pending.insert(id.clone()))
                 .collect::<Vec<_>>();
-            let response = json!({"id": id, "type": "response", "ok": true, "result": {"queued": fresh.len()}});
-            self.native_output
-                .send(response)
-                .map_err(|_| "Rust backend is not available".to_owned())?;
+            self.accept(&id, json!({"queued": fresh.len()}))?;
             drop(pending);
             if !fresh.is_empty() {
                 let sender = self.native_output.clone();
@@ -181,12 +206,12 @@ impl Bridge {
                 .watchlist_gate
                 .lock()
                 .map_err(|_| "Watchlist state is unavailable")?;
-            let generation = self.watchlist_generation.fetch_add(1, Ordering::SeqCst) + 1;
+            let generation = self.shared.generation.fetch_add(1, Ordering::SeqCst) + 1;
             let response_id = id.clone();
             let sender = self.native_output.clone();
             let login = Arc::clone(&self.login);
-            let local = Arc::clone(&self.local_job);
-            let latest = Arc::clone(&self.watchlist_generation);
+            let running = Arc::clone(&self.shared.running);
+            let latest = Arc::clone(&self.shared.generation);
             let gate = Arc::clone(&self.watchlist_gate);
             let repository = Repository::new(Repository::default_path());
             thread::spawn(move || {
@@ -196,7 +221,7 @@ impl Bridge {
                     params,
                     repository,
                     login,
-                    local,
+                    running,
                     latest,
                     gate,
                     generation,
@@ -212,26 +237,11 @@ impl Bridge {
                 .watchlist_gate
                 .lock()
                 .map_err(|_| "Watchlist state is unavailable")?;
-            let login = self
-                .login
-                .lock()
-                .map_err(|_| "Spotify login state is unavailable")?;
-            let local_active = self
-                .local_job
-                .lock()
-                .map_err(|_| "Local job state is unavailable")?
-                .is_some();
-            let response = if login.is_some() || local_active {
-                json!({"id":id,"type":"response","ok":false,"error":{"code":"job_active","message":"A job is already active."}})
-            } else {
-                native_response(&id, command, &params)
-            };
+            let response = native_response(&id, command, &params);
             if response["ok"] == true {
-                self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
+                self.shared.generation.fetch_add(1, Ordering::SeqCst);
             }
-            self.native_output
-                .send(response)
-                .map_err(|_| "Rust backend is not available".to_owned())?;
+            self.respond(response)?;
             return Ok(id);
         }
         if native::handles(command) {
@@ -247,362 +257,165 @@ impl Bridge {
                     let _ = sender.send(response);
                 });
             } else {
-                let response = native_response(&id, command, &params);
-                self.native_output
-                    .send(response)
-                    .map_err(|_| "Rust backend is not available".to_string())?;
+                self.respond(native_response(&id, command, &params))?;
             }
             return Ok(id);
         }
-        if command == "workflow.start" {
-            if let Some(local) = local_workflow::supported(&params) {
-                return self.start_native_workflow(id, local.map(NativeWorkflowRequest::Local));
-            }
-            if let Some(remote) = remote_workflow::supported(&params) {
-                return self.start_native_workflow(id, remote.map(NativeWorkflowRequest::Remote));
-            }
-        }
-        if let Err(message) = validate_workflow_command(command, &params) {
-            self.native_output
-                .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
-        }
-        if matches!(command, "watchlist.refresh" | "watchlist.action")
-            && (command != "watchlist.action"
-                || matches!(
-                    params["action"].as_str(),
-                    Some(
-                        "run"
-                            | "retry"
-                            | "download_again"
-                            | "run_all_again"
-                            | "check_quality_again"
-                            | "parse_again"
-                            | "split_again"
-                            | "organize_again"
-                    )
-                ))
-        {
-            self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
-            let request = if command == "watchlist.refresh" {
-                NativeWorkflowRequest::WatchlistRefresh(params)
-            } else {
-                NativeWorkflowRequest::WatchlistAction(params)
-            };
-            return self.start_native_workflow(id, Ok(request));
-        }
-        self.native_output
-            .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":format!("Unknown command: {command}")}}))
-            .map_err(|_| "Rust backend is not available".to_owned())?;
-        Ok(id)
+        self.reject(
+            &id,
+            "invalid_request",
+            format!("Unknown command: {command}"),
+        )
     }
 
-    fn queue_command(
-        &mut self,
-        id: String,
-        command: &str,
-        params: &Value,
-    ) -> Result<String, String> {
-        let Some(jobs) = self.jobs.clone() else {
-            self.native_output
-                .send(json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":"The job queue is not available."}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
-        };
-        let store = jobs.lock().map_err(|_| "Job queue is unavailable")?;
-        let result = match command {
-            "jobs.waiting" => store.list(Status::Waiting).map(|waiting| {
-                let jobs: Vec<Value> = waiting
-                    .into_iter()
-                    .map(|job| {
-                        let question = job.question.unwrap_or(Value::Null);
-                        json!({"id":job.id,"title":job.title,"kind":question["kind"],"payload":question["payload"]})
-                    })
-                    .collect();
-                json!({"jobs":jobs})
-            }),
-            "jobs.answer" => match (params["id"].as_i64(), params.get("value")) {
-                (Some(job_id), Some(value)) => store.get(job_id).and_then(|job| {
-                    let kind = job
-                        .and_then(|job| job.question)
-                        .map(|question| question["kind"].clone())
-                        .unwrap_or(Value::Null);
-                    store
-                        .answer(job_id, &json!({"kind":kind,"value":value}))
-                        .map(|answered| json!({"answered":answered}))
-                }),
-                _ => Err("id and value are required.".into()),
-            },
-            "jobs.next" => {
-                let busy = self
-                    .login
-                    .lock()
-                    .map_err(|_| "Spotify login state is unavailable")?
-                    .is_some()
-                    || self
-                        .local_job
-                        .lock()
-                        .map_err(|_| "Local job state is unavailable")?
-                        .is_some();
-                match if busy { Ok(None) } else { store.claim(QUEUE) } {
-                    Ok(Some(job)) => {
-                        drop(store);
-                        let mut params = job.params;
-                        params["answer"] = job.answer.unwrap_or(Value::Null);
-                        params["queue_job_id"] = json!(job.id);
-                        self.watchlist_generation.fetch_add(1, Ordering::SeqCst);
-                        return self.start_native_workflow(
-                            id,
-                            Ok(NativeWorkflowRequest::WatchlistAction(params)),
-                        );
-                    }
-                    Ok(None) => Ok(json!({"job_id":null})),
-                    Err(error) => Err(error),
-                }
-            }
-            _ => Err(format!("Unknown command: {command}")),
-        };
-        let response = match result {
-            Ok(result) => json!({"id":id,"type":"response","ok":true,"result":result}),
-            Err(message) => {
-                json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}})
-            }
-        };
-        self.native_output
-            .send(response)
-            .map_err(|_| "Rust backend is not available".to_owned())?;
-        Ok(id)
+    fn reply(&self, id: &str, params: &Value) -> Result<String, String> {
+        let decision_id = params
+            .get("decision_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if decision_id.is_empty() {
+            return self.reject(
+                id,
+                "invalid_request",
+                "decision_id must be a non-empty string.",
+            );
+        }
+        let reply = self
+            .shared
+            .decisions
+            .lock()
+            .map_err(|_| "Decision state is unavailable")?
+            .remove(decision_id);
+        let sent = reply.is_some_and(|reply| {
+            reply
+                .send(params.get("value").cloned().unwrap_or(Value::Null))
+                .is_ok()
+        });
+        if sent {
+            self.accept(id, json!({"decision_id":decision_id}))
+        } else {
+            self.reject(id, "invalid_request", "The decision is not pending.")
+        }
     }
 
-    fn start_native_workflow(
-        &mut self,
-        id: String,
-        request: Result<NativeWorkflowRequest, String>,
-    ) -> Result<String, String> {
-        let request = match request {
-            Ok(request) => request,
-            Err(message) => {
-                self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}))
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
+    fn cancel(&self, id: &str, params: &Value) -> Result<String, String> {
+        let job_id = params.get("job_id").and_then(Value::as_str).unwrap_or("");
+        if job_id.is_empty() {
+            return self.reject(id, "invalid_request", "job_id must be a non-empty string.");
+        }
+        if let Some(cancel) = self.shared.running().get(job_id) {
+            cancel.store(true, Ordering::SeqCst);
+            return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
+        }
+        let queued = job_id
+            .strip_prefix("queue-")
+            .and_then(|number| number.parse::<i64>().ok());
+        if let Some(number) = queued {
+            if self.shared.store().cancel_open(number)? {
+                self.accept(id, json!({"job_id":job_id,"cancel_requested":true}))?;
+                self.shared
+                    .send(json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}));
+                self.shared.publish();
+                return Ok(id.to_owned());
             }
-        };
+        }
         let login = self
             .login
             .lock()
-            .map_err(|_| "Spotify login state is unavailable")?;
-        let mut state = self
-            .local_job
-            .lock()
-            .map_err(|_| "Local job state is unavailable")?;
-        if state.is_some() || login.is_some() {
-            self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"job_active","message":"A job is already active."}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
+            .map_err(|_| "Spotify login is not available")?;
+        if let Some(active) = login.as_ref().filter(|active| active.job_id == job_id) {
+            active.cancel.store(true, Ordering::Relaxed);
+            return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
         }
-        let job_id = format!("local-workflow-{id}");
-        let cancel = Arc::new(AtomicBool::new(false));
-        *state = Some(NativeLogin {
-            job_id: job_id.clone(),
-            cancel: Arc::clone(&cancel),
-        });
-        self.native_output
-            .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id}}))
-            .map_err(|_| "Rust backend is not available".to_owned())?;
-        drop(login);
-        drop(state);
-        let sender = self.native_output.clone();
-        let active = Arc::clone(&self.local_job);
-        let pending = Arc::clone(&self.local_decision);
-        let jobs = self.jobs.clone();
-        thread::spawn(move || {
-            let mut decision_number = 0_usize;
-            let parked = RefCell::new(None);
-            let (parks, queue_job, resume) = match &request {
-                NativeWorkflowRequest::WatchlistRefresh(params)
-                | NativeWorkflowRequest::WatchlistAction(params) => (
-                    jobs.is_some(),
-                    params["queue_job_id"].as_i64(),
-                    Some(params["answer"].clone()).filter(|answer| answer["kind"].is_string()),
-                ),
-                _ => (false, None, None),
-            };
-            let resume = RefCell::new(resume);
-            let mut workflow_event = |event: Value| {
-                if event["event"] == "item_waiting" {
-                    if let Some(store) = jobs.as_ref().and_then(|jobs| jobs.lock().ok()) {
-                        let _ = park_item(&store, &event["data"]);
-                    }
+        self.reject(id, "invalid_request", "The job is not active.")
+    }
+
+    fn answer(&self, id: &str, params: &Value) -> Result<String, String> {
+        let (Some(job_id), Some(value)) = (params["id"].as_i64(), params.get("value")) else {
+            return self.reject(id, "invalid_request", "id and value are required.");
+        };
+        let answered = {
+            let store = self.shared.store();
+            let kind = store
+                .get(job_id)?
+                .and_then(|job| job.question)
+                .map(|question| question["kind"].clone())
+                .unwrap_or(Value::Null);
+            store.answer(job_id, &json!({"kind":kind,"value":value}))?
+        };
+        self.accept(id, json!({"answered":answered}))?;
+        self.shared.publish();
+        self.shared.wake();
+        Ok(id.to_owned())
+    }
+
+    fn start_workflow(&self, id: &str, params: Value) -> Result<String, String> {
+        let raw = params["raw"].as_str().unwrap_or("").trim().to_owned();
+        if raw.is_empty() {
+            return self.reject(id, "invalid_request", "Enter a URL or path.");
+        }
+        let checked = local_workflow::supported(&params)
+            .map(|request| request.map(drop))
+            .or_else(|| remote_workflow::supported(&params).map(|request| request.map(drop)));
+        match checked {
+            Some(Ok(())) => {}
+            Some(Err(message)) => return self.reject(id, "invalid_request", message),
+            None => return self.reject(id, "invalid_request", "Enter a URL or path."),
+        }
+        let key = format!("{raw}#{}", unique());
+        self.enqueue(
+            id,
+            &NewJob {
+                kind: Kind::Workflow,
+                item_key: &key,
+                title: &raw,
+                params: &params,
+            },
+        )
+    }
+
+    fn start_item(&self, id: &str, params: Value) -> Result<String, String> {
+        if let Err(message) = validate_item(&params) {
+            return self.reject(id, "invalid_request", message);
+        }
+        let key = item_key(&params);
+        {
+            let store = self.shared.store();
+            for open in store.find_open(Kind::Item, &key)? {
+                if open.status == Status::Waiting {
+                    store.cancel_open(open.id)?;
+                } else {
+                    drop(store);
+                    return self.reject(
+                        id,
+                        "job_active",
+                        "This item already has a job in the queue.",
+                    );
                 }
-                let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"workflow","event":event["event"],"data":event["data"]}}));
-            };
-            let mut import_event = |event: Value| {
-                let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"native","event":event["event"],"data":event["data"]}}));
-            };
-            let mut decide = |kind: &str, mut payload: Value| {
-                let answered = {
-                    let mut resume = resume.borrow_mut();
-                    match resume.as_ref() {
-                        Some(answer) if answer["kind"] == kind => resume.take(),
-                        _ => None,
-                    }
-                };
-                if let Some(answer) = answered {
-                    return Ok(answer["value"].clone());
-                }
-                let job_message = |event: &str, data: Value| {
-                    let _ = sender.send(json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":"agent","event":event,"data":data}}));
-                };
-                if let Some(model) = agent_model(kind, &payload) {
-                    if muzik_agent::strong_match(kind, &payload).is_none() {
-                        job_message(
-                            "message",
-                            json!({"message":format!("Asking {model} to choose.")}),
-                        );
-                    }
-                    match muzik_agent::decide(kind, &payload, &model) {
-                        Ok(muzik_agent::Outcome::Decided(choice)) => {
-                            job_message(
-                                "agent_decided",
-                                json!({"kind":kind,"label":choice.label,"confidence":choice.confidence,"reason":choice.reason}),
-                            );
-                            return Ok(choice.value);
-                        }
-                        Ok(muzik_agent::Outcome::Unsure {
-                            suggestion,
-                            confidence,
-                            reason,
-                        }) => {
-                            payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
-                        }
-                        Err(error) => {
-                            payload["agent"] = json!({"model":model,"error":error});
-                        }
-                    }
-                }
-                if parks {
-                    parked.replace(Some(json!({"kind":kind,"payload":payload})));
-                    return Err("waiting for a choice".to_owned());
-                }
-                decision_number += 1;
-                let decision_id = format!("{job_id}-decision-{decision_number}");
-                let (reply, receiver) = mpsc::channel();
-                {
-                    let mut state = pending
-                        .lock()
-                        .map_err(|_| "Local decision state is unavailable")?;
-                    *state = Some(NativeDecision {
-                        id: decision_id.clone(),
-                        reply,
-                    });
-                }
-                sender.send(json!({"type":"event","event":"decision.request","data":{"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload}}))
-                    .map_err(|_| "Rust backend is not available")?;
-                let answer = loop {
-                    if cancel.load(Ordering::SeqCst) {
-                        break Err("import cancelled".to_owned());
-                    }
-                    match receiver.recv_timeout(Duration::from_millis(100)) {
-                        Ok(value) => break Ok(value),
-                        Err(RecvTimeoutError::Timeout) => {}
-                        Err(RecvTimeoutError::Disconnected) => {
-                            break Err("The decision is not pending.".to_owned())
-                        }
-                    }
-                };
-                if let Ok(mut state) = pending.lock() {
-                    if state
-                        .as_ref()
-                        .is_some_and(|decision| decision.id == decision_id)
-                    {
-                        *state = None;
-                    }
-                }
-                answer
-            };
-            let result: Result<Value, (bool, String)> = match request {
-                NativeWorkflowRequest::Local(local) => local_workflow::run(
-                    local,
-                    &cancel,
-                    &mut workflow_event,
-                    &mut import_event,
-                    &mut decide,
-                )
-                .map_err(|error| {
-                    (
-                        matches!(error, muzik_workflow::Error::Cancelled),
-                        error.to_string(),
-                    )
-                }),
-                NativeWorkflowRequest::Remote(remote) => remote_workflow::run(
-                    remote,
-                    &cancel,
-                    &mut workflow_event,
-                    &mut import_event,
-                    &mut decide,
-                )
-                .map_err(|error| {
-                    (
-                        matches!(error, muzik_workflow::Error::Cancelled),
-                        error.to_string(),
-                    )
-                }),
-                NativeWorkflowRequest::WatchlistRefresh(params) => native_watchlist::refresh(
-                    &params,
-                    &cancel,
-                    &mut workflow_event,
-                    &mut import_event,
-                    &mut decide,
-                    &parked,
-                )
-                .map_err(|error| {
-                    (
-                        matches!(error, muzik_core::watchlist::jobs::JobError::Cancelled),
-                        error.to_string(),
-                    )
-                }),
-                NativeWorkflowRequest::WatchlistAction(params) => native_watchlist::action(
-                    &params,
-                    &cancel,
-                    &mut workflow_event,
-                    &mut import_event,
-                    &mut decide,
-                    &parked,
-                )
-                .map_err(|error| {
-                    (
-                        matches!(error, muzik_core::watchlist::jobs::JobError::Cancelled),
-                        error.to_string(),
-                    )
-                }),
-            };
-            if let (Some(queue_job), Some(store)) =
-                (queue_job, jobs.as_ref().and_then(|jobs| jobs.lock().ok()))
-            {
-                let _ = match &result {
-                    Ok(_) => store.finish(queue_job),
-                    Err((true, _)) => store.reopen(queue_job),
-                    Err((false, message)) => store.fail(queue_job, message),
-                };
             }
-            if let Ok(mut state) = active.lock() {
-                *state = None;
-            }
-            let terminal = match result {
-                Ok(result) => {
-                    json!({"type":"event","event":"job.completed","data":{"job_id":job_id,"result":result}})
-                }
-                Err((true, _)) => {
-                    json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}})
-                }
-                Err((false, message)) => {
-                    json!({"type":"event","event":"job.failed","data":{"job_id":job_id,"error":{"code":"operation_failed","message":message}}})
-                }
-            };
-            let _ = sender.send(terminal);
-        });
-        Ok(id)
+        }
+        let title = params["title"]
+            .as_str()
+            .or_else(|| params["video_id"].as_str())
+            .unwrap_or("Item")
+            .to_owned();
+        self.enqueue(
+            id,
+            &NewJob {
+                kind: Kind::Item,
+                item_key: &key,
+                title: &title,
+                params: &params,
+            },
+        )
+    }
+
+    fn enqueue(&self, id: &str, job: &NewJob<'_>) -> Result<String, String> {
+        let number = self.shared.store().enqueue(job)?;
+        self.accept(id, json!({"job_id":format!("queue-{number}")}))?;
+        self.shared.publish();
+        self.shared.wake();
+        Ok(id.to_owned())
     }
 
     fn start_spotify_login(&mut self, id: String, params: Value) -> Result<String, String> {
@@ -615,9 +428,11 @@ impl Bridge {
             {
                 Some(port) => Some(port),
                 None => {
-                    self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"invalid_request","message":"port must be an integer from 1 to 65535."}}))
-                        .map_err(|_| "Rust backend is not available".to_owned())?;
-                    return Ok(id);
+                    return self.reject(
+                        &id,
+                        "invalid_request",
+                        "port must be an integer from 1 to 65535.",
+                    )
                 }
             },
         };
@@ -625,16 +440,9 @@ impl Bridge {
             .login
             .lock()
             .map_err(|_| "Spotify login is not available")?;
-        if login.is_some()
-            || self
-                .local_job
-                .lock()
-                .map_err(|_| "Local job state is unavailable")?
-                .is_some()
-        {
-            self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"job_active","message":"A job is already active."}}))
-                .map_err(|_| "Rust backend is not available".to_owned())?;
-            return Ok(id);
+        if login.is_some() {
+            drop(login);
+            return self.reject(&id, "job_active", "A Spotify login is already active.");
         }
         let config = app_config::path();
         if let Some(port) = port {
@@ -644,9 +452,8 @@ impl Bridge {
                 "redirect_port",
                 &port.to_string(),
             ) {
-                self.native_output.send(json!({"id":id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}}))
-                    .map_err(|_| "Rust backend is not available".to_owned())?;
-                return Ok(id);
+                drop(login);
+                return self.reject(&id, "operation_failed", message);
             }
         }
         let job_id = format!("spotify-login-{id}");
@@ -655,10 +462,8 @@ impl Bridge {
             job_id: job_id.clone(),
             cancel: Arc::clone(&cancel),
         });
-        self.native_output
-            .send(json!({"id":id,"type":"response","ok":true,"result":{"job_id":job_id}}))
-            .map_err(|_| "Rust backend is not available".to_owned())?;
         drop(login);
+        self.accept(&id, json!({"job_id":job_id}))?;
         let sender = self.native_output.clone();
         let state = Arc::clone(&self.login);
         thread::spawn(move || {
@@ -687,103 +492,344 @@ impl Bridge {
     }
 }
 
-fn validate_workflow_command(command: &str, params: &Value) -> Result<(), String> {
-    let required = |key: &str| {
-        params
-            .get(key)
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| format!("{key} must be a non-empty string."))
-    };
-    match command {
-        "workflow.start" => {
-            if params
-                .get("raw")
-                .and_then(Value::as_str)
-                .is_none_or(|raw| raw.trim().is_empty())
-            {
-                return Err("Enter a URL or path.".into());
-            }
-        }
-        "watchlist.action" => {
-            required("playlist_id")?;
-            if params
-                .get("position")
-                .is_none_or(|value| value.as_i64().is_none() && value.as_u64().is_none())
-            {
-                return Err("position must be an integer.".into());
-            }
-            let action = required("action")?;
-            if !matches!(
-                action,
-                "run"
-                    | "retry"
-                    | "download_again"
-                    | "check_quality_again"
-                    | "parse_again"
-                    | "split_again"
-                    | "organize_again"
-                    | "run_all_again"
-            ) {
-                return Err(format!("'{action}' is not a valid ItemAction"));
-            }
-        }
-        "job.cancel" => {
-            required("job_id")?;
-        }
-        "decision.reply" => {
-            required("decision_id")?;
-        }
-        _ => {}
+fn work(shared: &Arc<Shared>) {
+    while !shared.stop.load(Ordering::SeqCst) {
+        let claimed = shared.store().claim_any(&QUEUES).ok().flatten();
+        let Some(job) = claimed else {
+            let idle = shared.idle.lock().unwrap_or_else(PoisonError::into_inner);
+            let _ = shared.wake.wait_timeout(idle, Duration::from_secs(1));
+            continue;
+        };
+        run_job(shared, job);
     }
+}
+
+type Outcome = Result<Value, (bool, String)>;
+
+fn run_job(shared: &Arc<Shared>, job: Job) {
+    let job_id = format!("queue-{}", job.id);
+    let cancel = Arc::new(AtomicBool::new(false));
+    shared.running().insert(job_id.clone(), Arc::clone(&cancel));
+    shared.generation.fetch_add(1, Ordering::SeqCst);
+    queues::set_label(&job.title);
+    shared.send(json!({"type":"event","event":"job.started","data":{"job_id":job_id,"title":job.title,"kind":job.kind.as_ref()}}));
+    shared.publish();
+    let result = match job.kind {
+        Kind::Refresh => run_refresh(shared, &job, &job_id, &cancel),
+        Kind::Item => run_item(shared, &job, &job_id, &cancel),
+        Kind::Workflow => run_workflow(shared, &job, &job_id, &cancel),
+    };
+    {
+        let store = shared.store();
+        let _ = match &result {
+            Ok(_) => store.finish(job.id),
+            Err((true, _)) if job.question.is_some() => store.reopen(job.id),
+            Err((true, _)) => store.cancel(job.id),
+            Err((false, message)) => store.fail(job.id, message),
+        };
+    }
+    shared.running().remove(&job_id);
+    shared.generation.fetch_add(1, Ordering::SeqCst);
+    shared.send(match result {
+        Ok(result) => {
+            json!({"type":"event","event":"job.completed","data":{"job_id":job_id,"result":result}})
+        }
+        Err((true, _)) => json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}),
+        Err((false, message)) => {
+            json!({"type":"event","event":"job.failed","data":{"job_id":job_id,"error":{"code":"operation_failed","message":message}}})
+        }
+    });
+    shared.publish();
+}
+
+fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+    let pending = native_watchlist::sync(&job.params, cancel, &mut |event| {
+        shared.event(job_id, Source::Workflow, &event);
+    })
+    .map_err(job_error)?;
+    let mut queued = 0;
+    {
+        let store = shared.store();
+        for item in &pending {
+            let mut params = job.params.clone();
+            params["playlist_id"] = json!(item.playlist_id);
+            params["position"] = json!(item.position);
+            params["video_id"] = json!(item.video_id);
+            params["title"] = json!(item.title);
+            params["action"] = json!(ItemAction::Run);
+            let key = item_key(&params);
+            if store
+                .find_open(Kind::Item, &key)
+                .map_err(|error| (false, error))?
+                .is_empty()
+            {
+                store
+                    .enqueue(&NewJob {
+                        kind: Kind::Item,
+                        item_key: &key,
+                        title: &item.title,
+                        params: &params,
+                    })
+                    .map_err(|error| (false, error))?;
+                queued += 1;
+            }
+        }
+    }
+    shared.event(
+        job_id,
+        Source::Workflow,
+        &json!({"event":"message","data":{"message":format!("Queued {queued} item(s).")}}),
+    );
+    shared.wake();
+    Ok(json!({"pending":pending.len(),"queued":queued}))
+}
+
+fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+    let parked = RefCell::new(None);
+    let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
+        let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
+        Some((kind, answer["value"].clone()))
+    }));
+    let mut workflow_event = |event: Value| {
+        if event["event"] == "item_waiting" {
+            let _ = park_item(&shared.store(), &job.params, &event["data"]);
+            shared.publish();
+        }
+        shared.event(job_id, Source::Workflow, &event);
+    };
+    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
+    let mut decide = |kind: DecisionKind, mut payload: Value| {
+        let answered = {
+            let mut resume = resume.borrow_mut();
+            match resume.as_ref() {
+                Some((asked, _)) if *asked == kind => resume.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, value)) = answered {
+            return Ok(value);
+        }
+        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
+            return Ok(value);
+        }
+        parked.replace(Some(native_watchlist::Parked { kind, payload }));
+        Err("waiting for a choice".to_owned())
+    };
+    native_watchlist::action(
+        &job.params,
+        cancel,
+        &mut workflow_event,
+        &mut import_event,
+        &mut decide,
+        &parked,
+    )
+    .map_err(job_error)
+}
+
+fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+    let mut decision_number = 0_usize;
+    let mut workflow_event = |event: Value| shared.event(job_id, Source::Workflow, &event);
+    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
+    let mut decide = |kind: DecisionKind, mut payload: Value| {
+        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
+            return Ok(value);
+        }
+        decision_number += 1;
+        let decision_id = format!("{job_id}-decision-{decision_number}");
+        let (reply, receiver) = mpsc::channel();
+        shared
+            .decisions
+            .lock()
+            .map_err(|_| "Decision state is unavailable")?
+            .insert(decision_id.clone(), reply);
+        shared.send(json!({"type":"event","event":"decision.request","data":{"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload}}));
+        let answer = queues::suspended(|| loop {
+            if cancel.load(Ordering::SeqCst) {
+                break Err("import cancelled".to_owned());
+            }
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(value) => break Ok(value),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    break Err("The decision is not pending.".to_owned())
+                }
+            }
+        });
+        if let Ok(mut decisions) = shared.decisions.lock() {
+            decisions.remove(&decision_id);
+        }
+        answer
+    };
+    let workflow_failure = |error: muzik_workflow::Error| {
+        (
+            matches!(error, muzik_workflow::Error::Cancelled),
+            error.to_string(),
+        )
+    };
+    if let Some(local) = local_workflow::supported(&job.params) {
+        let local = local.map_err(|message| (false, message))?;
+        return local_workflow::run(
+            local,
+            cancel,
+            &mut workflow_event,
+            &mut import_event,
+            &mut decide,
+        )
+        .map_err(workflow_failure);
+    }
+    let remote = remote_workflow::supported(&job.params)
+        .ok_or((false, "Enter a URL or path.".to_owned()))?
+        .map_err(|message| (false, message))?;
+    remote_workflow::run(
+        remote,
+        cancel,
+        &mut workflow_event,
+        &mut import_event,
+        &mut decide,
+    )
+    .map_err(workflow_failure)
+}
+
+fn ask_agent(
+    shared: &Shared,
+    job_id: &str,
+    kind: DecisionKind,
+    payload: &mut Value,
+) -> Option<Value> {
+    let model = agent_model(kind, payload)?;
+    let message = |event: &str, data: Value| {
+        shared.event(job_id, Source::Agent, &json!({"event":event,"data":data}));
+    };
+    if muzik_agent::strong_match(kind, payload).is_none() {
+        message(
+            "message",
+            json!({"message":format!("Asking {model} to choose.")}),
+        );
+    }
+    match muzik_agent::decide(kind, payload, &model) {
+        Ok(muzik_agent::Outcome::Decided(choice)) => {
+            message(
+                "agent_decided",
+                json!({"kind":kind,"label":choice.label,"confidence":choice.confidence,"reason":choice.reason}),
+            );
+            Some(choice.value)
+        }
+        Ok(muzik_agent::Outcome::Unsure {
+            suggestion,
+            confidence,
+            reason,
+        }) => {
+            payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
+            None
+        }
+        Err(error) => {
+            payload["agent"] = json!({"model":model,"error":error});
+            None
+        }
+    }
+}
+
+fn job_error(error: JobError) -> (bool, String) {
+    (matches!(error, JobError::Cancelled), error.to_string())
+}
+
+fn validate_item(params: &Value) -> Result<(), String> {
+    params
+        .get("playlist_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("playlist_id must be a non-empty string.")?;
+    if params
+        .get("position")
+        .is_none_or(|value| value.as_i64().is_none() && value.as_u64().is_none())
+    {
+        return Err("position must be an integer.".into());
+    }
+    let action = params
+        .get("action")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("action must be a non-empty string.")?;
+    action
+        .parse::<ItemAction>()
+        .map_err(|_| format!("'{action}' is not a valid ItemAction"))?;
     Ok(())
 }
 
-const QUEUE: &str = "watchlist";
+pub(crate) fn item_key(params: &Value) -> String {
+    format!(
+        "{}:{}:{}",
+        params["playlist_id"].as_str().unwrap_or(""),
+        params["position"],
+        params["video_id"].as_str().unwrap_or("")
+    )
+}
+
+fn unique() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos())
+}
 
 fn open_jobs() -> Result<Store, String> {
     let store = if cfg!(test) {
-        Store::open_in_memory()?
+        Store::open_in_memory()
     } else {
-        Store::open(&paths::data_dir().join("jobs.db"))?
-    };
+        Store::open(&paths::data_dir().join("jobs.db")).or_else(|_| Store::open_in_memory())
+    }?;
     store.recover()?;
     Ok(store)
 }
 
-fn park_item(store: &Store, data: &Value) -> Result<i64, String> {
-    let video_id = data["video_id"].as_str().unwrap_or("");
-    let item_key = format!(
-        "{}:{}:{video_id}",
-        describe(&data["playlist_id"]),
-        data["position"]
-    );
-    let stage = data["stage"].as_str().unwrap_or("download");
-    let params = json!({
-        "playlist_id":data["playlist_id"],
-        "position":data["position"],
-        "video_id":video_id,
-        "action":native_watchlist::resume_action(stage),
-    });
+fn jobs_snapshot(store: &Store) -> Value {
+    let open: Vec<Value> = store
+        .list_open()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|job| {
+            json!({"job_id":format!("queue-{}", job.id),"title":job.title,"kind":job.kind.as_ref(),"status":job.status.as_ref(),"item":(job.kind == Kind::Item).then_some(job.item_key)})
+        })
+        .collect();
+    let waiting: Vec<Value> = store
+        .list(Status::Waiting)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|job| {
+            let question = job.question.unwrap_or(Value::Null);
+            json!({"id":job.id,"title":job.title,"kind":question["kind"],"payload":question["payload"],"item":job.item_key})
+        })
+        .collect();
+    json!({"open":open,"waiting":waiting})
+}
+
+fn park_item(store: &Store, params: &Value, data: &Value) -> Result<i64, String> {
+    let stage = data["stage"]
+        .as_str()
+        .and_then(|stage| stage.parse::<Stage>().ok())
+        .unwrap_or(Stage::Download);
+    let mut params = params.clone();
+    params["playlist_id"] = data["playlist_id"].clone();
+    params["position"] = data["position"].clone();
+    params["video_id"] = json!(data["video_id"].as_str().unwrap_or(""));
+    params["action"] = json!(stage.resume_action());
+    let key = item_key(&params);
+    let title = data["title"]
+        .as_str()
+        .or_else(|| params["title"].as_str())
+        .unwrap_or("Item")
+        .to_owned();
     store.park(
         &NewJob {
-            queue: QUEUE,
-            kind: "resume",
-            item_key: &item_key,
-            title: data["title"].as_str().unwrap_or(video_id),
+            kind: Kind::Item,
+            item_key: &key,
+            title: &title,
             params: &params,
         },
         &data["question"],
     )
 }
 
-fn describe(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
-}
-
-fn agent_model(kind: &str, payload: &Value) -> Option<String> {
+fn agent_model(kind: DecisionKind, payload: &Value) -> Option<String> {
     if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
         return None;
     }
@@ -805,10 +851,26 @@ struct WatchlistLoad {
     params: Value,
     repository: Repository,
     login: Arc<Mutex<Option<NativeLogin>>>,
-    local: Arc<Mutex<Option<NativeLogin>>>,
+    running: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     latest: Arc<AtomicU64>,
     gate: Arc<Mutex<()>>,
     generation: u64,
+}
+
+impl WatchlistLoad {
+    fn busy(&self) -> Result<bool, String> {
+        Ok(self
+            .login
+            .lock()
+            .map_err(|_| "Spotify login state is unavailable")?
+            .is_some()
+            || !self
+                .running
+                .lock()
+                .map_err(|_| "Job state is unavailable")?
+                .is_empty()
+            || self.generation != self.latest.load(Ordering::SeqCst))
+    }
 }
 
 fn load_watchlist(load: WatchlistLoad) {
@@ -844,43 +906,28 @@ fn load_watchlist(load: WatchlistLoad) {
 
 fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Result<(), String> {
     for _ in 0..3 {
-        if load
-            .login
-            .lock()
-            .map_err(|_| "Spotify login state is unavailable")?
-            .is_some()
-            || load
-                .local
-                .lock()
-                .map_err(|_| "Local job state is unavailable")?
-                .is_some()
-            || load.generation != load.latest.load(Ordering::SeqCst)
-        {
+        if load.busy()? {
             return Ok(());
         }
         let path = load.repository.path();
         let stamp = watchlist::stamp(path)?;
         let checked = options.checked(&load.repository)?;
-        let login = load
-            .login
-            .lock()
-            .map_err(|_| "Spotify login state is unavailable")?;
-        let local = load
-            .local
-            .lock()
-            .map_err(|_| "Local job state is unavailable")?;
-        if login.is_some()
-            || local.is_some()
-            || load.generation != load.latest.load(Ordering::SeqCst)
-        {
-            return Ok(());
-        }
-        if watchlist::stamp(path)? != stamp {
+        let saved = load.repository.locked(|| -> Result<bool, String> {
+            if load.busy()? {
+                return Ok(true);
+            }
+            if watchlist::stamp(path)? != stamp {
+                return Ok(false);
+            }
+            load.repository.save(checked.clone())?;
+            Ok(true)
+        })?;
+        if !saved {
             continue;
         }
-        load.repository.save(checked.clone())?;
-        drop(local);
-        drop(login);
+        if load.busy()? {
+            return Ok(());
+        }
         let visible = options.view(checked)?;
         let _gate = load
             .gate
@@ -914,7 +961,8 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 mod tests {
     use super::{load_watchlist, Bridge, NativeLogin, WatchlistLoad};
     use muzik_core::watchlist::Repository;
-    use serde_json::json;
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -922,31 +970,77 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn response(bridge: &Bridge, id: &str) -> Result<Value, Box<dyn std::error::Error>> {
+        loop {
+            let message = bridge.output.recv_timeout(Duration::from_secs(5))?;
+            if message["type"] == "response" && message["id"] == id {
+                return Ok(message);
+            }
+        }
+    }
+
+    fn event(
+        bridge: &Bridge,
+        wanted: &[&str],
+        job_id: &str,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        loop {
+            let message = bridge.output.recv_timeout(Duration::from_secs(20))?;
+            let name = message["event"].as_str().unwrap_or("");
+            if wanted.contains(&name) && message["data"]["job_id"] == job_id {
+                return Ok(message);
+            }
+            if name == "job.failed" && message["data"]["job_id"] == job_id {
+                return Err(format!("job failed: {}", message["data"]["error"]["message"]).into());
+            }
+        }
+    }
+
+    fn fixture_import(
+        dir: &std::path::Path,
+    ) -> Result<(PathBuf, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+        let audio = dir.join("track.flac");
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
+            &audio,
+        )?;
+        let database = dir.join("library.db");
+        let config = dir.join("config.yaml");
+        fs::write(
+            &config,
+            format!(
+                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
+                dir.join("Music").display(),
+                database.display(),
+                dir.join("state.pickle").display()
+            ),
+        )?;
+        Ok((audio, database, config))
+    }
+
     #[test]
-    fn library_scan_returns_file_size() -> Result<(), Box<dyn std::error::Error>> {
+    fn library_scan_returns_file_size() -> TestResult {
         let dir = tempfile::tempdir()?;
         fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
         let mut bridge = Bridge::start()?;
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["total_size"], "5.0 B");
+        assert_eq!(response(&bridge, &id)?["result"]["total_size"], "5.0 B");
         Ok(())
     }
 
     #[test]
-    fn startup_answers_hello() -> Result<(), Box<dyn std::error::Error>> {
+    fn startup_answers_hello() -> TestResult {
         let mut bridge = Bridge::start()?;
         let id = bridge.send("hello", json!({}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["protocol_version"], 1);
+        assert_eq!(response(&bridge, &id)?["result"]["protocol_version"], 1);
         Ok(())
     }
 
     #[test]
-    fn invalid_workflow_requests_use_the_native_protocol_response(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn invalid_workflow_requests_use_the_native_protocol_response() -> TestResult {
         let mut bridge = Bridge::start()?;
         for (command, params) in [
             ("workflow.start", json!({"raw":"  "})),
@@ -962,15 +1056,13 @@ mod tests {
             ("job.cancel", json!({"job_id":""})),
         ] {
             let id = bridge.send(command, params)?;
-            let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-            assert_eq!(response["id"], id);
-            assert_eq!(response["error"]["code"], "invalid_request");
+            assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
         }
         Ok(())
     }
 
     #[test]
-    fn local_workflow_uses_native_job_events() -> Result<(), Box<dyn std::error::Error>> {
+    fn local_workflow_runs_as_a_queue_job() -> TestResult {
         let dir = tempfile::tempdir()?;
         let audio = dir.path().join("track.flac");
         fs::write(&audio, b"audio")?;
@@ -981,229 +1073,170 @@ mod tests {
                 "raw":audio,"no_organize":true,"no_split":true,"dry_run":true
             }),
         )?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["ok"], true);
-        let job_id = response["result"]["job_id"]
+        let job_id = response(&bridge, &id)?["result"]["job_id"]
             .as_str()
-            .ok_or("missing job ID")?;
-        let mut saw_event = false;
-        loop {
-            let message = bridge.output.recv_timeout(Duration::from_secs(2))?;
-            if message["event"] == "job.event" {
-                saw_event = true;
-            }
-            if message["event"] == "job.completed" {
-                assert_eq!(message["data"]["job_id"], job_id);
-                assert_eq!(message["data"]["result"]["singles"], 1);
-                break;
-            }
-        }
-        assert!(saw_event);
+            .ok_or("missing job ID")?
+            .to_owned();
+        assert!(job_id.starts_with("queue-"));
+        event(&bridge, &["job.started"], &job_id)?;
+        let done = event(&bridge, &["job.completed"], &job_id)?;
+        assert_eq!(done["data"]["result"]["singles"], 1);
         assert!(audio.exists());
         Ok(())
     }
 
     #[test]
-    fn local_import_uses_native_decision_and_beets_library(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let audio = dir.path().join("track.flac");
-        fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
-            &audio,
-        )?;
-        let database = dir.path().join("library.db");
-        let root = dir.path().join("Music");
-        let config = dir.path().join("config.yaml");
-        fs::write(
-            &config,
-            format!(
-                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
-                root.display(),
-                database.display(),
-                dir.path().join("state.pickle").display()
-            ),
-        )?;
+    fn two_workflow_runs_share_the_import_gate() -> TestResult {
+        let first = tempfile::tempdir()?;
+        let second = tempfile::tempdir()?;
+        let (audio_one, database_one, config_one) = fixture_import(first.path())?;
+        let (audio_two, database_two, config_two) = fixture_import(second.path())?;
         let mut bridge = Bridge::start()?;
-        let id = bridge.send(
-            "workflow.start",
-            json!({
-                "raw":audio,"config":config,"no_split":true,"interactive":true
-            }),
-        )?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["ok"], true);
-        let job_id = response["result"]["job_id"]
-            .as_str()
-            .ok_or("missing job ID")?;
-        let decision_id = loop {
-            let message = bridge.output.recv_timeout(Duration::from_secs(10))?;
-            if message["event"] == "decision.request" {
-                assert_eq!(message["data"]["job_id"], job_id);
-                assert_eq!(message["data"]["kind"], "import_match");
-                break message["data"]["decision_id"]
+        let mut jobs = Vec::new();
+        for (audio, config) in [(&audio_one, &config_one), (&audio_two, &config_two)] {
+            let id = bridge.send(
+                "workflow.start",
+                json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
+            )?;
+            jobs.push(
+                response(&bridge, &id)?["result"]["job_id"]
                     .as_str()
-                    .ok_or("missing decision ID")?
-                    .to_owned();
-            }
-            if message["event"] == "job.failed" {
-                return Err(
-                    format!("import failed: {}", message["data"]["error"]["message"]).into(),
-                );
-            }
-        };
-        let reply = bridge.send(
-            "decision.reply",
-            json!({"decision_id":decision_id,"value":"as_is"}),
-        )?;
-        let mut finished = false;
-        for _ in 0..20 {
-            let message = bridge.output.recv_timeout(Duration::from_secs(10))?;
-            if message["type"] == "response" && message["id"] == reply {
-                assert_eq!(message["ok"], true);
-            }
-            if message["event"] == "job.failed" {
-                return Err(
-                    format!("import failed: {}", message["data"]["error"]["message"]).into(),
-                );
-            }
-            if message["event"] == "job.completed" {
-                finished = true;
-                break;
+                    .ok_or("missing job ID")?
+                    .to_owned(),
+            );
+        }
+        let mut asked = HashMap::new();
+        let mut done = 0;
+        while done < 2 {
+            let message = bridge.output.recv_timeout(Duration::from_secs(20))?;
+            match message["event"].as_str().unwrap_or("") {
+                "decision.request" => {
+                    let job = message["data"]["job_id"].as_str().unwrap_or("").to_owned();
+                    assert_eq!(message["data"]["kind"], "import_match");
+                    asked.insert(job, ());
+                    let id = bridge.send(
+                        "decision.reply",
+                        json!({"decision_id":message["data"]["decision_id"],"value":"as_is"}),
+                    )?;
+                    let _ = id;
+                }
+                "job.completed" if jobs.iter().any(|job| message["data"]["job_id"] == *job) => {
+                    done += 1;
+                }
+                "job.failed" => {
+                    return Err(
+                        format!("job failed: {}", message["data"]["error"]["message"]).into(),
+                    )
+                }
+                _ => {}
             }
         }
-        assert!(finished);
-        assert!(database.exists());
-        assert!(!audio.exists());
+        assert_eq!(asked.len(), 2);
+        assert!(database_one.exists() && database_two.exists());
+        assert!(!audio_one.exists() && !audio_two.exists());
         Ok(())
     }
 
     #[test]
-    fn cancel_ends_a_pending_local_import_decision() -> Result<(), Box<dyn std::error::Error>> {
+    fn cancel_ends_a_pending_local_import_decision() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let audio = dir.path().join("track.flac");
-        fs::copy(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
-            &audio,
-        )?;
-        let database = dir.path().join("library.db");
-        let config = dir.path().join("config.yaml");
-        fs::write(
-            &config,
-            format!(
-                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
-                dir.path().join("Music").display(),
-                database.display(),
-                dir.path().join("state.pickle").display()
-            ),
-        )?;
+        let (audio, database, config) = fixture_import(dir.path())?;
         let mut bridge = Bridge::start()?;
-        bridge.send(
+        let id = bridge.send(
             "workflow.start",
             json!({"raw":audio,"config":config,"no_split":true}),
         )?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        let job_id = response["result"]["job_id"]
+        let job_id = response(&bridge, &id)?["result"]["job_id"]
             .as_str()
             .ok_or("missing job ID")?
             .to_owned();
-        let decision_id = loop {
-            let message = bridge.output.recv_timeout(Duration::from_secs(10))?;
-            if message["event"] == "decision.request" {
-                break message["data"]["decision_id"]
-                    .as_str()
-                    .ok_or("missing decision ID")?
-                    .to_owned();
-            }
-            if message["event"] == "job.failed" {
-                return Err(
-                    format!("import failed: {}", message["data"]["error"]["message"]).into(),
-                );
-            }
-        };
-        bridge.send("job.cancel", json!({"job_id":job_id}))?;
-        let mut cancelled = false;
-        for _ in 0..5 {
-            let message = bridge.output.recv_timeout(Duration::from_secs(2))?;
-            if message["event"] == "job.cancelled" {
-                cancelled = true;
-                break;
-            }
-        }
-        assert!(cancelled);
+        let asked = event(&bridge, &["decision.request"], &job_id)?;
+        let decision_id = asked["data"]["decision_id"]
+            .as_str()
+            .ok_or("missing decision ID")?
+            .to_owned();
+        let id = bridge.send("job.cancel", json!({"job_id":job_id}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
+        event(&bridge, &["job.cancelled"], &job_id)?;
         assert!(audio.exists());
         assert!(!database.exists());
         let reply = bridge.send(
             "decision.reply",
             json!({"decision_id":decision_id,"value":"as_is"}),
         )?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], reply);
-        assert_eq!(response["error"]["code"], "invalid_request");
+        assert_eq!(
+            response(&bridge, &reply)?["error"]["code"],
+            "invalid_request"
+        );
         Ok(())
     }
 
     #[test]
-    fn cancel_reaches_an_active_local_job() -> Result<(), Box<dyn std::error::Error>> {
+    fn cancel_reaches_a_running_job() -> TestResult {
         let mut bridge = Bridge::start()?;
         let cancel = Arc::new(AtomicBool::new(false));
-        *bridge.local_job.lock().map_err(|_| "local lock failed")? = Some(NativeLogin {
-            job_id: "local-workflow-test".into(),
-            cancel: Arc::clone(&cancel),
-        });
-        let id = bridge.send("job.cancel", json!({"job_id":"local-workflow-test"}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["cancel_requested"], true);
+        bridge
+            .shared
+            .running()
+            .insert("queue-test".into(), Arc::clone(&cancel));
+        let id = bridge.send("job.cancel", json!({"job_id":"queue-test"}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
         assert!(cancel.load(Ordering::SeqCst));
         Ok(())
     }
 
     #[test]
-    fn thumbnail_requests_get_a_native_protocol_response() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn cancel_removes_a_queued_item_job() -> TestResult {
         let mut bridge = Bridge::start()?;
-        let id = bridge.send("thumbnails.cache", json!({"video_ids": []}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["queued"], 0);
-
-        let id = bridge.send("thumbnails.cache", json!({"video_ids": [42]}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["error"]["code"], "invalid_request");
+        bridge.shared.stop.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(1200));
+        let params = json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run","title":"Song"});
+        let id = bridge.send("watchlist.action", params.clone())?;
+        let job_id = response(&bridge, &id)?["result"]["job_id"]
+            .as_str()
+            .ok_or("missing job ID")?
+            .to_owned();
+        let again = bridge.send("watchlist.action", params)?;
+        assert_eq!(response(&bridge, &again)?["error"]["code"], "job_active");
+        let id = bridge.send("jobs.list", json!({}))?;
+        let listed = response(&bridge, &id)?;
+        assert_eq!(listed["result"]["open"][0]["job_id"], job_id);
+        assert_eq!(listed["result"]["open"][0]["item"], "PL1:2:abcdefghijk");
+        let id = bridge.send("job.cancel", json!({"job_id":job_id}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
+        let id = bridge.send("jobs.list", json!({}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["open"], json!([]));
         Ok(())
     }
 
     #[test]
-    fn spotify_login_validates_port_and_uses_the_native_job_slot(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn thumbnail_requests_get_a_native_protocol_response() -> TestResult {
+        let mut bridge = Bridge::start()?;
+        let id = bridge.send("thumbnails.cache", json!({"video_ids": []}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["queued"], 0);
+        let id = bridge.send("thumbnails.cache", json!({"video_ids": [42]}))?;
+        assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
+        Ok(())
+    }
+
+    #[test]
+    fn spotify_login_validates_port_and_uses_its_own_slot() -> TestResult {
         let mut bridge = Bridge::start()?;
         let id = bridge.send("spotify.login", json!({"port": 0}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["error"]["code"], "invalid_request");
-
+        assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
         let cancel = Arc::new(AtomicBool::new(false));
         *bridge.login.lock().map_err(|_| "login lock failed")? = Some(NativeLogin {
             job_id: "spotify-login-test".into(),
             cancel: Arc::clone(&cancel),
         });
         let id = bridge.send("job.cancel", json!({"job_id": "spotify-login-test"}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["cancel_requested"], true);
+        assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
         assert!(cancel.load(Ordering::Relaxed));
         Ok(())
     }
 
     #[test]
-    fn watchlist_load_sends_saved_cards_before_local_check(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn watchlist_load_sends_saved_cards_before_local_check() -> TestResult {
         let dir = tempfile::tempdir()?;
         let repository = Repository::new(dir.path().join("watchlist.json"));
         repository
@@ -1216,7 +1249,7 @@ mod tests {
             params: json!({"output": dir.path().join("downloads"), "splits": dir.path().join("splits"), "quality_policy":"off", "no_split":false, "no_organize":false}),
             repository,
             login: Arc::new(Mutex::new(None)),
-            local: Arc::new(Mutex::new(None)),
+            running: Arc::new(Mutex::new(HashMap::new())),
             latest: Arc::new(AtomicU64::new(1)),
             gate: Arc::new(Mutex::new(())),
             generation: 1,
@@ -1238,68 +1271,43 @@ mod tests {
     }
 
     #[test]
-    fn watchlist_edit_waits_for_an_active_workflow() -> Result<(), Box<dyn std::error::Error>> {
-        let mut bridge = Bridge::start()?;
-        *bridge.local_job.lock().map_err(|_| "job lock failed")? = Some(NativeLogin {
-            job_id: "local-workflow-running".into(),
-            cancel: Arc::new(AtomicBool::new(false)),
-        });
-        let id = bridge.send("watchlist.add", json!({"url":"liked"}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["error"]["code"], "job_active");
-        Ok(())
-    }
-
-    #[test]
-    fn unknown_command_has_protocol_error() -> Result<(), Box<dyn std::error::Error>> {
+    fn unknown_command_has_protocol_error() -> TestResult {
         let mut bridge = Bridge::start()?;
         let id = bridge.send("unknown.command", json!({}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
-        assert_eq!(response["error"]["code"], "invalid_request");
+        assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
         Ok(())
     }
 
     #[test]
-    fn a_parked_choice_waits_for_an_answer_and_then_resumes(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_parked_choice_waits_for_an_answer_and_then_queues() -> TestResult {
         let mut bridge = Bridge::start()?;
-        let jobs = bridge.jobs.clone().ok_or("job queue is missing")?;
+        bridge.shared.stop.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(1200));
         let question = json!({"kind":"import_match","payload":{"matches":[]}});
-        let job_id = {
-            let store = jobs.lock().map_err(|_| "job queue is locked")?;
-            super::park_item(
-                &store,
-                &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","title":"Album","stage":"organize","question":question}),
-            )?
-        };
-        let id = bridge.send("jobs.waiting", json!({}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["id"], id);
+        let job_id = super::park_item(
+            &bridge.shared.store(),
+            &json!({"output":"/music"}),
+            &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","title":"Album","stage":"organize","question":question}),
+        )?;
+        let id = bridge.send("jobs.list", json!({}))?;
         assert_eq!(
-            response["result"]["jobs"],
-            json!([{"id":job_id,"title":"Album","kind":"import_match","payload":{"matches":[]}}])
+            response(&bridge, &id)?["result"]["waiting"],
+            json!([{"id":job_id,"title":"Album","kind":"import_match","payload":{"matches":[]},"item":"PL1:3:abcdefghijk"}])
         );
-        bridge.send("jobs.answer", json!({"id":job_id,"value":"release:1"}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["result"]["answered"], true);
-        *bridge.local_job.lock().map_err(|_| "job state is locked")? = Some(NativeLogin {
-            job_id: "busy".into(),
-            cancel: Arc::new(AtomicBool::new(false)),
-        });
-        bridge.send("jobs.next", json!({}))?;
-        let response = bridge.output.recv_timeout(Duration::from_secs(2))?;
-        assert_eq!(response["result"]["job_id"], serde_json::Value::Null);
-        let store = jobs.lock().map_err(|_| "job queue is locked")?;
-        let job = store.claim(super::QUEUE)?.ok_or("job is not queued")?;
+        let id = bridge.send("jobs.answer", json!({"id":job_id,"value":"release:1"}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["answered"], true);
+        let job = bridge
+            .shared
+            .store()
+            .claim(muzik_jobs::Queue::Item)?
+            .ok_or("job is not queued")?;
         assert_eq!(
             job.answer,
             Some(json!({"kind":"import_match","value":"release:1"}))
         );
         assert_eq!(
             job.params,
-            json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"organize_again"})
+            json!({"output":"/music","playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"organize_again"})
         );
         Ok(())
     }

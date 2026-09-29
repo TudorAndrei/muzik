@@ -37,12 +37,36 @@ menu can run the next stage, retry a failed stage, or repeat a selected stage.
 The app asks before a command replaces local files. A command that changes an
 early stage can make later stages stale.
 
-A watchlist job does not stop when an item needs a choice. The item goes to
-the Waiting state, and the job continues with the next item. **Needs you** in
-Activity lists the waiting items. When you answer, the app keeps the answer in
-`jobs.db` in the data folder and runs the waiting stage again with it. If you
-cancel that run, the item waits again. An answer that is not used yet stays
-in the queue after the app closes.
+An item does not stop other items when it needs a choice. The item goes to
+the Waiting state. **Needs you** in Activity lists the waiting items. When you
+answer, the app runs the waiting stage again with your answer. If you cancel
+that run, the item waits again.
+
+## Queues
+
+All jobs go into a queue in `jobs.db` in the data folder:
+
+- A refresh checks the playlists, then adds one job for each pending item.
+- An item command adds one job for that item. An item can have one open job.
+- A Workflow run is also a queue job.
+
+Five workers take jobs in this order: playlist checks, Workflow runs, items.
+Each stage waits for its resource:
+
+| Gate | Stages | At the same time |
+| --- | --- | --- |
+| Download | YouTube and Soulseek downloads | 2 |
+| Process | Quality check, split | 1 |
+| Import | Organize into the library | 1 |
+
+So one item can import while two others download. Activity shows each gate
+with its active and waiting items, and a list of the running and queued jobs.
+All jobs use one Soulseek login. Writes to `watchlist.json` go through one
+lock, so parallel jobs do not overwrite each other. A job that was running when
+the app closed goes back into the queue when the app starts again.
+
+A Workflow run that asks you a question releases its gates while it waits, so
+other jobs continue.
 
 ## AI decisions
 
@@ -59,8 +83,9 @@ The Codex CLI must be installed and logged in. Run the live check with
 
 ## Cancellation
 
-One long job runs at a time. `job.cancel` marks the Rust job for cancellation.
-The job stops at a safe point and keeps completed files and saved state.
+Each job in Activity has its own button. **Remove** takes a queued job out of
+the queue. **Cancel** stops a running job at a safe point. The job keeps
+completed files and saved state, and the other jobs continue.
 
 ## Verification
 

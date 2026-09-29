@@ -1,6 +1,11 @@
 //! Local audio workflow adapter with native split and Beets import.
 
-use muzik_core::{chapters::Chapter, paths, splitter};
+use crate::queues::{self, Gate};
+use muzik_core::watchlist::Stage;
+use muzik_core::{
+    chapters::Chapter, paths, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer,
+    KEEP_CURRENT_TAGS,
+};
 use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
 use muzik_import::plan::{AlbumPlan, PlannedCandidate};
@@ -116,7 +121,7 @@ pub fn run(
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<Value, muzik_workflow::Error> {
     let mut operations = LocalOperations {
         decide,
@@ -138,7 +143,7 @@ pub fn run(
 }
 
 pub(crate) struct LocalOperations<'a> {
-    pub(crate) decide: &'a mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     pub(crate) on_import_event: &'a mut dyn FnMut(Value),
     pub(crate) cancelled: &'a AtomicBool,
 }
@@ -150,16 +155,18 @@ impl WorkflowOperations for LocalOperations<'_> {
         chapters: &[Chapter],
         _: &AtomicBool,
     ) -> Result<ChapterReview, String> {
+        queues::mark_stage(Stage::Parse);
         let chapters = chapters.iter().map(chapter_record).collect::<Vec<_>>();
         let answer = (self.decide)(
-            "chapter_review",
+            DecisionKind::ChapterReview,
             json!({"source":source,"chapters":chapters}),
         )?;
-        match answer.as_str() {
-            Some("accept") => Ok(ChapterReview::Accept),
-            Some("reject") => Ok(ChapterReview::Reject),
-            Some("edit") => {
-                let answer = (self.decide)("chapter_edit", json!({"chapters":chapters}))?;
+        match answer.as_str().and_then(|answer| answer.parse().ok()) {
+            Some(ChapterAnswer::Accept) => Ok(ChapterReview::Accept),
+            Some(ChapterAnswer::Reject) => Ok(ChapterReview::Reject),
+            Some(ChapterAnswer::Edit) => {
+                let answer =
+                    (self.decide)(DecisionKind::ChapterEdit, json!({"chapters":chapters}))?;
                 if answer.is_null() {
                     return Ok(ChapterReview::Reject);
                 }
@@ -175,7 +182,7 @@ impl WorkflowOperations for LocalOperations<'_> {
                     Ok(ChapterReview::Edit(edited))
                 }
             }
-            _ => Err("Select a chapter action.".into()),
+            None => Err("Select a chapter action.".into()),
         }
     }
 
@@ -188,6 +195,7 @@ impl WorkflowOperations for LocalOperations<'_> {
     }
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
+        let _permit = queues::enter(Gate::Import, Stage::Organize, self.cancelled)?;
         if options.tag_only {
             let count =
                 beets::write_library_tags(target, options.config.as_deref(), options.dry_run)?;
@@ -219,9 +227,9 @@ impl WorkflowOperations for LocalOperations<'_> {
                 json!({"event":"message","data":{"message":format!("Import group {} of {}: {}",index + 1,preview.plan.albums.len(),album.source_dir.display())}}),
             );
             let choice = if options.interactive {
-                let answer = (self.decide)("import_match", json!({"task":task}))?;
+                let answer = (self.decide)(DecisionKind::ImportMatch, json!({"task":task}))?;
                 match answer.as_str() {
-                    Some("as_is") => MatchDecision::AsIs,
+                    Some(KEEP_CURRENT_TAGS) => MatchDecision::AsIs,
                     Some(id) => album
                         .candidates
                         .iter()
@@ -240,15 +248,17 @@ impl WorkflowOperations for LocalOperations<'_> {
                 Some(DuplicateDecision::Replace)
             } else if options.interactive {
                 let answer = (self.decide)(
-                    "import_duplicate",
+                    DecisionKind::ImportDuplicate,
                     json!({"task":task,"duplicates":duplicate_views(album, &preview.paths.library)?}),
                 )?;
-                Some(match answer.as_str() {
-                    Some("skip") => DuplicateDecision::Skip,
-                    Some("keep_all") => DuplicateDecision::Keep,
-                    Some("remove_old") => DuplicateDecision::Replace,
-                    _ => return Err("Select a valid duplicate action.".into()),
-                })
+                Some(
+                    match answer.as_str().and_then(|answer| answer.parse().ok()) {
+                        Some(DuplicateAnswer::Skip) => DuplicateDecision::Skip,
+                        Some(DuplicateAnswer::KeepAll) => DuplicateDecision::Keep,
+                        Some(DuplicateAnswer::RemoveOld) => DuplicateDecision::Replace,
+                        None => return Err("Select a valid duplicate action.".into()),
+                    },
+                )
             } else {
                 Some(DuplicateDecision::Skip)
             };
@@ -274,6 +284,7 @@ impl WorkflowOperations for LocalOperations<'_> {
         cancelled: &AtomicBool,
         on_progress: &mut dyn FnMut(SplitProgress),
     ) -> Result<(), String> {
+        let _permit = queues::enter(Gate::Process, Stage::Split, cancelled)?;
         let settings = splitter::SplitOptions {
             jobs: options.jobs,
             keep_source: options.keep_source,
@@ -435,6 +446,7 @@ pub(crate) fn event_record(event: WorkflowEvent) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{parse, run, supported};
+    use muzik_core::{ChapterAnswer, DecisionKind};
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -503,14 +515,14 @@ mod tests {
             &mut |_| {},
             &mut |_| {},
             &mut |kind, payload| {
-                decisions.push((kind.to_owned(), payload));
-                Ok(json!("reject"))
+                decisions.push((kind, payload));
+                Ok(json!(ChapterAnswer::Reject))
             },
         )?;
         assert_eq!(result["albums"], 0);
         assert_eq!(result["singles"], 1);
         assert_eq!(decisions.len(), 1);
-        assert_eq!(decisions[0].0, "chapter_review");
+        assert_eq!(decisions[0].0, DecisionKind::ChapterReview);
         assert_eq!(decisions[0].1["chapters"][0]["title"], "First");
         Ok(())
     }

@@ -1,10 +1,17 @@
 //! Rust source and audio operations for saved watchlist jobs.
 
+use crate::queues::{self, Gate};
 use crate::{local_workflow, remote_workflow};
 use muzik_core::watchlist::jobs::{
-    self, ItemSelection, JobError, JobOptions, LoadedSource, Operations,
+    self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
-use muzik_core::{app_config, chapters, paths, spotify, watchlist, AudioSource, QualityPolicy};
+use muzik_core::watchlist::{
+    set_stage_status, stage_status, ItemAction, SourceKind, Stage, StageStatus,
+};
+use muzik_core::{
+    app_config, chapters, paths, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind,
+    QualityPolicy,
+};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
 use muzik_workflow::{process_audio_plan_with_events, WorkflowOperations, WorkflowOptions};
 use serde_json::{json, Value};
@@ -16,25 +23,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use yt_dlp::executor::Executor;
 
-pub fn refresh(
+pub fn sync(
     params: &Value,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
-    on_import_event: &mut dyn FnMut(Value),
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
-    parked: &RefCell<Option<Value>>,
-) -> Result<Value, JobError> {
+) -> Result<Vec<PendingItem>, JobError> {
     let prepared = Prepared::new(params)?;
     let events = RefCell::new(on_event);
+    let parked = RefCell::new(None);
     let mut adapter = Adapter {
         prepared: &prepared,
         events: &events,
-        on_import_event,
-        decide,
-        parked,
+        on_import_event: &mut |_| {},
+        decide: &mut |_, _| Err("A playlist check does not ask for choices.".into()),
+        parked: &parked,
         cancelled,
     };
-    jobs::refresh(
+    let synced = jobs::sync(
         &prepared.repository,
         prepared.job_options(),
         &mut adapter,
@@ -42,7 +47,11 @@ pub fn refresh(
         &mut |record| {
             (events.borrow_mut())(record);
         },
-    )
+    )?;
+    (events.borrow_mut())(
+        json!({"event":"progress_finished","data":{"task_id":"watchlist-refresh","success":synced.errors == 0}}),
+    );
+    Ok(synced.pending)
 }
 
 pub fn action(
@@ -50,8 +59,8 @@ pub fn action(
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
-    parked: &RefCell<Option<Value>>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
+    parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(params)?;
     let playlist_id = required(params, "playlist_id")?;
@@ -61,6 +70,9 @@ pub fn action(
         .ok_or_else(|| JobError::Operation("position must be a positive integer".into()))?;
     let video_id = params["video_id"].as_str();
     let name = required(params, "action")?;
+    let name: ItemAction = name
+        .parse()
+        .map_err(|_| JobError::Operation(format!("Unknown item action: {name}")))?;
     let events = RefCell::new(on_event);
     let mut adapter = Adapter {
         prepared: &prepared,
@@ -95,8 +107,19 @@ struct Prepared {
     params: Value,
     local: local_workflow::LocalRequest,
     cache: PathBuf,
-    quality_policy: String,
+    quality_policy: QualityPolicy,
     repository: watchlist::Repository,
+}
+
+pub struct Parked {
+    pub kind: DecisionKind,
+    pub payload: Value,
+}
+
+impl Parked {
+    fn question(&self) -> Value {
+        json!({"kind":self.kind,"payload":self.payload})
+    }
 }
 
 impl Prepared {
@@ -111,8 +134,8 @@ impl Prepared {
         saved.extend(supplied.clone());
         let quality_policy = merged["quality_policy"]
             .as_str()
-            .unwrap_or("off")
-            .to_owned();
+            .and_then(|policy| policy.parse().ok())
+            .unwrap_or_default();
         let raw = merged["raw"].as_str().unwrap_or("").to_owned();
         let local = local_workflow::parse(&raw, &merged)?;
         let cache = paths::cache_dir();
@@ -134,7 +157,7 @@ impl Prepared {
                 config: self.local.options.config.as_deref(),
                 no_organize: self.local.options.no_organize,
                 no_split: self.local.options.no_split,
-                quality_policy: &self.quality_policy,
+                quality_policy: self.quality_policy,
             },
             output: &self.local.request.output,
             cache: &self.cache,
@@ -147,34 +170,16 @@ struct Adapter<'a, 'b> {
     prepared: &'a Prepared,
     events: &'a RefCell<&'b mut dyn FnMut(Value)>,
     on_import_event: &'a mut dyn FnMut(Value),
-    decide: &'a mut dyn FnMut(&str, Value) -> Result<Value, String>,
-    parked: &'a RefCell<Option<Value>>,
+    decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
+    parked: &'a RefCell<Option<Parked>>,
     cancelled: &'a AtomicBool,
-}
-
-pub(crate) fn choice_stage(kind: &str) -> &'static str {
-    match kind {
-        "import_match" | "import_duplicate" => "organize",
-        "chapter_review" | "chapter_edit" => "parse",
-        "quality_replacement" => "quality",
-        _ => "download",
-    }
-}
-
-pub(crate) fn resume_action(stage: &str) -> &'static str {
-    match stage {
-        "organize" => "organize_again",
-        "parse" => "parse_again",
-        "quality" => "check_quality_again",
-        _ => "run",
-    }
 }
 
 impl Operations for Adapter<'_, '_> {
     fn load(&mut self, playlist: &Value) -> Result<LoadedSource, JobError> {
         check_cancelled(self.cancelled)?;
         let id = required(playlist, "playlist_id")?;
-        if playlist["kind"] == "spotify" {
+        if SourceKind::of(playlist) == SourceKind::Spotify {
             let document =
                 spotify::load_playlist_document(&app_config::path(), &spotify::token_path(), id)?;
             check_cancelled(self.cancelled)?;
@@ -189,21 +194,28 @@ impl Operations for Adapter<'_, '_> {
         &mut self,
         playlist: &Value,
         item: &Value,
-        action: &str,
+        action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         check_cancelled(cancelled)?;
         self.parked.replace(None);
-        let result = if item["kind"] == "spotify" {
-            self.process_spotify(playlist, item, action, cancelled)
-        } else {
-            self.process_youtube(item, action, cancelled)
+        queues::take_stage();
+        let result = match SourceKind::of(item) {
+            SourceKind::Spotify => self.process_spotify(playlist, item, action, cancelled),
+            SourceKind::Youtube => self.process_youtube(item, action, cancelled),
         };
+        let stage = queues::take_stage();
         result.map_err(|error| {
-            let Some(question) = self.parked.replace(None) else {
-                return error;
+            let Some(parked) = self.parked.replace(None) else {
+                return match (error, stage) {
+                    (JobError::Operation(message), Some(stage)) => {
+                        JobError::Failed { stage, message }
+                    }
+                    (error, _) => error,
+                };
             };
-            let stage = choice_stage(question["kind"].as_str().unwrap_or(""));
+            let stage = parked.kind.stage();
+            let question = parked.question();
             (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
                 "playlist_id":playlist["playlist_id"],
                 "position":item["position"],
@@ -212,10 +224,7 @@ impl Operations for Adapter<'_, '_> {
                 "stage":stage,
                 "question":question,
             }}));
-            JobError::Waiting {
-                stage: stage.into(),
-                question,
-            }
+            JobError::Waiting { stage, question }
         })
     }
 }
@@ -224,39 +233,33 @@ impl Adapter<'_, '_> {
     fn process_youtube(
         &mut self,
         item: &Value,
-        action: &str,
+        action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
-        if matches!(
-            action,
-            "parse_again" | "split_again" | "organize_again" | "check_quality_again"
-        ) {
+        if action.stage() != Stage::Download {
             return self.process_local_stage(item, action, cancelled);
         }
-        if matches!(action, "run" | "retry") && ready_quality_directory(item).is_some() {
+        if matches!(action, ItemAction::Run | ItemAction::Retry)
+            && ready_quality_directory(item).is_some()
+        {
             if !self.prepared.local.options.no_organize {
-                return self.process_local_stage(item, "organize_again", cancelled);
+                return self.process_local_stage(item, ItemAction::OrganizeAgain, cancelled);
             }
             let mut updated = item.clone();
-            set_stage(&mut updated, "organize", "skipped");
+            set_stage(&mut updated, Stage::Organize, StageStatus::Skipped);
             return Ok(updated);
         }
         let url = required(item, "video_url")?;
         let mut params = self.prepared.params.clone();
         params["raw"] = json!(url);
         match action {
-            "run" | "retry" => {}
-            "download_again" => {
+            ItemAction::DownloadAgain => {
                 params["force"] = json!(true);
                 params["no_split"] = json!(true);
                 params["no_organize"] = json!(true);
             }
-            "run_all_again" => params["force"] = json!(true),
-            _ => {
-                return Err(JobError::Operation(format!(
-                    "The Rust watchlist does not support {action} yet."
-                )))
-            }
+            ItemAction::RunAllAgain => params["force"] = json!(true),
+            _ => {}
         }
         let remote = remote_workflow::supported(&params).ok_or_else(|| {
             JobError::Operation("The saved YouTube item is not a video URL.".into())
@@ -271,10 +274,10 @@ impl Adapter<'_, '_> {
         .map_err(workflow_error)?;
         let mut updated = item.clone();
         save_output_paths(&mut updated, &result, &self.prepared.local.request.output)?;
-        if action == "download_again" {
-            set_stage(&mut updated, "download", "complete");
-            for stage in ["parse", "split", "organize"] {
-                set_stage(&mut updated, stage, "stale");
+        if action == ItemAction::DownloadAgain {
+            set_stage(&mut updated, Stage::Download, StageStatus::Complete);
+            for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
+                set_stage(&mut updated, stage, StageStatus::Stale);
             }
         } else {
             let split = result["split_dirs"]
@@ -288,13 +291,13 @@ impl Adapter<'_, '_> {
     fn process_local_stage(
         &mut self,
         item: &Value,
-        action: &str,
+        action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         let audio = downloaded_audio(item, &self.prepared.local.request.output)?;
         let mut updated = item.clone();
-        if action == "organize_again" {
-            let target = item["stages"]["split"]["path"]
+        if action == ItemAction::OrganizeAgain {
+            let target = stage_path(item, Stage::Split)
                 .as_str()
                 .map(PathBuf::from)
                 .filter(|path| path.is_dir())
@@ -314,13 +317,15 @@ impl Adapter<'_, '_> {
             options.no_organize = false;
             local.organize(&target, &options)?;
             check_cancelled(cancelled)?;
-            set_stage(&mut updated, "organize", "complete");
+            set_stage(&mut updated, Stage::Organize, StageStatus::Complete);
             return Ok(updated);
         }
         let audio = audio
             .ok_or_else(|| JobError::Operation("Downloaded audio is not available.".into()))?;
-        if action == "check_quality_again" {
-            updated["stages"]["download"]["path"] = json!(audio);
+        if action == ItemAction::CheckQualityAgain {
+            set_path(&mut updated, Stage::Download, json!(audio));
+            let _permit = queues::enter(Gate::Process, Stage::Quality, cancelled)
+                .map_err(|_| JobError::Cancelled)?;
             let result = check_youtube_quality(
                 vec![audio],
                 self.prepared.local.options.quality_policy,
@@ -340,13 +345,14 @@ impl Adapter<'_, '_> {
             apply_quality_result(&mut updated, &result);
             return Ok(updated);
         }
-        if action == "parse_again" {
+        if action == ItemAction::ParseAgain {
+            queues::mark_stage(Stage::Parse);
             let video_url = required(item, "video_url")?;
             let chapter_path = refresh_chapters(&audio, video_url, cancelled, self.decide)?;
-            set_stage(&mut updated, "parse", "complete");
-            updated["stages"]["parse"]["path"] = json!(chapter_path);
-            for stage in ["split", "organize"] {
-                set_stage(&mut updated, stage, "stale");
+            set_stage(&mut updated, Stage::Parse, StageStatus::Complete);
+            set_path(&mut updated, Stage::Parse, json!(chapter_path));
+            for stage in [Stage::Split, Stage::Organize] {
+                set_stage(&mut updated, stage, StageStatus::Stale);
             }
             return Ok(updated);
         }
@@ -378,9 +384,9 @@ impl Adapter<'_, '_> {
             .split_with_cancel(&task, &options, cancelled, &mut |_| {})
             .map_err(JobError::Operation)?;
         check_cancelled(cancelled)?;
-        set_stage(&mut updated, "split", "complete");
-        updated["stages"]["split"]["path"] = json!(output);
-        set_stage(&mut updated, "organize", "stale");
+        set_stage(&mut updated, Stage::Split, StageStatus::Complete);
+        set_path(&mut updated, Stage::Split, json!(output));
+        set_stage(&mut updated, Stage::Organize, StageStatus::Stale);
         Ok(updated)
     }
 
@@ -388,17 +394,18 @@ impl Adapter<'_, '_> {
         &mut self,
         _playlist: &Value,
         item: &Value,
-        action: &str,
+        action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
-        if action == "organize_again" {
+        if action == ItemAction::OrganizeAgain {
             return self.process_local_stage(item, action, cancelled);
         }
-        if !matches!(action, "run" | "retry" | "download_again" | "run_all_again") {
+        if action.stage() != Stage::Download {
             return Err(JobError::Operation(format!(
                 "The Rust watchlist does not support {action} yet."
             )));
         }
+        let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
         let track = item["track"].as_object().ok_or_else(|| {
             JobError::Operation("The Spotify track has no saved metadata.".into())
         })?;
@@ -419,8 +426,8 @@ impl Adapter<'_, '_> {
             .unwrap_or_default();
         let query = format!("{artists} - {title}");
         let preference = self.prepared.local.options.prefer.as_str();
-        if !matches!(action, "download_again" | "run_all_again") {
-            let saved = item["stages"]["download"]["path"]
+        if !fresh {
+            let saved = stage_path(item, Stage::Download)
                 .as_str()
                 .map(PathBuf::from)
                 .filter(|path| path.is_file());
@@ -463,13 +470,8 @@ impl Adapter<'_, '_> {
                 )
             },
             || {
-                remote_workflow::download(
-                    &query,
-                    &root,
-                    matches!(action, "download_again" | "run_all_again"),
-                    cancelled,
-                )
-                .map_err(|error| error.to_string())
+                remote_workflow::download(&query, &root, fresh, cancelled)
+                    .map_err(|error| error.to_string())
             },
         )
         .map_err(|error| {
@@ -514,45 +516,53 @@ impl Adapter<'_, '_> {
         let mut updated = item.clone();
         mark_full(&mut updated, &options, false);
         if file.is_file() {
-            updated["stages"]["download"]["path"] = json!(file);
+            set_path(&mut updated, Stage::Download, json!(file));
         }
         Ok(updated)
     }
 }
 
+fn stage_path(item: &Value, stage: Stage) -> &Value {
+    &item["stages"][stage.as_ref()]["path"]
+}
+
+fn set_path(item: &mut Value, stage: Stage, path: Value) {
+    item["stages"][stage.as_ref()]["path"] = path;
+}
+
 fn ready_quality_directory(item: &Value) -> Option<PathBuf> {
-    if item["stages"]["split"]["status"] != "complete"
-        || item["stages"]["quality"]["path"] != item["stages"]["split"]["path"]
+    if stage_status(item, Stage::Split) != Some(StageStatus::Complete)
+        || stage_path(item, Stage::Quality) != stage_path(item, Stage::Split)
     {
         return None;
     }
-    item["stages"]["split"]["path"]
+    stage_path(item, Stage::Split)
         .as_str()
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
 }
 
 fn apply_quality_result(item: &mut Value, result: &QualityUpgradeResult) {
-    set_stage(item, "quality", "complete");
+    set_stage(item, Stage::Quality, StageStatus::Complete);
     if let Some(directory) = result.pre_split_dirs.first() {
-        item["stages"]["quality"]["path"] = json!(directory);
-        item["stages"]["split"]["path"] = json!(directory);
-        set_stage(item, "parse", "skipped");
-        set_stage(item, "split", "complete");
-        set_stage(item, "organize", "stale");
+        set_path(item, Stage::Quality, json!(directory));
+        set_path(item, Stage::Split, json!(directory));
+        set_stage(item, Stage::Parse, StageStatus::Skipped);
+        set_stage(item, Stage::Split, StageStatus::Complete);
+        set_stage(item, Stage::Organize, StageStatus::Stale);
     } else if let Some(replacement) = result.audio_files.first() {
-        if item["stages"]["download"]["path"] != json!(replacement) {
-            item["stages"]["download"]["path"] = json!(replacement);
-            item["stages"]["quality"]["path"] = json!(replacement);
-            for stage in ["parse", "split", "organize"] {
-                set_stage(item, stage, "stale");
+        if *stage_path(item, Stage::Download) != json!(replacement) {
+            set_path(item, Stage::Download, json!(replacement));
+            set_path(item, Stage::Quality, json!(replacement));
+            for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
+                set_stage(item, stage, StageStatus::Stale);
             }
         }
     }
 }
 
 fn downloaded_audio(item: &Value, output: &Path) -> Result<Option<PathBuf>, JobError> {
-    if let Some(path) = item["stages"]["download"]["path"]
+    if let Some(path) = stage_path(item, Stage::Download)
         .as_str()
         .map(PathBuf::from)
         .filter(|path| path.is_file())
@@ -586,7 +596,7 @@ fn save_output_paths(item: &mut Value, result: &Value, output: &Path) -> Result<
         Some(path) => Some(path),
         None => downloaded_audio(item, output)?,
     };
-    item["stages"]["download"]["path"] = json!(audio);
+    set_path(item, Stage::Download, json!(audio));
     let split = result["split_dirs"]
         .as_array()
         .into_iter()
@@ -594,7 +604,7 @@ fn save_output_paths(item: &mut Value, result: &Value, output: &Path) -> Result<
         .filter_map(Value::as_str)
         .map(PathBuf::from)
         .find(|path| path.is_dir());
-    item["stages"]["split"]["path"] = json!(split);
+    set_path(item, Stage::Split, json!(split));
     Ok(())
 }
 
@@ -636,7 +646,7 @@ fn refresh_chapters(
     audio: &Path,
     video_url: &str,
     cancelled: &AtomicBool,
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<PathBuf, JobError> {
     refresh_chapters_with(audio, cancelled, decide, |comments| {
         youtube_video_metadata(video_url, comments, cancelled)
@@ -646,7 +656,7 @@ fn refresh_chapters(
 fn refresh_chapters_with(
     audio: &Path,
     cancelled: &AtomicBool,
-    decide: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     mut fetch: impl FnMut(bool) -> Result<Value, JobError>,
 ) -> Result<PathBuf, JobError> {
     let metadata = fetch(false)?;
@@ -672,13 +682,16 @@ fn refresh_chapters_with(
         ));
     }
     let records = found.iter().map(chapter_record).collect::<Vec<_>>();
-    let answer = decide("chapter_review", json!({"source":audio,"chapters":records}))
-        .map_err(JobError::Operation)?;
-    match answer.as_str() {
-        Some("accept") => {}
-        Some("edit") => {
-            let answer =
-                decide("chapter_edit", json!({"chapters":records})).map_err(JobError::Operation)?;
+    let answer = decide(
+        DecisionKind::ChapterReview,
+        json!({"source":audio,"chapters":records}),
+    )
+    .map_err(JobError::Operation)?;
+    match answer.as_str().and_then(|answer| answer.parse().ok()) {
+        Some(ChapterAnswer::Accept) => {}
+        Some(ChapterAnswer::Edit) => {
+            let answer = decide(DecisionKind::ChapterEdit, json!({"chapters":records}))
+                .map_err(JobError::Operation)?;
             found = answer
                 .as_array()
                 .ok_or_else(|| JobError::Operation("Edited chapters must be a list.".into()))?
@@ -686,12 +699,12 @@ fn refresh_chapters_with(
                 .map(parse_chapter_record)
                 .collect::<Result<Vec<_>, _>>()?;
         }
-        Some("reject") => {
+        Some(ChapterAnswer::Reject) => {
             return Err(JobError::Operation(
                 "YouTube chapters were not accepted.".into(),
             ))
         }
-        _ => return Err(JobError::Operation("Select a chapter action.".into())),
+        None => return Err(JobError::Operation("Select a chapter action.".into())),
     }
     if found.is_empty() {
         return Err(JobError::Operation(
@@ -821,7 +834,7 @@ fn youtube_items(playlist: &Value, source: &Value) -> LoadedSource {
         let saved = old.get(id).copied();
         let title = entry["title"].as_str().filter(|title| !title.is_empty()).or_else(|| saved.and_then(|item| item["title"].as_str())).unwrap_or(id);
         let thumbnail = entry["thumbnail"].as_str().or_else(|| entry["thumbnails"].as_array().and_then(|images| images.last()).and_then(|image| image["url"].as_str())).map(str::to_owned).or_else(|| saved.and_then(|item| item["thumbnail_url"].as_str()).map(str::to_owned));
-        Some(json!({"position":index + 1,"title":title,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"thumbnail_url":thumbnail,"kind":"youtube"}))
+        Some(json!({"position":index + 1,"title":title,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"thumbnail_url":thumbnail,"kind":SourceKind::Youtube}))
     }).collect();
     LoadedSource {
         title: source["title"]
@@ -864,7 +877,7 @@ fn spotify_items(document: &Value) -> Result<LoadedSource, JobError> {
         };
         let video_id = source.rsplit(':').next().unwrap_or("");
         let image = track["source_metadata"]["image"].clone();
-        items.push(json!({"position":index + 1,"title":label,"video_id":video_id,"video_url":track["source_url"],"thumbnail_url":image,"kind":"spotify","entry_id":entry_id,"track":track}));
+        items.push(json!({"position":index + 1,"title":label,"video_id":video_id,"video_url":track["source_url"],"thumbnail_url":image,"kind":SourceKind::Spotify,"entry_id":entry_id,"track":track}));
     }
     Ok(LoadedSource {
         title: document["title"].as_str().map(str::to_owned),
@@ -873,25 +886,29 @@ fn spotify_items(document: &Value) -> Result<LoadedSource, JobError> {
 }
 
 fn mark_full(item: &mut Value, options: &WorkflowOptions, split: bool) {
-    let spotify = item["kind"] == "spotify";
-    for stage in ["download", "quality", "parse", "split", "organize"] {
-        let status = if (spotify && matches!(stage, "quality" | "parse" | "split"))
-            || (stage == "quality"
-                && (options.quality_policy == QualityPolicy::Off
-                    || options.audio_source == AudioSource::Soulseek))
-            || (matches!(stage, "parse" | "split") && !split)
-            || (stage == "organize" && options.no_organize)
-        {
-            "skipped"
+    let spotify = SourceKind::of(item) == SourceKind::Spotify;
+    for stage in Stage::ALL.iter().copied() {
+        let skipped = match stage {
+            Stage::Download => false,
+            Stage::Quality => {
+                spotify
+                    || options.quality_policy == QualityPolicy::Off
+                    || options.audio_source == AudioSource::Soulseek
+            }
+            Stage::Parse | Stage::Split => spotify || !split,
+            Stage::Organize => options.no_organize,
+        };
+        let status = if skipped {
+            StageStatus::Skipped
         } else {
-            "complete"
+            StageStatus::Complete
         };
         set_stage(item, stage, status);
     }
 }
 
-fn set_stage(item: &mut Value, stage: &str, status: &str) {
-    item["stages"][stage]["status"] = json!(status);
+fn set_stage(item: &mut Value, stage: Stage, status: StageStatus) {
+    set_stage_status(item, stage, status);
 }
 
 fn workflow_error(error: muzik_workflow::Error) -> JobError {
@@ -912,6 +929,8 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
 #[cfg(test)]
 mod tests {
     use super::{refresh_chapters_with, spotify_items, youtube_items};
+    use muzik_core::watchlist::ItemAction;
+    use muzik_core::{ChapterAnswer, DecisionKind, QualityPolicy};
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -967,7 +986,7 @@ mod tests {
             local: crate::local_workflow::parse("", &params)?,
             params,
             cache: directory.path().to_path_buf(),
-            quality_policy: "off".into(),
+            quality_policy: QualityPolicy::Off,
             repository: muzik_core::watchlist::Repository::new(
                 directory.path().join("watchlist.json"),
             ),
@@ -975,7 +994,7 @@ mod tests {
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
         let mut imported = |_| {};
-        let mut decide = |_: &str, _: serde_json::Value| Err("unexpected decision".into());
+        let mut decide = |_: DecisionKind, _: serde_json::Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);
         let parked = std::cell::RefCell::new(None);
         let mut adapter = super::Adapter {
@@ -989,7 +1008,7 @@ mod tests {
         let result = adapter.process_spotify(
             &json!({}),
             &json!({"kind":"spotify","stages":{"download":{"path":audio},"organize":{}}}),
-            "organize_again",
+            ItemAction::OrganizeAgain,
             &cancelled,
         )?;
         assert_eq!(result["stages"]["organize"]["status"], "complete");
@@ -1044,7 +1063,7 @@ mod tests {
             local: crate::local_workflow::parse("", &params)?,
             params,
             cache: directory.path().to_path_buf(),
-            quality_policy: "auto".into(),
+            quality_policy: QualityPolicy::Auto,
             repository: muzik_core::watchlist::Repository::new(
                 directory.path().join("watchlist.json"),
             ),
@@ -1052,7 +1071,7 @@ mod tests {
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
         let mut imported = |_| {};
-        let mut decide = |_: &str, _: serde_json::Value| Err("unexpected decision".into());
+        let mut decide = |_: DecisionKind, _: serde_json::Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);
         let parked = std::cell::RefCell::new(None);
         let mut adapter = super::Adapter {
@@ -1063,7 +1082,7 @@ mod tests {
             parked: &parked,
             cancelled: &cancelled,
         };
-        let result = adapter.process_youtube(&item, "retry", &cancelled)?;
+        let result = adapter.process_youtube(&item, ItemAction::Retry, &cancelled)?;
         assert_eq!(result["stages"]["organize"]["status"], "complete");
         assert_eq!(
             muzik_library::Library::open_read_only(&library)?
@@ -1150,10 +1169,10 @@ mod tests {
             &audio,
             &AtomicBool::new(false),
             &mut |kind, value| {
-                assert_eq!(kind, "chapter_review");
+                assert_eq!(kind, DecisionKind::ChapterReview);
                 assert_eq!(value["chapters"][1]["title"], "Second");
                 asked = true;
-                Ok(json!("accept"))
+                Ok(json!(ChapterAnswer::Accept))
             },
             |_| {
                 Ok(json!({"chapters":[
