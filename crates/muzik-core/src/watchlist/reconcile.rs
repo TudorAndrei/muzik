@@ -69,7 +69,19 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
         let items = playlist["items"]
             .as_array_mut()
             .ok_or("playlist items are missing")?;
-        for item in items {
+        let waiting: Vec<(usize, String, Value)> = items
+            .iter()
+            .enumerate()
+            .flat_map(|(index, item)| {
+                item["stages"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, stage)| stage["status"] == "waiting")
+                    .map(move |(name, stage)| (index, name.clone(), stage.clone()))
+            })
+            .collect();
+        for item in items.iter_mut() {
             for stage in item["stages"]
                 .as_object_mut()
                 .ok_or("item stages are missing")?
@@ -78,12 +90,6 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
                 if stage["status"] == "running" {
                     stage["status"] = json!("not_started");
                 }
-            }
-            if item["stages"]
-                .as_object()
-                .is_some_and(|stages| stages.values().any(|stage| stage["status"] == "waiting"))
-            {
-                continue;
             }
             // Explicit repeat actions invalidate later stages. Older cache records
             // must not turn these stages back into completed work.
@@ -186,6 +192,15 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
             if status == "organized" {
                 set_status(item, "organize", "complete");
                 processed_ids.push(video_id);
+            }
+        }
+        for (index, name, stage) in waiting {
+            let item = &mut items[index];
+            item["stages"][name.as_str()] = stage;
+            for key in ["video_id", "entry_id"] {
+                if let Some(id) = item[key].as_str() {
+                    processed_ids.retain(|processed| processed != id);
+                }
             }
         }
         playlist["processed_video_ids"] = json!(processed_ids);

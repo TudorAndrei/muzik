@@ -3,6 +3,53 @@ use serde_json::{json, Value};
 use std::fs;
 
 #[test]
+fn reconcile_fills_finished_stages_and_keeps_the_waiting_one(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let cache = directory.path().join("cache");
+    let output = directory.path().join("downloads");
+    let splits = directory.path().join("splits");
+    fs::create_dir(&cache)?;
+    fs::create_dir(&output)?;
+    fs::create_dir(&splits)?;
+    let split = splits.join("Song [abcdefghijk]");
+    fs::create_dir(&split)?;
+    let question = json!({"kind": "import_match", "payload": {"task": {}}});
+    let mut document = json!({"version": 3, "playlists": [{
+        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "processed_video_ids": [],
+        "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
+            "video_url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "stages": {"organize": {"status": "waiting", "question": question}}}]
+    }]});
+    fs::write(
+        cache.join("playlist_PL1.json"),
+        serde_json::to_vec(&json!({"videos": {"abcdefghijk": {
+            "status": "split", "audio_file": output.join("Song.flac"), "split_dir": split
+        }}}))?,
+    )?;
+    reconcile(
+        &mut document,
+        ReconcileOptions {
+            output: &output,
+            splits: &splits,
+            cache: &cache,
+            config: None,
+            no_organize: false,
+            no_split: false,
+            quality_policy: "off",
+        },
+    )?;
+    let stages = &document["playlists"][0]["items"][0]["stages"];
+    assert_eq!(stages["download"]["status"], "complete");
+    assert_eq!(stages["split"]["status"], "complete");
+    assert_eq!(stages["organize"]["status"], "waiting");
+    assert_eq!(stages["organize"]["question"], question);
+    assert_eq!(document["playlists"][0]["processed_video_ids"], json!([]));
+    Ok(())
+}
+
+#[test]
 fn reads_old_watchlist_and_preserves_saved_item_state() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("watchlist.json");
