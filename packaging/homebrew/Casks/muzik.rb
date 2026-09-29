@@ -9,11 +9,13 @@ cask "muzik" do
 
   depends_on arch: :arm64
   depends_on formula: ["ffmpeg", "yt-dlp"]
+  depends_on :macos
 
   app "Muzik.app"
 
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Muzik.app"]
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-dr", "com.apple.quarantine", "{{appdir}}/Muzik.app"],
+        writable_paths: ["{{appdir}}/Muzik.app"]
   end
 end
