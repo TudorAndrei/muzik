@@ -1,6 +1,6 @@
 use crate::{local_workflow, remote_workflow};
-use muzik_core::paths;
 use muzik_core::watchlist::ItemAction;
+use muzik_core::{paths, DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use serde_json::{json, Value};
 use std::fmt;
@@ -132,6 +132,31 @@ impl Jobs {
         store.answer(id, &json!({"kind":kind,"value":value}))
     }
 
+    pub fn release_spotify_questions(&self) -> Result<usize, String> {
+        let store = self.store();
+        let mut released = 0;
+        for job in store.list(Status::Waiting)? {
+            let spotify = job.params["playlist_id"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("spotify:"));
+            let kind = job
+                .question
+                .as_ref()
+                .and_then(|question| question["kind"].as_str())
+                .and_then(|kind| kind.parse::<DecisionKind>().ok());
+            if spotify
+                && matches!(
+                    kind,
+                    Some(DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)
+                )
+                && store.answer(job.id, &json!({"kind":kind,"value":KEEP_CURRENT_TAGS}))?
+            {
+                released += 1;
+            }
+        }
+        Ok(released)
+    }
+
     pub fn cancel(&self, id: i64) -> Result<CancelRequest, String> {
         self.store().request_cancel(id)
     }
@@ -239,6 +264,39 @@ mod tests {
         assert_eq!(jobs.snapshot()["open"], json!([]));
         assert_eq!(parse_job_id("queue-7"), Some(7));
         assert_eq!(parse_job_id("7"), Some(7));
+        Ok(())
+    }
+
+    #[test]
+    fn waiting_spotify_import_questions_go_back_to_the_queue() -> Result<(), String> {
+        let jobs = Jobs::in_memory()?;
+        let park = |playlist: &str, kind: &str| {
+            jobs.store().park(
+                &muzik_jobs::NewJob {
+                    kind: muzik_jobs::Kind::Item,
+                    item_key: &format!("{playlist}:1:x"),
+                    title: "Song",
+                    params: &json!({"playlist_id":playlist,"position":1,"action":"organize_again"}),
+                },
+                &json!({"kind":kind,"payload":{}}),
+            )
+        };
+        let spotify = park("spotify:liked", "import_match")?;
+        let youtube = park("PL1", "import_match")?;
+        let chapters = park("spotify:album:a", "chapter_review")?;
+        assert_eq!(jobs.release_spotify_questions()?, 1);
+        let waiting: Vec<i64> = jobs.snapshot()["waiting"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|job| job["id"].as_i64())
+            .collect();
+        assert_eq!(waiting, [youtube, chapters]);
+        let released = jobs.get(spotify)?.ok_or("job is missing")?;
+        assert_eq!(
+            released.answer,
+            Some(json!({"kind":"import_match","value":"as_is"}))
+        );
         Ok(())
     }
 }

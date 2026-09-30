@@ -94,6 +94,7 @@ impl Runner {
             return Ok(None);
         };
         jobs.store().recover()?;
+        jobs.release_spotify_questions()?;
         let shared = Arc::new(Shared {
             jobs,
             running: Arc::new(Mutex::new(HashMap::new())),
