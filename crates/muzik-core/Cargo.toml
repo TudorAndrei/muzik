@@ -22,6 +22,7 @@ url = "2.5.8"
 muzik-library = { path = "../muzik-library" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
 muzik-tags = { path = "../muzik-tags" }
 unicode-normalization = "0.1"
 usage = { package = "usage-rs", version = "6.11.1" }

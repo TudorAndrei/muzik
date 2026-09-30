@@ -4,6 +4,7 @@ pub mod app_config;
 pub mod chapters;
 mod config;
 pub mod config_choices;
+pub mod db;
 mod decision;
 pub mod downloads;
 pub mod paths;

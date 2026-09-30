@@ -88,7 +88,7 @@ pub fn watch(reference: &str) -> Result<(), String> {
     if source.get("kind").and_then(serde_json::Value::as_str) != Some("spotify") {
         return Err("enter a Spotify playlist or album link, or liked".into());
     }
-    let repository = watchlist::Repository::new(watchlist::Repository::default_path());
+    let repository = watchlist::Repository::default();
     let playlist = repository.add(reference)?;
     let name = playlist
         .get("title")

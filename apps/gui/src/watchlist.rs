@@ -2,9 +2,7 @@
 
 use muzik_core::{app_config, paths, watchlist, QualityPolicy};
 use serde_json::{Map, Value};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::path::PathBuf;
 
 #[derive(Clone)]
 pub struct Options {
@@ -105,34 +103,18 @@ fn boolean(values: &Map<String, Value>, key: &str) -> Result<bool, String> {
         .ok_or_else(|| format!("{key} must be a boolean"))
 }
 
-pub fn stamp(path: &Path) -> Result<(u128, u64), String> {
-    let metadata = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((0, 0)),
-        Err(error) => return Err(error.to_string()),
-    };
-    let modified = metadata
-        .modified()
-        .map_err(|error| error.to_string())?
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_nanos();
-    Ok((modified, metadata.len()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{path, stamp, Options};
+    use super::{path, Options};
     use serde_json::json;
     use std::fs;
 
     #[test]
     fn load_uses_the_given_output_and_saved_cards() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let file = dir.path().join("watchlist.json");
         let output = dir.path().join("audio");
         fs::create_dir(&output)?;
-        let repo = muzik_core::watchlist::Repository::new(file.clone());
+        let repo = muzik_core::watchlist::Repository::new(dir.path().join("muzik.db"));
         repo.add("https://www.youtube.com/playlist?list=PL123")
             .map_err(std::io::Error::other)?;
         let options = Options::from_values(
@@ -145,7 +127,6 @@ mod tests {
         .map_err(std::io::Error::other)?;
         let saved = options.saved(&repo).map_err(std::io::Error::other)?;
         assert_eq!(saved["playlists"][0]["playlist_id"], "PL123");
-        assert!(stamp(&file)?.1 > 0);
         Ok(())
     }
 

@@ -70,7 +70,7 @@ fn options<'a>(directory: &'a std::path::Path) -> JobOptions<'a> {
 fn refresh_keeps_prior_state_and_processes_each_video_once(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -154,7 +154,7 @@ impl Operations for AsksOnFirst {
 #[test]
 fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut fake = AsksOnFirst {
         processed: Vec::new(),
@@ -225,7 +225,7 @@ impl Operations for CallLog {
 fn refresh_reads_every_playlist_before_it_processes_items() -> Result<(), Box<dyn std::error::Error>>
 {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PLone")?;
     repository.add("https://www.youtube.com/playlist?list=PLtwo")?;
     let mut log = CallLog(Vec::new());
@@ -269,7 +269,7 @@ impl Operations for ActionFailure {
 #[test]
 fn an_action_that_needs_a_choice_parks_the_item() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -298,7 +298,7 @@ fn an_action_that_needs_a_choice_parks_the_item() -> Result<(), Box<dyn std::err
 #[test]
 fn failed_action_saves_its_target_stage() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -331,7 +331,7 @@ fn failed_action_saves_its_target_stage() -> Result<(), Box<dyn std::error::Erro
 #[test]
 fn cancellation_keeps_items_saved_before_the_stop() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut fake = Fake {
         processed: Vec::new(),
@@ -356,7 +356,7 @@ fn cancellation_keeps_items_saved_before_the_stop() -> Result<(), Box<dyn std::e
 #[test]
 fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -386,12 +386,12 @@ fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Err
 fn dry_run_preserves_saved_state_and_does_not_process_audio(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
     repository.save(saved)?;
-    let before = std::fs::read(repository.path())?;
+    let before = (repository.revision()?, repository.load()?);
     let mut fake = Fake {
         processed: Vec::new(),
         cancel_after_first: false,
@@ -407,7 +407,7 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
     )?;
     assert_eq!(result["summary"]["pending_videos"], 2);
     assert_eq!(result["summary"]["completed_videos"], 0);
-    assert_eq!(std::fs::read(repository.path())?, before);
+    assert_eq!((repository.revision()?, repository.load()?), before);
     let result = jobs::action(
         &repository,
         options,
@@ -421,7 +421,7 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
         &AtomicBool::new(false),
     )?;
     assert_eq!(result["action"]["dry_run"], true);
-    assert_eq!(std::fs::read(repository.path())?, before);
+    assert_eq!((repository.revision()?, repository.load()?), before);
     assert!(fake.processed.is_empty());
     Ok(())
 }
@@ -450,7 +450,7 @@ impl Operations for SplitFailure {
 #[test]
 fn a_failure_marks_the_stage_that_failed() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -478,7 +478,7 @@ fn a_failure_marks_the_stage_that_failed() -> Result<(), Box<dyn std::error::Err
 #[test]
 fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
@@ -547,7 +547,7 @@ impl Operations for PrivateSecond {
 fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dyn std::error::Error>>
 {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let synced = jobs::sync(
         &repository,
@@ -576,7 +576,7 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dy
 #[test]
 fn parallel_updates_keep_every_change() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = std::sync::Arc::new(Repository::new(directory.path().join("watchlist.json")));
+    let repository = std::sync::Arc::new(Repository::new(directory.path().join("muzik.db")));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let workers: Vec<_> = (0..8)
         .map(|index| {
@@ -626,7 +626,7 @@ impl Operations for RepeatDownload {
 fn repeat_action_preserves_stale_stages_across_cached_reconciliation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("watchlist.json"));
+    let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     let mut saved = repository.load()?;
     saved["playlists"][0]["items"] = json!([card(1, "video_a"), card(2, "video_a")]);

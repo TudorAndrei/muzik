@@ -146,7 +146,7 @@ impl Prepared {
             local,
             cache,
             quality_policy,
-            repository: watchlist::Repository::new(watchlist::Repository::default_path()),
+            repository: watchlist::Repository::default(),
         })
     }
 
@@ -1016,9 +1016,7 @@ mod tests {
             params,
             cache: directory.path().to_path_buf(),
             quality_policy: QualityPolicy::Off,
-            repository: muzik_core::watchlist::Repository::new(
-                directory.path().join("watchlist.json"),
-            ),
+            repository: muzik_core::watchlist::Repository::new(directory.path().join("muzik.db")),
         };
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
@@ -1103,9 +1101,7 @@ mod tests {
             params,
             cache: directory.path().to_path_buf(),
             quality_policy: QualityPolicy::Auto,
-            repository: muzik_core::watchlist::Repository::new(
-                directory.path().join("watchlist.json"),
-            ),
+            repository: muzik_core::watchlist::Repository::new(directory.path().join("muzik.db")),
         };
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));

@@ -304,8 +304,11 @@ Each stage waits for its resource:
 | Import | Organize into the library | 1 |
 
 So one item can import while two others download. All jobs of a process use
-one Soulseek login. Writes to `watchlist.json` go through one lock, so parallel
-jobs do not overwrite each other. A job that was running when its process
+one Soulseek login. The watchlist is in `muzik.db` in the data folder. Each
+change is one SQLite transaction that writes only the playlists and items that
+changed, so parallel jobs do not overwrite each other. On the first start,
+muzik moves an old `watchlist.json` into `muzik.db` and renames the file to
+`watchlist.json.migrated`. A job that was running when its process
 stopped goes back into the queue when the queue runs again.
 
 An item does not stop other items when it needs a choice. The item goes to the

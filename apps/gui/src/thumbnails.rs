@@ -1,6 +1,6 @@
 //! Fetch watchlist images into the existing user cache.
 
-use muzik_core::{paths, thumbnails as cache, watchlist::Repository};
+use muzik_core::{thumbnails as cache, watchlist::Repository};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -23,8 +23,7 @@ pub fn validate_ids(params: &Value) -> Result<Vec<String>, String> {
         .collect())
 }
 
-pub fn cache_requested(ids: &[String], watchlist_path: &Path, cache_dir: &Path) -> Value {
-    let repository = Repository::new(watchlist_path.to_path_buf());
+pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path) -> Value {
     let updates = match repository.load() {
         Ok(watchlist) => {
             let mut urls = BTreeMap::new();
@@ -113,13 +112,9 @@ fn fetch_and_save(
     cache::save(id, &content_type, &bytes, cache_dir)
 }
 
-pub fn default_paths() -> (std::path::PathBuf, std::path::PathBuf) {
-    (Repository::default_path(), paths::cache_dir())
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{cache_requested, validate_ids};
+    use super::{cache_requested, validate_ids, Repository};
     use serde_json::json;
     use std::fs;
 
@@ -127,18 +122,18 @@ mod tests {
     fn reads_an_existing_image_from_the_saved_watchlist() -> Result<(), Box<dyn std::error::Error>>
     {
         let dir = tempfile::tempdir()?;
-        let watchlist = dir.path().join("watchlist.json");
+        let watchlist = Repository::new(dir.path().join("muzik.db"));
         let cache = dir.path().join("cache");
         fs::create_dir(&cache)?;
         fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"saved image")?;
-        fs::write(&watchlist, json!({
+        watchlist.save(json!({
             "version": 3,
             "playlists": [{
                 "playlist_id": "PL1",
                 "url": "https://www.youtube.com/playlist?list=PL1",
                 "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk", "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/default.jpg"}]
             }]
-        }).to_string())?;
+        }))?;
         let ids = validate_ids(&json!({"video_ids": ["abcdefghijk", "abcdefghijk"]}))?;
         let result = cache_requested(&ids, &watchlist, &cache);
         assert_eq!(result["thumbnails"].as_array().map(Vec::len), Some(1));

@@ -1,10 +1,10 @@
 //! Versioned watchlist data shared with the existing application.
 
-use crate::paths;
+use crate::{db, paths};
+use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
@@ -196,11 +196,31 @@ pub fn stage_statuses(item: &Value) -> Vec<StageStatus> {
 
 pub struct Repository {
     path: PathBuf,
+    legacy: Option<PathBuf>,
 }
 
 static WRITER: Mutex<()> = Mutex::new(());
 
+impl Default for Repository {
+    fn default() -> Self {
+        Self::new(db::default_path()).with_legacy(paths::config_dir().join("watchlist.json"))
+    }
+}
+
 impl Repository {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path, legacy: None }
+    }
+
+    pub fn with_legacy(mut self, legacy: PathBuf) -> Self {
+        self.legacy = Some(legacy);
+        self
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
         let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
         work()
@@ -211,135 +231,260 @@ impl Repository {
         change: impl FnOnce(&mut Value) -> Result<T, String>,
     ) -> Result<T, String> {
         self.locked(|| {
-            let mut document = self.load()?;
+            let mut connection = self.connect()?;
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .map_err(db::text)?;
+            let before = read_document(&transaction)?;
+            let mut document = before.clone();
             let result = change(&mut document)?;
-            self.save(document)?;
+            write_changes(&transaction, &before, &normalize(document)?)?;
+            transaction.commit().map_err(db::text)?;
             Ok(result)
         })
     }
 
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn default_path() -> PathBuf {
-        paths::config_dir().join("watchlist.json")
-    }
-
     pub fn load(&self) -> Result<Value, String> {
-        let source = match fs::read_to_string(&self.path) {
-            Ok(source) => source,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(json!({"version": 3, "playlists": []}));
-            }
-            Err(error) => return Err(format!("cannot read {}: {error}", self.path.display())),
-        };
-        let value: Value = serde_json::from_str(&source)
-            .map_err(|error| format!("invalid watchlist {}: {error}", self.path.display()))?;
-        normalize(value)
+        read_document(&self.connect()?)
     }
 
     pub fn save(&self, value: Value) -> Result<(), String> {
         let value = normalize(value)?;
-        let parent = self.path.parent().ok_or("watchlist path has no parent")?;
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let mut temporary = tempfile::Builder::new()
-            .prefix(".watchlist.json.")
-            .suffix(".tmp")
-            .tempfile_in(parent)
-            .map_err(|error| error.to_string())?;
-        let mut writer = std::io::BufWriter::new(&mut temporary);
-        serde_json::to_writer_pretty(&mut writer, &value).map_err(|error| error.to_string())?;
-        writer.write_all(b"\n").map_err(|error| error.to_string())?;
-        writer.flush().map_err(|error| error.to_string())?;
-        drop(writer);
-        temporary
-            .as_file()
-            .sync_all()
-            .map_err(|error| error.to_string())?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| error.to_string())?;
-        Ok(())
+        let mut connection = self.connect()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db::text)?;
+        let before = read_document(&transaction)?;
+        write_changes(&transaction, &before, &value)?;
+        transaction.commit().map_err(db::text)
+    }
+
+    pub fn revision(&self) -> Result<i64, String> {
+        self.connect()?
+            .query_row(
+                "SELECT revision FROM watchlist_revision WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(db::text)
     }
 
     pub fn add(&self, input: &str) -> Result<Value, String> {
         let source = parse_source(input)?;
-        self.locked(|| self.add_source(source))
-    }
-
-    fn add_source(&self, source: Value) -> Result<Value, String> {
-        let mut document = self.load()?;
-        let playlists = document
-            .get_mut("playlists")
-            .and_then(Value::as_array_mut)
-            .ok_or("watchlist playlists are missing")?;
-        if playlists
-            .iter()
-            .any(|item| item.get("playlist_id") == source.get("playlist_id"))
-        {
-            return Err("playlist is already in the watchlist".into());
-        }
-        playlists.push(source.clone());
-        self.save(document)?;
-        Ok(source)
+        self.update(|document| {
+            let playlists = playlists_mut(document)?;
+            if playlists
+                .iter()
+                .any(|item| item.get("playlist_id") == source.get("playlist_id"))
+            {
+                return Err("playlist is already in the watchlist".into());
+            }
+            playlists.push(source.clone());
+            Ok(source)
+        })
     }
 
     pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
-        self.locked(|| self.rename_playlist(playlist_id, title))
-    }
-
-    fn rename_playlist(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
-        let mut document = self.load()?;
-        let playlists = document
-            .get_mut("playlists")
-            .and_then(Value::as_array_mut)
-            .ok_or("watchlist playlists are missing")?;
-        let Some(playlist) = playlists
-            .iter_mut()
-            .find(|item| item.get("playlist_id").and_then(Value::as_str) == Some(playlist_id))
-        else {
-            return Ok(false);
-        };
-        let fields = playlist
-            .as_object_mut()
-            .ok_or("playlist is not an object")?;
-        let title = title.trim();
-        fields.insert(
-            "title".into(),
-            if title.is_empty() {
-                Value::Null
-            } else {
-                json!(title)
-            },
-        );
-        self.save(document)?;
-        Ok(true)
+        self.update(|document| {
+            let Some(playlist) = playlists_mut(document)?
+                .iter_mut()
+                .find(|item| item.get("playlist_id").and_then(Value::as_str) == Some(playlist_id))
+            else {
+                return Ok(false);
+            };
+            let fields = playlist
+                .as_object_mut()
+                .ok_or("playlist is not an object")?;
+            let title = title.trim();
+            fields.insert(
+                "title".into(),
+                if title.is_empty() {
+                    Value::Null
+                } else {
+                    json!(title)
+                },
+            );
+            Ok(true)
+        })
     }
 
     pub fn remove(&self, playlist_id: &str) -> Result<bool, String> {
-        self.locked(|| self.remove_playlist(playlist_id))
+        self.update(|document| {
+            let playlists = playlists_mut(document)?;
+            let before = playlists.len();
+            playlists.retain(|item| {
+                item.get("playlist_id").and_then(Value::as_str) != Some(playlist_id)
+            });
+            Ok(playlists.len() != before)
+        })
     }
 
-    fn remove_playlist(&self, playlist_id: &str) -> Result<bool, String> {
-        let mut document = self.load()?;
-        let playlists = document
-            .get_mut("playlists")
-            .and_then(Value::as_array_mut)
-            .ok_or("watchlist playlists are missing")?;
-        let before = playlists.len();
-        playlists
-            .retain(|item| item.get("playlist_id").and_then(Value::as_str) != Some(playlist_id));
-        if playlists.len() == before {
-            return Ok(false);
+    fn connect(&self) -> Result<Connection, String> {
+        let mut connection = db::open(&self.path)?;
+        if let Some(legacy) = &self.legacy {
+            import_legacy(&mut connection, legacy)?;
         }
-        self.save(document)?;
-        Ok(true)
+        Ok(connection)
     }
+}
+
+fn playlists_mut(document: &mut Value) -> Result<&mut Vec<Value>, String> {
+    document
+        .get_mut("playlists")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "watchlist playlists are missing".into())
+}
+
+fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<(), String> {
+    if !legacy.is_file() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(db::text)?;
+    let stored: i64 = transaction
+        .query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
+            row.get(0)
+        })
+        .map_err(db::text)?;
+    if stored > 0 {
+        return Ok(());
+    }
+    let source = fs::read_to_string(legacy)
+        .map_err(|error| format!("cannot read {}: {error}", legacy.display()))?;
+    let value: Value = serde_json::from_str(&source)
+        .map_err(|error| format!("invalid watchlist {}: {error}", legacy.display()))?;
+    let value = normalize(value)?;
+    write_changes(&transaction, &json!({"playlists": []}), &value)?;
+    transaction.commit().map_err(db::text)?;
+    let mut backup = legacy.as_os_str().to_owned();
+    backup.push(".migrated");
+    fs::rename(legacy, backup).map_err(|error| error.to_string())
+}
+
+fn read_document(connection: &Connection) -> Result<Value, String> {
+    let mut playlists = Vec::new();
+    let mut positions = std::collections::HashMap::new();
+    let mut statement = connection
+        .prepare("SELECT playlist_id, data FROM watchlist_playlists ORDER BY ordinal")
+        .map_err(db::text)?;
+    let mut rows = statement.query([]).map_err(db::text)?;
+    while let Some(row) = rows.next().map_err(db::text)? {
+        let id: String = row.get(0).map_err(db::text)?;
+        let data: String = row.get(1).map_err(db::text)?;
+        let mut playlist: Value = serde_json::from_str(&data)
+            .map_err(|error| format!("invalid playlist {id}: {error}"))?;
+        playlist["items"] = json!([]);
+        positions.insert(id, playlists.len());
+        playlists.push(playlist);
+    }
+    let mut statement = connection
+        .prepare("SELECT playlist_id, data FROM watchlist_items ORDER BY playlist_id, ordinal")
+        .map_err(db::text)?;
+    let mut rows = statement.query([]).map_err(db::text)?;
+    while let Some(row) = rows.next().map_err(db::text)? {
+        let id: String = row.get(0).map_err(db::text)?;
+        let data: String = row.get(1).map_err(db::text)?;
+        let item: Value = serde_json::from_str(&data)
+            .map_err(|error| format!("invalid item in playlist {id}: {error}"))?;
+        let index = *positions
+            .get(&id)
+            .ok_or_else(|| format!("item belongs to missing playlist {id}"))?;
+        if let Some(items) = playlists[index]["items"].as_array_mut() {
+            items.push(item);
+        }
+    }
+    normalize(json!({"version": 3, "playlists": playlists}))
+}
+
+fn write_changes(connection: &Connection, before: &Value, after: &Value) -> Result<(), String> {
+    let empty = Vec::new();
+    let old_playlists = before["playlists"].as_array().unwrap_or(&empty);
+    let new_playlists = after["playlists"].as_array().unwrap_or(&empty);
+    let old: std::collections::HashMap<&str, (usize, &Value)> = old_playlists
+        .iter()
+        .enumerate()
+        .filter_map(|(index, playlist)| {
+            Some((playlist["playlist_id"].as_str()?, (index, playlist)))
+        })
+        .collect();
+    let kept: std::collections::HashSet<&str> = new_playlists
+        .iter()
+        .filter_map(|playlist| playlist["playlist_id"].as_str())
+        .collect();
+    let mut changed = false;
+    for id in old.keys().filter(|id| !kept.contains(*id)) {
+        connection
+            .execute(
+                "DELETE FROM watchlist_playlists WHERE playlist_id = ?1",
+                [id],
+            )
+            .map_err(db::text)?;
+        changed = true;
+    }
+    for (ordinal, playlist) in new_playlists.iter().enumerate() {
+        let id = playlist["playlist_id"]
+            .as_str()
+            .ok_or("playlist_id must be a non-empty string")?;
+        let previous = old.get(id);
+        let header = without_items(playlist);
+        if previous.is_none_or(|(index, value)| *index != ordinal || without_items(value) != header)
+        {
+            connection
+                .execute(
+                    "INSERT INTO watchlist_playlists (playlist_id, ordinal, data)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT (playlist_id) DO UPDATE
+                     SET ordinal = excluded.ordinal, data = excluded.data",
+                    rusqlite::params![id, db::integer(ordinal)?, header.to_string()],
+                )
+                .map_err(db::text)?;
+            changed = true;
+        }
+        let old_items = previous
+            .and_then(|(_, value)| value["items"].as_array())
+            .unwrap_or(&empty);
+        let new_items = playlist["items"].as_array().unwrap_or(&empty);
+        for (ordinal, item) in new_items.iter().enumerate() {
+            if old_items.get(ordinal) != Some(item) {
+                connection
+                    .execute(
+                        "INSERT INTO watchlist_items (playlist_id, ordinal, data)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT (playlist_id, ordinal) DO UPDATE SET data = excluded.data",
+                        rusqlite::params![id, db::integer(ordinal)?, item.to_string()],
+                    )
+                    .map_err(db::text)?;
+                changed = true;
+            }
+        }
+        if old_items.len() > new_items.len() {
+            connection
+                .execute(
+                    "DELETE FROM watchlist_items WHERE playlist_id = ?1 AND ordinal >= ?2",
+                    rusqlite::params![id, db::integer(new_items.len())?],
+                )
+                .map_err(db::text)?;
+            changed = true;
+        }
+    }
+    if changed {
+        connection
+            .execute(
+                "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
+                [],
+            )
+            .map_err(db::text)?;
+    }
+    Ok(())
+}
+
+fn without_items(playlist: &Value) -> Value {
+    let mut header = playlist.clone();
+    if let Some(fields) = header.as_object_mut() {
+        fields.remove("items");
+    }
+    header
 }
 
 fn normalize(mut value: Value) -> Result<Value, String> {

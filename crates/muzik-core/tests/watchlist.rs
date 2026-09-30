@@ -51,9 +51,11 @@ fn reconcile_fills_finished_stages_and_keeps_the_waiting_one(
 }
 
 #[test]
-fn reads_old_watchlist_and_preserves_saved_item_state() -> Result<(), Box<dyn std::error::Error>> {
+fn imports_old_watchlist_file_and_preserves_saved_item_state(
+) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("watchlist.json");
+    let backup = directory.path().join("watchlist.json.migrated");
     let old = json!({
         "version": 1,
         "playlists": [{
@@ -74,7 +76,7 @@ fn reads_old_watchlist_and_preserves_saved_item_state() -> Result<(), Box<dyn st
         }]
     });
     fs::write(&path, serde_json::to_vec(&old)?)?;
-    let repository = Repository::new(path.clone());
+    let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
     let loaded = repository.load()?;
     let item = &loaded["playlists"][0]["items"][0];
@@ -87,9 +89,12 @@ fn reads_old_watchlist_and_preserves_saved_item_state() -> Result<(), Box<dyn st
         loaded["playlists"][0]["processed_video_ids"],
         json!(["abcdefghijk"])
     );
-    assert_eq!(serde_json::from_slice::<Value>(&fs::read(&path)?)?, old);
+    assert!(!path.exists());
+    assert_eq!(serde_json::from_slice::<Value>(&fs::read(&backup)?)?, old);
 
+    let revision = repository.revision()?;
     repository.save(loaded.clone())?;
+    assert_eq!(repository.revision()?, revision);
     assert_eq!(repository.load()?, loaded);
     Ok(())
 }
@@ -97,7 +102,7 @@ fn reads_old_watchlist_and_preserves_saved_item_state() -> Result<(), Box<dyn st
 #[test]
 fn edits_saved_sources_without_losing_item_state() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("config/watchlist.json"));
+    let repository = Repository::new(directory.path().join("config/muzik.db"));
     let added = repository.add("https://www.youtube.com/watch?v=abcdefghijk&list=PL_ONE")?;
     assert_eq!(added["playlist_id"], "PL_ONE");
     assert_eq!(added["url"], "https://www.youtube.com/playlist?list=PL_ONE");
@@ -137,12 +142,12 @@ fn edits_saved_sources_without_losing_item_state() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn rejects_invalid_data_without_replacing_the_file() -> Result<(), Box<dyn std::error::Error>> {
+fn rejects_an_invalid_old_file_without_moving_it() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("watchlist.json");
     let invalid = r#"{"version":99,"playlists":[]}"#;
     fs::write(&path, invalid)?;
-    let repository = Repository::new(path.clone());
+    let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
     assert!(repository
         .add("https://youtube.com/playlist?list=PL_NEW")
@@ -155,7 +160,7 @@ fn rejects_invalid_data_without_replacing_the_file() -> Result<(), Box<dyn std::
 fn view_adds_card_actions_and_cached_thumbnail_without_saving(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("watchlist.json");
+    let repository = Repository::new(directory.path().join("muzik.db"));
     let cache = directory.path().join("cache");
     fs::create_dir(&cache)?;
     fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"image")?;
@@ -164,12 +169,9 @@ fn view_adds_card_actions_and_cached_thumbnail_without_saving(
         "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
             "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}]
     }]});
-    fs::write(&path, serde_json::to_vec(&document)?)?;
-    let cards = view(
-        Repository::new(path.clone()).load()?,
-        directory.path(),
-        &cache,
-    )?;
+    repository.save(document)?;
+    let saved = (repository.revision()?, repository.load()?);
+    let cards = view(repository.load()?, directory.path(), &cache)?;
     let item = &cards["playlists"][0]["items"][0];
     assert_eq!(item["summary"], "Pending");
     assert_eq!(
@@ -188,7 +190,7 @@ fn view_adds_card_actions_and_cached_thumbnail_without_saving(
             .to_string_lossy()
             .as_ref()
     );
-    assert_eq!(serde_json::from_slice::<Value>(&fs::read(path)?)?, document);
+    assert_eq!((repository.revision()?, repository.load()?), saved);
     Ok(())
 }
 

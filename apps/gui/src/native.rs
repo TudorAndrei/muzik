@@ -60,11 +60,9 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         "spotify.status" => spotify::status(&path, &spotify::token_path()),
         "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
             .map(|playlists| json!({"playlists": playlists})),
-        "watchlist.add" | "watchlist.rename" | "watchlist.remove" => watchlist_edit(
-            &Repository::new(Repository::default_path()),
-            command,
-            params,
-        ),
+        "watchlist.add" | "watchlist.rename" | "watchlist.remove" => {
+            watchlist_edit(&Repository::default(), command, params)
+        }
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -228,9 +226,9 @@ mod tests {
     }
 
     #[test]
-    fn watchlist_edits_keep_the_existing_file_format() -> Result<(), Box<dyn std::error::Error>> {
+    fn watchlist_edits_save_to_the_database() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let repository = Repository::new(dir.path().join("watchlist.json"));
+        let repository = Repository::new(dir.path().join("muzik.db"));
         let added = watchlist_edit(
             &repository,
             "watchlist.add",

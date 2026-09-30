@@ -165,8 +165,11 @@ impl Bridge {
                 let sender = self.native_output.clone();
                 let pending = Arc::clone(&self.thumbnail_pending);
                 thread::spawn(move || {
-                    let (watchlist, cache) = thumbnails::default_paths();
-                    let data = thumbnails::cache_requested(&fresh, &watchlist, &cache);
+                    let data = thumbnails::cache_requested(
+                        &fresh,
+                        &Repository::default(),
+                        &muzik_core::paths::cache_dir(),
+                    );
                     let _ = sender
                         .send(json!({"type":"event", "event":"thumbnails.updated", "data":data}));
                     if let Ok(mut pending) = pending.lock() {
@@ -190,7 +193,7 @@ impl Bridge {
             let jobs = Arc::clone(&self.jobs);
             let latest = Arc::clone(&self.generation);
             let gate = Arc::clone(&self.watchlist_gate);
-            let repository = Repository::new(Repository::default_path());
+            let repository = Repository::default();
             thread::spawn(move || {
                 load_watchlist(WatchlistLoad {
                     sender,
@@ -509,14 +512,13 @@ fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Re
         if load.busy()? {
             return Ok(());
         }
-        let path = load.repository.path();
-        let stamp = watchlist::stamp(path)?;
+        let revision = load.repository.revision()?;
         let checked = options.checked(&load.repository)?;
         let saved = load.repository.locked(|| -> Result<bool, String> {
             if load.busy()? {
                 return Ok(true);
             }
-            if watchlist::stamp(path)? != stamp {
+            if load.repository.revision()? != revision {
                 return Ok(false);
             }
             load.repository.save(checked.clone())?;
@@ -822,7 +824,7 @@ mod tests {
     #[test]
     fn watchlist_load_sends_saved_cards_before_local_check() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let repository = Repository::new(dir.path().join("watchlist.json"));
+        let repository = Repository::new(dir.path().join("muzik.db"));
         repository
             .add("https://www.youtube.com/playlist?list=PLnative123")
             .map_err(std::io::Error::other)?;

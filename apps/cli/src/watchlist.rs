@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 fn repository() -> Repository {
-    Repository::new(Repository::default_path())
+    Repository::default()
 }
 
 fn output() -> PathBuf {
