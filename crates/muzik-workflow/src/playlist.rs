@@ -20,6 +20,33 @@ pub struct SpotifyTrack {
     pub position: usize,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SpotifyTags {
+    pub title: String,
+    pub artists: Vec<String>,
+    pub album: Option<String>,
+    pub track: Option<u64>,
+    pub disc: Option<u64>,
+    pub date: Option<String>,
+}
+
+pub fn write_spotify_tags(path: &Path, tags: &SpotifyTags) -> Result<(), String> {
+    let mut data = muzik_tags::TagData::default();
+    let mut set = |name: &str, value: Option<String>| {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            data.fields.insert(name.into(), value);
+        }
+    };
+    set("title", Some(tags.title.clone()));
+    set("artist", Some(tags.artists.join(", ")));
+    set("albumartist", tags.artists.first().cloned());
+    set("album", tags.album.clone());
+    set("track", tags.track.map(|track| track.to_string()));
+    set("disc", tags.disc.map(|disc| disc.to_string()));
+    set("date", tags.date.clone());
+    muzik_tags::write(path, &data).map_err(|error| error.to_string())
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SpotifyPlaylist {
     pub source_id: String,
@@ -187,7 +214,20 @@ pub fn run_spotify_export<O: WorkflowOperations>(
             )));
         }
         checkpoint.save_files(&id, &files)?;
-        let processed = process_item(request, options, operations, cancelled, &files, on_event)?;
+        let tags = SpotifyTags {
+            title: track.title.clone(),
+            artists: vec![track.artist.clone()],
+            album: track.album.clone(),
+            ..SpotifyTags::default()
+        };
+        for file in &files {
+            write_spotify_tags(file, &tags).map_err(Error::Operation)?;
+        }
+        let tagged = WorkflowOptions {
+            interactive: false,
+            ..options.clone()
+        };
+        let processed = process_item(request, &tagged, operations, cancelled, &files, on_event)?;
         merge(&mut result.processing, processed);
         checkpoint.complete(&id, options.no_organize)?;
         result.items.push(PlaylistItemResult {

@@ -146,9 +146,12 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
         r#"{"version":1,"source":"spotify","type":"playlist","id":"p1","title":"List","entries":[{"title":"One","artist":"A","source_id":"spotify:track:same","index":1},{"title":"Two","artist":"B","source_id":"spotify:track:same","index":2}]}"#,
     )?;
     let audio = dir.path().join("song.mp3");
-    fs::write(&audio, b"audio")?;
+    fs::copy(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../muzik-tags/tests/fixtures/blank.mp3"),
+        &audio,
+    )?;
     let mut operations = Operations {
-        spotify_file: Some(audio),
+        spotify_file: Some(audio.clone()),
         ..Operations::default()
     };
     let options = WorkflowOptions {
@@ -173,6 +176,9 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
         vec!["spotify:track:same#0", "spotify:track:same#1"]
     );
     assert_eq!(first.processing.plan.singles.len(), 2);
+    let tags = muzik_tags::read(&audio, &[])?;
+    assert_eq!(tags.fields.get("title").map(String::as_str), Some("Two"));
+    assert_eq!(tags.fields.get("artist").map(String::as_str), Some("B"));
     operations.calls.clear();
     let second = run_spotify_export(
         &request(dir.path()),

@@ -12,6 +12,7 @@ use muzik_core::{
     app_config, chapters, paths, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind,
     QualityPolicy,
 };
+use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
 use muzik_workflow::{process_audio_plan_with_events, WorkflowOperations, WorkflowOptions};
 use serde_json::{json, Value};
@@ -398,7 +399,11 @@ impl Adapter<'_, '_> {
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         if action == ItemAction::OrganizeAgain {
-            return self.process_local_stage(item, action, cancelled);
+            let saved = downloaded_audio(item, &self.prepared.local.request.output)?;
+            return match saved {
+                Some(file) => self.process_spotify_file(item, file, cancelled),
+                None => self.process_local_stage(item, action, cancelled),
+            };
         }
         if action.stage() != Stage::Download {
             return Err(JobError::Operation(format!(
@@ -494,8 +499,10 @@ impl Adapter<'_, '_> {
         file: PathBuf,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
+        write_spotify_tags(&file, &spotify_tags(&item["track"])).map_err(JobError::Operation)?;
         let mut options = self.prepared.local.options.clone();
         options.no_split = true;
+        options.interactive = false;
         let mut local = local_workflow::LocalOperations {
             decide: self.decide,
             on_import_event: self.on_import_event,
@@ -519,6 +526,23 @@ impl Adapter<'_, '_> {
             set_path(&mut updated, Stage::Download, json!(file));
         }
         Ok(updated)
+    }
+}
+
+fn spotify_tags(track: &Value) -> SpotifyTags {
+    SpotifyTags {
+        title: track["title"].as_str().unwrap_or("").to_owned(),
+        artists: track["artists"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        album: track["album"].as_str().map(str::to_owned),
+        track: track["track_number"].as_u64(),
+        disc: track["disc_number"].as_u64(),
+        date: track["release_date"].as_str().map(str::to_owned),
     }
 }
 
@@ -983,7 +1007,7 @@ mod tests {
                 directory.path().join("state").display()
             ),
         )?;
-        let params = json!({"output":directory.path(),"config":config,"interactive":false});
+        let params = json!({"output":directory.path(),"config":config,"interactive":true});
         let prepared = super::Prepared {
             local: crate::local_workflow::parse("", &params)?,
             params,
@@ -1009,13 +1033,23 @@ mod tests {
         };
         let result = adapter.process_spotify(
             &json!({}),
-            &json!({"kind":"spotify","stages":{"download":{"path":audio},"organize":{}}}),
+            &json!({"kind":"spotify","stages":{"download":{"path":audio},"organize":{}},"track":{
+                "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
+                "track_number":2,"disc_number":1,"release_date":"2017-10-13"
+            }}),
             ItemAction::OrganizeAgain,
             &cancelled,
         )?;
         assert_eq!(result["stages"]["organize"]["status"], "complete");
         let imported = muzik_library::Library::open_read_only(&library)?.items()?;
         assert_eq!(imported.len(), 1);
+        let text = |name: &str| match imported[0].field(name) {
+            Some(muzik_library::SqlValue::Text(text)) => text.clone(),
+            other => format!("{other:?}"),
+        };
+        assert_eq!(text("album"), "Warhaus");
+        assert_eq!(text("title"), "Love's a Stranger");
+        assert_eq!(text("albumartist"), "Warhaus");
         Ok(())
     }
 

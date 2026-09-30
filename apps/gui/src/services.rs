@@ -78,7 +78,7 @@ fn check_soulseek() -> ServiceStatus {
         return ServiceStatus {
             name: "Soulseek",
             available: None,
-            detail: "Add your account in the Soulseek section.".into(),
+            detail: "Add your account in the Soulseek section. Until then, Spotify tracks come from a YouTube search.".into(),
             optional: true,
         };
     };
