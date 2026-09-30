@@ -252,11 +252,11 @@ impl Repository {
             .suffix(".tmp")
             .tempfile_in(parent)
             .map_err(|error| error.to_string())?;
-        serde_json::to_writer_pretty(&mut temporary, &value).map_err(|error| error.to_string())?;
-        temporary
-            .write_all(b"\n")
-            .map_err(|error| error.to_string())?;
-        temporary.flush().map_err(|error| error.to_string())?;
+        let mut writer = std::io::BufWriter::new(&mut temporary);
+        serde_json::to_writer_pretty(&mut writer, &value).map_err(|error| error.to_string())?;
+        writer.write_all(b"\n").map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())?;
+        drop(writer);
         temporary
             .as_file()
             .sync_all()

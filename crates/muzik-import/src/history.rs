@@ -87,7 +87,10 @@ impl IncrementalHistory {
         let parent = self.path.parent().unwrap_or(Path::new("."));
         fs::create_dir_all(parent)?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-        serde_json::to_writer(&mut temporary, file)?;
+        let mut writer = io::BufWriter::new(&mut temporary);
+        serde_json::to_writer(&mut writer, file)?;
+        io::Write::flush(&mut writer)?;
+        drop(writer);
         temporary.persist(&self.path).map_err(|error| error.error)?;
         Ok(())
     }
