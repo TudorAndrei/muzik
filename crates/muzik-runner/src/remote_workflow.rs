@@ -2,6 +2,7 @@
 
 use crate::gates::{self, Gate};
 use crate::local_workflow;
+use muzik_core::process::background_command;
 use muzik_core::watchlist::Stage;
 use muzik_core::{app_config, chapters::Chapter, paths, DecisionKind};
 use muzik_soulseek::job::{JobOutcome, JobState};
@@ -627,7 +628,8 @@ fn execute_with_path(
         .map_err(|error| muzik_workflow::Error::Operation(error.to_string()))?;
     runtime.block_on(async {
         let executor = Executor::new(executable, args.iter().cloned(), timeout);
-        let mut command = tokio::process::Command::new(executor.executable_path());
+        let mut command =
+            tokio::process::Command::from(background_command(executor.executable_path()));
         command.args(executor.args()).kill_on_drop(true);
         let result = tokio::select! {
             result = command.output() => result.map_err(muzik_workflow::Error::Io),

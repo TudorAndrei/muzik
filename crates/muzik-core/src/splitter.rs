@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -423,7 +423,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         artist.push_str(&featured.join(", "));
     }
     let destination = output.join(track_file_name(source, chapter.index, &title));
-    let mut command = Command::new(ffmpeg);
+    let mut command = crate::process::background_command(ffmpeg);
     command
         .arg("-i")
         .arg(source)
@@ -923,7 +923,7 @@ mod tests {
     fn ffmpeg_split_writes_tracks_and_keeps_source_when_requested() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("Album.mp3");
-        let result = Command::new("ffmpeg")
+        let result = std::process::Command::new("ffmpeg")
             .args([
                 "-f",
                 "lavfi",

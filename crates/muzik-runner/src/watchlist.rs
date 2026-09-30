@@ -2,6 +2,7 @@
 
 use crate::gates::{self, Gate};
 use crate::{local_workflow, remote_workflow};
+use muzik_core::process::background_command;
 use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
@@ -647,7 +648,8 @@ fn youtube_source(url: &str, cancelled: &AtomicBool) -> Result<Value, JobError> 
         .build()
         .map_err(|error| JobError::Operation(error.to_string()))?;
     let output = runtime.block_on(async {
-        let mut command = tokio::process::Command::new(executor.executable_path());
+        let mut command =
+            tokio::process::Command::from(background_command(executor.executable_path()));
         command.args(executor.args()).kill_on_drop(true);
         tokio::select! {
             result = command.output() => result.map_err(|error| JobError::Operation(error.to_string())),
@@ -778,7 +780,8 @@ fn youtube_video_metadata(
         .build()
         .map_err(|error| JobError::Operation(error.to_string()))?;
     let output = runtime.block_on(async {
-        let mut command = tokio::process::Command::new(executor.executable_path());
+        let mut command =
+            tokio::process::Command::from(background_command(executor.executable_path()));
         command.args(executor.args()).kill_on_drop(true);
         tokio::select! {
             result = command.output() => result.map_err(|error| JobError::Operation(error.to_string())),

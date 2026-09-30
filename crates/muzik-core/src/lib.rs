@@ -7,6 +7,7 @@ pub mod config_choices;
 mod decision;
 pub mod downloads;
 pub mod paths;
+pub mod process;
 pub mod quality;
 pub mod splitter;
 pub mod spotify;

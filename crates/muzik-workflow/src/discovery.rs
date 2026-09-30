@@ -2,13 +2,13 @@
 
 use muzik_core::MetadataSource;
 use muzik_core::chapters::{self, Chapter};
+use muzik_core::process::background_command;
 use muzik_metadata::{MetadataClient, ReleaseSearch};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Seek};
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use yt_dlp::executor::Executor;
@@ -112,7 +112,7 @@ fn fetch_comments(url: &str, cancelled: &AtomicBool) -> Result<Value, String> {
     let executor = Executor::new("yt-dlp", args, Duration::from_secs(120));
     let mut stdout = tempfile::tempfile().map_err(|error| error.to_string())?;
     let mut stderr = tempfile::tempfile().map_err(|error| error.to_string())?;
-    let mut child = Command::new(executor.executable_path())
+    let mut child = background_command(executor.executable_path())
         .args(executor.args())
         .stdout(stdout.try_clone().map_err(|error| error.to_string())?)
         .stderr(stderr.try_clone().map_err(|error| error.to_string())?)
