@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.7.2 - 2026-09-30
+#### Bug Fixes
+- (**spotify**) tag downloads with Spotify metadata and import them without a match question - (e9e2a4b) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.7.1 - (3073502) - TudorAndrei
+
+- - -
+
 ## v2.7.1 - 2026-09-29
 #### Bug Fixes
 - (**gui**) show the full release name and suggest only what the model picked - (f43aa54) - TudorAndrei
