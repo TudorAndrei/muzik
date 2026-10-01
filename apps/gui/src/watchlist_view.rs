@@ -601,13 +601,13 @@ fn item_video_id(item: &Value) -> String {
 }
 
 pub(crate) fn matches_filter(item: &Value, filter: usize) -> bool {
-    let Some(wanted) = filter_summary(filter) else {
-        return true;
-    };
-    item["summary"]
+    let summary = item["summary"]
         .as_str()
-        .and_then(|summary| summary.parse::<Summary>().ok())
-        == Some(wanted)
+        .and_then(|summary| summary.parse::<Summary>().ok());
+    match filter_summary(filter) {
+        Some(wanted) => summary == Some(wanted),
+        None => summary != Some(Summary::Unavailable),
+    }
 }
 
 #[cfg(test)]

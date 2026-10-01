@@ -265,11 +265,13 @@ from Bandcamp in FLAC, then organizes it into the library. The login is kept
 in `bandcamp_cookies.txt` and `bandcamp_user` in the muzik config directory,
 so `muzik bandcamp` uses the same login.
 
-Select a source in the left rail. The page shows all current items in a paged
-card list. Each card shows its title and the Download, Quality, Parse, Split,
-and Organize states. **Processed** means that this computer
-has the required local workflow state. A private or deleted video stays in the
-list as **Unavailable** and does not run.
+Select a source in the left rail. The page shows its items in a table with the
+title, the Download, Quality, Parse, Split, and Organize states, the status,
+the next command, and the last error. Sort by number, title, or status. Double-
+click a row, or right-click it and select **Details**, to see all commands.
+**Processed** means that this computer has the required local workflow state.
+A private or deleted video gets the **Unavailable** status. It does not run,
+and it shows only in the **Unavailable** tab.
 
 Use **Run** or **Retry** for the normal next command. Each card also has
 these focused commands:

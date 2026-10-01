@@ -260,20 +260,29 @@ mod tests {
         let playlist = json!({"playlist_id": "PL1", "items": [
             {"position": 1, "title": "One", "video_id": "aaaaaaaaaaa", "summary": "Failed"},
             {"position": 2, "title": "Two", "video_id": "bbbbbbbbbbb", "summary": "Processed"},
-            {"position": 3, "title": "Three", "video_id": "ccccccccccc", "summary": "Failed"}
+            {"position": 3, "title": "Three", "video_id": "ccccccccccc", "summary": "Failed"},
+            {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "summary": "Unavailable"}
         ]});
         let queued = HashSet::from([muzik_runner::item_key(
             &json!({"playlist_id": "PL1", "position": 3, "video_id": "ccccccccccc"}),
         )]);
-        let failed = 1 + Summary::ALL
-            .iter()
-            .position(|summary| *summary == Summary::Failed)
-            .unwrap_or(0);
-        let list = rows(&playlist, failed, &queued);
+        let tab = |wanted: Summary| {
+            1 + Summary::ALL
+                .iter()
+                .position(|summary| *summary == wanted)
+                .unwrap_or(0)
+        };
+        let list = rows(&playlist, tab(Summary::Failed), &queued);
         assert_eq!(list.iter().map(|row| row.key.1).collect::<Vec<_>>(), [1, 3]);
         assert!(!list[0].queued);
         assert!(list[1].queued);
-        assert_eq!(rows(&playlist, 0, &queued).len(), 3);
+        let all = rows(&playlist, 0, &queued);
+        assert_eq!(
+            all.iter().map(|row| row.key.1).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        let gone = rows(&playlist, tab(Summary::Unavailable), &queued);
+        assert_eq!(gone.iter().map(|row| row.key.1).collect::<Vec<_>>(), [4]);
     }
 
     #[test]
