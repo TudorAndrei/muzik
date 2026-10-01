@@ -245,8 +245,15 @@ impl WorkflowOperations for LocalOperations<'_> {
             } else {
                 MatchDecision::AsIs
             };
-            let duplicate = if choice == MatchDecision::Skip || album.duplicates.is_empty() {
+            let duplicate = if choice == MatchDecision::Skip {
                 None
+            } else if album.duplicates.is_empty() {
+                (!options.force
+                    && matches!(
+                        options.duplicates,
+                        DuplicatePolicy::Skip | DuplicatePolicy::Ask
+                    ))
+                .then_some(DuplicateDecision::Skip)
             } else if options.force {
                 Some(DuplicateDecision::Replace)
             } else {
@@ -274,6 +281,11 @@ impl WorkflowOperations for LocalOperations<'_> {
         let outcome = beets::apply_import_with_cancel(preview, &decisions, &|| {
             self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
         })?;
+        if outcome.apply.already_in_library > 0 {
+            (self.on_import_event)(
+                json!({"event":"message","data":{"message":"The album is already in the library. Muzik did not import it again."}}),
+            );
+        }
         (self.on_import_event)(
             json!({"event":"step_finished","data":{"name":"import","items":outcome.apply.destinations.len(),"skipped":outcome.apply.skipped_albums + outcome.apply.skipped_incremental}}),
         );

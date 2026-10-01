@@ -557,6 +557,71 @@ fn dry_run_and_duplicate_skip_do_not_write() {
 }
 
 #[test]
+fn an_album_whose_files_are_in_the_library_is_skipped_as_a_duplicate() {
+    let (temp, source, database, root, _) = fixture();
+    let config = BeetsConfig::from_layers(
+        "paths:\n  default: $albumartist/$album/$title\n",
+        serde_json::json!({}),
+    )
+    .unwrap();
+    let again = temp.path().join("again");
+    fs::create_dir(&again).unwrap();
+    for name in ["02 Song.flac", "02 Song.muzik.json"] {
+        fs::copy(source.with_file_name(name), again.join(name)).unwrap();
+    }
+    let mut library = Library::open_read_write(&database).unwrap();
+    let match_config = MatchConfig::from_beets(&config).unwrap();
+    let options = ApplyOptions::from_beets(&config, root).unwrap();
+    let as_is = |duplicate| AlbumDecision {
+        choice: MatchDecision::AsIs,
+        duplicate,
+    };
+    let first = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    }
+    .plan(&[source])
+    .unwrap();
+    apply::apply(
+        &mut library,
+        &first,
+        &[as_is(Some(DuplicateDecision::Keep))],
+        &options,
+    )
+    .unwrap();
+    let albums = library.albums().unwrap().len();
+    let mut second = ImportPlanner {
+        provider: &FixtureProvider,
+        library: &library,
+        match_config: &match_config,
+        search_limit: 5,
+    }
+    .plan(&[again.join("02 Song.flac")])
+    .unwrap();
+    second.albums[0].duplicates.clear();
+
+    let refused = apply::apply(&mut library, &second, &[as_is(None)], &options);
+    assert!(
+        matches!(refused, Err(ApplyError::AlreadyInLibrary(_))),
+        "{refused:?}"
+    );
+    let result = apply::apply(
+        &mut library,
+        &second,
+        &[as_is(Some(DuplicateDecision::Skip))],
+        &options,
+    )
+    .unwrap();
+    assert_eq!(result.already_in_library, 1);
+    assert_eq!(result.skipped_albums, 1);
+    assert!(result.destinations.is_empty());
+    assert_eq!(library.albums().unwrap().len(), albums);
+    assert!(again.join("02 Song.flac").exists());
+}
+
+#[test]
 fn replace_removes_selected_duplicate_rows() {
     let (_temp, source, database, root, config) = fixture();
     let mut library = Library::open_read_write(&database).unwrap();

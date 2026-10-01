@@ -124,6 +124,7 @@ pub struct ApplyResult {
     pub destinations: Vec<PathBuf>,
     pub skipped_albums: usize,
     pub skipped_incremental: usize,
+    pub already_in_library: usize,
     /// Old files that remained after a successful database replacement.
     pub cleanup_failed: Vec<PathBuf>,
     /// Move sources that remained after a successful database write.
@@ -201,7 +202,21 @@ pub fn apply_with_cancel(
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
-        let prepared = prepare(library, album, *decision, options, &mut reserved)?;
+        let reserved_before = reserved.clone();
+        let prepared = match prepare(library, album, *decision, options, &mut reserved) {
+            Err(ApplyError::AlreadyInLibrary(_))
+                if decision.duplicate == Some(DuplicateDecision::Skip) =>
+            {
+                reserved = reserved_before;
+                result.skipped_albums += 1;
+                result.already_in_library += 1;
+                if !options.dry_run && !plan.incremental_skip_later {
+                    record_history(plan, album, &mut result);
+                }
+                continue;
+            }
+            prepared => prepared?,
+        };
         check_cancelled(cancelled)?;
         if options.dry_run {
             result
@@ -531,6 +546,8 @@ fn prepare(
         if destination.symlink_metadata().is_ok() {
             if old_paths.contains(&destination) {
                 occupied_paths.push(destination.clone());
+            } else if in_library(library, &destination, &options.library_root)? {
+                return Err(ApplyError::AlreadyInLibrary(destination));
             } else {
                 return Err(ApplyError::DestinationExists(destination));
             }
@@ -783,6 +800,22 @@ fn sql_path(value: &SqlValue) -> Option<PathBuf> {
         SqlValue::Text(value) => Some(PathBuf::from(value)),
         _ => None,
     }
+}
+
+fn in_library(library: &Library, path: &Path, library_root: &Path) -> Result<bool, ApplyError> {
+    Ok(library.items()?.iter().any(|item| {
+        item.fields
+            .get("path")
+            .and_then(sql_path)
+            .map(|known| {
+                if known.is_relative() {
+                    library_root.join(known)
+                } else {
+                    known
+                }
+            })
+            .is_some_and(|known| known == path)
+    }))
 }
 
 fn replacement_paths(

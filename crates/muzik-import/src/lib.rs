@@ -26,6 +26,8 @@ pub enum Error {
     InvalidSource(PathBuf),
     #[error("destination exists: {0}")]
     DestinationExists(PathBuf),
+    #[error("the album is already in the library: {0}")]
+    AlreadyInLibrary(PathBuf),
     #[error("path is outside the prune root: {0}")]
     OutsideRoot(PathBuf),
     #[error("no audio files were found")]

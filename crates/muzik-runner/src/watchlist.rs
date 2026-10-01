@@ -545,6 +545,7 @@ impl Adapter<'_, '_> {
         options.interactive = false;
         if action == ItemAction::OrganizeAgain {
             options.no_organize = false;
+            options.force = true;
         }
         if !options.no_organize {
             let mut local = local_workflow::LocalOperations {
@@ -552,7 +553,6 @@ impl Adapter<'_, '_> {
                 on_import_event: self.on_import_event,
                 cancelled,
             };
-            options.force = true;
             local.organize(&directory, &options)?;
             check_cancelled(cancelled)?;
         }
