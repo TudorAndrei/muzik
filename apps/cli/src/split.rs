@@ -107,7 +107,7 @@ pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> Result<Option<Vec<C
     }
 }
 
-fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String> {
+pub(crate) fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String> {
     let mut file = tempfile::Builder::new()
         .prefix("muzik-chapters-")
         .suffix(".chapters.txt")

@@ -38,6 +38,7 @@ impl Settings {
             ("dry_run", &mut options.dry_run),
             ("keep_source", &mut options.keep_source),
             ("force", &mut options.force),
+            ("compilation", &mut options.compilation),
             ("interactive", &mut options.interactive),
         ] {
             if let Some(value) = values.get(key) {

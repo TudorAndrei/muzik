@@ -172,7 +172,7 @@ impl WorkflowOperations for LocalOperations<'_> {
             jobs: options.jobs,
             keep_source: options.keep_source,
             force: options.force,
-            compilation: false,
+            compilation: options.compilation,
             cache_dir: None,
         };
         let actual = splitter::split_audio_with_cancel(

@@ -33,10 +33,11 @@
 
 ## Phase 5: CLI workflow through the runner
 
-- [ ] `compilation` workflow option
-- [ ] `muzik workflow` enqueues and drains; `CliOperations` deleted
-- [ ] CLI `ask` handles chapter edits
-- [ ] Commit: `refactor(cli): run the workflow command through the shared runner`
+- [x] `compilation` workflow option
+- [x] `muzik workflow` enqueues and drains; `CliOperations` deleted
+- [x] CLI `ask` handles chapter edits
+- [x] `drain` returns an error when a job fails, so the exit code stays correct
+- [x] Commit: `refactor(cli): run the workflow command through the shared runner`
 
 ## Phase 6: Typed watchlist item
 

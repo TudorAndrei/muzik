@@ -1,3 +1,5 @@
+use muzik_core::DecisionKind;
+use muzik_core::chapters::Chapter;
 use muzik_core::paths::Paths;
 use muzik_jobs::CancelRequest;
 use muzik_runner::agent::Codex;
@@ -6,7 +8,7 @@ use muzik_runner::{Jobs, Options, Prompt, Runner, job_id, parse_job_id};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Write};
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const WORKERS: usize = 5;
@@ -118,11 +120,18 @@ pub fn run() -> Result<(), String> {
 
 pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
     let titles = Mutex::new(HashMap::<String, String>::new());
+    let failed = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&failed);
     let Some(runner) = Runner::start(
         Arc::clone(jobs),
         Options {
             workers: WORKERS,
-            sink: Arc::new(move |message| report(&titles, &message)),
+            sink: Arc::new(move |message| {
+                if field(&message, "event") == "job.failed" {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                }
+                report(&titles, &message);
+            }),
             ask: Arc::new(ask),
             chooser: Some(Arc::new(Codex)),
             generation: Arc::new(AtomicU64::new(0)),
@@ -137,7 +146,10 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
     if waiting > 0 {
         println!("{waiting} item(s) wait for a choice. Run `muzik jobs list`.");
     }
-    Ok(())
+    match failed.load(Ordering::SeqCst) {
+        0 => Ok(()),
+        count => Err(format!("{count} job(s) failed")),
+    }
 }
 
 fn report(titles: &Mutex<HashMap<String, String>>, message: &Value) {
@@ -193,6 +205,9 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
         return Err("This job needs an answer. Run it in a terminal or in the app.".into());
     }
     let _prompt = PROMPT.lock().map_err(|_| "The prompt is not available.")?;
+    if prompt.kind == DecisionKind::ChapterEdit {
+        return edit_chapters(&prompt.payload);
+    }
     let question = serde_json::json!({"kind":prompt.kind,"payload":prompt.payload});
     println!(
         "{} · {}",
@@ -224,6 +239,31 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
             Err(_) => println!("Enter a number."),
         }
     }
+}
+
+fn edit_chapters(payload: &Value) -> Result<Value, String> {
+    let chapters = entries(payload, "chapters")
+        .iter()
+        .map(|record| {
+            Some(Chapter {
+                index: u32::try_from(field(record, "index").as_u64()?).ok()?,
+                start: field(record, "start").as_i64()?,
+                end: field(record, "end").as_i64(),
+                title: field(record, "title").as_str()?.to_owned(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or("The chapters to edit are not valid.")?;
+    let edited = crate::split::edit_chapters(&chapters)?;
+    let chosen = if edited.is_empty() { chapters } else { edited };
+    Ok(Value::Array(
+        chosen
+            .iter()
+            .map(|chapter| {
+                serde_json::json!({"index":chapter.index,"start":chapter.start,"end":chapter.end,"title":chapter.title})
+            })
+            .collect(),
+    ))
 }
 
 fn print_question(question: &Value) {

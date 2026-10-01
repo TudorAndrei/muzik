@@ -245,7 +245,7 @@ struct Workflow {
     /// Select the highest-ranked Soulseek result without a prompt.
     #[usage(long)]
     no_interactive: bool,
-    /// Add the run to the shared job queue instead of running it now.
+    /// Use the shared job queue (every run uses it; kept for old commands).
     #[usage(long)]
     queue: bool,
 }
@@ -703,7 +703,6 @@ fn run(command: Command) -> Result<(), String> {
                 args.queue_only,
             ),
         },
-        Command::Workflow(args) if args.queue => workflow::queue(&args),
         Command::Workflow(args) => workflow::run(&args),
     }
 }
