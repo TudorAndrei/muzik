@@ -573,7 +573,8 @@ mod tests {
     use muzik_core::watchlist::Repository;
     use muzik_runner::Jobs;
     use serde_json::{json, Value};
-    use std::collections::HashMap;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, VecDeque};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -583,13 +584,36 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    fn response(bridge: &Bridge, id: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    thread_local! {
+        static SKIPPED: RefCell<VecDeque<Value>> = const { RefCell::new(VecDeque::new()) };
+    }
+
+    fn next_matching(
+        bridge: &Bridge,
+        timeout: Duration,
+        wanted: impl Fn(&Value) -> bool,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        let earlier = SKIPPED.with(|skipped| {
+            let mut skipped = skipped.borrow_mut();
+            let index = skipped.iter().position(&wanted)?;
+            skipped.remove(index)
+        });
+        if let Some(message) = earlier {
+            return Ok(message);
+        }
         loop {
-            let message = bridge.output.recv_timeout(Duration::from_secs(5))?;
-            if message["type"] == "response" && message["id"] == id {
+            let message = bridge.output.recv_timeout(timeout)?;
+            if wanted(&message) {
                 return Ok(message);
             }
+            SKIPPED.with(|skipped| skipped.borrow_mut().push_back(message));
         }
+    }
+
+    fn response(bridge: &Bridge, id: &str) -> Result<Value, Box<dyn std::error::Error>> {
+        next_matching(bridge, Duration::from_secs(5), |message| {
+            message["type"] == "response" && message["id"] == id
+        })
     }
 
     fn event(
@@ -597,16 +621,14 @@ mod tests {
         wanted: &[&str],
         job_id: &str,
     ) -> Result<Value, Box<dyn std::error::Error>> {
-        loop {
-            let message = bridge.output.recv_timeout(Duration::from_secs(20))?;
+        let message = next_matching(bridge, Duration::from_secs(20), |message| {
             let name = message["event"].as_str().unwrap_or("");
-            if wanted.contains(&name) && message["data"]["job_id"] == job_id {
-                return Ok(message);
-            }
-            if name == "job.failed" && message["data"]["job_id"] == job_id {
-                return Err(format!("job failed: {}", message["data"]["error"]["message"]).into());
-            }
+            (wanted.contains(&name) || name == "job.failed") && message["data"]["job_id"] == job_id
+        })?;
+        if message["event"] == "job.failed" && !wanted.contains(&"job.failed") {
+            return Err(format!("job failed: {}", message["data"]["error"]["message"]).into());
         }
+        Ok(message)
     }
 
     fn fixture_import(
@@ -719,7 +741,7 @@ mod tests {
         let mut asked = HashMap::new();
         let mut done = 0;
         while done < 2 {
-            let message = bridge.output.recv_timeout(Duration::from_secs(20))?;
+            let message = next_matching(&bridge, Duration::from_secs(20), |_| true)?;
             match message["event"].as_str().unwrap_or("") {
                 "decision.request" => {
                     let job = message["data"]["job_id"].as_str().unwrap_or("").to_owned();
