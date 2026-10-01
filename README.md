@@ -235,7 +235,8 @@ videos.
 2. Select **Watchlist**.
 3. Paste a YouTube playlist URL and select **Add playlist**. You can add more
    than one source.
-4. Select **Refresh**.
+4. Select **Refresh** in the source header to check only that source, or
+   **Refresh all** at the top to check every source.
 
 The first refresh reads every playlist item. It compares the item IDs with the
 saved watchlist, yt-dlp archive, muzik playlist state, download folder, and split

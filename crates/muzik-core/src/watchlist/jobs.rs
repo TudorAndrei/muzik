@@ -92,6 +92,7 @@ pub struct JobOptions<'a> {
     pub output: &'a Path,
     pub cache: &'a Path,
     pub dry_run: bool,
+    pub playlist_id: Option<&'a str>,
 }
 
 pub fn sync(
@@ -102,11 +103,19 @@ pub fn sync(
     on_event: &mut dyn FnMut(Value),
 ) -> Result<Synced, JobError> {
     let mut draft = repository.load()?;
-    let playlists = draft["playlists"].as_array().cloned().unwrap_or_default();
+    let mut playlists = draft["playlists"].as_array().cloned().unwrap_or_default();
     if playlists.is_empty() {
         return Err(JobError::Operation(
             "Add a playlist before you refresh.".into(),
         ));
+    }
+    if let Some(only) = options.playlist_id {
+        playlists.retain(|playlist| playlist["playlist_id"] == only);
+        if playlists.is_empty() {
+            return Err(JobError::Operation(format!(
+                "The source {only} is not in the watchlist."
+            )));
+        }
     }
     emit(
         on_event,

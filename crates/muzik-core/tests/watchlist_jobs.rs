@@ -63,6 +63,7 @@ fn options<'a>(directory: &'a std::path::Path) -> JobOptions<'a> {
         output: directory,
         cache: directory,
         dry_run: false,
+        playlist_id: None,
     }
 }
 
@@ -245,6 +246,37 @@ fn refresh_reads_every_playlist_before_it_processes_items() -> Result<(), Box<dy
             "process video_PLtwo"
         ]
     );
+    Ok(())
+}
+
+#[test]
+fn refresh_of_one_source_reads_and_processes_only_that_source(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    repository.add("https://www.youtube.com/playlist?list=PLone")?;
+    repository.add("https://www.youtube.com/playlist?list=PLtwo")?;
+    let mut log = CallLog(Vec::new());
+    let mut only = options(directory.path());
+    only.playlist_id = Some("PLtwo");
+    jobs::refresh(
+        &repository,
+        only,
+        &mut log,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )?;
+    assert_eq!(log.0, ["load PLtwo", "process video_PLtwo"]);
+    let mut missing = options(directory.path());
+    missing.playlist_id = Some("PLgone");
+    assert!(jobs::refresh(
+        &repository,
+        missing,
+        &mut log,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .is_err());
     Ok(())
 }
 

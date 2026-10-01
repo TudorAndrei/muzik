@@ -41,9 +41,11 @@ pub fn sync(
         parked: &parked,
         cancelled,
     };
+    let mut options = prepared.job_options();
+    options.playlist_id = params["playlist_id"].as_str().filter(|id| !id.is_empty());
     let synced = jobs::sync(
         &prepared.repository,
-        prepared.job_options(),
+        options,
         &mut adapter,
         cancelled,
         &mut |record| {
@@ -164,6 +166,7 @@ impl Prepared {
             output: &self.local.request.output,
             cache: &self.cache,
             dry_run: self.local.options.dry_run,
+            playlist_id: None,
         }
     }
 }

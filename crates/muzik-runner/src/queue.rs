@@ -66,10 +66,21 @@ impl Jobs {
     }
 
     pub fn refresh(&self, params: &Value) -> Result<i64, EnqueueError> {
+        let source = params["playlist_id"].as_str().filter(|id| !id.is_empty());
+        let key = source.map_or_else(|| "refresh".to_owned(), |id| format!("refresh:{id}"));
+        let title = source.map_or_else(
+            || "Watchlist check".to_owned(),
+            |_| {
+                format!(
+                    "Check {}",
+                    params["playlist_title"].as_str().unwrap_or("source")
+                )
+            },
+        );
         Ok(self.store().enqueue(&NewJob {
             kind: Kind::Refresh,
-            item_key: "refresh",
-            title: "Watchlist check",
+            item_key: &key,
+            title: &title,
             params,
         })?)
     }

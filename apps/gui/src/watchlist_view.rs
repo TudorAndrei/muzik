@@ -59,7 +59,7 @@ impl Muzik {
         let refresh_params = self.launcher_params(cx);
         let refresh = Button::new("watch-refresh")
             .icon(IconName::RefreshCw)
-            .label("Refresh")
+            .label("Refresh all")
             .disabled(!has_playlists || self.has_run(RunKind::Refresh))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.start_job("watchlist.refresh", refresh_params.clone(), cx)
@@ -172,7 +172,25 @@ impl Muzik {
                 .map_or_else(|| "not checked".to_string(), |at| format!("checked {at}"))
         );
         let source_url = playlist["url"].as_str().unwrap_or("").to_string();
-        let mut tools = div().flex().items_center().gap_1();
+        let mut refresh_params = self
+            .launcher_params(cx)
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        refresh_params.insert("playlist_id".into(), json!(id));
+        refresh_params.insert("playlist_title".into(), json!(title));
+        let refresh_params = Value::Object(refresh_params);
+        let mut tools = div().flex().items_center().gap_1().child(
+            Button::new("refresh-source")
+                .ghost()
+                .small()
+                .icon(IconName::RefreshCw)
+                .label("Refresh")
+                .disabled(self.has_run(RunKind::Refresh))
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.start_job("watchlist.refresh", refresh_params.clone(), cx)
+                })),
+        );
         if !source_url.is_empty() {
             let open_url = source_url.clone();
             tools = tools
