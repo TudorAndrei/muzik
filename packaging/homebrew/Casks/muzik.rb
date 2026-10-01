@@ -1,6 +1,6 @@
 cask "muzik" do
-  version "2.9.0"
-  sha256 "c0e8f5836f54430d770c4a65064d79b0d35fdeda5778606ff95ff3a3162dd964"
+  version "2.10.0"
+  sha256 "6914f71df0993efa6898eef302adc47fe7220ae5c08c3dac9ed3f81be91fafc8"
 
   url "https://github.com/TudorAndrei/muzik/releases/download/v#{version}/Muzik-v#{version}-aarch64-apple-darwin.zip"
   name "Muzik"
