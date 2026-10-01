@@ -1,0 +1,103 @@
+# TODO: Deepen the watchlist, acquisition, queue, and GUI modules
+
+## Phase 1: Settings, paths, and the decision agent as values
+
+- [ ] `Paths` and `expand_home` in `muzik-core/src/paths.rs`
+- [ ] `Repository` and `db` take `&Paths`
+- [ ] `muzik-runner/src/settings.rs` with `Settings::resolve`
+- [ ] Local, remote, watchlist, GUI, and CLI callers use `Settings`
+- [ ] `Chooser` seam with `CodexChooser` and `NoChooser` in `runner::Options`
+- [ ] Delete the four extra `~` expanders
+- [ ] Tests use `Paths::under(temp)`
+- [ ] Commit: `refactor(runner): resolve settings and paths once and inject the decision agent`
+
+## Phase 2: One yt-dlp module
+
+- [ ] `muzik-workflow/src/ytdlp.rs` with tests
+- [ ] Replace yt-dlp code in runner, workflow discovery, and CLI
+- [ ] Commit: `refactor(workflow): run yt-dlp through one cancellable module`
+
+## Phase 3: Soulseek search and fetch in muzik-soulseek
+
+- [ ] `Session::search` and `Session::fetch`
+- [ ] Timeouts in `SessionSettings`
+- [ ] Runner, quality check, and CLI use them
+- [ ] Commit: `refactor(soulseek): search and fetch through one blocking interface`
+
+## Phase 4: One import decision policy
+
+- [ ] `muzik-import/src/decide.rs` with `ImportPolicy` and `decide_album`
+- [ ] Runner and CLI import use it; `muzik import --duplicates`
+- [ ] Policy matrix test
+- [ ] Commit: `fix(import): apply the duplicates setting on every import path`
+
+## Phase 5: CLI workflow through the runner
+
+- [ ] `compilation` workflow option
+- [ ] `muzik workflow` enqueues and drains; `CliOperations` deleted
+- [ ] CLI `ask` handles chapter edits
+- [ ] Commit: `refactor(cli): run the workflow command through the shared runner`
+
+## Phase 6: Typed watchlist item
+
+- [ ] `watchlist/item.rs` typed document and transitions
+- [ ] Core and runner use the typed item
+- [ ] Delete duplicated stage helpers and audio lookups
+- [ ] Stored JSON round-trip test
+- [ ] Commit: `refactor(watchlist): type the watchlist item and own its stage transitions`
+
+## Phase 7: Job queue in muzik.db and one item identity
+
+- [ ] muzik.db migration 2 with `jobs`
+- [ ] `Store::from_connection`; one-time `jobs.db` copy
+- [ ] `ItemId` in queue, park, jobs, GUI
+- [ ] Park and waiting state in one transaction
+- [ ] Commit: `feat(jobs): store the job queue in muzik.db with one item identity`
+
+## Phase 8: Source modules
+
+- [ ] `muzik-runner/src/sources/` with YouTube, Spotify, Bandcamp
+- [ ] Availability rules move into the sources
+- [ ] Bandcamp `ensure` in the watchlist load
+- [ ] `release_spotify_questions` asks the source
+- [ ] CLI `bandcamp` uses the Rust module; bandsnatch removed
+- [ ] Commit: `refactor(watchlist): give each source kind one module behind a Source seam`
+
+## Phase 9: Waiting for a choice as a returned value
+
+- [ ] Typed `DecisionError`
+- [ ] `ItemOutcome::Waiting` carries the question; runner parks from it
+- [ ] Delete `mark_stage`, `take_stage`, `Parked`, event-driven park
+- [ ] End-to-end decide → park → answer → resume test
+- [ ] Commit: `refactor(runner): return a pause for a choice instead of side channels`
+
+## Phase 10: Retire the legacy cache reconcile
+
+- [ ] muzik.db migration 3 with `meta`
+- [ ] `watchlist/legacy.rs` one-time import
+- [ ] Slim `reconcile.rs`; update core watchlist tests
+- [ ] Commit: `refactor(watchlist): import the legacy cache once and slim the reconcile`
+
+## Phase 11: Typed application module behind the GUI
+
+- [ ] `muzik-runner/src/app.rs` with `App` and `AppEvent`
+- [ ] Bridge is a thin adapter; watchlist logic out of the GUI
+- [ ] `main.rs` matches on `AppEvent`
+- [ ] Bridge tests use temp paths and `NoChooser`
+- [ ] Commit: `refactor(gui): drive the desktop app through a typed application module`
+
+## Verification
+
+- [ ] `mise run check` passes after each phase (fmt, clippy `-D warnings`, tests, cargo deny)
+- [ ] New tests: settings resolve, yt-dlp fake script, Soulseek fetch cancel, import policy matrix, stored JSON round trip, jobs.db copy, legacy cache import, decide → park → resume
+- [ ] Manual smoke test: `cargo run -p muzik-cli -- workflow <local flac> --dry-run`, `muzik watchlist list`, `muzik jobs list`, and `mise run gui` loads the watchlist
+- [ ] Edge cases: muzik.db at version 1 with a legacy `jobs.db`; waiting jobs survive the copy; Spotify waiting import questions still release; cancelled yt-dlp stops within 5 s
+- [ ] No behavior change in the watchlist cards (summary, primary action, action reasons) for YouTube, Spotify, and Bandcamp items
+- [ ] Migration: open a muzik.db at version 1, migrate, reopen; `*.migrated` file kept; a newer database version still refuses to open
+
+## Review
+
+- [ ] Code reviewed
+- [ ] PLAN.md updated if approach changed during implementation
+- [ ] All phase commits are clean and describe their intent
+- [ ] TODO.md items all checked off
