@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.8.0 - 2026-09-30
+#### Features
+- (**watchlist**) store the watchlist in muzik.db - (9bc8c00) - TudorAndrei
+#### Performance Improvements
+- (**downloads**) run yt-dlp and ffmpeg at a lower CPU priority - (fe7cc29) - TudorAndrei
+- (**watchlist**) buffer JSON writes when saving state files - (f7dfab5) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.7.3 - (4349110) - TudorAndrei
+
+- - -
+
 ## v2.7.3 - 2026-09-30
 #### Bug Fixes
 - (**spotify**) resolve waiting Spotify import questions without the user - (ecff7f0) - TudorAndrei
