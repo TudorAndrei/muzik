@@ -1,10 +1,10 @@
 //! Spotify settings and saved token path shared by the two apps.
 
-use crate::{app_config, paths};
+use crate::app_config;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
@@ -36,10 +36,6 @@ impl Settings {
     pub fn redirect_uri(&self) -> String {
         format!("http://127.0.0.1:{}/callback", self.redirect_port)
     }
-}
-
-pub fn token_path() -> PathBuf {
-    paths::config_dir().join("spotify-token.json")
 }
 
 pub fn set_client_id(path: &Path, client_id: &str) -> Result<String, String> {

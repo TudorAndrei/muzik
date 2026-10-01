@@ -2,6 +2,7 @@ use super::{check_cancelled, mark_full, organize, required, safe_name, Source};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_core::bandcamp;
+use muzik_core::paths::Paths;
 use muzik_core::watchlist::jobs::{JobError, LoadedSource};
 use muzik_core::watchlist::{
     bandcamp_source, ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem,
@@ -14,8 +15,8 @@ const MEGABYTE: u64 = 1024 * 1024;
 
 pub(super) struct Bandcamp;
 
-pub(super) fn ensure(repository: &Repository) -> Result<bool, String> {
-    match bandcamp::Login::load() {
+pub(super) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
+    match bandcamp::Login::load(paths) {
         Some(login) => repository.ensure(&bandcamp_source(&login.user)),
         None => Ok(false),
     }
@@ -23,7 +24,8 @@ pub(super) fn ensure(repository: &Repository) -> Result<bool, String> {
 
 impl Source for Bandcamp {
     fn load(&self, adapter: &mut Adapter<'_, '_>, _: &Playlist) -> Result<LoadedSource, JobError> {
-        let login = bandcamp::Login::load().ok_or_else(|| JobError::Operation(LOGIN.into()))?;
+        let login = bandcamp::Login::load(&adapter.prepared.settings.paths)
+            .ok_or_else(|| JobError::Operation(LOGIN.into()))?;
         let purchases = bandcamp::collection(&login)?;
         check_cancelled(adapter.cancelled)?;
         Ok(items(&purchases))
@@ -67,7 +69,8 @@ impl Source for Bandcamp {
                             .into(),
                     )
                 })?;
-            let login = bandcamp::Login::load().ok_or_else(|| JobError::Operation(LOGIN.into()))?;
+            let login = bandcamp::Login::load(&adapter.prepared.settings.paths)
+                .ok_or_else(|| JobError::Operation(LOGIN.into()))?;
             if directory.exists() {
                 std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
             }

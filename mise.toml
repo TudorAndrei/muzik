@@ -35,6 +35,14 @@ cargo test --workspace --locked
 cargo deny check licenses
 """
 
+[tasks.test-scoped]
+description = "Run the tests in a macOS sandbox that blocks the real muzik, beets, and music folders"
+run = """
+sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HOME="$HOME" -f scripts/test-scope.sb \
+  cargo test --workspace --locked --offline -- \
+  --skip background_command_runs_the_program_at_lower_priority
+"""
+
 [tasks.check-release]
 description = "Run the complete locked verification gate with the release build"
 depends = ["check"]

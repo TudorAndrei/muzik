@@ -24,7 +24,7 @@ impl Source for Spotify {
     ) -> Result<LoadedSource, JobError> {
         let document = spotify::load_playlist_document(
             &adapter.prepared.settings.paths.config_file(),
-            &spotify::token_path(),
+            &adapter.prepared.settings.paths.spotify_token(),
             &playlist.playlist_id,
         )?;
         check_cancelled(adapter.cancelled)?;

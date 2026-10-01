@@ -216,6 +216,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         self.local.stage.set(Stage::Quality);
         let _permit = gates::enter(Gate::Process, cancelled)?;
         let result = muzik_workflow::quality::check_youtube_quality(
+            &self.paths,
             audio_files.to_vec(),
             options.quality_policy,
             options.min_bitrate,

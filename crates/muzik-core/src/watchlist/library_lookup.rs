@@ -1,4 +1,4 @@
-use crate::{default_config_path, BeetsConfig};
+use crate::BeetsConfig;
 use muzik_library::{Library, SqlValue};
 use regex::Regex;
 use serde_json::json;
@@ -15,9 +15,7 @@ pub(super) struct MusicLibrary {
 impl MusicLibrary {
     /// The music library is optional during reconciliation.
     pub(super) fn open(config: Option<&Path>) -> Option<Self> {
-        let path = config
-            .map(Path::to_path_buf)
-            .unwrap_or_else(default_config_path);
+        let path = config?.to_path_buf();
         let values = BeetsConfig::load(&path, json!({})).ok()?;
         let database = values.get(&["library"])?.as_str()?;
         let directory = values.get(&["directory"])?.as_str()?;

@@ -1,0 +1,16 @@
+(version 1)
+(allow default)
+(deny file-write* (subpath "/"))
+(allow file-write*
+  (subpath (param "REPO"))
+  (subpath (string-append (param "HOME") "/.cargo"))
+  (subpath (string-append (param "HOME") "/.rustup"))
+  (subpath (string-append (param "HOME") "/.local/share/mise"))
+  (subpath "/dev"))
+(deny file-read* file-write*
+  (subpath (string-append (param "HOME") "/Library/Application Support/muzik"))
+  (subpath (string-append (param "HOME") "/Library/Caches/muzik"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/beets"))
+  (subpath (string-append (param "HOME") "/.config/beets"))
+  (subpath (string-append (param "HOME") "/.config/muzik"))
+  (subpath (string-append (param "HOME") "/Music")))

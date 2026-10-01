@@ -118,7 +118,7 @@ impl WorkflowOperations for LocalOperations<'_> {
         let preview = beets::plan_import_with_cancel(
             ImportRequest {
                 source: target.to_path_buf(),
-                config_path: options.config.clone().filter(|path| path.exists()),
+                config_path: options.config.clone(),
                 dry_run: options.dry_run,
                 force: options.force,
                 ..ImportRequest::default()

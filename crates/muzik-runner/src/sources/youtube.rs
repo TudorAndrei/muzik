@@ -146,6 +146,7 @@ pub(super) fn local_stage(
         let options = &adapter.prepared.settings.options;
         let events = adapter.events;
         let result = check_youtube_quality(
+            &adapter.prepared.settings.paths,
             vec![audio],
             options.quality_policy,
             options.min_bitrate,

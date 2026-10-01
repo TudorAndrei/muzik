@@ -1,6 +1,6 @@
 //! Bandcamp collection access with cookies exported from a browser.
 
-use crate::paths;
+use crate::paths::Paths;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{Read, Write};
@@ -28,14 +28,6 @@ pub const FORMATS: &[&str] = &[
     "alac",
 ];
 pub const DEFAULT_FORMAT: &str = "flac";
-
-pub fn cookies_path() -> PathBuf {
-    paths::config_dir().join("bandcamp_cookies.txt")
-}
-
-pub fn user_path() -> PathBuf {
-    paths::config_dir().join("bandcamp_user")
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cookie {
@@ -151,8 +143,8 @@ pub struct Login {
 }
 
 impl Login {
-    pub fn load() -> Option<Self> {
-        Self::load_from(&user_path(), &cookies_path())
+    pub fn load(paths: &Paths) -> Option<Self> {
+        Self::load_from(&paths.bandcamp_user(), &paths.bandcamp_cookies())
     }
 
     pub fn load_from(user_file: &Path, cookie_file: &Path) -> Option<Self> {
@@ -161,8 +153,13 @@ impl Login {
         (!user.is_empty()).then_some(Self { user, cookies })
     }
 
-    pub fn save(user: &str, cookie_text: &str) -> Result<Self, String> {
-        Self::save_to(&user_path(), &cookies_path(), user, cookie_text)
+    pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self, String> {
+        Self::save_to(
+            &paths.bandcamp_user(),
+            &paths.bandcamp_cookies(),
+            user,
+            cookie_text,
+        )
     }
 
     pub fn save_to(
@@ -218,9 +215,9 @@ impl Login {
             .ok_or_else(|| "Bandcamp did not accept the cookies. Log in to Bandcamp in the browser, then copy the identity cookie again.".into())
     }
 
-    pub fn clear() -> Result<bool, String> {
+    pub fn clear(paths: &Paths) -> Result<bool, String> {
         let mut removed = false;
-        for path in [cookies_path(), user_path()] {
+        for path in [paths.bandcamp_cookies(), paths.bandcamp_user()] {
             match fs::remove_file(&path) {
                 Ok(()) => removed = true,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -261,12 +258,12 @@ impl Login {
     }
 }
 
-pub fn status() -> Value {
-    match Login::load() {
+pub fn status(paths: &Paths) -> Value {
+    match Login::load(paths) {
         Some(login) => json!({"logged_in": true, "user": login.user}),
         None => json!({
             "logged_in": false,
-            "user": fs::read_to_string(user_path()).map(|user| user.trim().to_owned()).unwrap_or_default(),
+            "user": fs::read_to_string(paths.bandcamp_user()).map(|user| user.trim().to_owned()).unwrap_or_default(),
         }),
     }
 }

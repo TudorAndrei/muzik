@@ -1,6 +1,5 @@
 //! Thumbnail cache shared with saved watchlist items.
 
-use crate::paths;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,10 +25,6 @@ pub fn cached_path(id: &str, root: &Path) -> Option<PathBuf> {
         }
     }
     None
-}
-
-pub fn default_cached_path(id: &str) -> Option<PathBuf> {
-    cached_path(id, &paths::cache_dir())
 }
 
 pub fn save(id: &str, content_type: &str, bytes: &[u8], root: &Path) -> Result<PathBuf, String> {

@@ -23,7 +23,7 @@ pub fn sync(
     on_event: &mut dyn FnMut(Value),
 ) -> Result<Vec<PendingItem>, JobError> {
     let prepared = Prepared::new(settings);
-    sources::ensure(&prepared.repository)?;
+    sources::ensure(&prepared.repository, &settings.paths)?;
     import_cache(&prepared.repository, settings.reconcile())?;
     let events = RefCell::new(on_event);
     let parked = RefCell::new(None);
@@ -53,8 +53,8 @@ pub fn sync(
     Ok(synced.pending)
 }
 
-pub fn ensure_sources(repository: &Repository) -> Result<bool, String> {
-    sources::ensure(repository)
+pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> Result<bool, String> {
+    sources::ensure(&Repository::open(paths), paths)
 }
 
 pub fn action(

@@ -5,7 +5,6 @@ use muzik_core::bandcamp;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
 use muzik_core::spotify;
-use muzik_core::watchlist::Repository;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -40,23 +39,24 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
                 "parse_again", "split_again", "organize_again", "run_all_again"
             ]
         })),
-        "bandcamp.get" => Ok(bandcamp::status()),
+        "bandcamp.get" => Ok(bandcamp::status(paths)),
         "bandcamp.save" => {
             bandcamp::Login::save(
+                paths,
                 params["user"].as_str().unwrap_or(""),
                 params["cookies"].as_str().unwrap_or(""),
             )?;
-            muzik_runner::watchlist::ensure_sources(&Repository::open(paths))?;
-            Ok(bandcamp::status())
+            muzik_runner::watchlist::ensure_sources(paths)?;
+            Ok(bandcamp::status(paths))
         }
         "bandcamp.logout" => {
-            bandcamp::Login::clear()?;
-            Ok(bandcamp::status())
+            bandcamp::Login::clear(paths)?;
+            Ok(bandcamp::status(paths))
         }
         "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(paths)?})),
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(paths, params)?})),
         "library.scan" => library_scan(paths, params),
-        "services.check" => Ok(json!({"services": services::check()})),
+        "services.check" => Ok(json!({"services": services::check(paths)})),
         "soulseek.get" => soulseek_settings(&path),
         "soulseek.save" => {
             save_soulseek(&path, params)?;
@@ -70,9 +70,9 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
             let client_id = spotify::set_client_id(&path, client_id)?;
             Ok(json!({"client_id": client_id}))
         }
-        "spotify.logout" => Ok(json!({"removed": spotify::clear_tokens(&spotify::token_path())?})),
-        "spotify.status" => spotify::status(&path, &spotify::token_path()),
-        "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
+        "spotify.logout" => Ok(json!({"removed": spotify::clear_tokens(&paths.spotify_token())?})),
+        "spotify.status" => spotify::status(&path, &paths.spotify_token()),
+        "spotify.playlists" => spotify::list_playlists(&path, &paths.spotify_token())
             .map(|playlists| json!({"playlists": playlists})),
         _ => Err(format!("unknown command: {command}")),
     }

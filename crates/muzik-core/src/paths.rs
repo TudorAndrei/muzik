@@ -6,6 +6,7 @@ pub struct Paths {
     pub data: PathBuf,
     pub config: PathBuf,
     pub cache: PathBuf,
+    pub beets: PathBuf,
 }
 
 impl Paths {
@@ -14,6 +15,7 @@ impl Paths {
             data: data_dir(),
             config: config_dir(),
             cache: cache_dir(),
+            beets: crate::default_config_path(),
         }
     }
 
@@ -22,7 +24,20 @@ impl Paths {
             data: root.join("data"),
             config: root.join("config"),
             cache: root.join("cache"),
+            beets: root.join("beets/config.yaml"),
         }
+    }
+
+    pub fn spotify_token(&self) -> PathBuf {
+        self.config.join("spotify-token.json")
+    }
+
+    pub fn bandcamp_cookies(&self) -> PathBuf {
+        self.config.join("bandcamp_cookies.txt")
+    }
+
+    pub fn bandcamp_user(&self) -> PathBuf {
+        self.config.join("bandcamp_user")
     }
 
     pub fn database(&self) -> PathBuf {

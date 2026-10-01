@@ -1,4 +1,5 @@
 use muzik_core::app_config;
+use muzik_core::paths::Paths;
 use muzik_soulseek::session::{Session, SessionSettings};
 use serde::Serialize;
 use serde_json::Value;
@@ -12,11 +13,11 @@ pub struct ServiceStatus {
     optional: bool,
 }
 
-pub fn check() -> Vec<ServiceStatus> {
+pub fn check(paths: &Paths) -> Vec<ServiceStatus> {
     vec![
         check_binary("ffmpeg", "ffmpeg", &["-version"], false),
         check_binary("yt-dlp", "yt-dlp", &["--version"], false),
-        check_soulseek(),
+        check_soulseek(paths),
     ]
 }
 
@@ -71,8 +72,8 @@ fn version(line: &str) -> Option<String> {
         .map(|word| (*word).to_owned())
 }
 
-fn check_soulseek() -> ServiceStatus {
-    let config = app_config::load(&app_config::path()).unwrap_or(Value::Null);
+fn check_soulseek(paths: &Paths) -> ServiceStatus {
+    let config = app_config::load(&paths.config_file()).unwrap_or(Value::Null);
     let Some(settings) = SessionSettings::configured(&config) else {
         return ServiceStatus {
             name: "Soulseek",

@@ -2,6 +2,7 @@
 
 use crate::local_workflow;
 use crate::watchlist::Adapter;
+use muzik_core::paths::Paths;
 use muzik_core::watchlist::jobs::{JobError, LoadedSource};
 use muzik_core::watchlist::{
     ItemAction, Playlist, Repository, SourceKind, Stage, StageStatus, WatchItem,
@@ -40,8 +41,8 @@ pub(crate) fn of(kind: SourceKind) -> &'static dyn Source {
     }
 }
 
-pub(crate) fn ensure(repository: &Repository) -> Result<bool, String> {
-    bandcamp::ensure(repository)
+pub(crate) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
+    bandcamp::ensure(repository, paths)
 }
 
 fn organize(

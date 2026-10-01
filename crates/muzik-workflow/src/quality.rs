@@ -1,8 +1,9 @@
 //! Safe quality replacement for a freshly acquired YouTube audio file.
 
 use muzik_core::chapters::sidecar_path;
+use muzik_core::paths::Paths;
 use muzik_core::quality::{self, MeasuredQuality, QualityDecision};
-use muzik_core::{DecisionKind, QualityPolicy, app_config, paths};
+use muzik_core::{DecisionKind, QualityPolicy, app_config};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::ranking::{format as file_format, rank};
 use muzik_soulseek::session::{Session, SessionSettings};
@@ -58,7 +59,9 @@ trait Backend {
 
 /// Return the original audio if a replacement cannot be verified. The caller
 /// owns any returned replacement directory and must remove it after import.
+#[allow(clippy::too_many_arguments)]
 pub fn check_youtube_quality(
+    paths: &Paths,
     audio_files: Vec<PathBuf>,
     policy: QualityPolicy,
     min_bitrate: u32,
@@ -67,7 +70,10 @@ pub fn check_youtube_quality(
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult, String> {
-    let mut backend = SoulseekBackend { session: None };
+    let mut backend = SoulseekBackend {
+        paths: paths.clone(),
+        session: None,
+    };
     check_with_backend(
         &mut backend,
         audio_files,
@@ -439,20 +445,15 @@ fn copy_chapter_sidecars(original: &Path, replacement: &Path) -> Result<(), Stri
     Ok(())
 }
 
-fn quality_download_dir() -> Result<PathBuf, String> {
-    let path = paths::data_dir().join("soulseek");
-    std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
-    Ok(path)
-}
-
 struct SoulseekBackend {
+    paths: Paths,
     session: Option<(Arc<Session>, Timeouts)>,
 }
 
 impl SoulseekBackend {
     fn session(&mut self) -> Result<(&Session, Timeouts), String> {
         if self.session.is_none() {
-            let config = app_config::load(&app_config::path())?;
+            let config = app_config::load(&self.paths.config_file())?;
             let settings = SessionSettings::configured(&config)
                 .ok_or("Set Soulseek credentials in configuration first.")?;
             self.session = Some((
@@ -469,7 +470,9 @@ impl SoulseekBackend {
 
 impl Backend for SoulseekBackend {
     fn download_dir(&self) -> Result<PathBuf, String> {
-        quality_download_dir()
+        let path = self.paths.soulseek();
+        std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
+        Ok(path)
     }
 
     fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>, String> {

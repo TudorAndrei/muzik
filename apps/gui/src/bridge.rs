@@ -319,6 +319,7 @@ impl Bridge {
             return self.reject(&id, "job_active", "A Spotify login is already active.");
         }
         let config = self.app.paths().config_file();
+        let token = self.app.paths().spotify_token();
         if let Some(port) = port {
             if let Err(message) = app_config::save_section_string(
                 &config,
@@ -341,7 +342,7 @@ impl Bridge {
         let sender = self.native_output.clone();
         let state = Arc::clone(&self.login);
         thread::spawn(move || {
-            let event = match spotify::login(&config, &spotify::token_path(), port, &cancel) {
+            let event = match spotify::login(&config, &token, port, &cancel) {
                 Ok(name) => AppEvent::JobCompleted {
                     job_id,
                     result: json!({"account_name": name}),

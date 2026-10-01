@@ -178,7 +178,7 @@ impl App {
             self.generation.fetch_add(1, Ordering::SeqCst) + 1
         };
         let repository = self.repository();
-        if let Err(message) = watchlist::ensure_sources(&repository) {
+        if let Err(message) = watchlist::ensure_sources(&self.paths) {
             (self.sink)(AppEvent::WatchlistError(message));
         }
         let settings = Settings::resolve(&self.paths, &json!({}))?;

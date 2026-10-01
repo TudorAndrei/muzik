@@ -59,7 +59,7 @@ impl Settings {
                 .and_then(|number| u32::try_from(number).ok())
                 .ok_or("min_bitrate must be a non-negative integer")?;
         }
-        options.config = path(values, "config")?;
+        options.config = Some(path(values, "config")?.unwrap_or_else(|| paths.beets.clone()));
         if let Some(value) = values.get("audio_source") {
             options.audio_source = choice(value, "audio_source")?;
         }
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(settings.options.quality_policy.as_str(), "ask");
         assert_eq!(settings.options.duplicates.as_str(), "keep_all");
         assert_eq!(settings.options.min_bitrate, 192);
-        assert_eq!(settings.options.config, None);
+        assert_eq!(settings.options.config, Some(paths.beets.clone()));
         assert!(!settings.request.output.starts_with("~"));
         assert_eq!(
             settings.agent_model.as_deref(),

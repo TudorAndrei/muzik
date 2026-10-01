@@ -1,3 +1,4 @@
+use muzik_core::paths::Paths;
 use muzik_core::{app_config, spotify, watchlist};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -9,7 +10,7 @@ pub fn set_client_id(client_id: &str) -> Result<(), String> {
 }
 
 pub fn logout() -> Result<(), String> {
-    if spotify::clear_tokens(&spotify::token_path())? {
+    if spotify::clear_tokens(&Paths::user().spotify_token())? {
         println!("Spotify tokens removed.");
     } else {
         println!("No Spotify tokens were saved.");
@@ -18,7 +19,7 @@ pub fn logout() -> Result<(), String> {
 }
 
 pub fn status() -> Result<(), String> {
-    let status = spotify::status(&app_config::path(), &spotify::token_path())?;
+    let status = spotify::status(&app_config::path(), &Paths::user().spotify_token())?;
     let client_id = status
         .get("client_id")
         .and_then(serde_json::Value::as_str)
@@ -50,7 +51,7 @@ pub fn status() -> Result<(), String> {
 }
 
 pub fn playlists() -> Result<(), String> {
-    for playlist in spotify::list_playlists(&app_config::path(), &spotify::token_path())? {
+    for playlist in spotify::list_playlists(&app_config::path(), &Paths::user().spotify_token())? {
         let total = playlist
             .total
             .map_or_else(|| "?".to_owned(), |total| total.to_string());
@@ -61,7 +62,7 @@ pub fn playlists() -> Result<(), String> {
 
 pub fn export(uri: &str, output: Option<&Path>) -> Result<(), String> {
     let document =
-        spotify::load_playlist_document(&app_config::path(), &spotify::token_path(), uri)?;
+        spotify::load_playlist_document(&app_config::path(), &Paths::user().spotify_token(), uri)?;
     let mut bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     if let Some(path) = output {
@@ -88,7 +89,7 @@ pub fn watch(reference: &str) -> Result<(), String> {
     if source.kind != watchlist::SourceKind::Spotify {
         return Err("enter a Spotify playlist or album link, or liked".into());
     }
-    let repository = watchlist::Repository::open(&muzik_core::paths::Paths::user());
+    let repository = watchlist::Repository::open(&Paths::user());
     let playlist = repository.add(reference)?;
     let name = playlist.title.as_deref().unwrap_or(&playlist.playlist_id);
     println!("Added {name}. Run `muzik watchlist refresh` to sync it.");
@@ -114,7 +115,7 @@ pub fn login(port: Option<u16>) -> Result<(), String> {
     println!("Opening the browser for Spotify login...");
     let name = spotify::login(
         &config,
-        &spotify::token_path(),
+        &Paths::user().spotify_token(),
         port,
         &AtomicBool::new(false),
     )?;
