@@ -5,7 +5,7 @@ use muzik_core::bandcamp;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
 use muzik_core::spotify;
-use muzik_core::watchlist::{self, Repository};
+use muzik_core::watchlist::Repository;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -45,11 +45,11 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
         })),
         "bandcamp.get" => Ok(bandcamp::status()),
         "bandcamp.save" => {
-            let login = bandcamp::Login::save(
+            bandcamp::Login::save(
                 params["user"].as_str().unwrap_or(""),
                 params["cookies"].as_str().unwrap_or(""),
             )?;
-            Repository::open(paths).ensure(&watchlist::bandcamp_source(&login.user))?;
+            muzik_runner::watchlist::ensure_sources(&Repository::open(paths))?;
             Ok(bandcamp::status())
         }
         "bandcamp.logout" => {

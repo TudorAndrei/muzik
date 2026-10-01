@@ -1,7 +1,7 @@
 use crate::settings::Settings;
 use muzik_core::db;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::{ItemAction, ItemId};
+use muzik_core::watchlist::{ItemAction, ItemId, SourceKind};
 use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use serde_json::{json, Value};
@@ -152,19 +152,19 @@ impl Jobs {
         store.answer(id, &json!({"kind":kind,"value":value}))
     }
 
-    pub fn release_spotify_questions(&self) -> Result<usize, String> {
+    pub fn release_import_questions(&self) -> Result<usize, String> {
         let store = self.store();
         let mut released = 0;
         for job in store.list(Status::Waiting)? {
-            let spotify = job.params["playlist_id"]
+            let keeps_tags = job.params["playlist_id"]
                 .as_str()
-                .is_some_and(|id| id.starts_with("spotify:"));
+                .is_some_and(|id| SourceKind::of_playlist_id(id).keeps_current_tags());
             let kind = job
                 .question
                 .as_ref()
                 .and_then(|question| question["kind"].as_str())
                 .and_then(|kind| kind.parse::<DecisionKind>().ok());
-            if spotify
+            if keeps_tags
                 && matches!(
                     kind,
                     Some(DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)
@@ -287,7 +287,7 @@ mod tests {
         let spotify = park("spotify:liked", "import_match")?;
         let youtube = park("PL1", "import_match")?;
         let chapters = park("spotify:album:a", "chapter_review")?;
-        assert_eq!(jobs.release_spotify_questions()?, 1);
+        assert_eq!(jobs.release_import_questions()?, 1);
         let waiting: Vec<i64> = jobs.snapshot()["waiting"]
             .as_array()
             .into_iter()

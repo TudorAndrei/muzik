@@ -1,6 +1,6 @@
 //! Durable watchlist jobs. Callers supply source and audio operations.
 
-use super::view::availability;
+use super::source::availability;
 use super::{
     now, reconcile, view, AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository,
     Stage, StageStatus, WatchItem, Watchlist,

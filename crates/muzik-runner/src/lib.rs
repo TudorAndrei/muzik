@@ -8,6 +8,7 @@ mod queue;
 mod remote_workflow;
 mod runner;
 pub mod settings;
+mod sources;
 pub mod watchlist;
 
 pub use queue::{job_id, parse_job_id, EnqueueError, Jobs};

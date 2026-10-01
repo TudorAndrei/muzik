@@ -1,143 +1,84 @@
 use std::fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::atomic::AtomicBool;
+
+use muzik_core::bandcamp;
 
 use crate::{Bandcamp, paths};
 
-pub fn download(args: &Bandcamp) -> io::Result<()> {
-    let user = args
-        .user
-        .clone()
-        .or_else(|| std::env::var("BS_USER").ok())
-        .or_else(|| read_stored_user(&paths::config_dir().join("bandcamp_user")))
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "give a Bandcamp username"))?;
+pub fn download(args: &Bandcamp) -> Result<(), String> {
+    let login = match &args.cookies {
+        Some(file) => {
+            let text = fs::read_to_string(file)
+                .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+            bandcamp::Login::save(args.user.as_deref().unwrap_or(""), &text)?
+        }
+        None => bandcamp::Login::load().ok_or(
+            "Save the Bandcamp login first: give --cookies <file>, or use Settings in the app.",
+        )?,
+    };
     let output = args
         .output
         .clone()
         .unwrap_or_else(|| paths::data_dir().join("bandcamp"));
-    let cookies = args
-        .cookies
-        .clone()
-        .or_else(|| {
-            let path = paths::config_dir().join("bandcamp_cookies.txt");
-            path.is_file().then_some(path)
-        })
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                "give --cookies with a Bandcamp cookie file",
-            )
-        })?;
-
-    migrate_cache(&output)?;
-    let mut command = Command::new(bandsnatch_executable()?);
-    command
-        .arg("run")
-        .arg("--format")
-        .arg(&args.format)
-        .arg("--output-folder")
-        .arg(output)
-        .arg("--jobs")
-        .arg(args.jobs.to_string())
-        .arg("--cookies")
-        .arg(cookies);
-    if args.dry_run {
-        command.arg("--dry-run");
+    let purchases = bandcamp::collection(&login)?;
+    println!(
+        "{} purchase(s) in the collection of {}",
+        purchases.len(),
+        login.user
+    );
+    let cancelled = AtomicBool::new(false);
+    for purchase in &purchases {
+        let label = purchase.label();
+        let folder = output.join(folder_name(&label));
+        if !args.force && !bandcamp::audio_files(&folder).is_empty() {
+            println!("Already downloaded: {label}");
+            continue;
+        }
+        if args.dry_run {
+            println!("Would download: {label}");
+            continue;
+        }
+        println!("Downloading: {label}");
+        let files = bandcamp::download(
+            &login,
+            &purchase.download_page,
+            &args.format,
+            &folder,
+            &cancelled,
+            &mut |_, _| {},
+        )?;
+        println!("  {} file(s) in {}", files.len(), folder.display());
     }
-    if args.force {
-        command.arg("--force");
-    }
-    let status = command.arg(user).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "bandsnatch exited with status {status}"
-        )))
-    }
-}
-
-fn bandsnatch_executable() -> io::Result<PathBuf> {
-    let current = std::env::current_exe()?;
-    Ok(bandsnatch_executable_for(&current))
-}
-
-fn bandsnatch_executable_for(current: &Path) -> PathBuf {
-    let name = format!("bandsnatch{}", std::env::consts::EXE_SUFFIX);
-    current
-        .parent()
-        .map(|parent| parent.join(&name))
-        .filter(|candidate| candidate.is_file())
-        .unwrap_or_else(|| PathBuf::from(name))
-}
-
-fn read_stored_user(path: &Path) -> Option<String> {
-    fs::read_to_string(path)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-}
-
-fn migrate_cache(output: &Path) -> io::Result<()> {
-    let old_cache = paths::cache_dir().join("bandcamp.cache");
-    migrate_cache_from(&old_cache, output)
-}
-
-fn migrate_cache_from(old_cache: &Path, output: &Path) -> io::Result<()> {
-    let new_cache = output.join("bandcamp-collection-downloader.cache");
-    if !old_cache.is_file() || new_cache.exists() {
-        return Ok(());
-    }
-    fs::create_dir_all(output)?;
-    fs::copy(old_cache, new_cache)?;
     Ok(())
+}
+
+fn folder_name(label: &str) -> String {
+    let name: String = label
+        .chars()
+        .map(|character| {
+            if character.is_control() || matches!(character, '/' | '\\' | ':') {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect();
+    let name = name.trim().trim_start_matches('.');
+    if name.is_empty() {
+        "Bandcamp purchase".into()
+    } else {
+        name.to_owned()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
-    use super::{bandsnatch_executable_for, migrate_cache_from};
+    use super::folder_name;
 
     #[test]
-    fn uses_bandsnatch_installed_beside_muzik() {
-        let temp = tempfile::tempdir().expect("create test directory");
-        let muzik = temp.path().join("muzik");
-        let bandsnatch = temp
-            .path()
-            .join(format!("bandsnatch{}", std::env::consts::EXE_SUFFIX));
-        fs::write(&bandsnatch, []).expect("create sidecar binary");
-
-        assert_eq!(bandsnatch_executable_for(&muzik), bandsnatch);
-
-        fs::remove_file(&bandsnatch).expect("remove sidecar binary");
-        assert_eq!(
-            bandsnatch_executable_for(&muzik),
-            std::path::PathBuf::from(format!("bandsnatch{}", std::env::consts::EXE_SUFFIX))
-        );
-    }
-
-    #[test]
-    fn retains_download_history_when_changing_bandcamp_downloaders() {
-        let temp = tempfile::tempdir().expect("create test directory");
-        let source = temp.path().join("bandcamp.cache");
-        let output = temp.path().join("output");
-        fs::write(&source, "album-1| My album\n").expect("write old cache");
-
-        migrate_cache_from(&source, &output).expect("move cache");
-
-        let new_cache = output.join("bandcamp-collection-downloader.cache");
-        assert_eq!(
-            fs::read_to_string(&new_cache).expect("read new cache"),
-            "album-1| My album\n"
-        );
-
-        fs::write(&new_cache, "album-2| Existing\n").expect("write existing cache");
-        migrate_cache_from(&source, &output).expect("preserve existing cache");
-        assert_eq!(
-            fs::read_to_string(new_cache).expect("read existing cache"),
-            "album-2| Existing\n"
-        );
+    fn a_purchase_label_becomes_one_safe_folder_name() {
+        assert_eq!(folder_name("Band - Album"), "Band - Album");
+        assert_eq!(folder_name("AC/DC: Live\n"), "AC_DC_ Live_");
+        assert_eq!(folder_name(" .. "), "Bandcamp purchase");
     }
 }

@@ -34,8 +34,7 @@ licensed under GPL-3.0-only.
 
 The CLI and the desktop app are separate programs. The app adds the Homebrew
 and mise tool folders to its `PATH`, so it finds `ffmpeg` and `yt-dlp` when it
-opens from Finder. Install the upstream Rust `bandsnatch`
-program to use the Bandcamp command.
+opens from Finder.
 
 ## Publish to Homebrew and mise
 

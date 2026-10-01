@@ -16,7 +16,6 @@ pub fn check() -> Vec<ServiceStatus> {
     vec![
         check_binary("ffmpeg", "ffmpeg", &["-version"], false),
         check_binary("yt-dlp", "yt-dlp", &["--version"], false),
-        check_binary("bandsnatch", "bandsnatch", &["--version"], true),
         check_soulseek(),
     ]
 }
@@ -126,7 +125,7 @@ mod tests {
             version("ffmpeg version 9.0.2 Copyright (c) 2000-2026 the FFmpeg developers"),
             Some("9.0.2".into())
         );
-        assert_eq!(version("bandsnatch 0.3.3"), Some("0.3.3".into()));
+        assert_eq!(version("tool 0.3.3"), Some("0.3.3".into()));
         assert_eq!(version("2026.08.19"), Some("2026.08.19".into()));
         assert_eq!(version("usage: tool"), None);
     }

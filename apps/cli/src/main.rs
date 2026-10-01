@@ -32,7 +32,7 @@ struct Muzik {
 enum Command {
     /// Split and organize audio files already on disk.
     Archive(Archive),
-    /// Download a Bandcamp collection with bandsnatch.
+    /// Download the purchases of a Bandcamp collection.
     Bandcamp(Bandcamp),
     /// Manage cached data.
     Cache(Cache),
@@ -469,7 +469,7 @@ struct Download {
 
 #[derive(Args)]
 struct Bandcamp {
-    /// Bandcamp username.
+    /// Bandcamp username (only with --cookies; muzik finds it if you leave it out).
     user: Option<String>,
     /// Folder for downloaded releases.
     #[usage(long, short = 'o')]
@@ -491,16 +491,13 @@ struct Bandcamp {
         )
     )]
     format: String,
-    /// Path to a Bandcamp cookie file.
+    /// Path to a Bandcamp cookie file. Muzik saves the login for later runs.
     #[usage(long, short = 'c')]
     cookies: Option<PathBuf>,
-    /// Number of download jobs.
-    #[usage(long, short = 'j', default = "4")]
-    jobs: u8,
     /// List releases without downloading them.
     #[usage(long, short = 'd')]
     dry_run: bool,
-    /// Download releases that are already in the bandsnatch cache.
+    /// Download releases that are already in the output folder again.
     #[usage(long, short = 'F')]
     force: bool,
 }
@@ -639,7 +636,7 @@ struct SetSpotifyClientId {
 fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Archive(args) => archive::run(&args),
-        Command::Bandcamp(args) => bandcamp::download(&args).map_err(|error| error.to_string()),
+        Command::Bandcamp(args) => bandcamp::download(&args),
         Command::Cache(args) => match args.command {
             CacheCommand::List => cache::list(),
             CacheCommand::Clear(args) => cache::clear(args.key.as_deref()),

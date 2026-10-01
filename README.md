@@ -20,7 +20,6 @@ collection.
 ## Requirements
 
 - `yt-dlp` and `ffmpeg` on `$PATH`
-- [bandsnatch](https://github.com/Ovyerus/bandsnatch) on `$PATH` for Bandcamp
 - Optional for Soulseek: a Soulseek account (username/password) — the client
   is embedded, no separate server to run
 
@@ -33,15 +32,15 @@ muzik soulseek check      # when using Soulseek
 ```
 
 For Bandcamp, export your own cookies to a file and give that file to
-`muzik bandcamp --cookies`. See the upstream bandsnatch instructions for the
-cookie file format.
+`muzik bandcamp --cookies` one time, or save the login in **Settings** in the
+app. Muzik keeps the login for later runs.
 
 ### macOS arm64 prerequisites
 
 Install the required command-line tools and confirm that they are on `PATH`:
 
 ```sh
-brew install ffmpeg yt-dlp ovyerus/tap/bandsnatch
+brew install ffmpeg yt-dlp
 ffmpeg -version
 yt-dlp --version
 ```
@@ -174,7 +173,7 @@ files provide metadata; the selected audio source acquires each track.
 | `muzik spotify playlists` | List Liked Songs and your Spotify playlists |
 | `muzik spotify export <ref>` | Write one Spotify playlist as a metadata export |
 | `muzik spotify watch <ref>` | Add one Spotify playlist to the watchlist |
-| `muzik bandcamp <user> --cookies <file>` | Download a Bandcamp collection through bandsnatch |
+| `muzik bandcamp [--cookies <file>]` | Download the purchases of your Bandcamp collection |
 | `muzik split <file>` | Split audio file by chapters (with optional `--review`) |
 | `muzik organize <dir>` | Import audio by default, or write library tags with `--tag-only` |
 | `muzik import <dir>` | Import audio into a Beets-compatible library |
@@ -366,7 +365,6 @@ To override the skip and download again, use `--force` (`-f`) on the CLI, or the
 
 ## Credits
 
-- Bandcamp collection downloading uses the upstream Rust [bandsnatch](https://github.com/Ovyerus/bandsnatch) program.
 - Soulseek integration via the embedded [soulseek-rs](https://github.com/michel/soulseek-rs) client
 - YouTube metadata and fallback audio via [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 - Audio processing via [FFmpeg](https://ffmpeg.org/)
@@ -399,13 +397,13 @@ muzik workflow "https://youtube.com/watch?v=..." --audio-source soulseek --prefe
 muzik workflow "https://youtube.com/watch?v=..." --audio-source soulseek --fallback youtube
 
 # Download your Bandcamp collection with an exported cookie file
-muzik bandcamp <user> --cookies <file>
+muzik bandcamp --cookies <file>
 
 # Import an existing music collection
 muzik import ~/Music --copy
 ```
 
-Bandsnatch needs an authenticated cookie file. Pass it with `--cookies` each
-time, or keep it at `bandcamp_cookies.txt` in the muzik config directory.
+The Bandcamp command needs an authenticated cookie file one time. After that it
+uses the saved login in `bandcamp_cookies.txt` in the muzik config directory.
 
 Only download music you are authorized to access.

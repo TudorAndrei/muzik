@@ -15,6 +15,7 @@ mod item;
 pub mod jobs;
 mod library_lookup;
 mod reconcile;
+pub mod source;
 mod view;
 
 pub use item::{

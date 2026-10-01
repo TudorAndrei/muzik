@@ -1,9 +1,9 @@
-use super::{AudioIndex, ItemAction, SourceKind, Stage, StageStatus, WatchItem, Watchlist};
-use crate::chapters;
+use super::source::availability;
+use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
 use crate::thumbnails;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 #[derive(
@@ -107,78 +107,4 @@ fn enrich(
     fields.insert("primary_action".into(), primary);
     fields.insert("actions".into(), Value::Object(actions));
     Ok(())
-}
-
-pub(super) fn availability(
-    item: &WatchItem,
-    action: ItemAction,
-    audio: Option<&Path>,
-) -> (bool, Option<&'static str>) {
-    if item.is_gone() {
-        return (false, Some("This video is private or was removed."));
-    }
-    if item.video_id.as_deref().is_none_or(str::is_empty)
-        || item.video_url.as_deref().is_none_or(str::is_empty)
-    {
-        return (false, Some("This playlist item is unavailable."));
-    }
-    let spotify = item.kind == SourceKind::Spotify;
-    if spotify
-        && item.track.as_ref().is_none_or(|track| {
-            track.is_null() || track.as_object().is_some_and(serde_json::Map::is_empty)
-        })
-    {
-        return (false, Some("This track has no saved Spotify metadata."));
-    }
-    if action.stage() == Stage::Download {
-        return (true, None);
-    }
-    if item.kind == SourceKind::Bandcamp {
-        if action != ItemAction::OrganizeAgain {
-            return (false, Some("A Bandcamp purchase has no quality check, no chapters to parse, and nothing to split."));
-        }
-        return if item.path(Stage::Download).is_some_and(Path::is_dir) {
-            (true, None)
-        } else {
-            (
-                false,
-                Some("Download this purchase before you organize it again."),
-            )
-        };
-    }
-    if action == ItemAction::OrganizeAgain {
-        let split = item
-            .path(Stage::Split)
-            .map(PathBuf::from)
-            .filter(|path| path.exists());
-        if split.is_some() || audio.is_some() {
-            return (true, None);
-        }
-        return (
-            false,
-            Some(if spotify {
-                "No acquired audio is available."
-            } else {
-                "No downloaded audio or split directory is available."
-            }),
-        );
-    }
-    if spotify {
-        return (false, Some("A Spotify track is one file: it has no quality check, no chapters to parse, and nothing to split."));
-    }
-    let Some(audio) = audio else {
-        return (
-            false,
-            Some("Download this video before you run this command."),
-        );
-    };
-    if action == ItemAction::SplitAgain
-        && !chapters::find_chapters(audio).is_ok_and(|chapters| !chapters.is_empty())
-    {
-        return (
-            false,
-            Some("Parse and accept chapters before you split this video."),
-        );
-    }
-    (true, None)
 }

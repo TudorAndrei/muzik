@@ -100,7 +100,7 @@ impl Runner {
         };
         jobs.import_legacy()?;
         jobs.store().recover()?;
-        jobs.release_spotify_questions()?;
+        jobs.release_import_questions()?;
         let shared = Arc::new(Shared {
             jobs,
             running: Arc::new(Mutex::new(HashMap::new())),

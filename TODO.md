@@ -59,12 +59,13 @@
 
 ## Phase 8: Source modules
 
-- [ ] `muzik-runner/src/sources/` with YouTube, Spotify, Bandcamp
-- [ ] Availability rules move into the sources
-- [ ] Bandcamp `ensure` in the watchlist load
-- [ ] `release_spotify_questions` asks the source
-- [ ] CLI `bandcamp` uses the Rust module; bandsnatch removed
-- [ ] Commit: `refactor(watchlist): give each source kind one module behind a Source seam`
+- [x] `muzik-runner/src/sources/` with YouTube, Spotify, Bandcamp behind a `Source` trait
+- [x] Availability rules move into `muzik-core/src/watchlist/source.rs`, one function per kind (core must compute them for the view)
+- [x] Bandcamp `ensure` in the watchlist sync (`watchlist::ensure_sources`); the GUI calls it
+- [x] `release_import_questions` asks `SourceKind::keeps_current_tags`
+- [x] CLI `bandcamp` uses the Rust module; bandsnatch removed
+- [x] Same `watchlist list --items` output on a copy of the real data
+- [x] Commit: `refactor(watchlist): give each source kind one module behind a Source seam`
 
 ## Phase 9: Waiting for a choice as a returned value
 

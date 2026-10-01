@@ -493,13 +493,10 @@ fn load_watchlist(load: WatchlistLoad) {
             return;
         }
     };
-    if let Some(login) = muzik_core::bandcamp::Login::load() {
-        let source = muzik_core::watchlist::bandcamp_source(&login.user);
-        if let Err(message) = load.repository.ensure(&source) {
-            let _ = load
-                .sender
-                .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
-        }
+    if let Err(message) = muzik_runner::watchlist::ensure_sources(&load.repository) {
+        let _ = load
+            .sender
+            .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
     }
     let saved = match watchlist::saved(&settings, &load.repository) {
         Ok(saved) => saved,
