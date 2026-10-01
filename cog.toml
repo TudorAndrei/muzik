@@ -2,3 +2,6 @@ tag_prefix = "v"
 branch_whitelist = ["main"]
 pre_bump_hooks = ["cargo run --locked -p muzik-release -- {{version}}"]
 post_bump_hooks = ["git push origin HEAD:main", "git push origin {{version_tag}}"]
+
+[commit_types]
+perf = { changelog_title = "Performance Improvements", bump_patch = true }
