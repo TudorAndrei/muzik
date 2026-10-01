@@ -238,6 +238,13 @@ impl Repository {
         &self,
         change: impl FnOnce(&mut Watchlist) -> Result<T, String>,
     ) -> Result<T, String> {
+        self.update_with(|document, _| change(document))
+    }
+
+    pub fn update_with<T>(
+        &self,
+        change: impl FnOnce(&mut Watchlist, &Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
         self.locked(|| {
             let mut connection = self.connect()?;
             let transaction = connection
@@ -245,7 +252,7 @@ impl Repository {
                 .map_err(db::text)?;
             let before = read_document(&transaction)?;
             let mut document = before.clone();
-            let result = change(&mut document)?;
+            let result = change(&mut document, &transaction)?;
             write_changes(&transaction, &before, &document.normalized()?)?;
             transaction.commit().map_err(db::text)?;
             Ok(result)

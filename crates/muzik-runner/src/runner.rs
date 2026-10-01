@@ -3,11 +3,12 @@ use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::watchlist::jobs::JobError;
-use muzik_core::watchlist::{ItemAction, ItemId, Stage};
+use muzik_core::watchlist::{ItemAction, Stage};
 use muzik_core::DecisionKind;
 use muzik_jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
 use muzik_workflow::{classify_input, WorkflowInput};
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -169,12 +170,6 @@ impl Runner {
             thread::sleep(Duration::from_millis(300));
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn stop_workers(&self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
-        self.shared.wake.notify_all();
-    }
 }
 
 fn work(shared: &Arc<Shared>) {
@@ -308,7 +303,6 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
     }));
     let mut workflow_event = |event: Value| {
         if event["event"] == "item_waiting" {
-            let _ = park_item(&shared.store(), &job.params, &event["data"]);
             shared.publish();
         }
         shared.event(job_id, Source::Workflow, &event);
@@ -386,6 +380,7 @@ fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -
         input,
         &settings,
         cancel,
+        &Cell::new(Stage::Download),
         &mut workflow_event,
         &mut import_event,
         &mut decide,
@@ -441,44 +436,17 @@ fn job_error(error: JobError) -> (bool, String) {
     (matches!(error, JobError::Cancelled), error.to_string())
 }
 
-pub(crate) fn park_item(store: &Store, params: &Value, data: &Value) -> Result<i64, String> {
-    let stage = data["stage"]
-        .as_str()
-        .and_then(|stage| stage.parse::<Stage>().ok())
-        .unwrap_or(Stage::Download);
-    let id = ItemId::from_params(data)?;
-    let mut params = params.clone();
-    id.write(&mut params);
-    params["action"] = json!(stage.resume_action());
-    let key = id.to_string();
-    let title = data["title"]
-        .as_str()
-        .or_else(|| params["title"].as_str())
-        .unwrap_or("Item")
-        .to_owned();
-    store.park(
-        &NewJob {
-            kind: Kind::Item,
-            item_key: &key,
-            title: &title,
-            params: &params,
-        },
-        &data["question"],
-    )
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{park_item, Options, Runner};
+    use super::{Options, Runner};
     use crate::queue::Jobs;
     use muzik_core::paths::Paths;
-    use muzik_jobs::Queue;
+    use muzik_core::watchlist::{Repository, SourceKind, Stage, StageStatus, WatchItem};
     use serde_json::{json, Value};
-    use std::path::Path;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<Value>), String> {
         let (sender, receiver) = mpsc::channel();
@@ -502,33 +470,64 @@ mod tests {
     }
 
     #[test]
-    fn a_parked_choice_waits_for_an_answer_and_then_queues() -> Result<(), String> {
-        let jobs = Arc::new(Jobs::in_memory(&Paths::under(Path::new("unused")))?);
+    fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::under(dir.path());
+        let output = dir.path().join("downloads");
+        std::fs::create_dir_all(&output)?;
+        let audio = output.join("Song [abcdefghijk].flac");
+        std::fs::copy(crate::sources::testing::fixture(), &audio)?;
+        let config = crate::sources::testing::library_config(dir.path())?;
+        let repository = Repository::open(&paths);
+        repository.add("https://www.youtube.com/playlist?list=PL1")?;
+        repository.update(|document| {
+            let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
+            item.video_id = Some("abcdefghijk".into());
+            item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
+            item.complete(Stage::Download, Some(audio.clone()));
+            document.playlists[0].items = vec![item];
+            Ok(())
+        })?;
+        let jobs = Arc::new(Jobs::open(&paths)?);
         let (runner, _) = runner(&jobs)?;
-        runner.stop_workers();
-        std::thread::sleep(Duration::from_millis(1200));
-        let question = json!({"kind":"import_match","payload":{"matches":[]}});
-        let id = park_item(
-            &jobs.store(),
-            &json!({"output":"/music"}),
-            &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","title":"Album","stage":"organize","question":question}),
-        )?;
+        jobs.item(&json!({
+            "playlist_id":"PL1","position":1,"video_id":"abcdefghijk","title":"Song",
+            "action":"organize_again","output":output,"config":config,"interactive":true
+        }))?;
+        runner.wake();
+        let started = Instant::now();
+        let waiting = loop {
+            if let Some(job) = jobs.snapshot()["waiting"]
+                .as_array()
+                .and_then(|waiting| waiting.first().cloned())
+            {
+                break job;
+            }
+            if started.elapsed() > Duration::from_secs(20) {
+                return Err("the item did not park".into());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert_eq!(waiting["kind"], "import_match");
+        assert_eq!(waiting["item"], "PL1:1:abcdefghijk");
         assert_eq!(
-            jobs.snapshot()["waiting"],
-            json!([{"id":id,"title":"Album","kind":"import_match","payload":{"matches":[]},"item":"PL1:3:abcdefghijk"}])
+            repository.load()?.playlists[0].items[0].status(Stage::Organize),
+            StageStatus::Waiting
         );
-        assert!(jobs.answer(id, &json!("release:1"))?);
-        let job = jobs
-            .store()
-            .claim(Queue::Item)?
-            .ok_or("job is not queued")?;
+        let id = waiting["id"].as_i64().ok_or("the waiting job has no ID")?;
+        assert!(jobs.answer(id, &json!("as_is"))?);
+        runner.wake();
+        runner.wait_until_idle(&AtomicBool::new(false));
         assert_eq!(
-            job.answer,
-            Some(json!({"kind":"import_match","value":"release:1"}))
+            repository.load()?.playlists[0].items[0].status(Stage::Organize),
+            StageStatus::Complete
         );
         assert_eq!(
-            job.params,
-            json!({"output":"/music","playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"organize_again"})
+            muzik_library::Library::open_read_only(&dir.path().join("library.db"))?
+                .items()?
+                .len(),
+            1
         );
         Ok(())
     }

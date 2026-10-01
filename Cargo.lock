@@ -4550,6 +4550,7 @@ dependencies = [
  "muzik-library",
  "muzik-soulseek",
  "muzik-workflow",
+ "rusqlite",
  "serde_json",
  "strum",
  "strum_macros",

@@ -8,6 +8,7 @@ use muzik_core::watchlist::{
 };
 use muzik_core::{AudioSource, QualityPolicy};
 use muzik_workflow::{WorkflowOperations, WorkflowOptions};
+use std::cell::Cell;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -49,13 +50,24 @@ fn organize(
     options: &WorkflowOptions,
     cancelled: &AtomicBool,
 ) -> Result<(), JobError> {
+    let stage = Cell::new(Stage::Organize);
     let mut local = local_workflow::LocalOperations {
         decide: adapter.decide,
         on_import_event: adapter.on_import_event,
         cancelled,
+        stage: &stage,
     };
-    local.organize(target, options)?;
+    local
+        .organize(target, options)
+        .map_err(|error| at(Stage::Organize, JobError::Operation(error)))?;
     check_cancelled(cancelled)
+}
+
+fn at(stage: Stage, error: JobError) -> JobError {
+    match error {
+        JobError::Operation(message) => JobError::Failed { stage, message },
+        other => other,
+    }
 }
 
 fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, split: bool) {
@@ -173,6 +185,7 @@ pub(crate) mod testing {
         let parked = RefCell::new(None);
         let mut adapter = Adapter {
             prepared: &prepared,
+            params: &Value::Null,
             events: &events,
             on_import_event: &mut imported,
             decide: &mut decide,

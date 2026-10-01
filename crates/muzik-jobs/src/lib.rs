@@ -219,28 +219,7 @@ impl Store {
     }
 
     pub fn park(&self, job: &NewJob<'_>, question: &Value) -> Result<i64, String> {
-        let question = question.to_string();
-        let updated = self
-            .connection
-            .query_row(
-                "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4
-                 WHERE kind = ?5 AND item_key = ?6 AND status = 'waiting' RETURNING id",
-                params![
-                    question,
-                    job.params.to_string(),
-                    job.title,
-                    now(),
-                    job.kind,
-                    job.item_key
-                ],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(text)?;
-        match updated {
-            Some(id) => Ok(id),
-            None => self.insert(job, Status::Waiting, Some(question)),
-        }
+        park_on(&self.connection, job, question)
     }
 
     pub fn claim(&self, queue: Queue) -> Result<Option<Job>, String> {
@@ -375,24 +354,7 @@ impl Store {
         status: Status,
         question: Option<String>,
     ) -> Result<i64, String> {
-        let time = now();
-        self.connection
-            .execute(
-                "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                params![
-                    job.kind.queue(),
-                    job.kind,
-                    job.item_key,
-                    job.title,
-                    status,
-                    job.params.to_string(),
-                    question,
-                    time
-                ],
-            )
-            .map_err(text)?;
-        Ok(self.connection.last_insert_rowid())
+        insert_on(&self.connection, job, status, question)
     }
 
     fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<(), String> {
@@ -404,6 +366,56 @@ impl Store {
             .map(|_| ())
             .map_err(text)
     }
+}
+
+pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64, String> {
+    let question = question.to_string();
+    let updated = connection
+        .query_row(
+            "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4
+             WHERE kind = ?5 AND item_key = ?6 AND status = 'waiting' RETURNING id",
+            params![
+                question,
+                job.params.to_string(),
+                job.title,
+                now(),
+                job.kind,
+                job.item_key
+            ],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(text)?;
+    match updated {
+        Some(id) => Ok(id),
+        None => insert_on(connection, job, Status::Waiting, Some(question)),
+    }
+}
+
+fn insert_on(
+    connection: &Connection,
+    job: &NewJob<'_>,
+    status: Status,
+    question: Option<String>,
+) -> Result<i64, String> {
+    let time = now();
+    connection
+        .execute(
+            "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+            params![
+                job.kind.queue(),
+                job.kind,
+                job.item_key,
+                job.title,
+                status,
+                job.params.to_string(),
+                question,
+                time
+            ],
+        )
+        .map_err(text)?;
+    Ok(connection.last_insert_rowid())
 }
 
 fn job(row: &Row<'_>) -> rusqlite::Result<Job> {

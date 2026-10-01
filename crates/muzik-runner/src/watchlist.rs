@@ -1,13 +1,16 @@
 //! Watchlist jobs on the queue. Each source kind is one module in `sources`.
 
-use crate::gates;
 use crate::settings::Settings;
 use crate::sources;
 use muzik_core::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
-use muzik_core::watchlist::{AudioIndex, ItemAction, ItemId, Playlist, Repository, WatchItem};
+use muzik_core::watchlist::{
+    AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
+};
 use muzik_core::DecisionKind;
+use muzik_jobs::{park_on, Kind, NewJob};
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -25,6 +28,7 @@ pub fn sync(
     let parked = RefCell::new(None);
     let mut adapter = Adapter {
         prepared: &prepared,
+        params: &Value::Null,
         events: &events,
         on_import_event: &mut |_| {},
         decide: &mut |_, _| Err("A playlist check does not ask for choices.".into()),
@@ -72,6 +76,7 @@ pub fn action(
     let events = RefCell::new(on_event);
     let mut adapter = Adapter {
         prepared: &prepared,
+        params,
         events: &events,
         on_import_event,
         decide,
@@ -129,6 +134,7 @@ impl<'a> Prepared<'a> {
 
 pub(crate) struct Adapter<'a, 'b> {
     pub(crate) prepared: &'a Prepared<'a>,
+    pub(crate) params: &'a Value,
     pub(crate) events: &'a RefCell<&'b mut dyn FnMut(Value)>,
     pub(crate) on_import_event: &'a mut dyn FnMut(Value),
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -151,17 +157,10 @@ impl Operations for Adapter<'_, '_> {
     ) -> Result<WatchItem, JobError> {
         check_cancelled(cancelled)?;
         self.parked.replace(None);
-        gates::take_stage();
         let result = sources::of(item.kind).process(self, item, action, cancelled);
-        let stage = gates::take_stage();
         result.map_err(|error| {
             let Some(parked) = self.parked.replace(None) else {
-                return match (error, stage) {
-                    (JobError::Operation(message), Some(stage)) => {
-                        JobError::Failed { stage, message }
-                    }
-                    (error, _) => error,
-                };
+                return error;
             };
             let stage = parked.kind.stage();
             let question = parked.question();
@@ -175,6 +174,30 @@ impl Operations for Adapter<'_, '_> {
             }}));
             JobError::Waiting { stage, question }
         })
+    }
+
+    fn park(
+        &mut self,
+        connection: &Connection,
+        id: &ItemId,
+        title: &str,
+        stage: Stage,
+        question: &Value,
+    ) -> Result<(), String> {
+        let mut params = self.params.clone();
+        id.write(&mut params);
+        params["action"] = json!(stage.resume_action());
+        park_on(
+            connection,
+            &NewJob {
+                kind: Kind::Item,
+                item_key: &id.to_string(),
+                title,
+                params: &params,
+            },
+            question,
+        )
+        .map(drop)
     }
 }
 

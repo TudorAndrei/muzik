@@ -16,13 +16,16 @@ use muzik_workflow::{
     WorkflowOperations, WorkflowOptions,
 };
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     input: WorkflowInput,
     settings: &Settings,
     cancelled: &AtomicBool,
+    stage: &Cell<Stage>,
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -35,6 +38,7 @@ pub fn run(
             decide,
             on_import_event,
             cancelled,
+            stage,
         },
         paths: settings.paths.clone(),
         prefer: settings.options.prefer.clone(),
@@ -120,6 +124,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         output: &Path,
         force: bool,
     ) -> Result<Vec<PathBuf>, String> {
+        self.local.stage.set(Stage::Download);
         let files = download(url, output, force, self.local.cancelled)
             .map_err(|error| error.to_string())?;
         self.youtube_acquired = true;
@@ -127,6 +132,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
+        self.local.stage.set(Stage::Download);
         self.youtube_acquired = false;
         let query = if matches!(classify_input(query), WorkflowInput::YoutubeVideo { .. }) {
             YtDlp::default()
@@ -154,6 +160,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         &mut self,
         track: &playlist::SpotifyTrack,
     ) -> Result<Vec<PathBuf>, String> {
+        self.local.stage.set(Stage::Download);
         let query = format!("{} - {}", track.artist, track.title);
         let ready = self.soulseek_ready();
         let source = self.audio_source;
@@ -206,7 +213,8 @@ impl WorkflowOperations for RemoteOperations<'_> {
                 pre_split_dirs: Vec::new(),
             });
         }
-        let _permit = gates::enter(Gate::Process, Stage::Quality, cancelled)?;
+        self.local.stage.set(Stage::Quality);
+        let _permit = gates::enter(Gate::Process, cancelled)?;
         let result = muzik_workflow::quality::check_youtube_quality(
             audio_files.to_vec(),
             options.quality_policy,
@@ -319,7 +327,7 @@ pub(crate) fn soulseek_download(
     if cancelled.load(Ordering::SeqCst) {
         return Err("Soulseek search cancelled".into());
     }
-    let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)?;
+    let _permit = gates::enter(Gate::Download, cancelled)?;
     let config = app_config::load(&paths.config_file())?;
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
@@ -399,8 +407,8 @@ pub(crate) fn download(
     force: bool,
     cancelled: &AtomicBool,
 ) -> Result<Vec<PathBuf>, muzik_workflow::Error> {
-    let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
-        .map_err(|_| muzik_workflow::Error::Cancelled)?;
+    let _permit =
+        gates::enter(Gate::Download, cancelled).map_err(|_| muzik_workflow::Error::Cancelled)?;
     YtDlp::default().download(&Download::audio(url, output, force), cancelled)
 }
 

@@ -69,12 +69,12 @@
 
 ## Phase 9: Waiting for a choice as a returned value
 
-- [ ] Park and waiting state in one transaction
-- [ ] Typed `DecisionError`
-- [ ] `ItemOutcome::Waiting` carries the question; runner parks from it
-- [ ] Delete `mark_stage`, `take_stage`, `Parked`, event-driven park
-- [ ] End-to-end decide → park → answer → resume test
-- [ ] Commit: `refactor(runner): return a pause for a choice instead of side channels`
+- [x] Park and waiting state in one transaction (`Operations::park`, `Repository::update_with`, `muzik_jobs::park_on`)
+- [x] Typed `DecisionError` — not done; the decide callback keeps `String` (see PLAN.md)
+- [x] `ItemOutcome::Waiting` carries the question
+- [x] Delete `mark_stage`, `take_stage`, and the event-driven park; explicit `Cell<Stage>`
+- [x] End-to-end decide → park → answer → resume test
+- [x] Commit: `refactor(runner): return a pause for a choice instead of side channels`
 
 ## Phase 10: Retire the legacy cache reconcile
 

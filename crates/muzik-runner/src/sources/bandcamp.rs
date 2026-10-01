@@ -71,8 +71,8 @@ impl Source for Bandcamp {
             if directory.exists() {
                 std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
             }
-            let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
-                .map_err(|_| JobError::Cancelled)?;
+            let _permit =
+                gates::enter(Gate::Download, cancelled).map_err(|_| JobError::Cancelled)?;
             let on_import_event = &mut *adapter.on_import_event;
             let mut reported = None;
             bandcamp::download(

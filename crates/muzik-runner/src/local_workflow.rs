@@ -16,6 +16,7 @@ use muzik_workflow::{
     WorkflowOperations, WorkflowOptions,
 };
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -26,10 +27,12 @@ pub fn run(
     on_import_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<Value, muzik_workflow::Error> {
+    let stage = Cell::new(Stage::Download);
     let mut operations = LocalOperations {
         decide,
         on_import_event,
         cancelled,
+        stage: &stage,
     };
     let result = run_workflow_with_events(
         &settings.request,
@@ -49,6 +52,7 @@ pub(crate) struct LocalOperations<'a> {
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     pub(crate) on_import_event: &'a mut dyn FnMut(Value),
     pub(crate) cancelled: &'a AtomicBool,
+    pub(crate) stage: &'a Cell<Stage>,
 }
 
 impl WorkflowOperations for LocalOperations<'_> {
@@ -58,7 +62,7 @@ impl WorkflowOperations for LocalOperations<'_> {
         chapters: &[Chapter],
         _: &AtomicBool,
     ) -> Result<ChapterReview, String> {
-        gates::mark_stage(Stage::Parse);
+        self.stage.set(Stage::Parse);
         let chapters = chapters.iter().map(chapter_record).collect::<Vec<_>>();
         let answer = (self.decide)(
             DecisionKind::ChapterReview,
@@ -98,7 +102,8 @@ impl WorkflowOperations for LocalOperations<'_> {
     }
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
-        let _permit = gates::enter(Gate::Import, Stage::Organize, self.cancelled)?;
+        self.stage.set(Stage::Organize);
+        let _permit = gates::enter(Gate::Import, self.cancelled)?;
         if options.tag_only {
             let count =
                 beets::write_library_tags(target, options.config.as_deref(), options.dry_run)?;
@@ -167,7 +172,8 @@ impl WorkflowOperations for LocalOperations<'_> {
         cancelled: &AtomicBool,
         on_progress: &mut dyn FnMut(SplitProgress),
     ) -> Result<(), String> {
-        let _permit = gates::enter(Gate::Process, Stage::Split, cancelled)?;
+        self.stage.set(Stage::Split);
+        let _permit = gates::enter(Gate::Process, cancelled)?;
         let settings = splitter::SplitOptions {
             jobs: options.jobs,
             keep_source: options.keep_source,

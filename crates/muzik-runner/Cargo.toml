@@ -13,6 +13,7 @@ muzik-jobs = { path = "../muzik-jobs" }
 muzik-library = { path = "../muzik-library" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-workflow = { path = "../muzik-workflow" }
+rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 strum = "0.28"
 strum_macros = "0.28"

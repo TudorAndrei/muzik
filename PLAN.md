@@ -113,13 +113,18 @@ the phases before it:
   `ensure` step moves from the GUI bridge into the watchlist load. The CLI
   `bandcamp` command uses the Rust Bandcamp module, and the bandsnatch
   dependency goes away.
-- **Waiting as a value.** The decide closure returns `Err(Decision::Waiting
-  (question))` through a typed error in `muzik_core::DecisionError`; the
-  source modules map each stage step to `JobError::Failed { stage }` or
-  `JobError::Waiting { stage, question }` at the call site. `jobs::run_item`
-  returns `ItemOutcome::Waiting { stage, question }`, and the runner parks from
-  it. `gates::{mark_stage, take_stage}`, `Parked`, and the `item_waiting`
-  control path are deleted; `item_waiting` stays only as an event for display.
+- **Waiting as a value.** `jobs::run_item` returns
+  `ItemOutcome::Waiting { stage, question }` and calls `Operations::park`
+  inside the transaction that saves the waiting stage, so park and waiting
+  state commit together. The runner's watchlist adapter parks there with
+  `muzik_jobs::park_on`. Each operation sets an explicit `Cell<Stage>`, and
+  the source modules map a failure to `JobError::Failed { stage }`.
+  `gates::{mark_stage, take_stage}` and the parking on the `item_waiting`
+  event are deleted; `item_waiting` stays only as an event for display.
+  Change during the work: the decide callback keeps `Result<Value, String>`,
+  because a typed error would change every `WorkflowOperations` method. The
+  one `Parked` slot stays, as an explicit parameter between the runner and
+  the adapter.
 - **Legacy cache.** A one-time import in `watchlist/legacy.rs` reads
   `playlist_{id}.json` and `yt_{id}.txt`, writes the stage state into
   muzik.db, and records `legacy_cache_imported` in a `meta` table (migration

@@ -5,6 +5,7 @@ use super::{
     now, reconcile, view, AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository,
     Stage, StageStatus, WatchItem, Watchlist,
 };
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,14 +46,15 @@ pub struct Synced {
     pub document: Watchlist,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ItemOutcome {
     Completed { stage: Stage },
-    Waiting { stage: Stage },
+    Waiting { stage: Stage, question: Value },
 }
 
 /// Implement source lookup and item processing with Rust adapters.
 /// `process` returns the item with its final stage state.
+/// `park` runs in the transaction that saves a waiting stage.
 pub trait Operations {
     fn load(&mut self, playlist: &Playlist) -> Result<LoadedSource, JobError>;
     fn process(
@@ -62,6 +64,16 @@ pub trait Operations {
         action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<WatchItem, JobError>;
+    fn park(
+        &mut self,
+        _connection: &Connection,
+        _id: &ItemId,
+        _title: &str,
+        _stage: Stage,
+        _question: &Value,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -257,7 +269,7 @@ pub fn action(
     let outcome = run_item(repository, options, id, action, operations, cancelled)?;
     let summary = match outcome {
         ItemOutcome::Completed { stage } => json!({"action":action,"completed_stage":stage}),
-        ItemOutcome::Waiting { stage } => json!({"action":action,"waiting_stage":stage}),
+        ItemOutcome::Waiting { stage, .. } => json!({"action":action,"waiting_stage":stage}),
     };
     Ok(
         json!({"action":summary, "watchlist":view(&repository.load()?, options.output, options.cache)?}),
@@ -287,7 +299,7 @@ pub fn run_item(
         Ok(_) if cancelled.load(Ordering::SeqCst) => Err(JobError::Cancelled),
         other => other,
     };
-    repository.update(|document| {
+    repository.update_with(|document, connection| {
         let Ok((playlist, index)) = find_item(document, id) else {
             return Ok(());
         };
@@ -314,7 +326,10 @@ pub fn run_item(
             Err(JobError::Waiting {
                 stage: waiting,
                 question,
-            }) => card.wait(*waiting, action, question.clone()),
+            }) => {
+                card.wait(*waiting, action, question.clone());
+                operations.park(connection, id, &item.title, *waiting, question)?;
+            }
             Err(JobError::Cancelled) => {}
             Err(error) => {
                 let failed = match error {
@@ -329,7 +344,7 @@ pub fn run_item(
     })?;
     match result {
         Ok(_) => Ok(ItemOutcome::Completed { stage }),
-        Err(JobError::Waiting { stage, .. }) => Ok(ItemOutcome::Waiting { stage }),
+        Err(JobError::Waiting { stage, question }) => Ok(ItemOutcome::Waiting { stage, question }),
         Err(error) => Err(error),
     }
 }

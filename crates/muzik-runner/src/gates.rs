@@ -1,4 +1,3 @@
-use muzik_core::watchlist::Stage;
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,7 +67,6 @@ static LISTENER: Mutex<Option<Listener>> = Mutex::new(None);
 thread_local! {
     static LABEL: RefCell<String> = const { RefCell::new(String::new()) };
     static HELD: RefCell<Vec<(Gate, u64)>> = const { RefCell::new(Vec::new()) };
-    static STAGE: RefCell<Option<Stage>> = const { RefCell::new(None) };
 }
 
 pub struct Permit {
@@ -99,16 +97,7 @@ pub fn set_label(label: &str) {
     LABEL.with(|current| label.clone_into(&mut current.borrow_mut()));
 }
 
-pub fn mark_stage(stage: Stage) {
-    STAGE.with(|current| *current.borrow_mut() = Some(stage));
-}
-
-pub fn take_stage() -> Option<Stage> {
-    STAGE.with(|current| current.borrow_mut().take())
-}
-
-pub fn enter(gate: Gate, stage: Stage, cancelled: &AtomicBool) -> Result<Permit, String> {
-    mark_stage(stage);
+pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit, String> {
     if HELD.with(|held| held.borrow().iter().any(|entry| entry.0 == gate)) {
         return Ok(Permit { held: None });
     }
@@ -226,8 +215,7 @@ fn lock() -> MutexGuard<'static, State> {
 
 #[cfg(test)]
 mod tests {
-    use super::{enter, set_label, snapshot, suspended, take_stage, Gate};
-    use muzik_core::watchlist::Stage;
+    use super::{enter, set_label, snapshot, suspended, Gate};
     use serde_json::json;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
@@ -244,14 +232,13 @@ mod tests {
     fn a_gate_admits_its_limit_and_the_next_waits() -> Result<(), String> {
         let never = AtomicBool::new(false);
         set_label("gate holder");
-        let first = enter(Gate::Import, Stage::Organize, &never)?;
-        let again = enter(Gate::Import, Stage::Organize, &never)?;
-        assert_eq!(take_stage(), Some(Stage::Organize));
+        let first = enter(Gate::Import, &never)?;
+        let again = enter(Gate::Import, &never)?;
         let (sender, receiver) = mpsc::channel();
         let waiter = thread::spawn(move || {
             set_label("gate waiter");
             let never = AtomicBool::new(false);
-            let permit = enter(Gate::Import, Stage::Organize, &never);
+            let permit = enter(Gate::Import, &never);
             let _ = sender.send(());
             permit.map(drop)
         });
@@ -265,8 +252,7 @@ mod tests {
         drop(first);
         assert!(!listed(Gate::Import, "active", "gate holder"));
         let cancelled = AtomicBool::new(true);
-        let blocked =
-            thread::spawn(move || enter(Gate::Import, Stage::Organize, &cancelled).map(drop));
+        let blocked = thread::spawn(move || enter(Gate::Import, &cancelled).map(drop));
         assert!(blocked.join().map_err(|_| "blocked panicked")?.is_err());
         Ok(())
     }

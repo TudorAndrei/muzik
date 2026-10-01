@@ -1,5 +1,5 @@
 use super::{
-    cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube, Source,
+    at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube, Source,
 };
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
@@ -9,6 +9,7 @@ use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::process_audio_plan_with_events;
 use serde_json::Value;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -115,10 +116,12 @@ fn import_file(
     options.no_split = true;
     options.interactive = false;
     let events = adapter.events;
+    let stage = Cell::new(Stage::Organize);
     let mut local = local_workflow::LocalOperations {
         decide: adapter.decide,
         on_import_event: adapter.on_import_event,
         cancelled,
+        stage: &stage,
     };
     process_audio_plan_with_events(
         std::slice::from_ref(&file),
@@ -129,7 +132,7 @@ fn import_file(
         cancelled,
         &mut |event| (events.borrow_mut())(local_workflow::event_record(event)),
     )
-    .map_err(workflow_error)?;
+    .map_err(|error| at(stage.get(), workflow_error(error)))?;
     let mut updated = item.clone();
     mark_full(&mut updated, &options, false);
     if file.is_file() {

@@ -1,4 +1,6 @@
-use super::{cancel_or, check_cancelled, mark_full, organize, required, workflow_error, Source};
+use super::{
+    at, cancel_or, check_cancelled, mark_full, organize, required, workflow_error, Source,
+};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
@@ -9,6 +11,7 @@ use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
 use muzik_workflow::ytdlp::{is_video_id, YtDlp};
 use muzik_workflow::{classify_input, WorkflowInput, WorkflowOperations};
 use serde_json::{json, Value};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -66,15 +69,17 @@ impl Source for Youtube {
             ));
         }
         let events = adapter.events;
+        let stage = Cell::new(Stage::Download);
         let result = remote_workflow::run(
             input,
             &settings,
             cancelled,
+            &stage,
             &mut |event| (events.borrow_mut())(event),
             adapter.on_import_event,
             adapter.decide,
         )
-        .map_err(workflow_error)?;
+        .map_err(|error| at(stage.get(), workflow_error(error)))?;
         let mut updated = item.clone();
         save_output_paths(adapter, &mut updated, &result);
         if action == ItemAction::DownloadAgain {
@@ -137,8 +142,7 @@ pub(super) fn local_stage(
         audio.ok_or_else(|| JobError::Operation("Downloaded audio is not available.".into()))?;
     if action == ItemAction::CheckQualityAgain {
         updated.set_path(Stage::Download, Some(audio.clone()));
-        let _permit = gates::enter(Gate::Process, Stage::Quality, cancelled)
-            .map_err(|_| JobError::Cancelled)?;
+        let _permit = gates::enter(Gate::Process, cancelled).map_err(|_| JobError::Cancelled)?;
         let options = &adapter.prepared.settings.options;
         let events = adapter.events;
         let result = check_youtube_quality(
@@ -155,7 +159,6 @@ pub(super) fn local_stage(
         return Ok(updated);
     }
     if action == ItemAction::ParseAgain {
-        gates::mark_stage(Stage::Parse);
         let video_url = required(item.video_url.as_deref(), "video_url")?;
         let chapter_path = refresh_chapters(&audio, video_url, cancelled, adapter.decide)?;
         updated.complete(Stage::Parse, Some(chapter_path));
@@ -181,10 +184,12 @@ pub(super) fn local_stage(
     let mut options = adapter.prepared.settings.options.clone();
     options.force = true;
     options.keep_source = true;
+    let stage = Cell::new(Stage::Split);
     let mut local = local_workflow::LocalOperations {
         decide: adapter.decide,
         on_import_event: adapter.on_import_event,
         cancelled,
+        stage: &stage,
     };
     local
         .split_with_cancel(&task, &options, cancelled, &mut |_| {})
