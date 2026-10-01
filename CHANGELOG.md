@@ -2,6 +2,17 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.11.2 - 2026-10-01
+#### Performance Improvements
+- (**gui**) embed a 64-pixel header logo - (cd1080f) - TudorAndrei
+#### Continuous Integration
+- (**release**) stop when no commit needs a new version - (ef4b432) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.11.1 - (47cd783) - github-actions[bot]
+- (**release**) bump the patch version for perf commits - (36a5ad1) - TudorAndrei
+
+- - -
+
 ## v2.11.1 - 2026-10-01
 #### Bug Fixes
 - (**gui**) show unavailable items only in the Unavailable tab - (fe1868c) - TudorAndrei
