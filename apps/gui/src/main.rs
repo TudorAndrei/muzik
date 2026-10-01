@@ -5,10 +5,9 @@ mod services;
 mod style;
 mod thumbnails;
 mod watch_table;
-mod watchlist;
 mod watchlist_view;
 
-use bridge::Bridge;
+use bridge::{Bridge, Message};
 use gpui_kit::component::button::*;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
@@ -31,6 +30,7 @@ use muzik_core::{
 };
 use muzik_jobs::Status as JobStatus;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
+use muzik_runner::AppEvent;
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -438,10 +438,10 @@ impl Muzik {
         self.page = page;
         self.error = None;
         match page {
-            Page::Watchlist => self.send("watchlist.load", self.launcher_params(cx)),
+            Page::Watchlist => self.send("watchlist.load", json!({})),
             Page::Library => self.scan_library(cx),
             Page::Spotify => {
-                self.send("watchlist.load", self.launcher_params(cx));
+                self.send("watchlist.load", json!({}));
                 self.send("spotify.status", json!({}));
             }
             Page::Workflow | Page::Settings => {}
@@ -746,14 +746,22 @@ impl Muzik {
             self.message(message, window, cx);
         }
         if std::mem::take(&mut self.reload_watchlist) {
-            self.send("watchlist.load", self.launcher_params(cx));
+            self.send("watchlist.load", json!({}));
         }
         cx.notify();
     }
 
-    fn message(&mut self, message: Value, window: &mut Window, _cx: &mut Context<Self>) {
-        match message["type"].as_str().unwrap_or_default() {
-            "response" => {
+    fn message(&mut self, message: Message, window: &mut Window, cx: &mut Context<Self>) {
+        match message {
+            Message::Response(response) => self.response(response, window, cx),
+            Message::App(event) => self.app_event(event, window, cx),
+            Message::Thumbnails(data) => self.merge_thumbnail_results(&data),
+        }
+    }
+
+    fn response(&mut self, message: Value, window: &mut Window, _cx: &mut Context<Self>) {
+        {
+            {
                 let id = message["id"].as_str().unwrap_or_default();
                 let command = self.pending.remove(id).unwrap_or_default();
                 if matches!(
@@ -804,7 +812,7 @@ impl Muzik {
                             self.watch_url
                                 .update(_cx, |state, cx| state.set_value("", window, cx));
                         }
-                        self.send("watchlist.load", self.launcher_params(_cx));
+                        self.send("watchlist.load", json!({}));
                     }
                     "library.scan" => {
                         self.library = result.clone();
@@ -830,7 +838,7 @@ impl Muzik {
                         }
                         if command == "bandcamp.save" {
                             *self.config_status.borrow_mut() = "Bandcamp login saved".into();
-                            self.send("watchlist.load", self.launcher_params(_cx));
+                            self.send("watchlist.load", json!({}));
                         } else if command == "bandcamp.logout" {
                             *self.config_status.borrow_mut() = "Bandcamp login removed".into();
                         }
@@ -885,140 +893,128 @@ impl Muzik {
                     }
                 }
             }
-            "event" => {
-                let event = message["event"].as_str().unwrap_or_default();
-                let data = &message["data"];
+        }
+    }
+
+    fn app_event(&mut self, event: AppEvent, window: &mut Window, _cx: &mut Context<Self>) {
+        {
+            {
                 match event {
-                    "watchlist.updated" => {
-                        self.replace_watchlist(data["watchlist"].clone(), window, _cx);
+                    AppEvent::WatchlistUpdated(watchlist) => {
+                        self.replace_watchlist(watchlist, window, _cx);
                         self.cache_visible_thumbnails(_cx);
                         self.status = "Watchlist updated".into();
                     }
-                    "thumbnails.updated" => self.merge_thumbnail_results(data),
-                    "watchlist.error" => {
-                        self.error = Some(
-                            data["message"]
-                                .as_str()
-                                .unwrap_or("Watchlist check failed")
-                                .into(),
-                        );
-                    }
-                    "jobs.updated" => {
-                        self.apply_jobs(data);
+                    AppEvent::WatchlistError(message) => self.error = Some(message),
+                    AppEvent::WatchlistSaved => self.reload_watchlist = true,
+                    AppEvent::JobsUpdated(data) => {
+                        self.apply_jobs(&data);
                         self.sync_watch_table(_cx);
                     }
-                    "queues.updated" => self.gates = data.clone(),
-                    "jobs.remote" => {
-                        self.status = data["message"]
-                            .as_str()
-                            .unwrap_or("Another muzik process runs the queue.")
-                            .into();
-                    }
-                    "job.started" => {
-                        let id = data["job_id"].as_str().unwrap_or("");
-                        let kind = RunKind::parse(&data["kind"]);
-                        let title = data["title"].as_str().unwrap_or("Job").to_owned();
-                        let run = self.run_mut(id);
-                        run.kind = kind;
+                    AppEvent::QueuesUpdated(data) => self.gates = data,
+                    AppEvent::RemoteRunner(message) => self.status = message,
+                    AppEvent::JobStarted {
+                        job_id,
+                        title,
+                        kind,
+                    } => {
+                        let run = self.run_mut(&job_id);
+                        run.kind = RunKind::parse(&json!(kind));
                         run.title = title;
                         run.status = "Starting".into();
                     }
-                    "job.event" => {
-                        let kind = data["event"].as_str().unwrap_or("Update");
-                        let payload = &data["data"];
-                        if kind == "watchlist_saved" {
-                            self.reload_watchlist = true;
-                            return;
-                        }
-                        let job_id = data["job_id"].as_str().unwrap_or("").to_owned();
-                        self.record_job_event(&job_id, kind, payload);
+                    AppEvent::JobEvent {
+                        job_id, name, data, ..
+                    } => {
+                        self.record_job_event(&job_id, &name, &data);
                         if self.logs.len() > 300 {
                             self.logs.drain(..100);
                         }
                     }
-                    "decision.request" => {
-                        let job_id = data["job_id"].as_str().unwrap_or("").to_owned();
+                    AppEvent::DecisionRequest {
+                        job_id,
+                        decision_id,
+                        kind,
+                        payload,
+                    } => {
+                        let data = json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload});
                         self.set_status(&job_id, "Decision needed");
                         self.requests.push(data.clone());
                         if self.decision.is_none() {
-                            self.open_decision(data.clone(), window, _cx);
+                            self.open_decision(data, window, _cx);
                         }
                     }
-                    "job.completed" | "job.failed" | "job.cancelled" => {
-                        let id = data["job_id"].as_str().unwrap_or("").to_owned();
-                        self.finished_runs.insert(id.clone());
-                        let run = self
-                            .runs
-                            .iter()
-                            .position(|run| run.id == id)
-                            .map(|index| self.runs.remove(index));
-                        let kind = run.as_ref().map_or(RunKind::Unknown, |run| run.kind);
-                        let title = run
-                            .as_ref()
-                            .map_or_else(|| "Job".to_owned(), |run| run.title.clone());
-                        let ending = event
-                            .trim_start_matches("job.")
-                            .parse::<Ending>()
-                            .unwrap_or(Ending::Failed);
-                        self.requests
-                            .retain(|request| request["job_id"] != id.as_str());
-                        if self
-                            .decision
-                            .as_ref()
-                            .is_some_and(|decision| decision["job_id"] == id.as_str())
-                        {
-                            self.decision = None;
-                            self.chapter_rows.clear();
-                            if let Some(next) = self.requests.first().cloned() {
-                                self.open_decision(next, window, _cx);
-                            }
-                        }
-                        let failure = (ending == Ending::Failed).then(|| {
-                            data["error"]["message"]
-                                .as_str()
-                                .unwrap_or("Job failed")
-                                .to_string()
-                        });
-                        let job = job_label(kind, &title);
-                        self.logs.push(short_text(&format!("{job} {ending}"), 180));
-                        let note = match (ending, &failure) {
-                            (Ending::Failed, failure) => Some(
-                                Notification::error(failure.clone().unwrap_or_default())
-                                    .title(format!("{job} failed")),
-                            ),
-                            (Ending::Cancelled, _) => {
-                                Some(Notification::warning(format!("{job} cancelled")))
-                            }
-                            (Ending::Completed, _) if kind != RunKind::Item => {
-                                Some(Notification::success(format!("{job} finished")))
-                            }
-                            (Ending::Completed, _) => None,
-                        };
-                        if let Some(note) = note {
-                            window.push_notification(note, _cx);
-                        }
-                        if kind == RunKind::SpotifyLogin {
-                            self.send("spotify.status", json!({}));
-                            if ending == Ending::Completed {
-                                self.send("spotify.playlists", json!({}));
-                            }
-                        } else {
-                            self.reload_watchlist = true;
-                        }
-                        if let Some(failure) = failure {
-                            self.error = Some(failure);
-                        }
+                    AppEvent::JobCompleted { job_id, .. } => {
+                        self.job_finished(job_id, Ending::Completed, None, window, _cx);
                     }
-                    _ => self.logs.push(format!("{event}: {}", describe(data))),
+                    AppEvent::JobCancelled { job_id } => {
+                        self.job_finished(job_id, Ending::Cancelled, None, window, _cx);
+                    }
+                    AppEvent::JobFailed { job_id, message } => {
+                        self.job_finished(job_id, Ending::Failed, Some(message), window, _cx);
+                    }
                 }
             }
-            "transport.error" | "transport.closed" => {
-                self.status = message["message"]
-                    .as_str()
-                    .unwrap_or("Rust service stopped")
-                    .into();
+        }
+    }
+
+    fn job_finished(
+        &mut self,
+        id: String,
+        ending: Ending,
+        failure: Option<String>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.finished_runs.insert(id.clone());
+        let run = self
+            .runs
+            .iter()
+            .position(|run| run.id == id)
+            .map(|index| self.runs.remove(index));
+        let kind = run.as_ref().map_or(RunKind::Unknown, |run| run.kind);
+        let title = run
+            .as_ref()
+            .map_or_else(|| "Job".to_owned(), |run| run.title.clone());
+        self.requests
+            .retain(|request| request["job_id"] != id.as_str());
+        if self
+            .decision
+            .as_ref()
+            .is_some_and(|decision| decision["job_id"] == id.as_str())
+        {
+            self.decision = None;
+            self.chapter_rows.clear();
+            if let Some(next) = self.requests.first().cloned() {
+                self.open_decision(next, window, _cx);
             }
-            _ => {}
+        }
+        let job = job_label(kind, &title);
+        self.logs.push(short_text(&format!("{job} {ending}"), 180));
+        let note = match (ending, &failure) {
+            (Ending::Failed, failure) => Some(
+                Notification::error(failure.clone().unwrap_or_default())
+                    .title(format!("{job} failed")),
+            ),
+            (Ending::Cancelled, _) => Some(Notification::warning(format!("{job} cancelled"))),
+            (Ending::Completed, _) if kind != RunKind::Item => {
+                Some(Notification::success(format!("{job} finished")))
+            }
+            (Ending::Completed, _) => None,
+        };
+        if let Some(note) = note {
+            window.push_notification(note, _cx);
+        }
+        if kind == RunKind::SpotifyLogin {
+            self.send("spotify.status", json!({}));
+            if ending == Ending::Completed {
+                self.send("spotify.playlists", json!({}));
+            }
+        } else {
+            self.reload_watchlist = true;
+        }
+        if let Some(failure) = failure {
+            self.error = Some(failure);
         }
     }
 
@@ -2525,10 +2521,10 @@ fn check_backend() -> Result<(), String> {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while std::time::Instant::now() < deadline {
         for message in bridge.drain() {
-            if message["type"] == "transport.closed" {
-                return Err("Backend closed before hello".into());
-            }
-            if message["type"] == "response" && message["id"] == id {
+            let Message::Response(message) = message else {
+                continue;
+            };
+            if message["id"] == id {
                 if message["ok"] == true && message["result"]["protocol_version"] == 1 {
                     println!("Rust backend ready (protocol 1)");
                     return Ok(());

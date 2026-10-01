@@ -91,7 +91,7 @@ impl WatchTable {
 
 fn run_item(view: &WeakEntity<Muzik>, key: &ItemKey, action: ItemAction, cx: &mut App) {
     let _ = view.update(cx, |view, cx| {
-        let params = view.item_params(&key.0, key.1, &key.2, action, cx);
+        let params = view.item_params(&key.0, key.1, &key.2, action);
         view.start_job("watchlist.action", params, cx);
     });
 }

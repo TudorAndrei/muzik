@@ -136,6 +136,10 @@ the phases before it:
   shrinks to a thin adapter over `App`; `main.rs::message` matches on
   `AppEvent`, not on strings. The GUI stops calling `muzik_runner::item_key`
   and stops merging launcher defaults.
+  Change during the work: the runner `Sink` emits `AppEvent` (the CLI uses it
+  too). The request and response side stays a string command table for the
+  GUI-local settings commands (config, Spotify, Soulseek, Bandcamp, services,
+  library scan, thumbnails); those are not queue or watchlist logic.
 
 ### Out of scope
 

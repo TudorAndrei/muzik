@@ -1,33 +1,31 @@
-//! JSON protocol for the Rust desktop application.
-use crate::{native, thumbnails, watchlist};
+//! Request and response transport between the desktop view and the runner `App`.
+use crate::{native, thumbnails};
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, spotify, watchlist::Repository};
-use muzik_jobs::CancelRequest;
+use muzik_core::watchlist::{ItemAction, ItemId};
+use muzik_core::{app_config, spotify};
 use muzik_runner::agent::{Chooser, Codex};
-use muzik_runner::{gates, parse_job_id, EnqueueError, Jobs, Options, Prompt, Runner, Settings};
+use muzik_runner::{App, AppEvent, AppOptions, EnqueueError};
 use serde_json::{json, Value};
-use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 
 const WORKERS: usize = 5;
 
-type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
+pub enum Message {
+    Response(Value),
+    App(AppEvent),
+    Thumbnails(Value),
+}
 
 pub struct Bridge {
-    output: Receiver<Value>,
-    native_output: Sender<Value>,
+    output: Receiver<Message>,
+    native_output: Sender<Message>,
     thumbnail_pending: Arc<Mutex<HashSet<String>>>,
     login: Arc<Mutex<Option<NativeLogin>>>,
-    jobs: Arc<Jobs>,
-    runner: Option<Runner>,
-    decisions: Decisions,
-    generation: Arc<AtomicU64>,
-    watchlist_gate: Arc<Mutex<()>>,
-    paths: Paths,
+    app: Arc<App>,
     next_id: u64,
 }
 
@@ -42,60 +40,33 @@ impl Bridge {
     }
 
     fn with(paths: Paths, run: bool) -> Result<Self, String> {
-        let (events, output) = mpsc::channel::<Value>();
-        let jobs = Arc::new(if cfg!(test) {
-            Jobs::in_memory(&paths)?
-        } else {
-            Jobs::open(&paths)?
-        });
-        let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
-        let generation = Arc::new(AtomicU64::new(0));
-        let runner = if run {
-            let sink = Mutex::new(events.clone());
-            let asker = Mutex::new(events.clone());
-            let pending = Arc::clone(&decisions);
-            let asked = AtomicU64::new(0);
-            Runner::start(
-                Arc::clone(&jobs),
-                Options {
-                    workers: WORKERS,
-                    sink: Arc::new(move |message| {
-                        if let Ok(sender) = sink.lock() {
-                            let _ = sender.send(message);
-                        }
-                    }),
-                    ask: Arc::new(move |prompt| {
-                        let number = asked.fetch_add(1, Ordering::SeqCst) + 1;
-                        ask(&asker, &pending, &prompt, number)
-                    }),
-                    chooser: (!cfg!(test)).then(|| Arc::new(Codex) as Arc<dyn Chooser>),
-                    generation: Arc::clone(&generation),
-                },
-            )?
-        } else {
-            None
-        };
-        if run && runner.is_none() {
-            let _ = events.send(json!({"type":"event","event":"jobs.remote","data":{"message":"Another muzik process runs the queue. New jobs go into its queue."}}));
-        }
+        let (events, output) = mpsc::channel::<Message>();
+        let sink = Mutex::new(events.clone());
+        let app = App::start(AppOptions {
+            paths,
+            workers: WORKERS,
+            run,
+            in_memory: cfg!(test),
+            chooser: (!cfg!(test)).then(|| Arc::new(Codex) as Arc<dyn Chooser>),
+            sink: Arc::new(move |event| {
+                if let Ok(sender) = sink.lock() {
+                    let _ = sender.send(Message::App(event));
+                }
+            }),
+        })?;
         Ok(Self {
             output,
             native_output: events,
             thumbnail_pending: Arc::new(Mutex::new(HashSet::new())),
             login: Arc::new(Mutex::new(None)),
-            jobs,
-            runner,
-            decisions,
-            generation,
-            watchlist_gate: Arc::new(Mutex::new(())),
-            paths,
+            app: Arc::new(app),
             next_id: 1,
         })
     }
 
     fn respond(&self, message: Value) -> Result<(), String> {
         self.native_output
-            .send(message)
+            .send(Message::Response(message))
             .map_err(|_| "Rust backend is not available".to_owned())
     }
 
@@ -109,160 +80,165 @@ impl Bridge {
         Ok(id.to_owned())
     }
 
-    fn changed(&self) {
-        match &self.runner {
-            Some(runner) => {
-                runner.publish();
-                runner.wake();
-            }
-            None => {
-                let _ = self.native_output.send(
-                    json!({"type":"event","event":"jobs.updated","data":self.jobs.snapshot()}),
-                );
-            }
-        }
-    }
-
     pub fn send(&mut self, command: &str, params: Value) -> Result<String, String> {
         let id = self.next_id.to_string();
         self.next_id += 1;
         match command {
-            "spotify.login" => return self.start_spotify_login(id, params),
-            "decision.reply" => return self.reply(&id, &params),
-            "job.cancel" => return self.cancel(&id, &params),
-            "jobs.list" => {
-                let mut snapshot = self.jobs.snapshot();
-                snapshot["gates"] = gates::snapshot();
-                snapshot["runner"] = json!(self.runner.is_some());
-                return self.accept(&id, snapshot);
-            }
-            "jobs.answer" => return self.answer(&id, &params),
+            "spotify.login" => self.start_spotify_login(id, params),
+            "decision.reply" => self.reply(&id, &params),
+            "job.cancel" => self.cancel(&id, &params),
+            "jobs.list" => self.accept(&id, self.app.jobs()),
+            "jobs.answer" => self.answer(&id, &params),
             "workflow.start" => {
-                let queued = self.jobs.workflow(&params);
-                return self.queued(&id, queued);
+                let queued = self.app.start_workflow(&params);
+                self.queued(&id, queued)
             }
             "watchlist.refresh" => {
-                let queued = self.jobs.refresh(&params);
-                return self.queued(&id, queued);
+                let source = params["playlist_id"]
+                    .as_str()
+                    .filter(|playlist| !playlist.is_empty())
+                    .map(|playlist| {
+                        (
+                            playlist,
+                            params["playlist_title"].as_str().unwrap_or("source"),
+                        )
+                    });
+                let queued = self.app.refresh(source);
+                self.queued(&id, queued)
             }
-            "watchlist.action" => {
-                let queued = self.jobs.item(&params);
-                return self.queued(&id, queued);
+            "watchlist.action" => self.run_item(&id, &params),
+            "watchlist.load" => self.load_watchlist(id),
+            "watchlist.add" | "watchlist.rename" | "watchlist.remove" => {
+                let result = self.edit_watchlist(command, &params);
+                match result {
+                    Ok(result) => self.accept(&id, result),
+                    Err(message) => self.reject(&id, "operation_failed", message),
+                }
             }
-            _ => {}
-        }
-        if command == "thumbnails.cache" {
-            let ids = match thumbnails::validate_ids(&params) {
-                Ok(ids) => ids,
-                Err(message) => return self.reject(&id, "invalid_request", message),
-            };
-            let mut pending = self
-                .thumbnail_pending
-                .lock()
-                .map_err(|_| "thumbnail queue is not available")?;
-            let fresh = ids
-                .into_iter()
-                .filter(|id| pending.insert(id.clone()))
-                .collect::<Vec<_>>();
-            self.accept(&id, json!({"queued": fresh.len()}))?;
-            drop(pending);
-            if !fresh.is_empty() {
-                let sender = self.native_output.clone();
-                let pending = Arc::clone(&self.thumbnail_pending);
-                let paths = self.paths.clone();
-                thread::spawn(move || {
-                    let data = thumbnails::cache_requested(
-                        &fresh,
-                        &Repository::open(&paths),
-                        &paths.cache,
-                    );
-                    let _ = sender
-                        .send(json!({"type":"event", "event":"thumbnails.updated", "data":data}));
-                    if let Ok(mut pending) = pending.lock() {
-                        for id in fresh {
-                            pending.remove(&id);
-                        }
-                    }
-                });
+            "thumbnails.cache" => self.cache_thumbnails(id, &params),
+            _ if native::handles(command) => {
+                let paths = self.app.paths().clone();
+                if matches!(
+                    command,
+                    "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
+                ) {
+                    let sender = self.native_output.clone();
+                    let response_id = id.clone();
+                    let command = command.to_owned();
+                    thread::spawn(move || {
+                        let response = native_response(&paths, &response_id, &command, &params);
+                        let _ = sender.send(Message::Response(response));
+                    });
+                } else {
+                    self.respond(native_response(&paths, &id, command, &params))?;
+                }
+                Ok(id)
             }
-            return Ok(id);
+            _ => self.reject(
+                &id,
+                "invalid_request",
+                format!("Unknown command: {command}"),
+            ),
         }
-        if command == "watchlist.load" {
-            let _gate = self
-                .watchlist_gate
-                .lock()
-                .map_err(|_| "Watchlist state is unavailable")?;
-            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-            let response_id = id.clone();
-            let sender = self.native_output.clone();
-            let login = Arc::clone(&self.login);
-            let jobs = Arc::clone(&self.jobs);
-            let latest = Arc::clone(&self.generation);
-            let gate = Arc::clone(&self.watchlist_gate);
-            let paths = self.paths.clone();
-            thread::spawn(move || {
-                load_watchlist(WatchlistLoad {
-                    sender,
-                    id: response_id,
-                    params,
-                    repository: Repository::open(&paths),
-                    paths,
-                    login,
-                    jobs,
-                    latest,
-                    gate,
-                    generation,
-                });
-            });
-            return Ok(id);
-        }
-        if matches!(
-            command,
-            "watchlist.add" | "watchlist.rename" | "watchlist.remove"
-        ) {
-            let _gate = self
-                .watchlist_gate
-                .lock()
-                .map_err(|_| "Watchlist state is unavailable")?;
-            let response = native_response(&self.paths, &id, command, &params);
-            if response["ok"] == true {
-                self.generation.fetch_add(1, Ordering::SeqCst);
-            }
-            self.respond(response)?;
-            return Ok(id);
-        }
-        if native::handles(command) {
-            if matches!(
-                command,
-                "library.scan" | "services.check" | "spotify.status" | "spotify.playlists"
-            ) {
-                let sender = self.native_output.clone();
-                let response_id = id.clone();
-                let command = command.to_owned();
-                let paths = self.paths.clone();
-                thread::spawn(move || {
-                    let response = native_response(&paths, &response_id, &command, &params);
-                    let _ = sender.send(response);
-                });
-            } else {
-                self.respond(native_response(&self.paths, &id, command, &params))?;
-            }
-            return Ok(id);
-        }
-        self.reject(
-            &id,
-            "invalid_request",
-            format!("Unknown command: {command}"),
-        )
     }
 
-    fn queued(&self, id: &str, queued: Result<i64, EnqueueError>) -> Result<String, String> {
-        match queued {
-            Ok(number) => {
-                self.accept(id, json!({"job_id":muzik_runner::job_id(number)}))?;
-                self.changed();
-                Ok(id.to_owned())
+    fn run_item(&self, id: &str, params: &Value) -> Result<String, String> {
+        let item = match ItemId::from_params(params) {
+            Ok(item) => item,
+            Err(message) => return self.reject(id, "invalid_request", message),
+        };
+        let action = params["action"].as_str().unwrap_or("");
+        let Ok(action) = action.parse::<ItemAction>() else {
+            return self.reject(
+                id,
+                "invalid_request",
+                format!("'{action}' is not a valid ItemAction"),
+            );
+        };
+        let title = params["title"]
+            .as_str()
+            .or_else(|| params["video_id"].as_str())
+            .unwrap_or("Item");
+        let queued = self.app.run_item(&item, title, action);
+        self.queued(id, queued)
+    }
+
+    fn load_watchlist(&self, id: String) -> Result<String, String> {
+        let app = Arc::clone(&self.app);
+        let sender = self.native_output.clone();
+        let login = Arc::clone(&self.login);
+        let response_id = id.clone();
+        thread::spawn(move || {
+            let busy = Arc::new(move || login.lock().map_or(true, |active| active.is_some()));
+            match app.load_watchlist(busy) {
+                Ok((saved, check)) => {
+                    let response = json!({"id":response_id,"type":"response","ok":true,"result":{"watchlist":saved}});
+                    if sender.send(Message::Response(response)).is_ok() {
+                        check.run();
+                    }
+                }
+                Err(message) => {
+                    let _ = sender.send(Message::Response(json!({"id":response_id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}})));
+                }
             }
+        });
+        Ok(id)
+    }
+
+    fn edit_watchlist(&self, command: &str, params: &Value) -> Result<Value, String> {
+        let text = |key: &str| {
+            params[key]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("{key} must be a non-empty string."))
+        };
+        Ok(match command {
+            "watchlist.add" => json!({"playlist": self.app.add_source(text("url")?)?}),
+            "watchlist.rename" => json!({"renamed": self.app.rename_source(
+                text("playlist_id")?,
+                text("title")?,
+            )?}),
+            _ => json!({"removed": self.app.remove_source(text("playlist_id")?)?}),
+        })
+    }
+
+    fn cache_thumbnails(&self, id: String, params: &Value) -> Result<String, String> {
+        let ids = match thumbnails::validate_ids(params) {
+            Ok(ids) => ids,
+            Err(message) => return self.reject(&id, "invalid_request", message),
+        };
+        let mut pending = self
+            .thumbnail_pending
+            .lock()
+            .map_err(|_| "thumbnail queue is not available")?;
+        let fresh = ids
+            .into_iter()
+            .filter(|id| pending.insert(id.clone()))
+            .collect::<Vec<_>>();
+        self.accept(&id, json!({"queued": fresh.len()}))?;
+        drop(pending);
+        if !fresh.is_empty() {
+            let sender = self.native_output.clone();
+            let pending = Arc::clone(&self.thumbnail_pending);
+            let app = Arc::clone(&self.app);
+            thread::spawn(move || {
+                let data =
+                    thumbnails::cache_requested(&fresh, &app.repository(), &app.paths().cache);
+                let _ = sender.send(Message::Thumbnails(data));
+                if let Ok(mut pending) = pending.lock() {
+                    for id in fresh {
+                        pending.remove(&id);
+                    }
+                }
+            });
+        }
+        Ok(id)
+    }
+
+    fn queued(&self, id: &str, queued: Result<String, EnqueueError>) -> Result<String, String> {
+        match queued {
+            Ok(job_id) => self.accept(id, json!({"job_id":job_id})),
             Err(EnqueueError::Invalid(message)) => self.reject(id, "invalid_request", message),
             Err(EnqueueError::Busy(message)) => self.reject(id, "job_active", message),
             Err(EnqueueError::Store(message)) => self.reject(id, "operation_failed", message),
@@ -281,17 +257,8 @@ impl Bridge {
                 "decision_id must be a non-empty string.",
             );
         }
-        let reply = self
-            .decisions
-            .lock()
-            .map_err(|_| "Decision state is unavailable")?
-            .remove(decision_id);
-        let sent = reply.is_some_and(|reply| {
-            reply
-                .send(params.get("value").cloned().unwrap_or(Value::Null))
-                .is_ok()
-        });
-        if sent {
+        let value = params.get("value").cloned().unwrap_or(Value::Null);
+        if self.app.reply(decision_id, value) {
             self.accept(id, json!({"decision_id":decision_id}))
         } else {
             self.reject(id, "invalid_request", "The decision is not pending.")
@@ -303,32 +270,8 @@ impl Bridge {
         if job_id.is_empty() {
             return self.reject(id, "invalid_request", "job_id must be a non-empty string.");
         }
-        if self
-            .runner
-            .as_ref()
-            .is_some_and(|runner| runner.cancel(job_id))
-        {
+        if self.app.cancel(job_id)? {
             return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
-        }
-        if let Some(number) = job_id
-            .starts_with("queue-")
-            .then(|| parse_job_id(job_id))
-            .flatten()
-        {
-            match self.jobs.cancel(number)? {
-                CancelRequest::Removed => {
-                    self.accept(id, json!({"job_id":job_id,"cancel_requested":true}))?;
-                    self.respond(
-                        json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}}),
-                    )?;
-                    self.changed();
-                    return Ok(id.to_owned());
-                }
-                CancelRequest::Requested => {
-                    return self.accept(id, json!({"job_id":job_id,"cancel_requested":true}));
-                }
-                CancelRequest::NotOpen => {}
-            }
         }
         let login = self
             .login
@@ -345,10 +288,8 @@ impl Bridge {
         let (Some(job_id), Some(value)) = (params["id"].as_i64(), params.get("value")) else {
             return self.reject(id, "invalid_request", "id and value are required.");
         };
-        let answered = self.jobs.answer(job_id, value)?;
-        self.accept(id, json!({"answered":answered}))?;
-        self.changed();
-        Ok(id.to_owned())
+        let answered = self.app.answer(job_id, value)?;
+        self.accept(id, json!({"answered":answered}))
     }
 
     fn start_spotify_login(&mut self, id: String, params: Value) -> Result<String, String> {
@@ -377,7 +318,7 @@ impl Bridge {
             drop(login);
             return self.reject(&id, "job_active", "A Spotify login is already active.");
         }
-        let config = app_config::path();
+        let config = self.app.paths().config_file();
         if let Some(port) = port {
             if let Err(message) = app_config::save_section_string(
                 &config,
@@ -400,19 +341,15 @@ impl Bridge {
         let sender = self.native_output.clone();
         let state = Arc::clone(&self.login);
         thread::spawn(move || {
-            let result = spotify::login(&config, &spotify::token_path(), port, &cancel);
-            let event = match result {
-                Ok(name) => {
-                    json!({"type":"event","event":"job.completed","data":{"job_id":job_id,"result":{"account_name":name}}})
-                }
-                Err(message) if message == "cancelled" => {
-                    json!({"type":"event","event":"job.cancelled","data":{"job_id":job_id}})
-                }
-                Err(message) => {
-                    json!({"type":"event","event":"job.failed","data":{"job_id":job_id,"error":{"code":"operation_failed","message":message}}})
-                }
+            let event = match spotify::login(&config, &spotify::token_path(), port, &cancel) {
+                Ok(name) => AppEvent::JobCompleted {
+                    job_id,
+                    result: json!({"account_name": name}),
+                },
+                Err(message) if message == "cancelled" => AppEvent::JobCancelled { job_id },
+                Err(message) => AppEvent::JobFailed { job_id, message },
             };
-            let _ = sender.send(event);
+            let _ = sender.send(Message::App(event));
             if let Ok(mut active) = state.lock() {
                 *active = None;
             }
@@ -420,143 +357,9 @@ impl Bridge {
         Ok(id)
     }
 
-    pub fn drain(&self) -> Vec<Value> {
+    pub fn drain(&self) -> Vec<Message> {
         self.output.try_iter().collect()
     }
-}
-
-fn ask(
-    sender: &Mutex<Sender<Value>>,
-    decisions: &Decisions,
-    prompt: &Prompt<'_>,
-    number: u64,
-) -> Result<Value, String> {
-    let decision_id = format!("{}-decision-{number}", prompt.job_id);
-    let (reply, receiver) = mpsc::channel();
-    decisions
-        .lock()
-        .map_err(|_| "Decision state is unavailable")?
-        .insert(decision_id.clone(), reply);
-    sender
-        .lock()
-        .map_err(|_| "Rust backend is not available")?
-        .send(json!({"type":"event","event":"decision.request","data":{"job_id":prompt.job_id,"decision_id":decision_id,"kind":prompt.kind,"payload":prompt.payload}}))
-        .map_err(|_| "Rust backend is not available")?;
-    let answer = loop {
-        if prompt.cancelled.load(Ordering::SeqCst) {
-            break Err("import cancelled".to_owned());
-        }
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(value) => break Ok(value),
-            Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => {
-                break Err("The decision is not pending.".to_owned())
-            }
-        }
-    };
-    if let Ok(mut decisions) = decisions.lock() {
-        decisions.remove(&decision_id);
-    }
-    answer
-}
-
-struct WatchlistLoad {
-    sender: Sender<Value>,
-    id: String,
-    params: Value,
-    repository: Repository,
-    paths: Paths,
-    login: Arc<Mutex<Option<NativeLogin>>>,
-    jobs: Arc<Jobs>,
-    latest: Arc<AtomicU64>,
-    gate: Arc<Mutex<()>>,
-    generation: u64,
-}
-
-impl WatchlistLoad {
-    fn busy(&self) -> Result<bool, String> {
-        Ok(self
-            .login
-            .lock()
-            .map_err(|_| "Spotify login state is unavailable")?
-            .is_some()
-            || self.jobs.has_running()
-            || self.generation != self.latest.load(Ordering::SeqCst))
-    }
-}
-
-fn load_watchlist(load: WatchlistLoad) {
-    let settings = match Settings::resolve(&load.paths, &load.params) {
-        Ok(settings) => settings,
-        Err(message) => {
-            let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}));
-            return;
-        }
-    };
-    if let Err(message) = muzik_runner::watchlist::ensure_sources(&load.repository) {
-        let _ = load
-            .sender
-            .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
-    }
-    let saved = match watchlist::saved(&settings, &load.repository) {
-        Ok(saved) => saved,
-        Err(message) => {
-            let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}}));
-            return;
-        }
-    };
-    if load
-        .sender
-        .send(json!({"id":load.id,"type":"response","ok":true,"result":{"watchlist":saved}}))
-        .is_err()
-    {
-        return;
-    }
-    if let Err(message) = reconcile_watchlist(&load, &settings) {
-        if load.generation == load.latest.load(Ordering::SeqCst) {
-            let _ = load
-                .sender
-                .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
-        }
-    }
-}
-
-fn reconcile_watchlist(load: &WatchlistLoad, settings: &Settings) -> Result<(), String> {
-    for _ in 0..3 {
-        if load.busy()? {
-            return Ok(());
-        }
-        let revision = load.repository.revision()?;
-        let checked = watchlist::checked(settings, &load.repository)?;
-        let saved = load.repository.locked(|| -> Result<bool, String> {
-            if load.busy()? {
-                return Ok(true);
-            }
-            if load.repository.revision()? != revision {
-                return Ok(false);
-            }
-            load.repository.save(&checked)?;
-            Ok(true)
-        })?;
-        if !saved {
-            continue;
-        }
-        if load.busy()? {
-            return Ok(());
-        }
-        let visible = watchlist::view(settings, &checked)?;
-        let _gate = load
-            .gate
-            .lock()
-            .map_err(|_| "Watchlist state is unavailable")?;
-        if load.generation == load.latest.load(Ordering::SeqCst) {
-            let _ = load.sender.send(
-                json!({"type":"event","event":"watchlist.updated","data":{"watchlist":visible}}),
-            );
-        }
-        return Ok(());
-    }
-    Err("The watchlist changed during the local check. Reload it.".into())
 }
 
 fn native_response(paths: &Paths, id: &str, command: &str, params: &Value) -> Value {
@@ -575,31 +378,29 @@ fn native_response(paths: &Paths, id: &str, command: &str, params: &Value) -> Va
 
 #[cfg(test)]
 mod tests {
-    use super::{load_watchlist, Bridge, NativeLogin, WatchlistLoad};
+    use super::{Bridge, Message, NativeLogin};
     use muzik_core::paths::Paths;
-    use muzik_core::watchlist::Repository;
-    use muzik_runner::Jobs;
+    use muzik_runner::AppEvent;
     use serde_json::{json, Value};
     use std::cell::RefCell;
     use std::collections::{HashMap, VecDeque};
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-    use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use std::time::Duration;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     thread_local! {
-        static SKIPPED: RefCell<VecDeque<Value>> = const { RefCell::new(VecDeque::new()) };
+        static SKIPPED: RefCell<VecDeque<Message>> = const { RefCell::new(VecDeque::new()) };
     }
 
     fn next_matching(
         bridge: &Bridge,
         timeout: Duration,
-        wanted: impl Fn(&Value) -> bool,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
+        wanted: impl Fn(&Message) -> bool,
+    ) -> Result<Message, Box<dyn std::error::Error>> {
         let earlier = SKIPPED.with(|skipped| {
             let mut skipped = skipped.borrow_mut();
             let index = skipped.iter().position(&wanted)?;
@@ -624,24 +425,38 @@ mod tests {
     }
 
     fn response(bridge: &Bridge, id: &str) -> Result<Value, Box<dyn std::error::Error>> {
-        next_matching(bridge, Duration::from_secs(5), |message| {
-            message["type"] == "response" && message["id"] == id
-        })
+        match next_matching(
+            bridge,
+            Duration::from_secs(5),
+            |message| matches!(message, Message::Response(value) if value["id"] == id),
+        )? {
+            Message::Response(value) => Ok(value),
+            _ => Err("not a response".into()),
+        }
     }
 
-    fn event(
+    fn job_event(
         bridge: &Bridge,
-        wanted: &[&str],
         job_id: &str,
-    ) -> Result<Value, Box<dyn std::error::Error>> {
-        let message = next_matching(bridge, Duration::from_secs(20), |message| {
-            let name = message["event"].as_str().unwrap_or("");
-            (wanted.contains(&name) || name == "job.failed") && message["data"]["job_id"] == job_id
-        })?;
-        if message["event"] == "job.failed" && !wanted.contains(&"job.failed") {
-            return Err(format!("job failed: {}", message["data"]["error"]["message"]).into());
+        wanted: impl Fn(&AppEvent) -> bool,
+    ) -> Result<AppEvent, Box<dyn std::error::Error>> {
+        match next_matching(bridge, Duration::from_secs(20), |message| {
+            matches!(message, Message::App(event) if event.job_id() == Some(job_id)
+                && (wanted(event) || matches!(event, AppEvent::JobFailed { .. })))
+        })? {
+            Message::App(AppEvent::JobFailed { message, .. }) => {
+                Err(format!("job failed: {message}").into())
+            }
+            Message::App(event) => Ok(event),
+            _ => Err("not an app event".into()),
         }
-        Ok(message)
+    }
+
+    fn job_id(value: &Value) -> Result<String, Box<dyn std::error::Error>> {
+        Ok(value["result"]["job_id"]
+            .as_str()
+            .ok_or("missing job ID")?
+            .to_owned())
     }
 
     fn fixture_import(
@@ -715,18 +530,20 @@ mod tests {
         let (_state, mut bridge) = started()?;
         let id = bridge.send(
             "workflow.start",
-            json!({
-                "raw":audio,"no_organize":true,"no_split":true,"dry_run":true
-            }),
+            json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}),
         )?;
-        let job_id = response(&bridge, &id)?["result"]["job_id"]
-            .as_str()
-            .ok_or("missing job ID")?
-            .to_owned();
-        assert!(job_id.starts_with("queue-"));
-        event(&bridge, &["job.started"], &job_id)?;
-        let done = event(&bridge, &["job.completed"], &job_id)?;
-        assert_eq!(done["data"]["result"]["singles"], 1);
+        let job = job_id(&response(&bridge, &id)?)?;
+        assert!(job.starts_with("queue-"));
+        job_event(&bridge, &job, |event| {
+            matches!(event, AppEvent::JobStarted { .. })
+        })?;
+        let done = job_event(&bridge, &job, |event| {
+            matches!(event, AppEvent::JobCompleted { .. })
+        })?;
+        let AppEvent::JobCompleted { result, .. } = done else {
+            return Err("the job did not complete".into());
+        };
+        assert_eq!(result["singles"], 1);
         assert!(audio.exists());
         Ok(())
     }
@@ -744,34 +561,30 @@ mod tests {
                 "workflow.start",
                 json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
             )?;
-            jobs.push(
-                response(&bridge, &id)?["result"]["job_id"]
-                    .as_str()
-                    .ok_or("missing job ID")?
-                    .to_owned(),
-            );
+            jobs.push(job_id(&response(&bridge, &id)?)?);
         }
         let mut asked = HashMap::new();
         let mut done = 0;
         while done < 2 {
-            let message = next_matching(&bridge, Duration::from_secs(20), |_| true)?;
-            match message["event"].as_str().unwrap_or("") {
-                "decision.request" => {
-                    let job = message["data"]["job_id"].as_str().unwrap_or("").to_owned();
-                    assert_eq!(message["data"]["kind"], "import_match");
-                    asked.insert(job, ());
+            match next_matching(&bridge, Duration::from_secs(20), |_| true)? {
+                Message::App(AppEvent::DecisionRequest {
+                    job_id,
+                    decision_id,
+                    kind,
+                    ..
+                }) => {
+                    assert_eq!(kind, muzik_core::DecisionKind::ImportMatch);
+                    asked.insert(job_id, ());
                     bridge.send(
                         "decision.reply",
-                        json!({"decision_id":message["data"]["decision_id"],"value":"as_is"}),
+                        json!({"decision_id":decision_id,"value":"as_is"}),
                     )?;
                 }
-                "job.completed" if jobs.iter().any(|job| message["data"]["job_id"] == *job) => {
+                Message::App(AppEvent::JobCompleted { job_id, .. }) if jobs.contains(&job_id) => {
                     done += 1;
                 }
-                "job.failed" => {
-                    return Err(
-                        format!("job failed: {}", message["data"]["error"]["message"]).into(),
-                    )
+                Message::App(AppEvent::JobFailed { message, .. }) => {
+                    return Err(format!("job failed: {message}").into())
                 }
                 _ => {}
             }
@@ -791,18 +604,18 @@ mod tests {
             "workflow.start",
             json!({"raw":audio,"config":config,"no_split":true}),
         )?;
-        let job_id = response(&bridge, &id)?["result"]["job_id"]
-            .as_str()
-            .ok_or("missing job ID")?
-            .to_owned();
-        let asked = event(&bridge, &["decision.request"], &job_id)?;
-        let decision_id = asked["data"]["decision_id"]
-            .as_str()
-            .ok_or("missing decision ID")?
-            .to_owned();
-        let id = bridge.send("job.cancel", json!({"job_id":job_id}))?;
+        let job = job_id(&response(&bridge, &id)?)?;
+        let AppEvent::DecisionRequest { decision_id, .. } = job_event(&bridge, &job, |event| {
+            matches!(event, AppEvent::DecisionRequest { .. })
+        })?
+        else {
+            return Err("no decision request".into());
+        };
+        let id = bridge.send("job.cancel", json!({"job_id":job}))?;
         assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
-        event(&bridge, &["job.cancelled"], &job_id)?;
+        job_event(&bridge, &job, |event| {
+            matches!(event, AppEvent::JobCancelled { .. })
+        })?;
         assert!(audio.exists());
         assert!(!database.exists());
         let reply = bridge.send(
@@ -822,17 +635,14 @@ mod tests {
         let mut bridge = Bridge::with(Paths::under(dir.path()), false)?;
         let params = json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run","title":"Song"});
         let id = bridge.send("watchlist.action", params.clone())?;
-        let job_id = response(&bridge, &id)?["result"]["job_id"]
-            .as_str()
-            .ok_or("missing job ID")?
-            .to_owned();
+        let job = job_id(&response(&bridge, &id)?)?;
         let again = bridge.send("watchlist.action", params)?;
         assert_eq!(response(&bridge, &again)?["error"]["code"], "job_active");
         let id = bridge.send("jobs.list", json!({}))?;
         let listed = response(&bridge, &id)?;
-        assert_eq!(listed["result"]["open"][0]["job_id"], job_id);
+        assert_eq!(listed["result"]["open"][0]["job_id"], job);
         assert_eq!(listed["result"]["runner"], false);
-        let id = bridge.send("job.cancel", json!({"job_id":job_id}))?;
+        let id = bridge.send("job.cancel", json!({"job_id":job}))?;
         assert_eq!(response(&bridge, &id)?["result"]["cancel_requested"], true);
         let id = bridge.send("jobs.list", json!({}))?;
         assert_eq!(response(&bridge, &id)?["result"]["open"], json!([]));
@@ -867,38 +677,52 @@ mod tests {
 
     #[test]
     fn watchlist_load_sends_saved_cards_before_local_check() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let paths = Paths::under(dir.path());
-        let repository = Repository::open(&paths);
-        repository
-            .add("https://www.youtube.com/playlist?list=PLnative123")
-            .map_err(std::io::Error::other)?;
-        let (sender, receiver) = mpsc::channel();
-        let request = WatchlistLoad {
-            sender,
-            id: "load-1".into(),
-            params: json!({"quality_policy":"off", "no_split":false, "no_organize":false}),
-            repository,
-            jobs: Arc::new(Jobs::in_memory(&paths)?),
-            paths,
-            login: Arc::new(Mutex::new(None)),
-            latest: Arc::new(AtomicU64::new(1)),
-            gate: Arc::new(Mutex::new(())),
-            generation: 1,
-        };
-        load_watchlist(request);
-        let saved = receiver.recv()?;
-        let checked = receiver.recv()?;
-        assert_eq!(saved["id"], "load-1");
+        let (_state, mut bridge) = started()?;
+        let id = bridge.send(
+            "watchlist.add",
+            json!({"url":"https://www.youtube.com/playlist?list=PLnative123"}),
+        )?;
+        assert_eq!(
+            response(&bridge, &id)?["result"]["playlist"]["playlist_id"],
+            "PLnative123"
+        );
+        let id = bridge.send("watchlist.load", json!({}))?;
+        let saved = response(&bridge, &id)?;
         assert_eq!(
             saved["result"]["watchlist"]["playlists"][0]["playlist_id"],
             "PLnative123"
         );
-        assert_eq!(checked["event"], "watchlist.updated");
+        let Message::App(AppEvent::WatchlistUpdated(checked)) =
+            next_matching(&bridge, Duration::from_secs(5), |message| {
+                matches!(message, Message::App(AppEvent::WatchlistUpdated(_)))
+            })?
+        else {
+            return Err("no checked watchlist".into());
+        };
+        assert_eq!(checked["playlists"][0]["playlist_id"], "PLnative123");
+        Ok(())
+    }
+
+    #[test]
+    fn watchlist_edits_go_through_the_app() -> TestResult {
+        let (_state, mut bridge) = started()?;
+        let id = bridge.send(
+            "watchlist.add",
+            json!({"url": "https://www.youtube.com/playlist?list=PL123"}),
+        )?;
         assert_eq!(
-            checked["data"]["watchlist"]["playlists"][0]["playlist_id"],
-            "PLnative123"
+            response(&bridge, &id)?["result"]["playlist"]["playlist_id"],
+            "PL123"
         );
+        let id = bridge.send(
+            "watchlist.rename",
+            json!({"playlist_id": "PL123", "title": "  New name  "}),
+        )?;
+        assert_eq!(response(&bridge, &id)?["result"]["renamed"], true);
+        let id = bridge.send("watchlist.rename", json!({"playlist_id": "PL123"}))?;
+        assert_eq!(response(&bridge, &id)?["error"]["code"], "operation_failed");
+        let id = bridge.send("watchlist.remove", json!({"playlist_id": "PL123"}))?;
+        assert_eq!(response(&bridge, &id)?["result"]["removed"], true);
         Ok(())
     }
 

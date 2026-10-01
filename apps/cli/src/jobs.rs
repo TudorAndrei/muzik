@@ -4,7 +4,7 @@ use muzik_core::paths::Paths;
 use muzik_jobs::CancelRequest;
 use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
-use muzik_runner::{Jobs, Options, Prompt, Runner, job_id, parse_job_id};
+use muzik_runner::{AppEvent, Jobs, Options, Prompt, Runner, job_id, parse_job_id};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Write};
@@ -126,11 +126,11 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
         Arc::clone(jobs),
         Options {
             workers: WORKERS,
-            sink: Arc::new(move |message| {
-                if field(&message, "event") == "job.failed" {
+            sink: Arc::new(move |event| {
+                if matches!(event, AppEvent::JobFailed { .. }) {
                     counted.fetch_add(1, Ordering::SeqCst);
                 }
-                report(&titles, &message);
+                report(&titles, &event);
             }),
             ask: Arc::new(ask),
             chooser: Some(Arc::new(Codex)),
@@ -152,20 +152,24 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
     }
 }
 
-fn report(titles: &Mutex<HashMap<String, String>>, message: &Value) {
-    let data = field(message, "data");
-    let id = text(field(data, "job_id"));
+fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
     let Ok(mut titles) = titles.lock() else {
         return;
     };
-    match field(message, "event").as_str().unwrap_or("") {
-        "job.started" => {
-            titles.insert(id.clone(), text(field(data, "title")));
-            println!("{id} started: {}", text(field(data, "title")));
+    match event {
+        AppEvent::JobStarted {
+            job_id: id, title, ..
+        } => {
+            titles.insert(id.clone(), title.clone());
+            println!("{id} started: {title}");
         }
-        "job.event" => {
-            let payload = field(data, "data");
-            let line = match field(data, "event").as_str().unwrap_or("") {
+        AppEvent::JobEvent {
+            job_id: id,
+            name,
+            data: payload,
+            ..
+        } => {
+            let line = match name.as_str() {
                 "message" | "log" => text(field(payload, "message")),
                 "step_started" => format!("{} started", text(field(payload, "name"))),
                 "item_waiting" => format!(
@@ -185,13 +189,16 @@ fn report(titles: &Mutex<HashMap<String, String>>, message: &Value) {
                 println!("  {id}: {line}");
             }
         }
-        "job.completed" => println!("{id} finished: {}", title(&titles, &id)),
-        "job.cancelled" => println!("{id} cancelled: {}", title(&titles, &id)),
-        "job.failed" => println!(
-            "{id} failed: {}: {}",
-            title(&titles, &id),
-            text(field(field(data, "error"), "message"))
-        ),
+        AppEvent::JobCompleted { job_id: id, .. } => {
+            println!("{id} finished: {}", title(&titles, id));
+        }
+        AppEvent::JobCancelled { job_id: id } => {
+            println!("{id} cancelled: {}", title(&titles, id));
+        }
+        AppEvent::JobFailed {
+            job_id: id,
+            message,
+        } => println!("{id} failed: {}: {message}", title(&titles, id)),
         _ => {}
     }
 }

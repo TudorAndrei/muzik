@@ -87,11 +87,12 @@
 
 ## Phase 11: Typed application module behind the GUI
 
-- [ ] `muzik-runner/src/app.rs` with `App` and `AppEvent`
-- [ ] Bridge is a thin adapter; watchlist logic out of the GUI
-- [ ] `main.rs` matches on `AppEvent`
-- [ ] Bridge tests use temp paths and `NoChooser`
-- [ ] Commit: `refactor(gui): drive the desktop app through a typed application module`
+- [x] `muzik-runner/src/app.rs` with `App`; `AppEvent` from the runner `Sink`
+- [x] Bridge is a thin adapter; watchlist load, reconcile, edits, and keys out of the GUI
+- [x] `main.rs` matches on `AppEvent` (responses for GUI-local settings stay string commands)
+- [x] Bridge tests use temp paths and no chooser
+- [x] `muzik-gpui --check-backend` works on a copy of the real data; 79 open jobs move from `jobs.db`
+- [x] Commit: `refactor(gui): drive the desktop app through a typed application module`
 
 ## Verification
 

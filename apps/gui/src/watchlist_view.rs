@@ -56,13 +56,12 @@ impl Muzik {
     }
 
     fn watchlist_header(&self, has_playlists: bool, cx: &mut Context<Self>) -> AnyElement {
-        let refresh_params = self.launcher_params(cx);
         let refresh = Button::new("watch-refresh")
             .icon(IconName::RefreshCw)
             .label("Refresh all")
             .disabled(!has_playlists || self.has_run(RunKind::Refresh))
             .on_click(cx.listener(move |view, _, _, cx| {
-                view.start_job("watchlist.refresh", refresh_params.clone(), cx)
+                view.start_job("watchlist.refresh", json!({}), cx)
             }));
         div()
             .flex()
@@ -173,14 +172,7 @@ impl Muzik {
                 .map_or_else(|| "not checked".to_string(), |at| format!("checked {at}"))
         );
         let source_url = playlist["url"].as_str().unwrap_or("").to_string();
-        let mut refresh_params = self
-            .launcher_params(cx)
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        refresh_params.insert("playlist_id".into(), json!(id));
-        refresh_params.insert("playlist_title".into(), json!(title));
-        let refresh_params = Value::Object(refresh_params);
+        let refresh_params = json!({"playlist_id": id, "playlist_title": title});
         let mut tools = div().flex().items_center().gap_1().child(
             Button::new("refresh-source")
                 .ghost()
@@ -221,7 +213,6 @@ impl Muzik {
                     item_position(item),
                     &item_video_id(item),
                     ItemAction::Retry,
-                    cx,
                 )
             })
             .collect();
@@ -381,18 +372,13 @@ impl Muzik {
         position: usize,
         video_id: &str,
         action: ItemAction,
-        cx: &App,
     ) -> Value {
-        let mut params = self
-            .launcher_params(cx)
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
-        params.insert("playlist_id".into(), json!(playlist_id));
-        params.insert("position".into(), json!(position));
-        params.insert("video_id".into(), json!(video_id));
-        params.insert("action".into(), json!(action));
-        Value::Object(params)
+        let title = self
+            .find_item(&(playlist_id.to_owned(), position, video_id.to_owned()))
+            .and_then(|item| item["title"].as_str().map(str::to_owned));
+        let mut params = json!({"action": action, "title": title});
+        ItemId::new(playlist_id, position as u64, Some(video_id)).write(&mut params);
+        params
     }
 
     fn find_item(&self, key: &(String, usize, String)) -> Option<Value> {
@@ -498,9 +484,7 @@ fn item_sheet(
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
         let availability = &item["actions"][action.as_ref()];
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
-        let params = entity
-            .read(cx)
-            .item_params(&key.0, key.1, &key.2, action, cx);
+        let params = entity.read(cx).item_params(&key.0, key.1, &key.2, action);
         let label = action_label(action);
         let item_title = title.clone();
         let view = view.clone();

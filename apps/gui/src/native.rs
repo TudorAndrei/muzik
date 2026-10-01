@@ -26,9 +26,6 @@ pub fn handles(command: &str) -> bool {
             | "spotify.logout"
             | "spotify.status"
             | "spotify.playlists"
-            | "watchlist.add"
-            | "watchlist.rename"
-            | "watchlist.remove"
     )
 }
 
@@ -77,9 +74,6 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
         "spotify.status" => spotify::status(&path, &spotify::token_path()),
         "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
             .map(|playlists| json!({"playlists": playlists})),
-        "watchlist.add" | "watchlist.rename" | "watchlist.remove" => {
-            watchlist_edit(&Repository::open(paths), command, params)
-        }
         _ => Err(format!("unknown command: {command}")),
     }
 }
@@ -143,21 +137,6 @@ fn save_soulseek(path: &Path, params: &Value) -> Result<(), String> {
     app_config::save_section_string(path, "soulseek", "server_port", &port.to_string())
 }
 
-fn watchlist_edit(repository: &Repository, command: &str, params: &Value) -> Result<Value, String> {
-    let result = match command {
-        "watchlist.add" => json!({"playlist": repository.add(required_string(params, "url")?)?}),
-        "watchlist.rename" => json!({"renamed": repository.rename(
-            required_string(params, "playlist_id")?,
-            required_string(params, "title")?,
-        )?}),
-        "watchlist.remove" => json!({"removed": repository.remove(
-            required_string(params, "playlist_id")?,
-        )?}),
-        _ => return Err(format!("unknown watchlist edit: {command}")),
-    };
-    Ok(result)
-}
-
 pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
     let output = params
         .get("output")
@@ -191,8 +170,7 @@ pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{library_scan, save_soulseek, soulseek_settings, watchlist_edit};
-    use muzik_core::watchlist::Repository;
+    use super::{library_scan, save_soulseek, soulseek_settings};
     use serde_json::json;
     use std::fs;
 
@@ -243,41 +221,6 @@ mod tests {
         assert!(saved.contains("secret"));
         assert!(saved.contains("renamed"));
         assert!(saved.contains("jobs: 2"));
-        Ok(())
-    }
-
-    #[test]
-    fn watchlist_edits_save_to_the_database() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let repository = Repository::new(dir.path().join("muzik.db"));
-        let added = watchlist_edit(
-            &repository,
-            "watchlist.add",
-            &json!({"url": "https://www.youtube.com/playlist?list=PL123"}),
-        )
-        .map_err(std::io::Error::other)?;
-        assert_eq!(added["playlist"]["playlist_id"], "PL123");
-        let renamed = watchlist_edit(
-            &repository,
-            "watchlist.rename",
-            &json!({"playlist_id": "PL123", "title": "  New name  "}),
-        )
-        .map_err(std::io::Error::other)?;
-        assert_eq!(renamed["renamed"], true);
-        let saved = repository.load().map_err(std::io::Error::other)?;
-        assert_eq!(saved.playlists[0].title.as_deref(), Some("New name"));
-        let removed = watchlist_edit(
-            &repository,
-            "watchlist.remove",
-            &json!({"playlist_id": "PL123"}),
-        )
-        .map_err(std::io::Error::other)?;
-        assert_eq!(removed["removed"], true);
-        assert!(repository
-            .load()
-            .map_err(std::io::Error::other)?
-            .playlists
-            .is_empty());
         Ok(())
     }
 }

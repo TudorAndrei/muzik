@@ -1,4 +1,5 @@
 use crate::agent::Chooser;
+use crate::events::AppEvent;
 use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
@@ -19,7 +20,7 @@ use strum_macros::AsRefStr;
 
 const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
 
-pub type Sink = Arc<dyn Fn(Value) + Send + Sync>;
+pub type Sink = Arc<dyn Fn(AppEvent) + Send + Sync>;
 pub type Ask = Arc<dyn Fn(Prompt<'_>) -> Result<Value, String> + Send + Sync>;
 pub type Running = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
@@ -67,14 +68,21 @@ impl Shared {
     }
 
     fn event(&self, job_id: &str, source: Source, event: &Value) {
-        (self.sink)(
-            json!({"type":"event","event":"job.event","data":{"job_id":job_id,"source":source.as_ref(),"event":event["event"],"data":event["data"]}}),
-        );
+        let name = event["event"].as_str().unwrap_or("");
+        (self.sink)(if name == "watchlist_saved" {
+            AppEvent::WatchlistSaved
+        } else {
+            AppEvent::JobEvent {
+                job_id: job_id.to_owned(),
+                source: source.as_ref().to_owned(),
+                name: name.to_owned(),
+                data: event["data"].clone(),
+            }
+        });
     }
 
     fn publish(&self) {
-        let snapshot = self.jobs.snapshot();
-        (self.sink)(json!({"type":"event","event":"jobs.updated","data":snapshot}));
+        (self.sink)(AppEvent::JobsUpdated(self.jobs.snapshot()));
     }
 
     fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
@@ -114,9 +122,7 @@ impl Runner {
             generation: options.generation,
         });
         let sink = Arc::clone(&shared.sink);
-        gates::listen(move |snapshot| {
-            sink(json!({"type":"event","event":"queues.updated","data":snapshot}));
-        });
+        gates::listen(move |snapshot| sink(AppEvent::QueuesUpdated(snapshot)));
         for _ in 0..options.workers.max(1) {
             let shared = Arc::clone(&shared);
             thread::spawn(move || work(&shared));
@@ -198,7 +204,7 @@ fn watch(shared: &Arc<Shared>) {
         }
         let snapshot = shared.jobs.snapshot();
         if snapshot != last {
-            (shared.sink)(json!({"type":"event","event":"jobs.updated","data":snapshot}));
+            (shared.sink)(AppEvent::JobsUpdated(snapshot.clone()));
             last = snapshot;
         }
         thread::sleep(Duration::from_secs(1));
@@ -211,9 +217,11 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
     shared.running().insert(id.clone(), Arc::clone(&cancel));
     shared.generation.fetch_add(1, Ordering::SeqCst);
     gates::set_label(&job.title);
-    (shared.sink)(
-        json!({"type":"event","event":"job.started","data":{"job_id":id,"title":job.title,"kind":job.kind.as_ref()}}),
-    );
+    (shared.sink)(AppEvent::JobStarted {
+        job_id: id.clone(),
+        title: job.title.clone(),
+        kind: job.kind.as_ref().to_owned(),
+    });
     shared.publish();
     let result = match job.kind {
         Kind::Refresh => run_refresh(shared, &job, &id, &cancel),
@@ -232,13 +240,12 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
     shared.running().remove(&id);
     shared.generation.fetch_add(1, Ordering::SeqCst);
     (shared.sink)(match result {
-        Ok(result) => {
-            json!({"type":"event","event":"job.completed","data":{"job_id":id,"result":result}})
-        }
-        Err((true, _)) => json!({"type":"event","event":"job.cancelled","data":{"job_id":id}}),
-        Err((false, message)) => {
-            json!({"type":"event","event":"job.failed","data":{"job_id":id,"error":{"code":"operation_failed","message":message}}})
-        }
+        Ok(result) => AppEvent::JobCompleted { job_id: id, result },
+        Err((true, _)) => AppEvent::JobCancelled { job_id: id },
+        Err((false, message)) => AppEvent::JobFailed {
+            job_id: id,
+            message,
+        },
     });
     shared.publish();
 }
@@ -439,16 +446,17 @@ fn job_error(error: JobError) -> (bool, String) {
 #[cfg(test)]
 mod tests {
     use super::{Options, Runner};
+    use crate::events::AppEvent;
     use crate::queue::Jobs;
     use muzik_core::paths::Paths;
     use muzik_core::watchlist::{Repository, SourceKind, Stage, StageStatus, WatchItem};
-    use serde_json::{json, Value};
+    use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
-    fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<Value>), String> {
+    fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
         let sender = Mutex::new(sender);
         let runner = Runner::start(
@@ -544,10 +552,15 @@ mod tests {
         runner.wake();
         let job_id = super::job_id(id);
         loop {
-            let message = receiver.recv_timeout(Duration::from_secs(20))?;
-            if message["event"] == "job.completed" && message["data"]["job_id"] == job_id {
-                assert_eq!(message["data"]["result"]["singles"], 1);
-                break;
+            if let AppEvent::JobCompleted {
+                job_id: done,
+                result,
+            } = receiver.recv_timeout(Duration::from_secs(20))?
+            {
+                if done == job_id {
+                    assert_eq!(result["singles"], 1);
+                    break;
+                }
             }
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
