@@ -6,11 +6,13 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0";
 const PAGE_LIMIT: u64 = 64 * 1024 * 1024;
+const REQUEST_BUDGET: Duration = Duration::from_secs(120);
+const DOWNLOAD_ATTEMPTS: u32 = 5;
 const AUDIO: &[&str] = &[
     "flac", "wav", "aif", "aiff", "m4a", "mp3", "ogg", "opus", "alac",
 ];
@@ -448,72 +450,39 @@ pub fn download(
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<Vec<PathBuf>, String> {
-    let blob = login.page_blob(download_page)?;
-    let item = blob["digital_items"]
-        .as_array()
-        .and_then(|items| items.first())
-        .ok_or("Bandcamp has no download for this purchase.")?;
-    let downloads = item["downloads"]
-        .as_object()
-        .ok_or("Bandcamp has no download for this purchase.")?;
-    let url = downloads[format]["url"].as_str().ok_or_else(|| {
-        format!(
-            "Bandcamp has no {format} download for this purchase. It has: {}.",
-            downloads.keys().cloned().collect::<Vec<_>>().join(", ")
-        )
-    })?;
-    if cancelled.load(Ordering::SeqCst) {
-        return Err("Bandcamp download cancelled".into());
-    }
+    let folder = destination
+        .file_name()
+        .ok_or("The Bandcamp download folder has no name.")?
+        .to_string_lossy();
+    let partial = destination.with_file_name(format!(".{folder}.{format}.part"));
+    let mut locate = || {
+        let blob = login.page_blob(download_page)?;
+        let item = blob["digital_items"]
+            .as_array()
+            .and_then(|items| items.first())
+            .ok_or("Bandcamp has no download for this purchase.")?;
+        let downloads = item["downloads"]
+            .as_object()
+            .ok_or("Bandcamp has no download for this purchase.")?;
+        downloads[format]["url"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                format!(
+                    "Bandcamp has no {format} download for this purchase. It has: {}.",
+                    downloads.keys().cloned().collect::<Vec<_>>().join(", ")
+                )
+            })
+    };
+    let name = transfer(
+        &mut locate,
+        &login.header(),
+        &partial,
+        cancelled,
+        on_progress,
+    )?;
     fs::create_dir_all(destination).map_err(|error| error.to_string())?;
-    let response = ureq::get(url)
-        .header("User-Agent", USER_AGENT)
-        .header("Cookie", login.header())
-        .config()
-        .timeout_global(Some(Duration::from_secs(3600)))
-        .build()
-        .call()
-        .map_err(|error| format!("Bandcamp did not send the download: {error}"))?;
-    let name = response
-        .headers()
-        .get("content-disposition")
-        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
-        .and_then(|value| disposition_name(&value))
-        .ok_or("Bandcamp sent a download without a safe file name.")?;
-    let total = response
-        .headers()
-        .get("content-length")
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<u64>().ok());
     let target = destination.join(&name);
-    let partial = destination.join(format!(".{name}.part"));
-    let written = (|| {
-        let mut reader = response.into_body().into_reader();
-        let mut file = fs::File::create(&partial).map_err(|error| error.to_string())?;
-        let mut buffer = vec![0; 256 * 1024];
-        let mut received = 0u64;
-        on_progress(received, total);
-        loop {
-            if cancelled.load(Ordering::SeqCst) {
-                return Err("Bandcamp download cancelled".to_owned());
-            }
-            let count = reader
-                .read(&mut buffer)
-                .map_err(|error| format!("The Bandcamp download stopped: {error}"))?;
-            if count == 0 {
-                break;
-            }
-            file.write_all(&buffer[..count])
-                .map_err(|error| error.to_string())?;
-            received += count as u64;
-            on_progress(received, total);
-        }
-        file.sync_all().map_err(|error| error.to_string())
-    })();
-    if let Err(error) = written {
-        let _ = fs::remove_file(&partial);
-        return Err(error);
-    }
     fs::rename(&partial, &target).map_err(|error| error.to_string())?;
     if target
         .extension()
@@ -527,6 +496,140 @@ pub fn download(
         return Err("The Bandcamp download has no audio files.".into());
     }
     Ok(files)
+}
+
+fn transfer(
+    locate: &mut dyn FnMut() -> Result<String, String>,
+    cookie: &str,
+    partial: &Path,
+    cancelled: &AtomicBool,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<String, String> {
+    let mut url = Some(locate()?);
+    let mut failures = 0;
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            let _ = fs::remove_file(partial);
+            return Err("Bandcamp download cancelled".into());
+        }
+        let before = saved_bytes(partial);
+        let attempt = match url.take() {
+            Some(url) => fetch(&url, cookie, partial, cancelled, on_progress),
+            None => locate().and_then(|url| fetch(&url, cookie, partial, cancelled, on_progress)),
+        };
+        let error = match attempt {
+            Ok(name) => return Ok(name),
+            Err(error) => error,
+        };
+        failures = if saved_bytes(partial) > before {
+            0
+        } else {
+            failures + 1
+        };
+        if failures >= DOWNLOAD_ATTEMPTS {
+            return Err(error);
+        }
+        if failures > 0 {
+            wait(Duration::from_secs(1 << failures), cancelled);
+        }
+    }
+}
+
+fn fetch(
+    url: &str,
+    cookie: &str,
+    partial: &Path,
+    cancelled: &AtomicBool,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<String, String> {
+    let offset = saved_bytes(partial);
+    let mut request = ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Cookie", cookie);
+    if offset > 0 {
+        request = request.header("Range", format!("bytes={offset}-"));
+    }
+    let response = match request
+        .config()
+        .timeout_global(Some(REQUEST_BUDGET))
+        .build()
+        .call()
+    {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(416)) => {
+            let _ = fs::remove_file(partial);
+            return Err("Bandcamp did not accept the saved part of the download.".into());
+        }
+        Err(error) => return Err(format!("Bandcamp did not send the download: {error}")),
+    };
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+    };
+    let name = header("content-disposition")
+        .and_then(|value| disposition_name(&value))
+        .ok_or("Bandcamp sent a download without a safe file name.")?;
+    let resumed = response.status() == 206;
+    let total = if resumed {
+        match header("content-range").and_then(|value| content_range(&value)) {
+            Some((start, total)) if start == offset => total,
+            _ => {
+                let _ = fs::remove_file(partial);
+                return Err("Bandcamp sent the wrong part of the download.".into());
+            }
+        }
+    } else {
+        header("content-length").and_then(|value| value.parse().ok())
+    };
+    let mut file = if resumed {
+        fs::OpenOptions::new().append(true).open(partial)
+    } else {
+        fs::File::create(partial)
+    }
+    .map_err(|error| error.to_string())?;
+    let mut received = if resumed { offset } else { 0 };
+    let mut reader = response.into_body().into_reader();
+    let mut buffer = vec![0; 256 * 1024];
+    on_progress(received, total);
+    loop {
+        if cancelled.load(Ordering::SeqCst) {
+            return Err("Bandcamp download cancelled".into());
+        }
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("The Bandcamp download stopped: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        file.write_all(&buffer[..count])
+            .map_err(|error| error.to_string())?;
+        received += count as u64;
+        on_progress(received, total);
+    }
+    file.sync_all().map_err(|error| error.to_string())?;
+    if total.is_some_and(|total| total != received) {
+        return Err("The Bandcamp download ended early.".into());
+    }
+    Ok(name)
+}
+
+fn saved_bytes(partial: &Path) -> u64 {
+    fs::metadata(partial).map_or(0, |metadata| metadata.len())
+}
+
+fn content_range(header: &str) -> Option<(u64, Option<u64>)> {
+    let (range, total) = header.strip_prefix("bytes ")?.split_once('/')?;
+    let start = range.split_once('-')?.0.trim().parse().ok()?;
+    Some((start, total.trim().parse().ok()))
+}
+
+fn wait(duration: Duration, cancelled: &AtomicBool) {
+    let end = Instant::now() + duration;
+    while Instant::now() < end && !cancelled.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn disposition_name(header: &str) -> Option<String> {
@@ -715,6 +818,80 @@ mod tests {
             list[0].art_url.as_deref(),
             Some("https://f4.bcbits.com/img/a0000000123_9.jpg")
         );
+    }
+
+    #[test]
+    fn an_interrupted_download_continues_from_the_saved_bytes(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        let body: Vec<u8> = (0..200_000u32).map(|index| (index % 251) as u8).collect();
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!("http://{}/album.zip", listener.local_addr()?);
+        let served = body.clone();
+        let server = std::thread::spawn(move || -> std::io::Result<Vec<Option<String>>> {
+            let mut ranges = Vec::new();
+            for cut in [true, false] {
+                let (mut stream, _) = listener.accept()?;
+                let mut range = None;
+                let mut reader = BufReader::new(stream.try_clone()?);
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line)?;
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("range") {
+                            range = Some(value.trim().to_owned());
+                        }
+                    }
+                }
+                let start = range
+                    .as_deref()
+                    .and_then(|range| range.strip_prefix("bytes="))
+                    .and_then(|range| range.trim_end_matches('-').parse::<usize>().ok())
+                    .unwrap_or(0);
+                let status = if start > 0 {
+                    format!(
+                        "206 Partial Content\r\nContent-Range: bytes {start}-{}/{}",
+                        served.len() - 1,
+                        served.len()
+                    )
+                } else {
+                    "200 OK".to_owned()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"Band - Album.zip\"\r\nConnection: close\r\n\r\n",
+                    served.len() - start
+                )?;
+                let end = if cut { served.len() / 2 } else { served.len() };
+                stream.write_all(&served[start..end])?;
+                ranges.push(range);
+            }
+            Ok(ranges)
+        });
+        let directory = tempfile::tempdir()?;
+        let partial = directory.path().join(".album.flac.part");
+        let mut progress = Vec::new();
+        let name = transfer(
+            &mut || Ok(url.clone()),
+            "identity=secret",
+            &partial,
+            &AtomicBool::new(false),
+            &mut |received, total| progress.push((received, total)),
+        )?;
+        let ranges = server.join().map_err(|_| "server panicked")??;
+        assert_eq!(name, "Band - Album.zip");
+        assert_eq!(fs::read(&partial)?, body);
+        assert_eq!(ranges, [None, Some(format!("bytes={}-", body.len() / 2))]);
+        assert_eq!(
+            progress.last(),
+            Some(&(body.len() as u64, Some(body.len() as u64)))
+        );
+        Ok(())
     }
 
     #[test]
