@@ -446,6 +446,7 @@ pub fn download(
     format: &str,
     destination: &Path,
     cancelled: &AtomicBool,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<Vec<PathBuf>, String> {
     let blob = login.page_blob(download_page)?;
     let item = blob["digital_items"]
@@ -479,12 +480,19 @@ pub fn download(
         .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
         .and_then(|value| disposition_name(&value))
         .ok_or("Bandcamp sent a download without a safe file name.")?;
+    let total = response
+        .headers()
+        .get("content-length")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok());
     let target = destination.join(&name);
     let partial = destination.join(format!(".{name}.part"));
     let written = (|| {
         let mut reader = response.into_body().into_reader();
         let mut file = fs::File::create(&partial).map_err(|error| error.to_string())?;
         let mut buffer = vec![0; 256 * 1024];
+        let mut received = 0u64;
+        on_progress(received, total);
         loop {
             if cancelled.load(Ordering::SeqCst) {
                 return Err("Bandcamp download cancelled".to_owned());
@@ -497,6 +505,8 @@ pub fn download(
             }
             file.write_all(&buffer[..count])
                 .map_err(|error| error.to_string())?;
+            received += count as u64;
+            on_progress(received, total);
         }
         file.sync_all().map_err(|error| error.to_string())
     })();

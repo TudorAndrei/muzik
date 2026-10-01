@@ -522,12 +522,25 @@ impl Adapter<'_, '_> {
             }
             let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
                 .map_err(|_| JobError::Cancelled)?;
+            let on_import_event = &mut *self.on_import_event;
+            let mut reported = None;
             bandcamp::download(
                 &login,
                 page,
                 bandcamp::DEFAULT_FORMAT,
                 &directory,
                 cancelled,
+                &mut |received, total| {
+                    let completed = received / MEGABYTE;
+                    let total = total.map(|total| total.div_ceil(MEGABYTE));
+                    if reported.is_none() {
+                        on_import_event(json!({"event":"progress_started","data":{"task_id":"bandcamp-download","description":"Downloading from Bandcamp (MB)","total":total}}));
+                    } else if reported == Some(completed) {
+                        return;
+                    }
+                    reported = Some(completed);
+                    on_import_event(json!({"event":"progress_advanced","data":{"task_id":"bandcamp-download","completed":completed}}));
+                },
             )
             .map_err(|error| {
                 if cancelled.load(Ordering::SeqCst) {
@@ -539,6 +552,9 @@ impl Adapter<'_, '_> {
                     }
                 }
             })?;
+            (self.on_import_event)(
+                json!({"event":"progress_finished","data":{"task_id":"bandcamp-download","success":true}}),
+            );
         }
         let mut options = self.prepared.local.options.clone();
         options.no_split = true;
@@ -983,6 +999,7 @@ fn spotify_items(document: &Value) -> Result<LoadedSource, JobError> {
 }
 
 const BANDCAMP_LOGIN: &str = "Set your Bandcamp login in Settings first.";
+const MEGABYTE: u64 = 1024 * 1024;
 
 fn safe_name(id: &str) -> String {
     id.chars()
