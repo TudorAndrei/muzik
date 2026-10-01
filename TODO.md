@@ -19,10 +19,10 @@
 
 ## Phase 3: Soulseek search and fetch in muzik-soulseek
 
-- [ ] `Session::search` and `Session::fetch`
-- [ ] Timeouts in `SessionSettings`
-- [ ] Runner, quality check, and CLI use them
-- [ ] Commit: `refactor(soulseek): search and fetch through one blocking interface`
+- [x] `Session::search` and `Session::fetch`
+- [x] Timeouts in `fetch::Timeouts`
+- [x] Runner, quality check, and CLI use them
+- [x] Commit: `refactor(soulseek): search and fetch through one blocking interface`
 
 ## Phase 4: One import decision policy
 

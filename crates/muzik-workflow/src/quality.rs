@@ -3,16 +3,15 @@
 use muzik_core::chapters::sidecar_path;
 use muzik_core::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_core::{DecisionKind, QualityPolicy, app_config, paths};
-use muzik_soulseek::job::{JobHandle, JobOutcome, JobState};
-use muzik_soulseek::ranking::{format as file_format, rank, search_query};
+use muzik_soulseek::fetch::Timeouts;
+use muzik_soulseek::ranking::{format as file_format, rank};
 use muzik_soulseek::session::{Session, SessionSettings};
-use muzik_soulseek::types::{Candidate, DownloadProgress};
+use muzik_soulseek::types::Candidate;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 const DURATION_TOLERANCE: f64 = 10.0;
 
@@ -447,19 +446,23 @@ fn quality_download_dir() -> Result<PathBuf, String> {
 }
 
 struct SoulseekBackend {
-    session: Option<std::sync::Arc<Session>>,
+    session: Option<(Arc<Session>, Timeouts)>,
 }
 
 impl SoulseekBackend {
-    fn session(&mut self) -> Result<&Session, String> {
+    fn session(&mut self) -> Result<(&Session, Timeouts), String> {
         if self.session.is_none() {
             let config = app_config::load(&app_config::path())?;
             let settings = SessionSettings::configured(&config)
                 .ok_or("Set Soulseek credentials in configuration first.")?;
-            self.session = Some(Session::shared(settings).map_err(|error| error.to_string())?);
+            self.session = Some((
+                Session::shared(settings).map_err(|error| error.to_string())?,
+                Timeouts::configured(&config),
+            ));
         }
         self.session
-            .as_deref()
+            .as_ref()
+            .map(|(session, timeouts)| (session.as_ref(), *timeouts))
             .ok_or("Soulseek session is not available".into())
     }
 }
@@ -520,16 +523,12 @@ impl Backend for SoulseekBackend {
         prefer: &str,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Candidate>, String> {
-        let job = self
-            .session()?
-            .start_track_search(search_query(query, prefer), 15.0);
-        match await_job(&job, cancelled)? {
-            JobOutcome::Search(candidates) => Ok(rank(candidates, query, prefer, 20)
-                .into_iter()
-                .map(|item| item.candidate)
-                .collect()),
-            JobOutcome::Download(_) => Err("Soulseek returned a download for a search".into()),
-        }
+        let (session, timeouts) = self.session()?;
+        Ok(session
+            .search(query, prefer, 20, timeouts.search, cancelled)?
+            .into_iter()
+            .map(|item| item.candidate)
+            .collect())
     }
 
     fn download(
@@ -538,55 +537,14 @@ impl Backend for SoulseekBackend {
         destination: &Path,
         cancelled: &AtomicBool,
     ) -> Result<Vec<PathBuf>, String> {
-        let mut names = HashSet::new();
-        let mut expected = Vec::new();
-        for file in &candidate.files {
-            check_cancelled(cancelled)?;
-            let name = file.name.rsplit(['/', '\\']).next().unwrap_or("");
-            if name.is_empty()
-                || name.chars().any(char::is_control)
-                || !names.insert(name.to_ascii_lowercase())
-            {
-                return Err("Soulseek result has an invalid or duplicate file name".into());
-            }
-            let job = self
-                .session()?
-                .start_download(
-                    candidate.username.clone(),
-                    file.name.clone(),
-                    file.size,
-                    destination.to_string_lossy().into_owned(),
-                )
-                .map_err(|error| error.to_string())?;
-            match await_job(&job, cancelled)? {
-                JobOutcome::Download(DownloadProgress::Completed) => {
-                    expected.push(destination.join(name))
-                }
-                _ => return Err("Soulseek download did not complete".into()),
-            }
-        }
-        Ok(expected)
+        let (session, timeouts) = self.session()?;
+        session.fetch(candidate, destination, timeouts.download, cancelled)
     }
 
     fn duration(&mut self, path: &Path) -> Result<Option<f64>, String> {
         muzik_tags::probe(path)
             .map(|properties| properties.duration_seconds)
             .map_err(|error| error.to_string())
-    }
-}
-
-fn await_job(job: &Arc<JobHandle>, cancelled: &AtomicBool) -> Result<JobOutcome, String> {
-    loop {
-        if cancelled.load(Ordering::SeqCst) {
-            job.cancel();
-            return Err("quality check cancelled".into());
-        }
-        match job.snapshot() {
-            JobState::Running => std::thread::sleep(Duration::from_millis(100)),
-            JobState::Completed(outcome) => return Ok(outcome),
-            JobState::Failed(error) => return Err(error),
-            JobState::Cancelled => return Err("quality check cancelled".into()),
-        }
     }
 }
 

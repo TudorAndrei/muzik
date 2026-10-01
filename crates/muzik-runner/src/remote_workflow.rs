@@ -6,10 +6,9 @@ use crate::settings::Settings;
 use muzik_core::paths::Paths;
 use muzik_core::watchlist::Stage;
 use muzik_core::{app_config, chapters::Chapter, DecisionKind};
-use muzik_soulseek::job::{JobOutcome, JobState};
-use muzik_soulseek::ranking::{rank, search_query};
+use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::session::{setting, Session, SessionSettings};
-use muzik_soulseek::types::{Candidate, DownloadProgress};
+use muzik_soulseek::types::Candidate;
 use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
     classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,
@@ -19,7 +18,6 @@ use muzik_workflow::{
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 pub fn run(
     input: WorkflowInput,
@@ -326,33 +324,8 @@ pub(crate) fn soulseek_download(
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
     let session = Session::shared(settings).map_err(|error| error.to_string())?;
-    let search_timeout = configured_timeout(
-        &config,
-        "MUZIK_SOULSEEK_SEARCH_TIMEOUT",
-        "search_timeout",
-        15.0,
-        120.0,
-    );
-    let search = session.start_track_search(search_query(query, prefer), search_timeout);
-    let candidates = loop {
-        if cancelled.load(Ordering::SeqCst) {
-            search.cancel();
-            return Err("Soulseek search cancelled".into());
-        }
-        match search.snapshot() {
-            JobState::Running => std::thread::sleep(Duration::from_millis(100)),
-            JobState::Completed(JobOutcome::Search(candidates)) => break candidates,
-            JobState::Completed(JobOutcome::Download(_)) => {
-                return Err("Soulseek returned a download for a search.".into())
-            }
-            JobState::Failed(error) => {
-                Session::forget_shared();
-                return Err(error);
-            }
-            JobState::Cancelled => return Err("Soulseek search cancelled".into()),
-        }
-    };
-    let ranked = rank(candidates, query, prefer, 10);
+    let timeouts = Timeouts::configured(&config);
+    let ranked = session.search(query, prefer, 10, timeouts.search, cancelled)?;
     if ranked.is_empty() {
         return Err(format!("No Soulseek audio found for {query}."));
     }
@@ -376,11 +349,6 @@ pub(crate) fn soulseek_download(
     } else {
         ranked.first().ok_or("No Soulseek audio found.")?
     };
-    if selected.candidate.username.trim().is_empty()
-        || selected.candidate.username.chars().any(char::is_control)
-    {
-        return Err("Soulseek result has an invalid username.".into());
-    }
     let output = output_root
         .map(Path::to_path_buf)
         .or_else(|| {
@@ -392,63 +360,14 @@ pub(crate) fn soulseek_download(
         .prefix("soulseek-")
         .tempdir_in(&output)
         .map_err(|error| error.to_string())?;
-    let timeout = configured_timeout(
-        &config,
-        "MUZIK_SOULSEEK_DOWNLOAD_TIMEOUT",
-        "download_timeout",
-        600.0,
-        3600.0,
-    );
-    let mut names = std::collections::HashSet::new();
-    for file in selected
-        .candidate
-        .files
-        .iter()
-        .filter(|file| !muzik_soulseek::ranking::format(file).is_empty())
-        .take(if single_file { 1 } else { usize::MAX })
-    {
-        if cancelled.load(Ordering::SeqCst) {
-            return Err("Soulseek download cancelled".into());
-        }
-        let name = file.name.rsplit(['/', '\\']).next().unwrap_or("");
-        if name.is_empty()
-            || name.chars().any(char::is_control)
-            || !names.insert(name.to_ascii_lowercase())
-        {
-            return Err("Soulseek result has missing or duplicate file names.".into());
-        }
-        let job = session
-            .start_download(
-                selected.candidate.username.clone(),
-                file.name.clone(),
-                file.size,
-                destination.path().to_string_lossy().into_owned(),
-            )
-            .map_err(|error| error.to_string())?;
-        let deadline = Instant::now() + Duration::from_secs_f64(timeout + 5.0);
-        loop {
-            if cancelled.load(Ordering::SeqCst) {
-                job.cancel();
-                return Err("Soulseek download cancelled".into());
-            }
-            match job.snapshot() {
-                JobState::Running if Instant::now() >= deadline => {
-                    job.cancel();
-                    return Err("Soulseek download timed out".into());
-                }
-                JobState::Running => std::thread::sleep(Duration::from_millis(100)),
-                JobState::Completed(JobOutcome::Download(DownloadProgress::Completed)) => break,
-                JobState::Completed(JobOutcome::Download(_)) => {
-                    return Err("Soulseek download did not complete".into())
-                }
-                JobState::Completed(JobOutcome::Search(_)) => {
-                    return Err("Soulseek returned a search for a download".into())
-                }
-                JobState::Failed(error) => return Err(error),
-                JobState::Cancelled => return Err("Soulseek download cancelled".into()),
-            }
-        }
-    }
+    session.fetch(
+        &selected
+            .candidate
+            .audio_only(if single_file { 1 } else { usize::MAX }),
+        destination.path(),
+        timeouts.download,
+        cancelled,
+    )?;
     let files = muzik_workflow::find_audio_inputs(&[destination.path().to_path_buf()])
         .map_err(|error| error.to_string())?;
     if files.is_empty() {
@@ -456,19 +375,6 @@ pub(crate) fn soulseek_download(
     }
     let root = destination.keep();
     muzik_workflow::find_audio_inputs(&[root]).map_err(|error| error.to_string())
-}
-
-fn configured_timeout(
-    config: &Value,
-    environment: &str,
-    key: &str,
-    default: f64,
-    maximum: f64,
-) -> f64 {
-    setting(config, environment, key)
-        .and_then(|value| value.parse::<f64>().ok())
-        .filter(|value| value.is_finite() && (1.0..=maximum).contains(value))
-        .unwrap_or(default)
 }
 
 fn candidate_row(candidate: &Candidate, score: f64) -> Value {

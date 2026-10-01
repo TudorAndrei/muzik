@@ -4,8 +4,8 @@ use muzik_core::{
 };
 use muzik_import::beets;
 use muzik_library::{Item, Library, SqlValue};
-use muzik_soulseek::job::{JobOutcome, JobState};
-use muzik_soulseek::ranking::{RankedCandidate, rank, search_query};
+use muzik_soulseek::fetch::{Timeouts, local_files};
+use muzik_soulseek::ranking::RankedCandidate;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
 use muzik_soulseek::types::{Candidate, FileEntry};
 use serde::{Deserialize, Serialize};
@@ -15,8 +15,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
 
 use crate::{Import, SoulseekCheckLibrary, SoulseekDownload, import};
 
@@ -456,38 +455,16 @@ fn ranked_search(
     prefer: &str,
     limit: usize,
 ) -> Result<Vec<RankedCandidate>, String> {
-    if query.trim().is_empty() {
-        return Err("search query must not be empty".into());
-    }
-    if query.chars().any(char::is_control) {
-        return Err("search query must not contain control characters".into());
-    }
     if !(1..=100).contains(&limit) {
         return Err("limit must be from 1 to 100".into());
     }
-    let timeout = setting(config, "MUZIK_SOULSEEK_SEARCH_TIMEOUT", "search_timeout")
-        .and_then(|text| text.parse::<f64>().ok())
-        .filter(|timeout| timeout.is_finite() && (1.0..=120.0).contains(timeout))
-        .unwrap_or(15.0);
-    let query = search_query(query, prefer);
-    let job = session.start_track_search(query.clone(), timeout);
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout + 5.0);
-    let candidates = loop {
-        match job.snapshot() {
-            JobState::Running if Instant::now() >= deadline => {
-                job.cancel();
-                return Err("Timed out waiting for Soulseek search".into());
-            }
-            JobState::Running => thread::sleep(Duration::from_millis(200)),
-            JobState::Completed(JobOutcome::Search(candidates)) => break candidates,
-            JobState::Completed(JobOutcome::Download(_)) => {
-                return Err("Soulseek returned a download for a search".into());
-            }
-            JobState::Failed(reason) => return Err(format!("Soulseek search failed: {reason}")),
-            JobState::Cancelled => return Err("Soulseek search was cancelled".into()),
-        }
-    };
-    Ok(rank(candidates, &query, prefer, limit))
+    session.search(
+        query,
+        prefer,
+        limit,
+        Timeouts::configured(config).search,
+        &AtomicBool::new(false),
+    )
 }
 
 fn show_candidates(
@@ -631,32 +608,12 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
     } else {
         connect(&config)?
     };
-    fs::create_dir_all(&root)
-        .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
-    let timeout = setting(
-        &config,
-        "MUZIK_SOULSEEK_DOWNLOAD_TIMEOUT",
-        "download_timeout",
-    )
-    .and_then(|text| text.parse::<f64>().ok())
-    .filter(|timeout| timeout.is_finite() && (1.0..=3_600.0).contains(timeout))
-    .unwrap_or(600.0);
-    for (remote, local) in saved.candidate.files.iter().zip(&files) {
-        let job = connected
-            .start_download(
-                saved.candidate.username.clone(),
-                remote.name.clone(),
-                remote.size,
-                root.to_string_lossy().into_owned(),
-            )
-            .map_err(|error| format!("Soulseek download failed: {error}"))?;
-        wait_download(&job, timeout)?;
-        if !local.is_file() {
-            return Err(format!(
-                "Soulseek reported a completed transfer, but {} is missing",
-                local.display()
-            ));
-        }
+    for local in connected.fetch(
+        &saved.candidate,
+        &root,
+        Timeouts::configured(&config).download,
+        &AtomicBool::new(false),
+    )? {
         println!("Downloaded {}", local.display());
     }
     let sidecar = root.join(".muzik.json");
@@ -736,48 +693,6 @@ fn choose_index(count: usize, no_interactive: bool) -> Result<usize, String> {
     Ok(number - 1)
 }
 
-fn wait_download(job: &muzik_soulseek::job::JobHandle, timeout: f64) -> Result<(), String> {
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout + 5.0);
-    loop {
-        match job.snapshot() {
-            JobState::Running if Instant::now() >= deadline => {
-                job.cancel();
-                return Err("Timed out waiting for Soulseek download".into());
-            }
-            JobState::Running => thread::sleep(Duration::from_millis(200)),
-            JobState::Completed(JobOutcome::Download(
-                muzik_soulseek::types::DownloadProgress::Completed,
-            )) => return Ok(()),
-            JobState::Completed(JobOutcome::Download(_)) => {
-                return Err("Soulseek download did not complete".into());
-            }
-            JobState::Completed(JobOutcome::Search(_)) => {
-                return Err("Soulseek returned a search for a download".into());
-            }
-            JobState::Failed(reason) => return Err(format!("Soulseek download failed: {reason}")),
-            JobState::Cancelled => return Err("Soulseek download was cancelled".into()),
-        }
-    }
-}
-
-fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut names = HashSet::new();
-    candidate
-        .files
-        .iter()
-        .map(|remote| {
-            let name = remote.name.rsplit(['/', '\\']).next().unwrap_or("");
-            if name.is_empty()
-                || name.chars().any(char::is_control)
-                || !names.insert(name.to_ascii_lowercase())
-            {
-                return Err("Soulseek result has missing or duplicate file names".into());
-            }
-            Ok(root.join(name))
-        })
-        .collect()
-}
-
 fn safe_display(value: &str) -> String {
     value
         .chars()
@@ -834,7 +749,7 @@ fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate, String> {
 mod tests {
     use super::{
         CachedCandidate, FlaggedTrack, candidate_id, candidate_row, check_library, load_candidate,
-        local_files, safe_track_match, save_candidate, scan_library, select_upgrade,
+        safe_track_match, save_candidate, scan_library, select_upgrade,
     };
     use crate::SoulseekCheckLibrary;
     use muzik_core::quality::MeasuredQuality;
@@ -894,21 +809,6 @@ mod tests {
             fs::read_to_string(&path)?.replace("Album\\\\01 Song.flac", "Album\\\\02 Song.flac");
         fs::write(&path, changed)?;
         assert!(load_candidate(dir.path(), &id).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn local_targets_reject_duplicate_remote_names() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let files = local_files(&candidate(&["Album\\01 Song.flac"]), dir.path())?;
-        assert_eq!(
-            files
-                .first()
-                .and_then(|path| path.file_name())
-                .and_then(|name| name.to_str()),
-            Some("01 Song.flac")
-        );
-        assert!(local_files(&candidate(&["A\\Song.flac", "B\\song.FLAC"]), dir.path()).is_err());
         Ok(())
     }
 
