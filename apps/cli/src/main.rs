@@ -633,7 +633,7 @@ struct SetSpotifyClientId {
     client_id: String,
 }
 
-async fn run(command: Command) -> Result<(), String> {
+fn run(command: Command) -> Result<(), String> {
     match command {
         Command::Archive(args) => archive::run(&args),
         Command::Bandcamp(args) => bandcamp::download(&args).map_err(|error| error.to_string()),
@@ -654,7 +654,7 @@ async fn run(command: Command) -> Result<(), String> {
             ConfigCommand::Edit(args) => config::edit(args.config.as_deref()),
         }
         .map_err(|error| error.to_string()),
-        Command::Download(args) => download::run(&args).await,
+        Command::Download(args) => download::run(&args),
         Command::Downloaded(args) => {
             let output = args.output.unwrap_or_else(paths::download_dir);
             downloaded::list(&output).map_err(|error| error.to_string())
@@ -705,9 +705,8 @@ async fn run(command: Command) -> Result<(), String> {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::process::ExitCode {
-    if let Err(error) = run(Muzik::parse().command).await {
+fn main() -> std::process::ExitCode {
+    if let Err(error) = run(Muzik::parse().command) {
         eprintln!("error: {error}");
         std::process::ExitCode::FAILURE
     } else {

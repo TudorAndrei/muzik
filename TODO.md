@@ -13,9 +13,9 @@
 
 ## Phase 2: One yt-dlp module
 
-- [ ] `muzik-workflow/src/ytdlp.rs` with tests
-- [ ] Replace yt-dlp code in runner, workflow discovery, and CLI
-- [ ] Commit: `refactor(workflow): run yt-dlp through one cancellable module`
+- [x] `muzik-workflow/src/ytdlp.rs` with tests
+- [x] Replace yt-dlp code in runner, workflow discovery, and CLI
+- [x] Commit: `refactor(workflow): run yt-dlp through one cancellable module`
 
 ## Phase 3: Soulseek search and fetch in muzik-soulseek
 

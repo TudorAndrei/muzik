@@ -4,13 +4,13 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::process::background_command;
 use muzik_core::watchlist::Stage;
 use muzik_core::{app_config, chapters::Chapter, DecisionKind};
 use muzik_soulseek::job::{JobOutcome, JobState};
 use muzik_soulseek::ranking::{rank, search_query};
 use muzik_soulseek::session::{setting, Session, SessionSettings};
 use muzik_soulseek::types::{Candidate, DownloadProgress};
+use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
     classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,
     QualityCheckedAudio, SplitProgress, SplitTask, WorkflowEvent, WorkflowInput,
@@ -20,7 +20,6 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use yt_dlp::executor::Executor;
 
 pub fn run(
     input: WorkflowInput,
@@ -132,15 +131,9 @@ impl WorkflowOperations for RemoteOperations<'_> {
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
         self.youtube_acquired = false;
         let query = if matches!(classify_input(query), WorkflowInput::YoutubeVideo { .. }) {
-            execute(
-                vec!["--skip-download".into(), query.to_owned()],
-                "title",
-                Duration::from_secs(120),
-                self.local.cancelled,
-            )
-            .map_err(|error| error.to_string())?
-            .trim()
-            .to_owned()
+            YtDlp::default()
+                .field(query, "title", self.local.cancelled)
+                .map_err(|error| error.to_string())?
         } else {
             query.to_owned()
         };
@@ -232,7 +225,9 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 
     fn youtube_playlist_video_ids(&mut self, url: &str) -> Result<Vec<String>, String> {
-        playlist_ids(url, self.local.cancelled).map_err(|error| error.to_string())
+        YtDlp::default()
+            .playlist_ids(url, self.local.cancelled)
+            .map_err(|error| error.to_string())
     }
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
@@ -492,31 +487,6 @@ fn candidate_row(candidate: &Candidate, score: f64) -> Value {
     json!({"title":title,"score":score,"user":candidate.username,"quality":{"format":format},"files":candidate.files,"path":path})
 }
 
-pub(crate) fn playlist_ids(
-    url: &str,
-    cancelled: &AtomicBool,
-) -> Result<Vec<String>, muzik_workflow::Error> {
-    let args = vec!["--flat-playlist".to_owned(), url.to_owned()];
-    let output = execute(args, "id", Duration::from_secs(600), cancelled)?;
-    let ids = output
-        .lines()
-        .map(str::trim)
-        .filter(|id| {
-            id.len() == 11
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        })
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if ids.is_empty() {
-        return Err(muzik_workflow::Error::Operation(
-            "Playlist contains no available videos.".into(),
-        ));
-    }
-    Ok(ids)
-}
-
 pub(crate) fn download(
     url: &str,
     output: &Path,
@@ -525,151 +495,14 @@ pub(crate) fn download(
 ) -> Result<Vec<PathBuf>, muzik_workflow::Error> {
     let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
         .map_err(|_| muzik_workflow::Error::Cancelled)?;
-    std::fs::create_dir_all(output)?;
-    let output = std::fs::canonicalize(output)?;
-    let target = if matches!(classify_input(url), WorkflowInput::Search(_)) {
-        format!("ytsearch1:{url}")
-    } else {
-        url.to_owned()
-    };
-    let mut args = vec![
-        "--no-playlist".to_owned(),
-        "--paths".to_owned(),
-        output.to_string_lossy().into_owned(),
-        "--format".to_owned(),
-        "bestaudio".to_owned(),
-        "--extract-audio".to_owned(),
-        "--audio-quality".to_owned(),
-        "0".to_owned(),
-        "--embed-metadata".to_owned(),
-        "--add-metadata".to_owned(),
-        "--write-thumbnail".to_owned(),
-        "--convert-thumbnails".to_owned(),
-        "jpg".to_owned(),
-        "--write-info-json".to_owned(),
-        "--embed-chapters".to_owned(),
-        "--output".to_owned(),
-        "%(title)s [%(id)s].%(ext)s".to_owned(),
-        target,
-    ];
-    if force {
-        args.insert(0, "--force-overwrites".into());
-    }
-    let stdout = execute(
-        args,
-        "after_move:filepath",
-        Duration::from_secs(24 * 60 * 60),
-        cancelled,
-    )?;
-    let files = stdout
-        .lines()
-        .map(str::trim)
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-        .collect::<Vec<_>>();
-    let files = muzik_workflow::find_audio_inputs(&files)?;
-    if files.is_empty() {
-        return Err(muzik_workflow::Error::NoAudio);
-    }
-    Ok(files)
-}
-
-fn execute(
-    mut args: Vec<String>,
-    template: &str,
-    timeout: Duration,
-    cancelled: &AtomicBool,
-) -> Result<String, muzik_workflow::Error> {
-    execute_with_path(Path::new("yt-dlp"), &mut args, template, timeout, cancelled)
-}
-
-fn execute_with_path(
-    executable: &Path,
-    args: &mut Vec<String>,
-    template: &str,
-    timeout: Duration,
-    cancelled: &AtomicBool,
-) -> Result<String, muzik_workflow::Error> {
-    if cancelled.load(Ordering::SeqCst) {
-        return Err(muzik_workflow::Error::Cancelled);
-    }
-    args.splice(0..0, yt_dlp_environment_args());
-    let output = tempfile::NamedTempFile::new()?;
-    let target = args
-        .pop()
-        .ok_or_else(|| muzik_workflow::Error::Operation("yt-dlp target is missing".into()))?;
-    args.extend([
-        "--quiet".to_owned(),
-        "--print-to-file".to_owned(),
-        template.to_owned(),
-        output.path().to_string_lossy().into_owned(),
-        target,
-    ]);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| muzik_workflow::Error::Operation(error.to_string()))?;
-    runtime.block_on(async {
-        let executor = Executor::new(executable, args.iter().cloned(), timeout);
-        let mut command =
-            tokio::process::Command::from(background_command(executor.executable_path()));
-        command.args(executor.args()).kill_on_drop(true);
-        let result = tokio::select! {
-            result = command.output() => result.map_err(muzik_workflow::Error::Io),
-            () = async {
-                while !cancelled.load(Ordering::SeqCst) {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            } => Err(muzik_workflow::Error::Cancelled),
-            () = tokio::time::sleep(timeout) => Err(muzik_workflow::Error::Operation("yt-dlp timed out".into())),
-        };
-        let result = result?;
-        if !result.status.success() {
-            return Err(muzik_workflow::Error::Operation(format!(
-                "yt-dlp failed: {}",
-                String::from_utf8_lossy(&result.stderr).trim()
-            )));
-        }
-        Ok(())
-    })?;
-    if cancelled.load(Ordering::SeqCst) {
-        return Err(muzik_workflow::Error::Cancelled);
-    }
-    std::fs::read_to_string(output.path()).map_err(muzik_workflow::Error::Io)
-}
-
-pub(crate) fn yt_dlp_environment_args() -> Vec<String> {
-    let mut args = Vec::new();
-    let browser = std::env::var("MUZIK_YTDLP_COOKIES_FROM_BROWSER").unwrap_or_default();
-    if !browser.trim().is_empty() {
-        args.extend(["--cookies-from-browser".to_owned(), browser]);
-    } else {
-        let cookies = std::env::var("MUZIK_YTDLP_COOKIES").unwrap_or_default();
-        if !cookies.trim().is_empty() {
-            args.extend(["--cookies".to_owned(), cookies]);
-        }
-    }
-    for runtime in ["node", "bun"] {
-        if std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-            .any(|directory| directory.join(runtime).is_file())
-        {
-            args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
-            break;
-        }
-    }
-    args
+    YtDlp::default().download(&Download::audio(url, output, force), cancelled)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{acquire_spotify_audio, candidate_row, execute_with_path};
+    use super::{acquire_spotify_audio, candidate_row};
     use muzik_core::{AudioFallback, AudioSource};
     use muzik_soulseek::types::{Candidate, FileEntry};
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-    use std::time::{Duration, Instant};
 
     #[test]
     fn spotify_youtube_source_does_not_call_soulseek() -> Result<(), String> {
@@ -732,66 +565,5 @@ mod tests {
         assert_eq!(row["user"], "peer");
         assert_eq!(row["quality"]["format"], "flac");
         assert_eq!(row["files"].as_array().map(Vec::len), Some(1));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn cancellation_stops_an_active_youtube_process() -> Result<(), Box<dyn std::error::Error>> {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir()?;
-        let script = dir.path().join("yt-dlp");
-        let started = dir.path().join("started");
-        std::fs::write(
-            &script,
-            format!("#!/bin/sh\ntouch '{}'\nsleep 30\n", started.display()),
-        )?;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&cancelled);
-        let script_for_job = script.clone();
-        let start = Instant::now();
-        let job = std::thread::spawn(move || {
-            execute_with_path(
-                &script_for_job,
-                &mut vec!["https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()],
-                "after_move:filepath",
-                Duration::from_secs(40),
-                &flag,
-            )
-        });
-        while !started.is_file() {
-            if start.elapsed() > Duration::from_secs(3) {
-                cancelled.store(true, Ordering::SeqCst);
-                return Err("yt-dlp test process did not start".into());
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        cancelled.store(true, Ordering::SeqCst);
-        let result = job.join().map_err(|_| "yt-dlp test thread stopped")?;
-        assert!(matches!(result, Err(muzik_workflow::Error::Cancelled)));
-        assert!(start.elapsed() < Duration::from_secs(5));
-        Ok(())
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn youtube_executor_reads_printed_file_path() -> Result<(), Box<dyn std::error::Error>> {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir()?;
-        let script = dir.path().join("yt-dlp");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nwhile [ \"$1\" != \"--print-to-file\" ]; do shift; done\nshift\nshift\nprintf '%s\\n' '/tmp/audio.flac' >> \"$1\"\n",
-        )?;
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))?;
-        let result = execute_with_path(
-            &script,
-            &mut vec!["https://www.youtube.com/watch?v=dQw4w9WgXcQ".into()],
-            "after_move:filepath",
-            Duration::from_secs(2),
-            &AtomicBool::new(false),
-        )?;
-        assert_eq!(result.trim(), "/tmp/audio.flac");
-        Ok(())
     }
 }

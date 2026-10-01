@@ -4,17 +4,16 @@ use std::collections::HashSet;
 use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
 
 use muzik_core::{AudioFallback, AudioSource, app_config, paths, splitter};
 use muzik_soulseek::session::SessionSettings;
+use muzik_workflow::ytdlp::{self, YtDlp};
 use muzik_workflow::{
     AudioProcessingResult, QualityCheckedAudio, SplitTask, WorkflowInput, WorkflowOperations,
     WorkflowOptions, WorkflowRequest, classify_input, find_audio_inputs, playlist, run_workflow,
 };
-use yt_dlp::executor::Executor;
 
-use crate::{Download, Organize, SoulseekDownload, Workflow, download, organize, soulseek, split};
+use crate::{Organize, SoulseekDownload, Workflow, organize, soulseek, split};
 
 pub fn queue(args: &Workflow) -> Result<(), String> {
     if args.compilation {
@@ -195,62 +194,22 @@ impl WorkflowOperations for CliOperations {
         output: &Path,
         force: bool,
     ) -> Result<Vec<PathBuf>, String> {
-        let before = known_audio(output)?;
-        let (target, video_id) = match classify_input(url) {
-            WorkflowInput::Search(_) => {
-                let id = youtube_print(&format!("ytsearch1:{url}"), "id")?;
-                if id.len() != 11
-                    || !id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-                {
-                    return Err("YouTube search returned an invalid video ID".into());
-                }
-                (format!("https://www.youtube.com/watch?v={id}"), Some(id))
-            }
-            WorkflowInput::YoutubeVideo { video_id, .. } => (url.to_owned(), Some(video_id)),
-            _ => (url.to_owned(), None),
-        };
-        let request = Download {
-            url: target,
-            output: Some(output.to_path_buf()),
-            format: "bestaudio".into(),
-            quality: "0".into(),
-            no_chapters: false,
-            archive_file: None,
-            force_overwrites: force,
-        };
-        // The CLI entry point already has a Tokio runtime. The downloader needs
-        // its own runtime because this shared workflow service is synchronous.
-        std::thread::spawn(move || -> Result<(), String> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            runtime.block_on(download::run(&request))
-        })
-        .join()
-        .map_err(|_| "YouTube downloader stopped unexpectedly".to_owned())??;
-        let after =
-            find_audio_inputs(&[output.to_path_buf()]).map_err(|error| error.to_string())?;
+        let files = YtDlp::default()
+            .download(
+                &ytdlp::Download::audio(url, output, force),
+                &AtomicBool::new(false),
+            )
+            .map_err(|error| error.to_string())?;
         self.youtube_acquired = true;
-        Ok(after
-            .into_iter()
-            .filter(|path| {
-                !before.contains(path)
-                    || video_id.as_ref().is_some_and(|id| {
-                        path.file_stem()
-                            .and_then(|stem| stem.to_str())
-                            .is_some_and(|stem| stem.contains(&format!("[{id}]")))
-                    })
-            })
-            .collect())
+        Ok(files)
     }
 
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
         self.youtube_acquired = false;
         let query = if matches!(classify_input(query), WorkflowInput::YoutubeVideo { .. }) {
-            youtube_title(query)?
+            YtDlp::default()
+                .field(query, "title", &AtomicBool::new(false))
+                .map_err(|error| error.to_string())?
         } else {
             query.to_owned()
         };
@@ -344,35 +303,9 @@ impl WorkflowOperations for CliOperations {
     }
 
     fn youtube_playlist_video_ids(&mut self, url: &str) -> Result<Vec<String>, String> {
-        let url = url.to_owned();
-        let output = std::thread::spawn(move || -> Result<String, String> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|error| error.to_string())?;
-            let executor = Executor::new(
-                "yt-dlp",
-                vec!["--flat-playlist".into(), "--print".into(), "id".into(), url],
-                Duration::from_secs(600),
-            );
-            runtime
-                .block_on(executor.execute())
-                .map(|result| result.stdout)
-                .map_err(|error| error.to_string())
-        })
-        .join()
-        .map_err(|_| "playlist lookup stopped unexpectedly".to_owned())??;
-        Ok(output
-            .lines()
-            .map(str::trim)
-            .filter(|id| {
-                id.len() == 11
-                    && id
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-            })
-            .map(str::to_owned)
-            .collect())
+        YtDlp::default()
+            .playlist_ids(url, &AtomicBool::new(false))
+            .map_err(|error| error.to_string())
     }
 
     fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String> {
@@ -451,35 +384,6 @@ fn confirm_quality(
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
-}
-
-fn youtube_title(url: &str) -> Result<String, String> {
-    youtube_print(url, "title")
-}
-
-fn youtube_print(url: &str, field: &str) -> Result<String, String> {
-    let url = url.to_owned();
-    let field = field.to_owned();
-    let output = std::thread::spawn(move || -> Result<String, String> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|error| error.to_string())?;
-        let mut args = download::yt_dlp_access_args();
-        args.extend(["--skip-download".into(), "--print".into(), field, url]);
-        let executor = Executor::new("yt-dlp", args, Duration::from_secs(120));
-        runtime
-            .block_on(executor.execute())
-            .map(|result| result.stdout)
-            .map_err(|error| error.to_string())
-    })
-    .join()
-    .map_err(|_| "YouTube metadata lookup stopped unexpectedly".to_owned())??;
-    let value = output.trim();
-    if value.is_empty() {
-        return Err("YouTube metadata has no requested value".into());
-    }
-    Ok(value.to_owned())
 }
 
 fn known_audio(output: &Path) -> Result<HashSet<PathBuf>, String> {

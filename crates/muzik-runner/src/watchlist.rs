@@ -3,7 +3,6 @@
 use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::process::background_command;
 use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
@@ -15,6 +14,7 @@ use muzik_core::{
 };
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
+use muzik_workflow::ytdlp::YtDlp;
 use muzik_workflow::{
     classify_input, process_audio_plan_with_events, WorkflowInput, WorkflowOperations,
     WorkflowOptions,
@@ -25,8 +25,6 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use yt_dlp::executor::Executor;
 
 pub fn sync(
     settings: &Settings,
@@ -177,7 +175,9 @@ impl Operations for Adapter<'_, '_> {
             return spotify_items(&document);
         }
         let url = required(playlist, "url")?;
-        let source = youtube_source(url, self.cancelled)?;
+        let source = YtDlp::default()
+            .playlist(url, self.cancelled)
+            .map_err(workflow_error)?;
         Ok(youtube_items(playlist, &source))
     }
 
@@ -705,41 +705,6 @@ fn save_output_paths(item: &mut Value, result: &Value, output: &Path) -> Result<
     Ok(())
 }
 
-fn youtube_source(url: &str, cancelled: &AtomicBool) -> Result<Value, JobError> {
-    check_cancelled(cancelled)?;
-    let mut args = remote_workflow::yt_dlp_environment_args();
-    args.extend([
-        "--flat-playlist".to_owned(),
-        "--dump-single-json".to_owned(),
-        "--quiet".to_owned(),
-        url.to_owned(),
-    ]);
-    let executor = Executor::new("yt-dlp", args, Duration::from_secs(600));
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| JobError::Operation(error.to_string()))?;
-    let output = runtime.block_on(async {
-        let mut command =
-            tokio::process::Command::from(background_command(executor.executable_path()));
-        command.args(executor.args()).kill_on_drop(true);
-        tokio::select! {
-            result = command.output() => result.map_err(|error| JobError::Operation(error.to_string())),
-            () = async { while !cancelled.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(100)).await; } } => Err(JobError::Cancelled),
-            () = tokio::time::sleep(Duration::from_secs(600)) => Err(JobError::Operation("YouTube playlist lookup timed out.".into())),
-        }
-    })?;
-    check_cancelled(cancelled)?;
-    if !output.status.success() {
-        return Err(JobError::Operation(format!(
-            "YouTube playlist lookup failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| JobError::Operation(format!("Invalid YouTube playlist metadata: {error}")))
-}
-
 fn refresh_chapters(
     audio: &Path,
     video_url: &str,
@@ -747,7 +712,9 @@ fn refresh_chapters(
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<PathBuf, JobError> {
     refresh_chapters_with(audio, cancelled, decide, |comments| {
-        youtube_video_metadata(video_url, comments, cancelled)
+        YtDlp::default()
+            .video(video_url, comments, cancelled)
+            .map_err(workflow_error)
     })
 }
 
@@ -819,57 +786,6 @@ fn refresh_chapters_with(
     let path = chapters::sidecar_path(audio, ".chapters.txt");
     atomic_write(&path, &text)?;
     Ok(path)
-}
-
-fn youtube_video_metadata(
-    url: &str,
-    comments: bool,
-    cancelled: &AtomicBool,
-) -> Result<Value, JobError> {
-    let mut args = remote_workflow::yt_dlp_environment_args();
-    args.extend([
-        "--no-playlist".to_owned(),
-        "--dump-single-json".to_owned(),
-        "--skip-download".to_owned(),
-        "--quiet".to_owned(),
-    ]);
-    if comments {
-        args.extend([
-            "--write-comments".to_owned(),
-            "--extractor-args".to_owned(),
-            "youtube:max_comments=50,all,0,0;comment_sort=top".to_owned(),
-        ]);
-    }
-    args.push(url.to_owned());
-    let timeout = if comments {
-        Duration::from_secs(120)
-    } else {
-        Duration::from_secs(600)
-    };
-    let executor = Executor::new("yt-dlp", args, timeout);
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| JobError::Operation(error.to_string()))?;
-    let output = runtime.block_on(async {
-        let mut command =
-            tokio::process::Command::from(background_command(executor.executable_path()));
-        command.args(executor.args()).kill_on_drop(true);
-        tokio::select! {
-            result = command.output() => result.map_err(|error| JobError::Operation(error.to_string())),
-            () = async { while !cancelled.load(Ordering::SeqCst) { tokio::time::sleep(Duration::from_millis(100)).await; } } => Err(JobError::Cancelled),
-            () = tokio::time::sleep(timeout) => Err(JobError::Operation("YouTube metadata lookup timed out.".into())),
-        }
-    })?;
-    check_cancelled(cancelled)?;
-    if !output.status.success() {
-        return Err(JobError::Operation(format!(
-            "YouTube metadata lookup failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )));
-    }
-    serde_json::from_slice(&output.stdout)
-        .map_err(|error| JobError::Operation(format!("Invalid YouTube metadata: {error}")))
 }
 
 fn atomic_write(path: &Path, text: &str) -> Result<(), JobError> {

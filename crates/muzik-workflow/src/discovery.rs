@@ -1,17 +1,13 @@
 //! Chapter lookup after local sidecars have no usable chapters.
 
+use crate::ytdlp::YtDlp;
 use muzik_core::MetadataSource;
 use muzik_core::chapters::{self, Chapter};
-use muzik_core::process::background_command;
 use muzik_metadata::{MetadataClient, ReleaseSearch};
 use serde_json::Value;
-use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
-use yt_dlp::executor::Executor;
 
 /// Apply the configured metadata source to one audio file.
 /// Local chapter sidecars are read by the caller before this function.
@@ -77,79 +73,10 @@ fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, String
     let Some(url) = url else {
         return Ok(Vec::new());
     };
-    let comments = fetch_comments(url, cancelled)?;
+    let comments = YtDlp::default()
+        .video(url, true, cancelled)
+        .map_err(|error| error.to_string())?;
     Ok(chapters::best_comment_tracklist(&comments))
-}
-
-fn fetch_comments(url: &str, cancelled: &AtomicBool) -> Result<Value, String> {
-    let mut args = Vec::new();
-    if let Some(browser) = std::env::var("MUZIK_YTDLP_COOKIES_FROM_BROWSER")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.extend(["--cookies-from-browser".to_owned(), browser]);
-    } else if let Some(cookies) = std::env::var("MUZIK_YTDLP_COOKIES")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        args.extend(["--cookies".to_owned(), cookies]);
-    }
-    args.extend(
-        [
-            "--no-playlist",
-            "--dump-single-json",
-            "--skip-download",
-            "--quiet",
-            "--write-comments",
-            "--extractor-args",
-            "youtube:max_comments=50,all,0,0;comment_sort=top",
-        ]
-        .into_iter()
-        .map(str::to_owned),
-    );
-    args.extend(js_runtime_args(std::env::var_os("PATH")));
-    args.push(url.to_owned());
-    let executor = Executor::new("yt-dlp", args, Duration::from_secs(120));
-    let mut stdout = tempfile::tempfile().map_err(|error| error.to_string())?;
-    let mut stderr = tempfile::tempfile().map_err(|error| error.to_string())?;
-    let mut child = background_command(executor.executable_path())
-        .args(executor.args())
-        .stdout(stdout.try_clone().map_err(|error| error.to_string())?)
-        .stderr(stderr.try_clone().map_err(|error| error.to_string())?)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    let started = Instant::now();
-    loop {
-        if cancelled.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("cancelled".into());
-        }
-        if started.elapsed() > Duration::from_secs(120) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("YouTube comment lookup timed out".into());
-        }
-        match child.try_wait().map_err(|error| error.to_string())? {
-            Some(_) => break,
-            None => std::thread::sleep(Duration::from_millis(100)),
-        }
-    }
-    let status = child.wait().map_err(|error| error.to_string())?;
-    let mut output = Vec::new();
-    let mut errors = String::new();
-    stdout.rewind().map_err(|error| error.to_string())?;
-    stderr.rewind().map_err(|error| error.to_string())?;
-    stdout
-        .read_to_end(&mut output)
-        .map_err(|error| error.to_string())?;
-    stderr
-        .read_to_string(&mut errors)
-        .map_err(|error| error.to_string())?;
-    if !status.success() {
-        return Err(format!("YouTube comment lookup failed: {}", errors.trim()));
-    }
-    serde_json::from_slice(&output).map_err(|error| error.to_string())
 }
 
 fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, String> {
@@ -245,18 +172,6 @@ fn validate_duration(
     chapters
 }
 
-fn js_runtime_args(path: Option<OsString>) -> Vec<String> {
-    let Some(path) = path else {
-        return Vec::new();
-    };
-    for runtime in ["node", "bun"] {
-        if std::env::split_paths(&path).any(|directory| directory.join(runtime).is_file()) {
-            return vec!["--js-runtimes".into(), runtime.into()];
-        }
-    }
-    Vec::new()
-}
-
 fn chapters_from_tracks(tracks: &[muzik_core::TrackCandidate]) -> Vec<Chapter> {
     if tracks.len() < 2
         || tracks
@@ -338,15 +253,6 @@ mod tests {
         let checked = validate_duration(found, 141, 148.0);
         assert_eq!(checked[1].end, None);
         assert_eq!(checked[0].end, Some(61));
-    }
-
-    #[test]
-    fn javascript_runtime_flag_has_one_value() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        fs::write(dir.path().join("node"), [])?;
-        let args = js_runtime_args(Some(std::env::join_paths([dir.path()])?));
-        assert_eq!(args, ["--js-runtimes", "node"]);
-        Ok(())
     }
 
     #[test]
