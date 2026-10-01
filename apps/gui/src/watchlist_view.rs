@@ -190,6 +190,36 @@ impl Muzik {
                         .tooltip("Copy source link"),
                 );
         }
+        let retries: Vec<Value> = items
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                retryable(item) && !self.is_queued(&id, item_position(item), &item_video_id(item))
+            })
+            .map(|item| {
+                self.item_params(
+                    &id,
+                    item_position(item),
+                    &item_video_id(item),
+                    ItemAction::Retry,
+                    cx,
+                )
+            })
+            .collect();
+        if !retries.is_empty() {
+            tools = tools.child(
+                Button::new("retry-failed")
+                    .ghost()
+                    .small()
+                    .icon(IconName::Redo)
+                    .label(format!("Retry {} failed", retries.len()))
+                    .on_click(cx.listener(move |view, _, _, cx| {
+                        for params in &retries {
+                            view.start_job("watchlist.action", params.clone(), cx);
+                        }
+                    })),
+            );
+        }
         let rename_id = id.clone();
         let remove_id = id.clone();
         let remove_title = title.clone();
@@ -625,6 +655,18 @@ fn playlist_title(playlist: &Value) -> &str {
         .unwrap_or("Playlist")
 }
 
+fn item_position(item: &Value) -> usize {
+    item["position"].as_u64().unwrap_or(0) as usize
+}
+
+fn retryable(item: &Value) -> bool {
+    item["summary"].as_str() == Some(Summary::Failed.as_ref())
+        && item["primary_action"]["action"].as_str() == Some(ItemAction::Retry.as_ref())
+        && item["actions"][ItemAction::Retry.as_ref()]["enabled"]
+            .as_bool()
+            .unwrap_or(true)
+}
+
 fn item_video_id(item: &Value) -> String {
     item["video_id"]
         .as_str()
@@ -641,4 +683,24 @@ pub(crate) fn matches_filter(item: &Value, filter: usize) -> bool {
         .as_str()
         .and_then(|summary| summary.parse::<Summary>().ok())
         == Some(wanted)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::retryable;
+    use serde_json::json;
+
+    #[test]
+    fn retry_all_takes_only_failed_items_with_an_enabled_retry() {
+        let failed = |enabled: bool| {
+            json!({"summary": "Failed",
+                   "primary_action": {"action": "retry", "label": "Retry"},
+                   "actions": {"retry": {"enabled": enabled, "reason": null}}})
+        };
+        assert!(retryable(&failed(true)));
+        assert!(!retryable(&failed(false)));
+        assert!(!retryable(
+            &json!({"summary": "Processed", "primary_action": null})
+        ));
+    }
 }
