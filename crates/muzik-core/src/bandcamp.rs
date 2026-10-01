@@ -47,6 +47,12 @@ pub fn parse_cookies(text: &str) -> Result<Vec<Cookie>, String> {
         json_cookies(text)?
     } else if text.lines().any(|line| line.split('\t').count() >= 7) {
         netscape_cookies(text)
+    } else if !text.is_empty() && !text.contains(['=', ';']) && !text.contains(char::is_whitespace)
+    {
+        vec![Cookie {
+            name: "identity".into(),
+            value: text.to_owned(),
+        }]
     } else {
         header_cookies(text)
     };
@@ -163,14 +169,6 @@ impl Login {
         user: &str,
         cookie_text: &str,
     ) -> Result<Self, String> {
-        let user = user.trim().trim_start_matches('@');
-        if user.is_empty()
-            || !user
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        {
-            return Err("Enter your Bandcamp user name, as in bandcamp.com/<user name>.".into());
-        }
         let cookies = if cookie_text.trim().is_empty() {
             parse_cookies(
                 &fs::read_to_string(cookie_file)
@@ -179,15 +177,43 @@ impl Login {
         } else {
             parse_cookies(cookie_text)?
         };
+        let user = user.trim().trim_start_matches('@');
+        let user = if user.is_empty() {
+            Self {
+                user: String::new(),
+                cookies: cookies.clone(),
+            }
+            .account_user()?
+        } else {
+            user.to_owned()
+        };
+        if !user
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err("Enter your Bandcamp user name, as in bandcamp.com/<user name>.".into());
+        }
         if let Some(parent) = cookie_file.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
         write_private(cookie_file, &netscape(&cookies))?;
         write_private(user_file, &format!("{user}\n"))?;
-        Ok(Self {
-            user: user.to_owned(),
-            cookies,
-        })
+        Ok(Self { user, cookies })
+    }
+
+    fn account_user(&self) -> Result<String, String> {
+        let summary: Value = self
+            .get("https://bandcamp.com/api/fan/2/collection_summary")?
+            .body_mut()
+            .read_json()
+            .map_err(|error| {
+                format!("Bandcamp sent an account summary that is not valid: {error}")
+            })?;
+        summary["collection_summary"]["username"]
+            .as_str()
+            .filter(|user| !user.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| "Bandcamp did not accept the cookies. Log in to Bandcamp in the browser, then copy the identity cookie again.".into())
     }
 
     pub fn clear() -> Result<bool, String> {
@@ -450,8 +476,8 @@ pub fn download(
     let name = response
         .headers()
         .get("content-disposition")
-        .and_then(|value| value.to_str().ok())
-        .and_then(disposition_name)
+        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+        .and_then(|value| disposition_name(&value))
         .ok_or("Bandcamp sent a download without a safe file name.")?;
     let target = destination.join(&name);
     let partial = destination.join(format!(".{name}.part"));
@@ -607,7 +633,15 @@ mod tests {
             r#"[{"domain":".bandcamp.com","name":"identity","value":"secret"},{"domain":".other.com","name":"x","value":"y"}]"#,
         )?;
         assert_eq!(json, file);
+        assert_eq!(
+            parse_cookies("7%09token%2B%7B")?,
+            vec![Cookie {
+                name: "identity".into(),
+                value: "7%09token%2B%7B".into()
+            }]
+        );
         assert!(parse_cookies("client_id=abc").is_err());
+        assert!(parse_cookies("").is_err());
         Ok(())
     }
 
@@ -682,6 +716,10 @@ mod tests {
         assert_eq!(
             disposition_name("attachment; filename*=UTF-8''Band%20-%20Caf%C3%A9.zip"),
             Some("Band - Café.zip".into())
+        );
+        assert_eq!(
+            disposition_name(r#"attachment; filename="GORE - 空の通り.flac""#),
+            Some("GORE - 空の通り.flac".into())
         );
         assert_eq!(disposition_name(r#"attachment; filename="../x.zip""#), None);
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
