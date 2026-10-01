@@ -161,6 +161,7 @@ pub enum SourceKind {
     #[default]
     Youtube,
     Spotify,
+    Bandcamp,
 }
 
 impl SourceKind {
@@ -170,6 +171,21 @@ impl SourceKind {
             .and_then(|kind| kind.parse().ok())
             .unwrap_or_default()
     }
+
+    pub fn is_youtube(self) -> bool {
+        self == Self::Youtube
+    }
+}
+
+pub const BANDCAMP_PLAYLIST_ID: &str = "bandcamp:collection";
+
+pub fn bandcamp_source(user: &str) -> Value {
+    playlist(
+        BANDCAMP_PLAYLIST_ID,
+        &format!("https://bandcamp.com/{user}"),
+        SourceKind::Bandcamp,
+        Some("Bandcamp collection"),
+    )
 }
 
 pub fn is_unavailable(item: &Value) -> bool {
@@ -282,6 +298,30 @@ impl Repository {
                 |row| row.get(0),
             )
             .map_err(db::text)
+    }
+
+    pub fn ensure(&self, source: &Value) -> Result<bool, String> {
+        if self.load()?["playlists"]
+            .as_array()
+            .is_some_and(|playlists| {
+                playlists
+                    .iter()
+                    .any(|item| item.get("playlist_id") == source.get("playlist_id"))
+            })
+        {
+            return Ok(false);
+        }
+        self.update(|document| {
+            let playlists = playlists_mut(document)?;
+            if playlists
+                .iter()
+                .any(|item| item.get("playlist_id") == source.get("playlist_id"))
+            {
+                return Ok(false);
+            }
+            playlists.push(source.clone());
+            Ok(true)
+        })
     }
 
     pub fn add(&self, input: &str) -> Result<Value, String> {

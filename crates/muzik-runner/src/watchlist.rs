@@ -10,8 +10,8 @@ use muzik_core::watchlist::{
     set_stage_status, stage_status, ItemAction, SourceKind, Stage, StageStatus,
 };
 use muzik_core::{
-    app_config, chapters, paths, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind,
-    QualityPolicy,
+    app_config, bandcamp, chapters, paths, spotify, watchlist, AudioSource, ChapterAnswer,
+    DecisionKind, QualityPolicy,
 };
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
@@ -181,6 +181,13 @@ impl Operations for Adapter<'_, '_> {
     fn load(&mut self, playlist: &Value) -> Result<LoadedSource, JobError> {
         check_cancelled(self.cancelled)?;
         let id = required(playlist, "playlist_id")?;
+        if SourceKind::of(playlist) == SourceKind::Bandcamp {
+            let login = bandcamp::Login::load()
+                .ok_or_else(|| JobError::Operation(BANDCAMP_LOGIN.into()))?;
+            let purchases = bandcamp::collection(&login)?;
+            check_cancelled(self.cancelled)?;
+            return Ok(bandcamp_items(&purchases));
+        }
         if SourceKind::of(playlist) == SourceKind::Spotify {
             let document =
                 spotify::load_playlist_document(&app_config::path(), &spotify::token_path(), id)?;
@@ -205,6 +212,7 @@ impl Operations for Adapter<'_, '_> {
         let result = match SourceKind::of(item) {
             SourceKind::Spotify => self.process_spotify(playlist, item, action, cancelled),
             SourceKind::Youtube => self.process_youtube(item, action, cancelled),
+            SourceKind::Bandcamp => self.process_bandcamp(item, action, cancelled),
         };
         let stage = gates::take_stage();
         result.map_err(|error| {
@@ -442,23 +450,13 @@ impl Adapter<'_, '_> {
             }
         }
         let entry_id = required(item, "entry_id")?;
-        let safe_id: String = entry_id
-            .chars()
-            .map(|character| {
-                if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                    character
-                } else {
-                    '_'
-                }
-            })
-            .collect();
         let root = self
             .prepared
             .local
             .request
             .output
             .join("spotify-watchlist")
-            .join(safe_id);
+            .join(safe_name(entry_id));
         let files = remote_workflow::soulseek_download(
             &query,
             preference,
@@ -480,6 +478,85 @@ impl Adapter<'_, '_> {
             .next()
             .ok_or_else(|| JobError::Operation("Soulseek returned no audio file.".into()))?;
         self.process_spotify_file(item, file, cancelled)
+    }
+
+    fn process_bandcamp(
+        &mut self,
+        item: &Value,
+        action: ItemAction,
+        cancelled: &AtomicBool,
+    ) -> Result<Value, JobError> {
+        let entry_id = required(item, "entry_id")?;
+        let directory = self
+            .prepared
+            .local
+            .request
+            .output
+            .join("bandcamp-watchlist")
+            .join(safe_name(entry_id));
+        let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
+        let saved = !fresh && !bandcamp::audio_files(&directory).is_empty();
+        if action == ItemAction::OrganizeAgain && !saved {
+            return Err(JobError::Operation(
+                "Download this purchase before you organize it again.".into(),
+            ));
+        }
+        if action != ItemAction::OrganizeAgain && action.stage() != Stage::Download {
+            return Err(JobError::Operation(format!(
+                "A Bandcamp purchase does not support {action}."
+            )));
+        }
+        if !saved {
+            let page = item["track"]["download_page"].as_str().ok_or_else(|| {
+                JobError::Operation(
+                    "The Bandcamp purchase has no download page. Refresh the collection.".into(),
+                )
+            })?;
+            let login = bandcamp::Login::load()
+                .ok_or_else(|| JobError::Operation(BANDCAMP_LOGIN.into()))?;
+            if directory.exists() {
+                std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
+            }
+            let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)
+                .map_err(|_| JobError::Cancelled)?;
+            bandcamp::download(
+                &login,
+                page,
+                bandcamp::DEFAULT_FORMAT,
+                &directory,
+                cancelled,
+            )
+            .map_err(|error| {
+                if cancelled.load(Ordering::SeqCst) {
+                    JobError::Cancelled
+                } else {
+                    JobError::Failed {
+                        stage: Stage::Download,
+                        message: error,
+                    }
+                }
+            })?;
+        }
+        let mut options = self.prepared.local.options.clone();
+        options.no_split = true;
+        options.interactive = false;
+        if action == ItemAction::OrganizeAgain {
+            options.no_organize = false;
+        }
+        if !options.no_organize {
+            let mut local = local_workflow::LocalOperations {
+                decide: self.decide,
+                on_import_event: self.on_import_event,
+                cancelled,
+            };
+            options.force = true;
+            local.organize(&directory, &options)?;
+            check_cancelled(cancelled)?;
+        }
+        let mut updated = item.clone();
+        mark_full(&mut updated, &options, false);
+        set_path(&mut updated, Stage::Download, json!(directory));
+        Ok(updated)
     }
 
     fn process_spotify_file(
@@ -902,8 +979,50 @@ fn spotify_items(document: &Value) -> Result<LoadedSource, JobError> {
     })
 }
 
+const BANDCAMP_LOGIN: &str = "Set your Bandcamp login in Settings first.";
+
+fn safe_name(id: &str) -> String {
+    id.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn bandcamp_items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
+    let items = purchases
+        .iter()
+        .enumerate()
+        .map(|(index, purchase)| {
+            json!({
+                "position": index + 1,
+                "title": purchase.label(),
+                "video_id": purchase.key,
+                "entry_id": purchase.key,
+                "video_url": purchase.item_url.as_deref().unwrap_or(&purchase.download_page),
+                "thumbnail_url": purchase.art_url,
+                "kind": SourceKind::Bandcamp,
+                "track": {
+                    "artist": purchase.artist,
+                    "title": purchase.title,
+                    "single": purchase.single,
+                    "download_page": purchase.download_page,
+                },
+            })
+        })
+        .collect();
+    LoadedSource {
+        title: Some("Bandcamp collection".into()),
+        items,
+    }
+}
+
 fn mark_full(item: &mut Value, options: &WorkflowOptions, split: bool) {
-    let spotify = SourceKind::of(item) == SourceKind::Spotify;
+    let spotify = !SourceKind::of(item).is_youtube();
     for stage in Stage::ALL.iter().copied() {
         let skipped = match stage {
             Stage::Download => false,
@@ -945,7 +1064,7 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{refresh_chapters_with, spotify_items, youtube_items};
+    use super::{bandcamp_items, refresh_chapters_with, spotify_items, youtube_items};
     use muzik_core::watchlist::ItemAction;
     use muzik_core::{ChapterAnswer, DecisionKind, QualityPolicy};
     use serde_json::json;
@@ -1128,6 +1247,29 @@ mod tests {
         assert_eq!(loaded.items[1]["entry_id"], "spotify:track:t1#1");
         assert_eq!(loaded.items[0]["title"], "Alex - One");
         Ok(())
+    }
+
+    #[test]
+    fn bandcamp_purchases_become_items_with_their_download_page() {
+        let loaded = bandcamp_items(&[muzik_core::bandcamp::Purchase {
+            key: "p12".into(),
+            artist: "Band".into(),
+            title: "Album".into(),
+            single: false,
+            download_page: "https://bandcamp.com/download?id=12".into(),
+            item_url: Some("https://band.bandcamp.com/album/album".into()),
+            art_url: None,
+        }]);
+        let item = &loaded.items[0];
+        assert_eq!(item["kind"], "bandcamp");
+        assert_eq!(item["entry_id"], "p12");
+        assert_eq!(item["video_id"], "p12");
+        assert_eq!(item["title"], "Band - Album");
+        assert_eq!(item["video_url"], "https://band.bandcamp.com/album/album");
+        assert_eq!(
+            item["track"]["download_page"],
+            "https://bandcamp.com/download?id=12"
+        );
     }
 
     #[test]

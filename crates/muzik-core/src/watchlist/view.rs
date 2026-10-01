@@ -127,6 +127,23 @@ pub(super) fn availability(
     if action.stage() == Stage::Download {
         return (true, None);
     }
+    if SourceKind::of(item) == SourceKind::Bandcamp {
+        if action != ItemAction::OrganizeAgain {
+            return (false, Some("A Bandcamp purchase has no quality check, no chapters to parse, and nothing to split."));
+        }
+        let saved = item["stages"][Stage::Download.as_ref()]["path"]
+            .as_str()
+            .map(Path::new)
+            .is_some_and(Path::is_dir);
+        return if saved {
+            (true, None)
+        } else {
+            (
+                false,
+                Some("Download this purchase before you organize it again."),
+            )
+        };
+    }
     let audio = audio_path(item, output);
     if action == ItemAction::OrganizeAgain {
         let split = item["stages"][Stage::Split.as_ref()]["path"]

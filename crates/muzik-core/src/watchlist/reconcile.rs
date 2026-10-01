@@ -52,8 +52,8 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
         let id = playlist["playlist_id"]
             .as_str()
             .ok_or("playlist ID is missing")?;
-        let spotify = SourceKind::of(playlist) == SourceKind::Spotify;
-        let state_id = if spotify {
+        let by_entry = !SourceKind::of(playlist).is_youtube();
+        let state_id = if by_entry {
             let short = id.rsplit(':').next().unwrap_or(id);
             format!(
                 "spotify_{}",
@@ -105,13 +105,13 @@ pub fn reconcile(document: &mut Value, options: ReconcileOptions<'_>) -> Result<
                 .iter()
                 .any(|stage| stage_status(item, *stage) == Some(StageStatus::Stale))
             {
-                let key = if spotify { "entry_id" } else { "video_id" };
+                let key = if by_entry { "entry_id" } else { "video_id" };
                 if let Some(id) = item[key].as_str() {
                     processed_ids.retain(|processed| processed != id);
                 }
                 continue;
             }
-            if spotify {
+            if by_entry {
                 for stage in [Stage::Quality, Stage::Parse, Stage::Split] {
                     set_status(item, stage, StageStatus::Skipped);
                 }

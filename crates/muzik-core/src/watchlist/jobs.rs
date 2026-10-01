@@ -520,9 +520,10 @@ fn pending_ids(playlist: &Value) -> Vec<String> {
 }
 
 fn item_key(item: &Value) -> Option<&str> {
-    let field = match SourceKind::of(item) {
-        SourceKind::Spotify => "entry_id",
-        SourceKind::Youtube => "video_id",
+    let field = if SourceKind::of(item).is_youtube() {
+        "video_id"
+    } else {
+        "entry_id"
     };
     item[field].as_str().filter(|value| !value.is_empty())
 }

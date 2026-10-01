@@ -1,4 +1,4 @@
-use muzik_core::watchlist::{reconcile, view, ReconcileOptions, Repository};
+use muzik_core::watchlist::{bandcamp_source, reconcile, view, ReconcileOptions, Repository};
 use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::fs;
@@ -96,6 +96,25 @@ fn imports_old_watchlist_file_and_preserves_saved_item_state(
     repository.save(loaded.clone())?;
     assert_eq!(repository.revision()?, revision);
     assert_eq!(repository.load()?, loaded);
+    Ok(())
+}
+
+#[test]
+fn the_bandcamp_collection_is_added_once() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    let source = bandcamp_source("listener");
+    assert!(repository.ensure(&source)?);
+    let revision = repository.revision()?;
+    assert!(!repository.ensure(&source)?);
+    assert_eq!(repository.revision()?, revision);
+    let saved = repository.load()?;
+    assert_eq!(saved["playlists"].as_array().map(Vec::len), Some(1));
+    assert_eq!(saved["playlists"][0]["kind"], "bandcamp");
+    assert_eq!(
+        saved["playlists"][0]["url"],
+        "https://bandcamp.com/listener"
+    );
     Ok(())
 }
 
