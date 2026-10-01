@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.10.0 - 2026-10-01
+#### Features
+- (**watchlist**) refresh one source or all sources - (b575901) - TudorAndrei
+#### Bug Fixes
+- (**import**) skip an album that is already in the library - (8181060) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.9.0 - (c0c05fd) - TudorAndrei
+
+- - -
+
 ## v2.9.0 - 2026-10-01
 #### Features
 - (**bandcamp**) read the collection and download purchases in Rust - (a6825e3) - TudorAndrei
