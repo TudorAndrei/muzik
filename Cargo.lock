@@ -4662,6 +4662,7 @@ dependencies = [
  "ureq",
  "url",
  "usage-rs",
+ "zip",
 ]
 
 [[package]]
