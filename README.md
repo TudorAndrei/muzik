@@ -257,8 +257,9 @@ setup, the scopes, and the limits.
 
 The **Bandcamp collection** source shows your Bandcamp purchases. It is added
 automatically when you save a Bandcamp login in **Settings**. The Bandcamp
-section there tells you how to copy the Cookie value from the browser
-developer tools; a `cookies.txt` file also works. muzik downloads each purchase
+section there tells you how to copy the `identity` cookie from the browser
+developer tools; muzik then finds your user name. A full Cookie header or a
+`cookies.txt` file also works. muzik downloads each purchase
 from Bandcamp in FLAC, then organizes it into the library. The login is kept
 in `bandcamp_cookies.txt` and `bandcamp_user` in the muzik config directory,
 so `muzik bandcamp` uses the same login.

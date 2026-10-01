@@ -1705,13 +1705,13 @@ struct BandcampFields {
     logged_in: bool,
 }
 
-const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the cookies:
-1. In your browser, log in to bandcamp.com and open your collection page.
-2. Open the developer tools (Option-Command-I) and select the Network tab.
-3. Reload the page, then select the first request (your user name).
-4. In Request Headers, copy the full value of the Cookie line.
-5. Paste it below, type your user name, and select Save Bandcamp login.
-A cookies.txt file from a browser extension also works. The cookies stay on this computer.";
+const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the login cookie:
+1. In your browser, log in to bandcamp.com.
+2. Open the developer tools (Option-Command-I), then open Storage (Firefox, Zen) or Application (Chrome).
+3. Select Cookies, then https://bandcamp.com.
+4. Double-click the Value of the identity row and copy it.
+5. Paste it below and select Save Bandcamp login. Muzik finds your user name.
+A full Cookie header or a cookies.txt file also works. The cookie stays on this computer. Do not share it.";
 
 struct SoulseekFields {
     username: Entity<InputState>,
@@ -1831,10 +1831,10 @@ impl ConfigView {
             has_password: false,
         };
         let bandcamp = BandcampFields {
-            user: cx.new(|cx| InputState::new(window, cx).placeholder("User name")),
+            user: cx.new(|cx| InputState::new(window, cx).placeholder("Found automatically")),
             cookies: cx.new(|cx| {
                 TextareaState::new(window, cx)
-                    .placeholder("Paste the Cookie value or a cookies.txt file")
+                    .placeholder("Paste the identity cookie value")
                     .rows(4)
             }),
             logged_in: false,
@@ -1861,7 +1861,7 @@ impl ConfigView {
         let placeholder = if self.bandcamp.logged_in {
             "Saved. Paste new cookies to change them."
         } else {
-            "Paste the Cookie value or a cookies.txt file"
+            "Paste the identity cookie value"
         };
         self.bandcamp.cookies.update(cx, |state, cx| {
             state.set_value("", window, cx);
