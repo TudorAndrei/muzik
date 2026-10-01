@@ -10,6 +10,6 @@ mod runner;
 pub mod settings;
 pub mod watchlist;
 
-pub use queue::{item_key, job_id, parse_job_id, EnqueueError, Jobs};
+pub use queue::{job_id, parse_job_id, EnqueueError, Jobs};
 pub use runner::{Ask, Options, Prompt, Runner, Running, Sink};
 pub use settings::Settings;

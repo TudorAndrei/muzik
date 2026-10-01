@@ -2,8 +2,8 @@
 
 use super::view::availability;
 use super::{
-    now, reconcile, view, AudioIndex, ItemAction, Playlist, ReconcileOptions, Repository, Stage,
-    StageStatus, WatchItem, Watchlist,
+    now, reconcile, view, AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository,
+    Stage, StageStatus, WatchItem, Watchlist,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -32,30 +32,10 @@ pub struct LoadedSource {
     pub items: Vec<WatchItem>,
 }
 
-pub struct ItemSelection<'a> {
-    pub playlist_id: &'a str,
-    pub position: u64,
-    pub video_id: Option<&'a str>,
-    pub action: ItemAction,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingItem {
-    pub playlist_id: String,
-    pub position: u64,
-    pub video_id: Option<String>,
+    pub id: ItemId,
     pub title: String,
-}
-
-impl PendingItem {
-    pub fn selection(&self, action: ItemAction) -> ItemSelection<'_> {
-        ItemSelection {
-            playlist_id: &self.playlist_id,
-            position: self.position,
-            video_id: self.video_id.as_deref(),
-            action,
-        }
-    }
 }
 
 pub struct Synced {
@@ -182,9 +162,7 @@ pub fn sync(
                     .pending()
                     .into_iter()
                     .map(|item| PendingItem {
-                        playlist_id: id.clone(),
-                        position: item.position,
-                        video_id: item.video_id.clone(),
+                        id: ItemId::of(&id, item),
                         title: item.title.clone(),
                     })
                     .collect()
@@ -222,7 +200,8 @@ pub fn refresh(
             match run_item(
                 repository,
                 options,
-                item.selection(ItemAction::Run),
+                &item.id,
+                ItemAction::Run,
                 operations,
                 cancelled,
             ) {
@@ -234,7 +213,7 @@ pub fn refresh(
             emit(
                 on_event,
                 "watchlist_saved",
-                json!({"playlist_id":item.playlist_id}),
+                json!({"playlist_id":item.id.playlist_id}),
             );
         }
     }
@@ -256,15 +235,15 @@ pub fn refresh(
 pub fn action(
     repository: &Repository,
     options: JobOptions<'_>,
-    selection: ItemSelection<'_>,
+    id: &ItemId,
+    action: ItemAction,
     operations: &mut impl Operations,
     cancelled: &AtomicBool,
 ) -> Result<Value, JobError> {
-    let action = selection.action;
     if options.dry_run {
         check_cancelled(cancelled)?;
         let document = repository.load()?;
-        let (playlist, item) = find_item(&document, &selection)?;
+        let (playlist, item) = find_item(&document, id)?;
         check_available(
             &document.playlists[playlist].items[item],
             action,
@@ -275,7 +254,7 @@ pub fn action(
             "watchlist":view(&document, options.output, options.cache)?}),
         );
     }
-    let outcome = run_item(repository, options, selection, operations, cancelled)?;
+    let outcome = run_item(repository, options, id, action, operations, cancelled)?;
     let summary = match outcome {
         ItemOutcome::Completed { stage } => json!({"action":action,"completed_stage":stage}),
         ItemOutcome::Waiting { stage } => json!({"action":action,"waiting_stage":stage}),
@@ -288,15 +267,15 @@ pub fn action(
 pub fn run_item(
     repository: &Repository,
     options: JobOptions<'_>,
-    selection: ItemSelection<'_>,
+    id: &ItemId,
+    action: ItemAction,
     operations: &mut impl Operations,
     cancelled: &AtomicBool,
 ) -> Result<ItemOutcome, JobError> {
     check_cancelled(cancelled)?;
-    let action = selection.action;
     let stage = action.stage();
     let (playlist, item) = repository.update(|document| {
-        let (playlist, index) = find_item(document, &selection)?;
+        let (playlist, index) = find_item(document, id)?;
         let item = document.playlists[playlist].items[index].clone();
         check_available(&item, action, options.output)?;
         let source = document.playlists[playlist].clone();
@@ -309,7 +288,7 @@ pub fn run_item(
         other => other,
     };
     repository.update(|document| {
-        let Ok((playlist, index)) = find_item(document, &selection) else {
+        let Ok((playlist, index)) = find_item(document, id) else {
             return Ok(());
         };
         let playlist = &mut document.playlists[playlist];
@@ -317,7 +296,7 @@ pub fn run_item(
         match &result {
             Ok(updated) => {
                 card = updated.clone();
-                card.position = selection.position;
+                card.position = id.position;
                 card.finish(stage, action);
                 if let Some(key) = item.key() {
                     for other in playlist
@@ -355,17 +334,14 @@ pub fn run_item(
     }
 }
 
-fn find_item(
-    document: &Watchlist,
-    selection: &ItemSelection<'_>,
-) -> Result<(usize, usize), String> {
+fn find_item(document: &Watchlist, id: &ItemId) -> Result<(usize, usize), String> {
     let playlist = document
         .playlists
         .iter()
-        .position(|playlist| playlist.playlist_id == selection.playlist_id)
+        .position(|playlist| playlist.playlist_id == id.playlist_id)
         .ok_or("The selected playlist is no longer available.")?;
     let item = document.playlists[playlist]
-        .find(selection.position, selection.video_id)
+        .find(id)
         .ok_or("The selected video is no longer available.")?;
     Ok((playlist, item))
 }

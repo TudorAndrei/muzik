@@ -3,27 +3,8 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
-
-const SCHEMA: &str = "
-CREATE TABLE IF NOT EXISTS jobs (
-    id INTEGER PRIMARY KEY,
-    queue TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    item_key TEXT NOT NULL,
-    title TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL,
-    params TEXT NOT NULL DEFAULT '{}',
-    question TEXT,
-    answer TEXT,
-    error TEXT,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS jobs_by_queue ON jobs (queue, status, id);
-CREATE INDEX IF NOT EXISTS jobs_by_item ON jobs (item_key, kind, status);
-";
 
 const COLUMNS: &str = "id, queue, kind, item_key, title, status, params, question, answer, error";
 
@@ -139,42 +120,58 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn open(path: &Path) -> Result<Self, String> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    pub fn from_connection(connection: Connection) -> Self {
+        Self { connection }
+    }
+
+    pub fn import_legacy(&self, path: &Path) -> Result<usize, String> {
+        if !path.is_file() {
+            return Ok(0);
         }
-        let connection = Connection::open(path).map_err(text)?;
-        connection
-            .pragma_update(None, "journal_mode", "WAL")
-            .map_err(text)?;
-        Self::prepare(connection)
-    }
-
-    pub fn open_in_memory() -> Result<Self, String> {
-        Self::prepare(Connection::open_in_memory().map_err(text)?)
-    }
-
-    fn prepare(connection: Connection) -> Result<Self, String> {
-        connection
-            .busy_timeout(Duration::from_secs(5))
-            .map_err(text)?;
-        connection.execute_batch(SCHEMA).map_err(text)?;
-        let has_cancel: bool = connection
-            .query_row(
-                "SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'cancel_requested'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|count| count > 0)
-            .map_err(text)?;
-        if !has_cancel {
-            connection
-                .execute_batch(
-                    "ALTER TABLE jobs ADD COLUMN cancel_requested INTEGER NOT NULL DEFAULT 0",
+        let jobs = {
+            let legacy = Connection::open(path).map_err(text)?;
+            let mut statement = legacy
+                .prepare(
+                    "SELECT queue, kind, item_key, title, status, params, question, answer, created_at
+                     FROM jobs WHERE status IN ('queued', 'running', 'waiting') ORDER BY id",
+                )
+                .map_err(text)?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, i64>(8)?,
+                    ))
+                })
+                .map_err(text)?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(text)?
+        };
+        let time = now();
+        for (queue, kind, item_key, title, status, params, question, answer, created) in &jobs {
+            let status = if status == "running" {
+                "queued"
+            } else {
+                status
+            };
+            self.connection
+                .execute(
+                    "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                    params![queue, kind, item_key, title, status, params, question, answer, created, time],
                 )
                 .map_err(text)?;
         }
-        Ok(Self { connection })
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".migrated");
+        std::fs::rename(path, backup).map_err(|error| error.to_string())?;
+        Ok(jobs.len())
     }
 
     pub fn request_cancel(&self, id: i64) -> Result<CancelRequest, String> {
@@ -442,6 +439,10 @@ mod tests {
     use super::{CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
+    fn memory() -> Result<Store, String> {
+        Ok(Store::from_connection(muzik_core::db::open_in_memory()?))
+    }
+
     fn job<'a>(kind: Kind, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
         NewJob {
             kind,
@@ -453,7 +454,7 @@ mod tests {
 
     #[test]
     fn claim_takes_the_oldest_queued_job_once() -> Result<(), String> {
-        let store = Store::open_in_memory()?;
+        let store = memory()?;
         let params = json!({});
         let first = store.enqueue(&job(Kind::Item, "a", &params))?;
         let second = store.enqueue(&job(Kind::Item, "b", &params))?;
@@ -471,7 +472,7 @@ mod tests {
 
     #[test]
     fn claim_any_takes_the_oldest_job_of_the_named_queues() -> Result<(), String> {
-        let store = Store::open_in_memory()?;
+        let store = memory()?;
         let params = json!({});
         let first = store.enqueue(&job(Kind::Refresh, "refresh", &params))?;
         let second = store.enqueue(&job(Kind::Item, "a", &params))?;
@@ -524,7 +525,7 @@ mod tests {
 
     #[test]
     fn a_parked_job_waits_until_it_has_an_answer() -> Result<(), String> {
-        let store = Store::open_in_memory()?;
+        let store = memory()?;
         let params = json!({"playlist_id": "PL1", "position": 3});
         let id = store.park(
             &job(Kind::Item, "PL1:3", &params),
@@ -556,7 +557,7 @@ mod tests {
 
     #[test]
     fn a_cancel_removes_a_queued_job_and_flags_a_running_one() -> Result<(), String> {
-        let store = Store::open_in_memory()?;
+        let store = memory()?;
         let params = json!({});
         let queued = store.enqueue(&job(Kind::Item, "a", &params))?;
         let running = store.enqueue(&job(Kind::Workflow, "b", &params))?;
@@ -585,17 +586,46 @@ mod tests {
     #[test]
     fn running_jobs_return_to_the_queue_after_a_restart() -> Result<(), String> {
         let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
-        let path = directory.path().join("jobs.db");
+        let path = directory.path().join("muzik.db");
         let params = json!({});
         let id = {
-            let store = Store::open(&path)?;
+            let store = Store::from_connection(muzik_core::db::open(&path)?);
             let id = store.enqueue(&job(Kind::Workflow, "a", &params))?;
             store.claim(Queue::Workflow)?;
             id
         };
-        let store = Store::open(&path)?;
+        let store = Store::from_connection(muzik_core::db::open(&path)?);
         assert_eq!(store.recover()?, 1);
         assert_eq!(store.claim(Queue::Workflow)?.map(|job| job.id), Some(id));
+        Ok(())
+    }
+
+    #[test]
+    fn open_jobs_of_the_old_database_move_once() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let legacy = directory.path().join("jobs.db");
+        {
+            let old = rusqlite::Connection::open(&legacy)?;
+            old.execute_batch(
+                "CREATE TABLE jobs (id INTEGER PRIMARY KEY, queue TEXT NOT NULL, kind TEXT NOT NULL,
+                 item_key TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                 params TEXT NOT NULL DEFAULT '{}', question TEXT, answer TEXT, error TEXT,
+                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                 INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at) VALUES
+                 ('item', 'item', 'PL1:1:a', 'Waiting', 'waiting', '{}', '{\"kind\":\"import_match\"}', 1, 1),
+                 ('item', 'item', 'PL1:2:b', 'Running', 'running', '{}', NULL, 1, 1),
+                 ('item', 'item', 'PL1:3:c', 'Done', 'done', '{}', NULL, 1, 1);",
+            )?;
+        }
+        let store = memory()?;
+        assert_eq!(store.import_legacy(&legacy)?, 2);
+        assert!(!legacy.exists());
+        assert!(directory.path().join("jobs.db.migrated").is_file());
+        assert_eq!(store.import_legacy(&legacy)?, 0);
+        let waiting = store.list(Status::Waiting)?;
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
+        assert_eq!(store.list(Status::Queued)?[0].item_key, "PL1:2:b");
         Ok(())
     }
 }

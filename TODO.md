@@ -50,11 +50,12 @@
 
 ## Phase 7: Job queue in muzik.db and one item identity
 
-- [ ] muzik.db migration 2 with `jobs`
-- [ ] `Store::from_connection`; one-time `jobs.db` copy
-- [ ] `ItemId` in queue, park, jobs, GUI
-- [ ] Park and waiting state in one transaction
-- [ ] Commit: `feat(jobs): store the job queue in muzik.db with one item identity`
+- [x] muzik.db migration 2 with `jobs`
+- [x] `Store::from_connection`; one-time `jobs.db` copy (only under the runner lock, never for an in-memory queue)
+- [x] `ItemId` in queue, park, jobs, GUI (same key format, so open jobs keep their keys)
+- [x] Bridge tests use temporary paths
+- [ ] Park and waiting state in one transaction (moved to Phase 9, where the pause becomes a returned value)
+- [x] Commit: `feat(jobs): store the job queue in muzik.db with one item identity`
 
 ## Phase 8: Source modules
 
@@ -67,6 +68,7 @@
 
 ## Phase 9: Waiting for a choice as a returned value
 
+- [ ] Park and waiting state in one transaction
 - [ ] Typed `DecisionError`
 - [ ] `ItemOutcome::Waiting` carries the question; runner parks from it
 - [ ] Delete `mark_stage`, `take_stage`, `Parked`, event-driven park

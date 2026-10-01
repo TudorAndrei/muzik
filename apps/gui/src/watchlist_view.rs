@@ -371,9 +371,8 @@ impl Muzik {
     }
 
     fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
-        self.queued_items.contains(&muzik_runner::item_key(
-            &json!({"playlist_id":playlist_id,"position":position,"video_id":video_id}),
-        ))
+        self.queued_items
+            .contains(&ItemId::new(playlist_id, position as u64, Some(video_id)).to_string())
     }
 
     pub(crate) fn item_params(

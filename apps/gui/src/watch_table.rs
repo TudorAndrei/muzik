@@ -235,9 +235,8 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
                 .or_else(|| item["id"].as_str())
                 .unwrap_or("")
                 .to_string();
-            let queued = queued.contains(&muzik_runner::item_key(
-                &json!({"playlist_id":id,"position":position,"video_id":video_id}),
-            ));
+            let queued =
+                queued.contains(&ItemId::new(&id, position as u64, Some(&video_id)).to_string());
             WatchRow {
                 key: (id.clone(), position, video_id),
                 item: item.clone(),
@@ -263,9 +262,10 @@ mod tests {
             {"position": 3, "title": "Three", "video_id": "ccccccccccc", "summary": "Failed"},
             {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "summary": "Unavailable"}
         ]});
-        let queued = HashSet::from([muzik_runner::item_key(
-            &json!({"playlist_id": "PL1", "position": 3, "video_id": "ccccccccccc"}),
-        )]);
+        let queued =
+            HashSet::from([
+                muzik_core::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
+            ]);
         let tab = |wanted: Summary| {
             1 + Summary::ALL
                 .iter()

@@ -4,7 +4,8 @@ use rusqlite::{Connection, TransactionBehavior};
 use std::path::Path;
 use std::time::Duration;
 
-const MIGRATIONS: &[&str] = &["CREATE TABLE watchlist_playlists (
+const MIGRATIONS: &[&str] = &[
+    "CREATE TABLE watchlist_playlists (
         playlist_id TEXT PRIMARY KEY,
         ordinal INTEGER NOT NULL,
         data TEXT NOT NULL
@@ -20,18 +21,44 @@ const MIGRATIONS: &[&str] = &["CREATE TABLE watchlist_playlists (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         revision INTEGER NOT NULL
     );
-    INSERT INTO watchlist_revision (id, revision) VALUES (1, 0);"];
+    INSERT INTO watchlist_revision (id, revision) VALUES (1, 0);",
+    "CREATE TABLE jobs (
+        id INTEGER PRIMARY KEY,
+        queue TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        item_key TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        params TEXT NOT NULL DEFAULT '{}',
+        question TEXT,
+        answer TEXT,
+        error TEXT,
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX jobs_by_queue ON jobs (queue, status, id);
+    CREATE INDEX jobs_by_item ON jobs (item_key, kind, status);",
+];
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let mut connection = Connection::open(path).map_err(text)?;
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(text)?;
+    let connection = Connection::open(path).map_err(text)?;
     connection
         .pragma_update(None, "journal_mode", "WAL")
+        .map_err(text)?;
+    prepare(connection)
+}
+
+pub fn open_in_memory() -> Result<Connection, String> {
+    prepare(Connection::open_in_memory().map_err(text)?)
+}
+
+fn prepare(mut connection: Connection) -> Result<Connection, String> {
+    connection
+        .busy_timeout(Duration::from_secs(5))
         .map_err(text)?;
     connection
         .pragma_update(None, "foreign_keys", true)
@@ -82,6 +109,30 @@ mod tests {
         let connection = open(&path)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         assert_eq!(usize::try_from(version)?, MIGRATIONS.len());
+        Ok(())
+    }
+
+    #[test]
+    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("muzik.db");
+        {
+            let connection = Connection::open(&path)?;
+            connection.execute_batch(MIGRATIONS[0])?;
+            connection.execute(
+                "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}')",
+                [],
+            )?;
+            connection.pragma_update(None, "user_version", 1)?;
+        }
+        let connection = open(&path)?;
+        let playlists: i64 =
+            connection.query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
+                row.get(0)
+            })?;
+        let jobs: i64 = connection.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))?;
+        assert_eq!((playlists, jobs), (1, 0));
         Ok(())
     }
 

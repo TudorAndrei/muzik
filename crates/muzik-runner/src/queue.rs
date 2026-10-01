@@ -1,6 +1,7 @@
 use crate::settings::Settings;
+use muzik_core::db;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::ItemAction;
+use muzik_core::watchlist::{ItemAction, ItemId};
 use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use serde_json::{json, Value};
@@ -43,7 +44,7 @@ pub struct Jobs {
 impl Jobs {
     pub fn open(paths: &Paths) -> Result<Self, String> {
         Ok(Self {
-            store: Mutex::new(Store::open(&paths.data.join("jobs.db"))?),
+            store: Mutex::new(Store::from_connection(db::open(&paths.database())?)),
             lock_path: Some(paths.data.join("jobs.lock")),
             paths: paths.clone(),
         })
@@ -51,10 +52,17 @@ impl Jobs {
 
     pub fn in_memory(paths: &Paths) -> Result<Self, String> {
         Ok(Self {
-            store: Mutex::new(Store::open_in_memory()?),
+            store: Mutex::new(Store::from_connection(db::open_in_memory()?)),
             lock_path: None,
             paths: paths.clone(),
         })
+    }
+
+    pub(crate) fn import_legacy(&self) -> Result<usize, String> {
+        if self.lock_path.is_none() {
+            return Ok(0);
+        }
+        self.store().import_legacy(&self.paths.data.join("jobs.db"))
     }
 
     pub fn paths(&self) -> &Paths {
@@ -108,8 +116,9 @@ impl Jobs {
     }
 
     pub fn item(&self, params: &Value) -> Result<i64, EnqueueError> {
-        validate_item(params).map_err(EnqueueError::Invalid)?;
-        let key = item_key(params);
+        let key = validate_item(params)
+            .map_err(EnqueueError::Invalid)?
+            .to_string();
         let store = self.store();
         for open in store.find_open(Kind::Item, &key)? {
             if open.status == Status::Waiting {
@@ -216,27 +225,8 @@ pub fn parse_job_id(text: &str) -> Option<i64> {
     text.strip_prefix("queue-").unwrap_or(text).parse().ok()
 }
 
-pub fn item_key(params: &Value) -> String {
-    format!(
-        "{}:{}:{}",
-        params["playlist_id"].as_str().unwrap_or(""),
-        params["position"],
-        params["video_id"].as_str().unwrap_or("")
-    )
-}
-
-fn validate_item(params: &Value) -> Result<(), String> {
-    params
-        .get("playlist_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("playlist_id must be a non-empty string.")?;
-    if params
-        .get("position")
-        .is_none_or(|value| value.as_i64().is_none() && value.as_u64().is_none())
-    {
-        return Err("position must be an integer.".into());
-    }
+fn validate_item(params: &Value) -> Result<ItemId, String> {
+    let id = ItemId::from_params(params)?;
     let action = params
         .get("action")
         .and_then(Value::as_str)
@@ -245,7 +235,7 @@ fn validate_item(params: &Value) -> Result<(), String> {
     action
         .parse::<ItemAction>()
         .map_err(|_| format!("'{action}' is not a valid ItemAction"))?;
-    Ok(())
+    Ok(id)
 }
 
 fn unique() -> u128 {

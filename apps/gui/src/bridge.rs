@@ -620,6 +620,12 @@ mod tests {
         }
     }
 
+    fn started() -> Result<(tempfile::TempDir, Bridge), Box<dyn std::error::Error>> {
+        let state = tempfile::tempdir()?;
+        let bridge = Bridge::with(Paths::under(state.path()), true)?;
+        Ok((state, bridge))
+    }
+
     fn response(bridge: &Bridge, id: &str) -> Result<Value, Box<dyn std::error::Error>> {
         next_matching(bridge, Duration::from_secs(5), |message| {
             message["type"] == "response" && message["id"] == id
@@ -668,7 +674,7 @@ mod tests {
     fn library_scan_returns_file_size() -> TestResult {
         let dir = tempfile::tempdir()?;
         fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
         assert_eq!(response(&bridge, &id)?["result"]["total_size"], "5.0 B");
         Ok(())
@@ -676,7 +682,7 @@ mod tests {
 
     #[test]
     fn startup_answers_hello() -> TestResult {
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send("hello", json!({}))?;
         assert_eq!(response(&bridge, &id)?["result"]["protocol_version"], 1);
         Ok(())
@@ -684,7 +690,7 @@ mod tests {
 
     #[test]
     fn invalid_workflow_requests_use_the_native_protocol_response() -> TestResult {
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         for (command, params) in [
             ("workflow.start", json!({"raw":"  "})),
             (
@@ -709,7 +715,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let audio = dir.path().join("track.flac");
         fs::write(&audio, b"audio")?;
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send(
             "workflow.start",
             json!({
@@ -734,7 +740,7 @@ mod tests {
         let second = tempfile::tempdir()?;
         let (audio_one, database_one, config_one) = fixture_import(first.path())?;
         let (audio_two, database_two, config_two) = fixture_import(second.path())?;
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let mut jobs = Vec::new();
         for (audio, config) in [(&audio_one, &config_one), (&audio_two, &config_two)] {
             let id = bridge.send(
@@ -783,7 +789,7 @@ mod tests {
     fn cancel_ends_a_pending_local_import_decision() -> TestResult {
         let dir = tempfile::tempdir()?;
         let (audio, database, config) = fixture_import(dir.path())?;
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send(
             "workflow.start",
             json!({"raw":audio,"config":config,"no_split":true}),
@@ -838,7 +844,7 @@ mod tests {
 
     #[test]
     fn thumbnail_requests_get_a_native_protocol_response() -> TestResult {
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send("thumbnails.cache", json!({"video_ids": []}))?;
         assert_eq!(response(&bridge, &id)?["result"]["queued"], 0);
         let id = bridge.send("thumbnails.cache", json!({"video_ids": [42]}))?;
@@ -848,7 +854,7 @@ mod tests {
 
     #[test]
     fn spotify_login_validates_port_and_uses_its_own_slot() -> TestResult {
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send("spotify.login", json!({"port": 0}))?;
         assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
         let cancel = Arc::new(AtomicBool::new(false));
@@ -901,7 +907,7 @@ mod tests {
 
     #[test]
     fn unknown_command_has_protocol_error() -> TestResult {
-        let mut bridge = Bridge::start()?;
+        let (_state, mut bridge) = started()?;
         let id = bridge.send("unknown.command", json!({}))?;
         assert_eq!(response(&bridge, &id)?["error"]["code"], "invalid_request");
         Ok(())

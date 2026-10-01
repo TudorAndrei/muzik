@@ -1,9 +1,9 @@
 use crate::agent::Chooser;
-use crate::queue::{item_key, job_id, Jobs};
+use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::watchlist::jobs::JobError;
-use muzik_core::watchlist::{ItemAction, Stage};
+use muzik_core::watchlist::{ItemAction, ItemId, Stage};
 use muzik_core::DecisionKind;
 use muzik_jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
 use muzik_workflow::{classify_input, WorkflowInput};
@@ -98,6 +98,7 @@ impl Runner {
         let Some(lock) = jobs.runner_lock()? else {
             return Ok(None);
         };
+        jobs.import_legacy()?;
         jobs.store().recover()?;
         jobs.release_spotify_questions()?;
         let shared = Arc::new(Shared {
@@ -267,12 +268,10 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
         let store = shared.store();
         for item in &pending {
             let mut params = job.params.clone();
-            params["playlist_id"] = json!(item.playlist_id);
-            params["position"] = json!(item.position);
-            params["video_id"] = json!(item.video_id);
+            item.id.write(&mut params);
             params["title"] = json!(item.title);
             params["action"] = json!(ItemAction::Run);
-            let key = item_key(&params);
+            let key = item.id.to_string();
             if store
                 .find_open(Kind::Item, &key)
                 .map_err(|error| (false, error))?
@@ -447,12 +446,11 @@ pub(crate) fn park_item(store: &Store, params: &Value, data: &Value) -> Result<i
         .as_str()
         .and_then(|stage| stage.parse::<Stage>().ok())
         .unwrap_or(Stage::Download);
+    let id = ItemId::from_params(data)?;
     let mut params = params.clone();
-    params["playlist_id"] = data["playlist_id"].clone();
-    params["position"] = data["position"].clone();
-    params["video_id"] = json!(data["video_id"].as_str().unwrap_or(""));
+    id.write(&mut params);
     params["action"] = json!(stage.resume_action());
-    let key = item_key(&params);
+    let key = id.to_string();
     let title = data["title"]
         .as_str()
         .or_else(|| params["title"].as_str())

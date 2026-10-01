@@ -96,11 +96,13 @@ the phases before it:
   only in `Repository` and in the `Serialize` output for the GUI.
 - **One database.** muzik.db migration 2 creates the `jobs` table (with
   `cancel_requested`). `muzik_jobs::Store::from_connection` takes the
-  connection that `muzik_core::db::open` returns. On first open, open jobs in
-  `jobs.db` are copied and the file is renamed to `jobs.db.migrated`.
-  `ItemId { playlist_id, position, key }` lives in the watchlist module; the
-  queue, `park`, the GUI, and `processed_video_ids` use it. Park and the
-  waiting stage write in one transaction.
+  connection that `muzik_core::db::open` returns. When the runner first holds
+  the runner lock, open jobs in `jobs.db` are copied and the file is renamed
+  to `jobs.db.migrated`. An in-memory queue never imports.
+  `ItemId { playlist_id, position, video_id }` lives in the watchlist module;
+  the queue, `park`, `jobs.rs`, and the GUI use it. It keeps the old key
+  format, so open jobs keep their keys. Park and the waiting stage write in
+  one transaction (Phase 9).
 - **Source modules (`muzik-runner/src/sources/{mod,youtube,spotify,bandcamp}.rs`).**
   `trait Source { fn load(..) -> LoadedSource; fn process(item, action, ctx) ->
   Result<WatchItem, JobError>; fn stages(..); fn availability(item, action) ->
@@ -251,9 +253,11 @@ the phases before it:
 - **Behavior changes that are intended.** A direct `muzik workflow` run now
   asks the import match question in a terminal (as the queue path does) and
   applies `--duplicates`. `muzik bandcamp` stops using bandsnatch.
-- **Item identity.** For Spotify and Bandcamp, the queue key changes from the
-  track ID to the entry ID. The jobs.db copy recomputes keys from the
-  watchlist item at the same playlist and position.
+- **Item identity.** `ItemId` keeps the old `playlist:position:video_id`
+  key, so no stored key changes.
+- **Tests and real data.** A test that starts a runner on the user paths can
+  move the real `jobs.db`. Every test uses `Paths::under(temp)`, and an
+  in-memory queue never imports.
 - **GUI phase.** GPUI code is hard to test; the `App` module carries the
   logic so tests run without GPUI.
 

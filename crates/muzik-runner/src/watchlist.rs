@@ -4,10 +4,10 @@ use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use crate::{local_workflow, remote_workflow};
 use muzik_core::watchlist::jobs::{
-    self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
+    self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
 use muzik_core::watchlist::{
-    AudioIndex, ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem,
+    AudioIndex, ItemAction, ItemId, Playlist, SourceKind, Stage, StageStatus, WatchItem,
 };
 use muzik_core::{
     bandcamp, chapters, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind, QualityPolicy,
@@ -69,12 +69,7 @@ pub fn action(
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(settings);
-    let playlist_id = required(params["playlist_id"].as_str(), "playlist_id")?;
-    let position = params["position"]
-        .as_u64()
-        .filter(|value| *value > 0)
-        .ok_or_else(|| JobError::Operation("position must be a positive integer".into()))?;
-    let video_id = params["video_id"].as_str();
+    let id = ItemId::from_params(params)?;
     let name = required(params["action"].as_str(), "action")?;
     let name: ItemAction = name
         .parse()
@@ -91,12 +86,8 @@ pub fn action(
     jobs::action(
         &prepared.repository,
         prepared.job_options(),
-        ItemSelection {
-            playlist_id,
-            position,
-            video_id,
-            action: name,
-        },
+        &id,
+        name,
         &mut adapter,
         cancelled,
     )

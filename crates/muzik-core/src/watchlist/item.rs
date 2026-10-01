@@ -102,6 +102,61 @@ pub struct StageRecord {
     pub question: Option<Value>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ItemId {
+    pub playlist_id: String,
+    pub position: u64,
+    pub video_id: Option<String>,
+}
+
+impl ItemId {
+    pub fn new(playlist_id: &str, position: u64, video_id: Option<&str>) -> Self {
+        Self {
+            playlist_id: playlist_id.to_owned(),
+            position,
+            video_id: video_id.filter(|id| !id.is_empty()).map(str::to_owned),
+        }
+    }
+
+    pub fn of(playlist_id: &str, item: &WatchItem) -> Self {
+        Self::new(playlist_id, item.position, item.video_id.as_deref())
+    }
+
+    pub fn from_params(params: &Value) -> Result<Self, String> {
+        let playlist_id = params["playlist_id"]
+            .as_str()
+            .filter(|id| !id.trim().is_empty())
+            .ok_or("playlist_id must be a non-empty string.")?;
+        let position = params["position"]
+            .as_u64()
+            .filter(|position| *position > 0)
+            .ok_or("position must be a positive integer.")?;
+        Ok(Self::new(
+            playlist_id,
+            position,
+            params["video_id"].as_str(),
+        ))
+    }
+
+    pub fn write(&self, params: &mut Value) {
+        params["playlist_id"] = Value::from(self.playlist_id.as_str());
+        params["position"] = Value::from(self.position);
+        params["video_id"] = Value::from(self.video_id.as_deref().unwrap_or(""));
+    }
+}
+
+impl std::fmt::Display for ItemId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}:{}:{}",
+            self.playlist_id,
+            self.position,
+            self.video_id.as_deref().unwrap_or("")
+        )
+    }
+}
+
 pub fn now() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
@@ -195,10 +250,13 @@ impl Playlist {
         }
     }
 
-    pub fn find(&self, position: u64, video_id: Option<&str>) -> Option<usize> {
+    pub fn find(&self, id: &ItemId) -> Option<usize> {
+        if id.playlist_id != self.playlist_id {
+            return None;
+        }
         self.items
             .iter()
-            .position(|item| item.position == position && item.video_id.as_deref() == video_id)
+            .position(|item| ItemId::of(&self.playlist_id, item) == *id)
     }
 
     pub fn pending(&self) -> Vec<&WatchItem> {
@@ -499,6 +557,24 @@ mod tests {
         assert_eq!(item["stages"]["quality"]["status"], "not_started");
         assert!(item.get("unavailable").is_none());
         assert_eq!(Watchlist::from_value(value)?, watchlist);
+        Ok(())
+    }
+
+    #[test]
+    fn an_item_id_reads_and_writes_job_params() -> Result<(), String> {
+        let id = super::ItemId::from_params(
+            &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"run"}),
+        )?;
+        assert_eq!(id.to_string(), "PL1:3:abcdefghijk");
+        let mut params = json!({"output":"/music"});
+        id.write(&mut params);
+        assert_eq!(super::ItemId::from_params(&params)?, id);
+        let bare =
+            super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))?;
+        assert_eq!(bare.to_string(), "PL1:2:");
+        assert_eq!(bare.video_id, None);
+        assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
+        assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
         Ok(())
     }
 

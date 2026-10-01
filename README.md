@@ -292,14 +292,17 @@ network. The current `muzik cache` commands list and clean these files.
 
 ## Job queue
 
-The CLI and the desktop app use the same job queue in `jobs.db` in the data
+The CLI and the desktop app use the same job queue in `muzik.db` in the data
 folder:
 
 - A watchlist refresh checks the playlists, then adds one job for each pending
   item.
 - An item command adds one job for that item. An item can have one open job.
-- A workflow run from the app, or from `muzik workflow --queue`, is also a
-  queue job.
+- A workflow run from the app or from `muzik workflow` is also a queue job.
+
+When a new version runs the queue for the first time, it moves the open jobs
+from the old `jobs.db` into `muzik.db` and renames the old file to
+`jobs.db.migrated`.
 
 One process at a time runs the queue. It holds `jobs.lock` in the data folder.
 When the app is open, it runs the queue, and a CLI command only adds jobs. When

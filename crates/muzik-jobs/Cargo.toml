@@ -17,4 +17,5 @@ strum = "0.28"
 strum_macros = "0.28"
 
 [dev-dependencies]
+muzik-core = { path = "../muzik-core" }
 tempfile = "3"

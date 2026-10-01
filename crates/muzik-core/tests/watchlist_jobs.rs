@@ -1,8 +1,7 @@
-use muzik_core::watchlist::jobs::{
-    self, ItemSelection, JobError, JobOptions, LoadedSource, Operations,
-};
+use muzik_core::watchlist::jobs::{self, JobError, JobOptions, LoadedSource, Operations};
 use muzik_core::watchlist::{
-    ItemAction, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
+    ItemAction, ItemId, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus,
+    WatchItem,
 };
 use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
@@ -92,13 +91,8 @@ fn repository_with(
     Ok(repository)
 }
 
-fn selection(video_id: &str, action: ItemAction) -> ItemSelection<'_> {
-    ItemSelection {
-        playlist_id: "PL123",
-        position: 1,
-        video_id: Some(video_id),
-        action,
-    }
+fn id(video_id: &str) -> ItemId {
+    ItemId::new("PL123", 1, Some(video_id))
 }
 
 #[test]
@@ -328,7 +322,8 @@ fn an_action_that_needs_a_choice_parks_the_item() -> TestResult {
     let result = jobs::action(
         &repository,
         options(directory.path()),
-        selection("video_a", ItemAction::Run),
+        &id("video_a"),
+        ItemAction::Run,
         &mut AsksOnFirst {
             processed: Vec::new(),
         },
@@ -352,7 +347,8 @@ fn failed_action_saves_its_target_stage() -> TestResult {
     let error = jobs::action(
         &repository,
         options(directory.path()),
-        selection("video_a", ItemAction::Run),
+        &id("video_a"),
+        ItemAction::Run,
         &mut ActionFailure,
         &AtomicBool::new(false),
     );
@@ -398,7 +394,8 @@ fn action_checks_the_saved_item_identity() -> TestResult {
     let result = jobs::action(
         &repository,
         options(directory.path()),
-        selection("other", ItemAction::Run),
+        &id("other"),
+        ItemAction::Run,
         &mut fake,
         &AtomicBool::new(false),
     );
@@ -431,7 +428,8 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio() -> TestResult {
     let result = jobs::action(
         &repository,
         options,
-        selection("video_a", ItemAction::DownloadAgain),
+        &id("video_a"),
+        ItemAction::DownloadAgain,
         &mut fake,
         &AtomicBool::new(false),
     )?;
@@ -469,7 +467,8 @@ fn a_failure_marks_the_stage_that_failed() -> TestResult {
     let error = jobs::run_item(
         &repository,
         options(directory.path()),
-        selection("video_a", ItemAction::Run),
+        &id("video_a"),
+        ItemAction::Run,
         &mut SplitFailure,
         &AtomicBool::new(false),
     );
@@ -506,15 +505,11 @@ fn sync_lists_pending_items_and_keeps_running_stages() -> TestResult {
         synced.pending,
         [
             jobs::PendingItem {
-                playlist_id: "PL123".into(),
-                position: 1,
-                video_id: Some("video_a".into()),
+                id: id("video_a"),
                 title: "video_a".into(),
             },
             jobs::PendingItem {
-                playlist_id: "PL123".into(),
-                position: 3,
-                video_id: Some("video_b".into()),
+                id: ItemId::new("PL123", 3, Some("video_b")),
                 title: "video_b".into(),
             },
         ]
@@ -564,7 +559,7 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() -> TestResult {
         synced
             .pending
             .iter()
-            .map(|item| item.position)
+            .map(|item| item.id.position)
             .collect::<Vec<_>>(),
         [1]
     );
@@ -640,7 +635,8 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation() -> TestRe
     jobs::action(
         &repository,
         options(directory.path()),
-        selection("video_a", ItemAction::DownloadAgain),
+        &id("video_a"),
+        ItemAction::DownloadAgain,
         &mut RepeatDownload,
         &AtomicBool::new(false),
     )?;

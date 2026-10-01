@@ -25,7 +25,7 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use muzik_core::watchlist::{ItemAction, SourceKind, Summary};
+use muzik_core::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };

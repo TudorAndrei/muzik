@@ -17,7 +17,9 @@ mod library_lookup;
 mod reconcile;
 mod view;
 
-pub use item::{is_audio, now, AudioIndex, Playlist, StageRecord, Stages, WatchItem, Watchlist};
+pub use item::{
+    is_audio, now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist,
+};
 pub use reconcile::{reconcile, ReconcileOptions};
 pub use view::{view, Summary};
 
