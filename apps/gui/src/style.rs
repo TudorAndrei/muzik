@@ -6,7 +6,7 @@ use muzik_core::watchlist::{stage_status, Stage, StageStatus};
 use serde_json::Value;
 
 const THEME: &str = include_str!("../themes/muzik.json");
-const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-v2.png");
+const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-64.png");
 
 gpui_kit::assets::icon_assets!(
     SourceIcons,
