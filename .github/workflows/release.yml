@@ -65,8 +65,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          before=$(git describe --tags --abbrev=0)
           cog bump --auto
-          echo "version=$(git describe --tags --abbrev=0)" >> "$GITHUB_OUTPUT"
+          after=$(git describe --tags --abbrev=0)
+          if [ "$after" = "$before" ]; then
+            echo "::error::No commit since ${before} needs a new version. Use feat, fix, or perf commits."
+            exit 1
+          fi
+          echo "version=${after}" >> "$GITHUB_OUTPUT"
       - name: Report the release tag
         id: tag
         env:
