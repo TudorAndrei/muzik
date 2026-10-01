@@ -26,10 +26,10 @@
 
 ## Phase 4: One import decision policy
 
-- [ ] `muzik-import/src/decide.rs` with `ImportPolicy` and `decide_album`
-- [ ] Runner and CLI import use it; `muzik import --duplicates`
-- [ ] Policy matrix test
-- [ ] Commit: `fix(import): apply the duplicates setting on every import path`
+- [x] `muzik-import/src/decide.rs` with `ImportPolicy` and `decide_album`
+- [x] Runner and CLI import use it; `muzik import --duplicates`
+- [x] Policy matrix test
+- [x] Commit: `fix(import): apply the duplicates setting on every import path`
 
 ## Phase 5: CLI workflow through the runner
 

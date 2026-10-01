@@ -1,7 +1,8 @@
 //! CLI presentation for the shared Beets import service.
 
-use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
+use muzik_import::apply::{AlbumDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest, SyncOutcome};
+use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
 
 use crate::Import;
 
@@ -23,6 +24,11 @@ pub fn run(args: &Import) -> Result<(), String> {
         force: false,
         no_prune: args.no_prune,
     })?;
+    let policy = ImportPolicy {
+        interactive: false,
+        force: false,
+        duplicates: args.duplicates,
+    };
     let decisions = preview
         .plan
         .albums
@@ -34,17 +40,23 @@ pub fn run(args: &Import) -> Result<(), String> {
                 .map(|item| item.match_item.album.as_str())
                 .unwrap_or("");
             println!("Album: {} ({title})", album.source_dir.display());
-            AlbumDecision {
-                choice: if args.quiet {
-                    MatchDecision::Skip
-                } else {
-                    MatchDecision::AsIs
-                },
-                duplicate: (!album.duplicates.is_empty()).then_some(DuplicateDecision::Skip),
+            if args.quiet {
+                Ok(AlbumDecision {
+                    choice: MatchDecision::Skip,
+                    duplicate: None,
+                })
+            } else {
+                decide_album(album, policy, &mut NeverAsk)
             }
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, String>>()?;
     let result = beets::apply_import(preview, &decisions)?;
+    if result.apply.already_in_library > 0 {
+        println!(
+            "{} album(s) are already in the library and were not imported again",
+            result.apply.already_in_library
+        );
+    }
     for path in &result.apply.destinations {
         println!("{}", path.display());
     }

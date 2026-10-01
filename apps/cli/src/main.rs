@@ -101,6 +101,9 @@ struct Import {
     /// Keep missing library rows after moving files.
     #[usage(long)]
     no_prune: bool,
+    /// What to do with an album that is already in the library.
+    #[usage(long, value_enum, default = "skip")]
+    duplicates: muzik_core::DuplicatePolicy,
     /// Beets-compatible library config file.
     #[usage(long, short = 'c')]
     config: Option<PathBuf>,

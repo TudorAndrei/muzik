@@ -657,6 +657,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
             quiet: false,
             dry_run: false,
             no_prune: true,
+            duplicates: muzik_core::DuplicatePolicy::default(),
             config: None,
         };
         import::run(&import_args)?;

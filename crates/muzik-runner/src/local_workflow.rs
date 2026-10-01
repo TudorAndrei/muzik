@@ -4,11 +4,11 @@ use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use muzik_core::watchlist::Stage;
 use muzik_core::{
-    chapters::Chapter, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer, DuplicatePolicy,
-    KEEP_CURRENT_TAGS,
+    chapters::Chapter, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS,
 };
-use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
+use muzik_import::apply::{DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
+use muzik_import::decide::{decide_album, Ask, ImportPolicy};
 use muzik_import::plan::{AlbumPlan, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_workflow::{
@@ -125,58 +125,22 @@ impl WorkflowOperations for LocalOperations<'_> {
             if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("import cancelled".into());
             }
-            let task = album_task(index, album);
             (self.on_import_event)(
                 json!({"event":"message","data":{"message":format!("Import group {} of {}: {}",index + 1,preview.plan.albums.len(),album.source_dir.display())}}),
             );
-            let choice = if options.interactive {
-                let answer = (self.decide)(DecisionKind::ImportMatch, json!({"task":task}))?;
-                match answer.as_str() {
-                    Some(KEEP_CURRENT_TAGS) => MatchDecision::AsIs,
-                    Some(id) => album
-                        .candidates
-                        .iter()
-                        .position(|candidate| candidate_id(candidate) == id)
-                        .map(MatchDecision::Candidate)
-                        .ok_or("Select a valid match ID.")?,
-                    None if answer.is_null() => MatchDecision::Skip,
-                    _ => return Err("Select a valid match ID.".into()),
-                }
-            } else {
-                MatchDecision::AsIs
-            };
-            let duplicate = if choice == MatchDecision::Skip {
-                None
-            } else if album.duplicates.is_empty() {
-                (!options.force
-                    && matches!(
-                        options.duplicates,
-                        DuplicatePolicy::Skip | DuplicatePolicy::Ask
-                    ))
-                .then_some(DuplicateDecision::Skip)
-            } else if options.force {
-                Some(DuplicateDecision::Replace)
-            } else {
-                Some(match options.duplicates {
-                    DuplicatePolicy::Skip => DuplicateDecision::Skip,
-                    DuplicatePolicy::KeepAll => DuplicateDecision::Keep,
-                    DuplicatePolicy::RemoveOld => DuplicateDecision::Replace,
-                    DuplicatePolicy::Ask if !options.interactive => DuplicateDecision::Skip,
-                    DuplicatePolicy::Ask => {
-                        let answer = (self.decide)(
-                            DecisionKind::ImportDuplicate,
-                            json!({"task":task,"duplicates":duplicate_views(album, &preview.paths.library)?}),
-                        )?;
-                        match answer.as_str().and_then(|answer| answer.parse().ok()) {
-                            Some(DuplicateAnswer::Skip) => DuplicateDecision::Skip,
-                            Some(DuplicateAnswer::KeepAll) => DuplicateDecision::Keep,
-                            Some(DuplicateAnswer::RemoveOld) => DuplicateDecision::Replace,
-                            None => return Err("Select a valid duplicate action.".into()),
-                        }
-                    }
-                })
-            };
-            decisions.push(AlbumDecision { choice, duplicate });
+            decisions.push(decide_album(
+                album,
+                ImportPolicy {
+                    interactive: options.interactive,
+                    force: options.force,
+                    duplicates: options.duplicates,
+                },
+                &mut Questions {
+                    decide: &mut *self.decide,
+                    task: album_task(index, album),
+                    library: &preview.paths.library,
+                },
+            )?);
         }
         let outcome = beets::apply_import_with_cancel(preview, &decisions, &|| {
             self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
@@ -233,6 +197,42 @@ impl WorkflowOperations for LocalOperations<'_> {
             ));
         }
         Ok(())
+    }
+}
+
+struct Questions<'a, 'b> {
+    decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
+    task: Value,
+    library: &'b Path,
+}
+
+impl Ask for Questions<'_, '_> {
+    fn choose_match(&mut self, album: &AlbumPlan) -> Result<MatchDecision, String> {
+        let answer = (self.decide)(DecisionKind::ImportMatch, json!({"task":self.task}))?;
+        match answer.as_str() {
+            Some(KEEP_CURRENT_TAGS) => Ok(MatchDecision::AsIs),
+            Some(id) => album
+                .candidates
+                .iter()
+                .position(|candidate| candidate_id(candidate) == id)
+                .map(MatchDecision::Candidate)
+                .ok_or_else(|| "Select a valid match ID.".into()),
+            None if answer.is_null() => Ok(MatchDecision::Skip),
+            None => Err("Select a valid match ID.".into()),
+        }
+    }
+
+    fn choose_duplicate(&mut self, album: &AlbumPlan) -> Result<DuplicateDecision, String> {
+        let answer = (self.decide)(
+            DecisionKind::ImportDuplicate,
+            json!({"task":self.task,"duplicates":duplicate_views(album, self.library)?}),
+        )?;
+        match answer.as_str().and_then(|answer| answer.parse().ok()) {
+            Some(DuplicateAnswer::Skip) => Ok(DuplicateDecision::Skip),
+            Some(DuplicateAnswer::KeepAll) => Ok(DuplicateDecision::Keep),
+            Some(DuplicateAnswer::RemoveOld) => Ok(DuplicateDecision::Replace),
+            None => Err("Select a valid duplicate action.".into()),
+        }
     }
 }
 

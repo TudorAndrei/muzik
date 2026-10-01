@@ -74,7 +74,9 @@ the phases before it:
   inside the crate. `remote_workflow::soulseek_download`,
   `apps/cli/src/soulseek.rs::{ranked_search, wait_download}` and
   `quality.rs::{SoulseekBackend::search, SoulseekBackend::download,
-  await_job}` call them. Timeout settings move into `SessionSettings`.
+  await_job}` call them. Timeout settings move into a `fetch::Timeouts`
+  value (not `SessionSettings`: a timeout change must not reconnect the
+  shared session).
 - **Import policy (`muzik-import/src/decide.rs`).** `decide_album(album,
   policy, ask) -> AlbumDecision` holds the match and duplicate rules now in
   `local_workflow.rs:224-279`. `ImportPolicy { interactive, force,
@@ -163,7 +165,7 @@ the phases before it:
 ### Phase 3: Soulseek search and fetch in muzik-soulseek
 
 - Add `crates/muzik-soulseek/src/fetch.rs` with `Session::search` and
-  `Session::fetch`; move timeouts into `SessionSettings`.
+  `Session::fetch`; move timeouts into `fetch::Timeouts`.
 - Use them in `remote_workflow::soulseek_download`, `quality.rs`
   `SoulseekBackend`, and `apps/cli/src/soulseek.rs`.
   **Commit:** `refactor(soulseek): search and fetch through one blocking interface`

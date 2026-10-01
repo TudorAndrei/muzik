@@ -34,6 +34,7 @@ pub fn run(args: &Organize) -> Result<(), String> {
         quiet: false,
         dry_run: args.dry_run,
         no_prune: false,
+        duplicates: muzik_core::DuplicatePolicy::default(),
         config: args.config.clone(),
     })
 }
