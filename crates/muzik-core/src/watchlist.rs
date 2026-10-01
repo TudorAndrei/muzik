@@ -13,6 +13,7 @@ use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 mod item;
 pub mod jobs;
+mod legacy;
 mod library_lookup;
 mod reconcile;
 pub mod source;
@@ -21,6 +22,7 @@ mod view;
 pub use item::{
     is_audio, now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist,
 };
+pub use legacy::import_cache;
 pub use reconcile::{reconcile, ReconcileOptions};
 pub use view::{view, Summary};
 

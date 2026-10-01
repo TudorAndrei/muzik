@@ -6,7 +6,7 @@ use muzik_core::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
 use muzik_core::watchlist::{
-    AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
+    import_cache, AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
 };
 use muzik_core::DecisionKind;
 use muzik_jobs::{park_on, Kind, NewJob};
@@ -24,6 +24,7 @@ pub fn sync(
 ) -> Result<Vec<PendingItem>, JobError> {
     let prepared = Prepared::new(settings);
     sources::ensure(&prepared.repository)?;
+    import_cache(&prepared.repository, settings.reconcile())?;
     let events = RefCell::new(on_event);
     let parked = RefCell::new(None);
     let mut adapter = Adapter {

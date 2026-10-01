@@ -39,6 +39,10 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX jobs_by_queue ON jobs (queue, status, id);
     CREATE INDEX jobs_by_item ON jobs (item_key, kind, status);",
+    "CREATE TABLE meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );",
 ];
 
 pub fn open(path: &Path) -> Result<Connection, String> {

@@ -1,5 +1,5 @@
 use muzik_core::watchlist::{
-    bandcamp_source, reconcile, view, ReconcileOptions, Repository, Watchlist,
+    bandcamp_source, import_cache, reconcile, view, ReconcileOptions, Repository, Watchlist,
 };
 use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
@@ -13,6 +13,18 @@ fn reconciled(
     options: ReconcileOptions<'_>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut document = Watchlist::from_value(document)?;
+    reconcile(&mut document, options)?;
+    Ok(document.to_value())
+}
+
+fn imported(
+    repository: &Repository,
+    document: Value,
+    options: ReconcileOptions<'_>,
+) -> Result<Value, Box<dyn std::error::Error>> {
+    repository.save(&Watchlist::from_value(document)?)?;
+    assert!(import_cache(repository, options)?);
+    let mut document = repository.load()?;
     reconcile(&mut document, options)?;
     Ok(document.to_value())
 }
@@ -54,7 +66,8 @@ fn reconcile_fills_finished_stages_and_keeps_the_waiting_one() -> TestResult {
             "status": "split", "audio_file": output.join("Song.flac"), "split_dir": split
         }}}))?,
     )?;
-    let document = reconciled(document, options(&output, &splits, &cache))?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    let document = imported(&repository, document, options(&output, &splits, &cache))?;
     let stages = &document["playlists"][0]["items"][0]["stages"];
     assert_eq!(stages["download"]["status"], "complete");
     assert_eq!(stages["split"]["status"], "complete");
@@ -225,7 +238,7 @@ fn view_adds_card_actions_and_cached_thumbnail_without_saving() -> TestResult {
 }
 
 #[test]
-fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed() -> TestResult {
+fn the_cache_import_marks_a_remaining_import_failed_once() -> TestResult {
     let directory = tempfile::tempdir()?;
     let cache = directory.path().join("cache");
     let output = directory.path().join("downloads");
@@ -247,7 +260,8 @@ fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed() -> TestRes
             "videos": {"abcdefghijk": {"status": "organized", "audio_file": audio}}
         }))?,
     )?;
-    let document = reconciled(document, options(&output, &splits, &cache))?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    let document = imported(&repository, document, options(&output, &splits, &cache))?;
     let playlist = &document["playlists"][0];
     assert_eq!(playlist["processed_video_ids"], json!([]));
     assert_eq!(
@@ -256,14 +270,57 @@ fn reconcile_reads_playlist_cache_and_marks_remaining_import_failed() -> TestRes
     );
     assert_eq!(playlist["items"][0]["last_action"], "refresh");
     fs::remove_file(audio)?;
-    let document = reconciled(document, options(&output, &splits, &cache))?;
+    assert!(!import_cache(
+        &repository,
+        options(&output, &splits, &cache)
+    )?);
+    let saved = repository.load()?.to_value();
     assert_eq!(
-        document["playlists"][0]["processed_video_ids"],
-        json!(["abcdefghijk"])
+        saved["playlists"][0]["items"][0]["stages"]["organize"]["status"],
+        "failed"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_second_reconcile_changes_no_rows() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let output = directory.path().join("downloads");
+    fs::create_dir(&output)?;
+    fs::write(output.join("Song [bcdefghijkl].flac"), b"audio")?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    repository.save(&Watchlist::from_value(json!({"version": 3, "playlists": [
+        {"playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+         "processed_video_ids": ["abcdefghijk"],
+         "items": [
+            {"position": 1, "title": "Done", "video_id": "abcdefghijk", "video_url": "u",
+             "stages": {"download": {"status": "running"}}},
+            {"position": 2, "title": "Downloaded", "video_id": "bcdefghijkl", "video_url": "u"}
+         ]},
+        {"playlist_id": "spotify:liked", "url": "https://open.spotify.com/collection/tracks",
+         "kind": "spotify", "items": [
+            {"position": 1, "title": "Track", "video_id": "t1", "entry_id": "t1#0", "kind": "spotify"}
+         ]}
+    ]}))?)?;
+    let options = options(&output, directory.path(), directory.path());
+    for _ in 0..2 {
+        let mut document = repository.load()?;
+        reconcile(&mut document, options)?;
+        repository.save(&document)?;
+    }
+    let revision = repository.revision()?;
+    let mut document = repository.load()?;
+    reconcile(&mut document, options)?;
+    repository.save(&document)?;
+    assert_eq!(repository.revision()?, revision);
+    let saved = repository.load()?.to_value();
+    assert_eq!(
+        saved["playlists"][0]["items"][1]["stages"]["download"]["status"],
+        "complete"
     );
     assert_eq!(
-        document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
-        "complete"
+        saved["playlists"][1]["items"][0]["stages"]["quality"]["status"],
+        "skipped"
     );
     Ok(())
 }
@@ -289,7 +346,12 @@ fn retained_source_with_empty_split_dir_keeps_processed_state() -> TestResult {
         "processed_video_ids":["abcdefghijk"],
         "items":[{"position":1,"title":"Song","video_id":"abcdefghijk"}]
     }]});
-    let document = reconciled(document, options(directory.path(), &splits, &cache))?;
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    let document = imported(
+        &repository,
+        document,
+        options(directory.path(), &splits, &cache),
+    )?;
     assert_eq!(
         document["playlists"][0]["processed_video_ids"],
         json!(["abcdefghijk"])
@@ -371,7 +433,9 @@ fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> TestResult {
             {"position": 1, "title": "Track", "video_id": "track-1", "entry_id": "track-1", "kind": "spotify", "video_url": "https://open.spotify.com/track/TEST"}
         ]}
     ]});
-    let document = reconciled(
+    let repository = Repository::new(directory.path().join("muzik.db"));
+    let document = imported(
+        &repository,
         document,
         ReconcileOptions {
             no_organize: true,

@@ -78,10 +78,12 @@
 
 ## Phase 10: Retire the legacy cache reconcile
 
-- [ ] muzik.db migration 3 with `meta`
-- [ ] `watchlist/legacy.rs` one-time import
-- [ ] Slim `reconcile.rs`; update core watchlist tests
-- [ ] Commit: `refactor(watchlist): import the legacy cache once and slim the reconcile`
+- [x] muzik.db migration 3 with `meta`
+- [x] `watchlist/legacy.rs` one-time import (runner sync and GUI check call `import_cache`)
+- [x] Slim `reconcile.rs`; update core watchlist tests
+- [x] A second reconcile changes no rows (test), so a load does not rewrite thousands of rows
+- [x] Same item states as the old reconcile on a copy of the real data
+- [x] Commit: `refactor(watchlist): import the legacy cache once and slim the reconcile`
 
 ## Phase 11: Typed application module behind the GUI
 

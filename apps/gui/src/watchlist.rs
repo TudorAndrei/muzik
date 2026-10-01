@@ -12,6 +12,7 @@ pub fn checked(
     settings: &Settings,
     repository: &watchlist::Repository,
 ) -> Result<Watchlist, String> {
+    watchlist::import_cache(repository, settings.reconcile())?;
     let mut document = repository.load()?;
     watchlist::reconcile(&mut document, settings.reconcile())?;
     Ok(document)
