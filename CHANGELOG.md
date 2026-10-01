@@ -2,6 +2,24 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.9.0 - 2026-10-01
+#### Features
+- (**bandcamp**) read the collection and download purchases in Rust - (a6825e3) - TudorAndrei
+- (**gui**) save the Bandcamp login in Settings - (204b141) - TudorAndrei
+- (**gui**) show a source icon for each watchlist source - (acb2b6e) - TudorAndrei
+- (**gui**) retry all failed watchlist items with one button - (6a75be2) - TudorAndrei
+- (**watchlist**) add the Bandcamp collection source - (bdaf6d1) - TudorAndrei
+#### Bug Fixes
+- (**bandcamp**) accept a bare identity cookie, find the user name, and read UTF-8 file names - (34b1003) - TudorAndrei
+- (**watchlist**) get Spotify item audio only from Soulseek - (7c44f51) - TudorAndrei
+- (**watchlist**) treat private and removed videos as unavailable - (3832ddb) - TudorAndrei
+#### Documentation
+- (**gui**) explain how to copy the Bandcamp identity cookie - (54cca91) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.8.0 - (b2bcfab) - TudorAndrei
+
+- - -
+
 ## v2.8.0 - 2026-09-30
 #### Features
 - (**watchlist**) store the watchlist in muzik.db - (9bc8c00) - TudorAndrei
