@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.11.3 - 2026-10-01
+#### Bug Fixes
+- (**watchlist**) show Bandcamp download progress in megabytes - (8452154) - TudorAndrei
+#### Tests
+- (**gui**) keep bridge messages that arrive before the expected one - (c35e685) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.11.2 - (baa51e1) - github-actions[bot]
+
+- - -
+
 ## v2.11.2 - 2026-10-01
 #### Performance Improvements
 - (**gui**) embed a 64-pixel header logo - (cd1080f) - TudorAndrei
