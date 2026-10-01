@@ -2,6 +2,33 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.12.0 - 2026-10-01
+#### Features
+- (**jobs**) store the job queue in muzik.db with one item identity - (bb50ef4) - TudorAndrei
+#### Bug Fixes
+- (**import**) apply the duplicates setting on every import path - (e157090) - TudorAndrei
+#### Documentation
+- check off the architecture plan - (c5aea2c) - TudorAndrei
+- plan the architecture deepening - (36c1d2b) - TudorAndrei
+#### Tests
+- keep every test inside the repository folder - (badc8c6) - TudorAndrei
+#### Build system
+- share Cargo builds with mr boxington in mise and CI - (4c65c38) - TudorAndrei
+#### Refactoring
+- (**cli**) run the workflow command through the shared runner - (0d7ead1) - TudorAndrei
+- (**gui**) drive the desktop app through a typed application module - (0d1a200) - TudorAndrei
+- (**runner**) return a pause for a choice instead of side channels - (565e667) - TudorAndrei
+- (**runner**) resolve settings and paths once and inject the decision agent - (aab72cc) - TudorAndrei
+- (**soulseek**) search and fetch through one blocking interface - (271fc3b) - TudorAndrei
+- (**watchlist**) import the legacy cache once and slim the reconcile - (e37f8a7) - TudorAndrei
+- (**watchlist**) give each source kind one module behind a Source seam - (74855ab) - TudorAndrei
+- (**watchlist**) type the watchlist item and own its stage transitions - (f1cbec8) - TudorAndrei
+- (**workflow**) run yt-dlp through one cancellable module - (8b31ad4) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.11.4 - (9f1812b) - github-actions[bot]
+
+- - -
+
 ## v2.11.4 - 2026-10-01
 #### Bug Fixes
 - (**bandcamp**) resume and retry interrupted purchase downloads - (90e1a85) - TudorAndrei

@@ -1,6 +1,6 @@
 [package]
 name = "muzik-gpui"
-version = "2.11.4"
+version = "2.12.0"
 edition = "2021"
 publish = false
 license = "GPL-3.0-only"
