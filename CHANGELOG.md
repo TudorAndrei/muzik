@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.11.1 - 2026-10-01
+#### Bug Fixes
+- (**gui**) show unavailable items only in the Unavailable tab - (fe1868c) - TudorAndrei
+#### Continuous Integration
+- (**release**) update the Homebrew cask and tap after each release - (58b6036) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.11.0 - (5e5adfe) - TudorAndrei
+
+- - -
+
 ## v2.11.0 - 2026-10-01
 #### Features
 - (**gui**) show each watchlist source as a table - (26fda9d) - TudorAndrei
