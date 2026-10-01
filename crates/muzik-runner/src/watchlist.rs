@@ -459,26 +459,14 @@ impl Adapter<'_, '_> {
             .output
             .join("spotify-watchlist")
             .join(safe_id);
-        let options = &self.prepared.local.options;
-        let (files, _) = remote_workflow::acquire_spotify_audio(
-            options.audio_source,
-            options.fallback,
-            remote_workflow::soulseek_ready(),
-            || {
-                remote_workflow::soulseek_download(
-                    &query,
-                    preference,
-                    false,
-                    cancelled,
-                    self.decide,
-                    true,
-                    Some(&root),
-                )
-            },
-            || {
-                remote_workflow::download(&query, &root, fresh, cancelled)
-                    .map_err(|error| error.to_string())
-            },
+        let files = remote_workflow::soulseek_download(
+            &query,
+            preference,
+            false,
+            cancelled,
+            self.decide,
+            true,
+            Some(&root),
         )
         .map_err(|error| {
             if cancelled.load(Ordering::SeqCst) {
