@@ -1,6 +1,6 @@
 [package]
 name = "muzik-tags"
-version = "2.11.3"
+version = "2.11.4"
 edition = "2021"
 license = "Apache-2.0"
 publish = false

@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.11.4 - 2026-10-01
+#### Bug Fixes
+- (**bandcamp**) resume and retry interrupted purchase downloads - (90e1a85) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.11.3 - (5784e45) - github-actions[bot]
+
+- - -
+
 ## v2.11.3 - 2026-10-01
 #### Bug Fixes
 - (**watchlist**) show Bandcamp download progress in megabytes - (8452154) - TudorAndrei
