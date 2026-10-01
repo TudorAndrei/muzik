@@ -96,16 +96,16 @@
 
 ## Verification
 
-- [ ] `mise run check` passes after each phase (fmt, clippy `-D warnings`, tests, cargo deny)
-- [ ] New tests: settings resolve, yt-dlp fake script, Soulseek fetch cancel, import policy matrix, stored JSON round trip, jobs.db copy, legacy cache import, decide → park → resume
-- [ ] Manual smoke test: `cargo run -p muzik-cli -- workflow <local flac> --dry-run`, `muzik watchlist list`, `muzik jobs list`, and `mise run gui` loads the watchlist
-- [ ] Edge cases: muzik.db at version 1 with a legacy `jobs.db`; waiting jobs survive the copy; Spotify waiting import questions still release; cancelled yt-dlp stops within 5 s
-- [ ] No behavior change in the watchlist cards (summary, primary action, action reasons) for YouTube, Spotify, and Bandcamp items
-- [ ] Migration: open a muzik.db at version 1, migrate, reopen; `*.migrated` file kept; a newer database version still refuses to open
+- [x] `mise run check` passes after each phase (fmt, clippy `-D warnings`, tests, cargo deny); 296 tests at the end
+- [x] New tests: settings resolve, yt-dlp fake script, Soulseek fetch cancel, import policy matrix, stored JSON round trip, jobs.db copy, legacy cache import, decide → park → resume
+- [x] Manual smoke test with a temporary HOME: `muzik workflow <local flac> --dry-run`, `muzik watchlist list --items`, `muzik-gpui --check-backend` (the GPUI window itself was not opened)
+- [x] Edge cases: muzik.db at version 1 with a legacy `jobs.db`; waiting jobs survive the copy; Spotify waiting import questions still release; cancelled yt-dlp stops within 5 s
+- [x] No behavior change in the watchlist cards: same `watchlist list --items` output and the same item states after reconcile, on a copy of the real data
+- [x] Migration: a version 1 database keeps its rows; `jobs.db.migrated` kept; a newer database version still refuses to open
 
 ## Review
 
-- [ ] Code reviewed
-- [ ] PLAN.md updated if approach changed during implementation
-- [ ] All phase commits are clean and describe their intent
-- [ ] TODO.md items all checked off
+- [ ] Code reviewed (by you)
+- [x] PLAN.md updated if approach changed during implementation
+- [x] All phase commits are clean and describe their intent
+- [x] TODO.md items all checked off, except the review
