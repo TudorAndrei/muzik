@@ -1,4 +1,6 @@
+use muzik_core::paths::Paths;
 use muzik_jobs::CancelRequest;
+use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
 use muzik_runner::{Jobs, Options, Prompt, Runner, job_id, parse_job_id};
 use serde_json::Value;
@@ -21,7 +23,7 @@ fn entries(value: &Value, key: &str) -> Vec<Value> {
 }
 
 pub fn open() -> Result<Arc<Jobs>, String> {
-    Jobs::open().map(Arc::new)
+    Jobs::open(&Paths::user()).map(Arc::new)
 }
 
 pub fn list() -> Result<(), String> {
@@ -122,6 +124,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
             workers: WORKERS,
             sink: Arc::new(move |message| report(&titles, &message)),
             ask: Arc::new(ask),
+            chooser: Some(Arc::new(Codex)),
             generation: Arc::new(AtomicU64::new(0)),
         },
     )?

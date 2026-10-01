@@ -4,19 +4,19 @@ use crate::config_choices::{
     choices_for_field, AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy,
     DEFAULT_AUDIO_PREFERENCE,
 };
-use crate::paths;
+use crate::paths::{self, Paths};
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub fn path() -> PathBuf {
-    paths::config_dir().join("config.yaml")
+    Paths::user().config_file()
 }
 
-pub fn gui_defaults() -> Value {
+pub fn gui_defaults(paths: &Paths) -> Value {
     json!({
-        "output": paths::download_dir(),
-        "splits": paths::data_dir().join("splits"),
+        "output": paths.downloads(),
+        "splits": paths.splits(),
         "review": false,
         "no_split": false,
         "no_organize": false,
@@ -56,24 +56,26 @@ pub fn load(path: &Path) -> Result<Value, String> {
     Ok(value)
 }
 
-pub fn load_gui_defaults(path: &Path) -> Result<Value, String> {
-    let saved = load(path).unwrap_or_else(|_| json!({}));
+pub fn load_gui_defaults(paths: &Paths) -> Result<Value, String> {
+    let standard = gui_defaults(paths);
+    let saved = load(&paths.config_file()).unwrap_or_else(|_| json!({}));
     let Some(section) = saved.get("native_gui").and_then(Value::as_object) else {
-        return Ok(gui_defaults());
+        return Ok(standard);
     };
-    let mut defaults = gui_defaults();
+    let mut defaults = standard.clone();
     let Some(values) = defaults.as_object_mut() else {
         return Err("GUI defaults are not a mapping".into());
     };
     values.extend(section.clone());
-    validate(defaults).or_else(|_| Ok(gui_defaults()))
+    validate(defaults, &standard).or(Ok(standard))
 }
 
-pub fn save_gui_defaults(path: &Path, params: &Value) -> Result<Value, String> {
+pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<Value, String> {
+    let path = &paths.config_file();
     let changes = params
         .as_object()
         .ok_or("config params must be an object")?;
-    let mut defaults = load_gui_defaults(path)?;
+    let mut defaults = load_gui_defaults(paths)?;
     let values = defaults
         .as_object_mut()
         .ok_or("GUI defaults are not a mapping")?;
@@ -83,7 +85,7 @@ pub fn save_gui_defaults(path: &Path, params: &Value) -> Result<Value, String> {
         }
         values.insert(key.clone(), value.clone());
     }
-    let defaults = validate(defaults)?;
+    let defaults = validate(defaults, &gui_defaults(paths))?;
     let mut config = load(path)?;
     let sections = config
         .as_object_mut()
@@ -139,8 +141,7 @@ pub fn save_section_string(
     Ok(())
 }
 
-fn validate(value: Value) -> Result<Value, String> {
-    let standard = gui_defaults();
+fn validate(value: Value, standard: &Value) -> Result<Value, String> {
     let expected = standard
         .as_object()
         .ok_or("GUI defaults are not a mapping")?;
@@ -175,7 +176,11 @@ fn validate(value: Value) -> Result<Value, String> {
         }
         let item = if matches!(key.as_str(), "output" | "splits" | "config") {
             item.as_str()
-                .map(expand_home)
+                .map(|text| {
+                    paths::expand_home(Path::new(text))
+                        .to_string_lossy()
+                        .into_owned()
+                })
                 .map_or_else(|| item.clone(), Value::String)
         } else {
             item.clone()
@@ -185,23 +190,10 @@ fn validate(value: Value) -> Result<Value, String> {
     Ok(Value::Object(valid))
 }
 
-fn expand_home(text: &str) -> String {
-    if text == "~" || text.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        home.join(text.trim_start_matches('~').trim_start_matches('/'))
-            .to_string_lossy()
-            .into_owned()
-    } else {
-        text.to_owned()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{load, load_gui_defaults, save_gui_defaults, save_section_string};
+    use crate::paths::Paths;
     use serde_json::json;
     use std::fs;
 
@@ -209,14 +201,17 @@ mod tests {
     fn saves_gui_settings_without_changing_spotify_settings(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.yaml");
+        let paths = Paths::under(dir.path());
+        let path = paths.config_file();
+        fs::create_dir_all(&paths.config)?;
         fs::write(&path, "spotify:\n  client_id: saved\n")?;
-        let saved = save_gui_defaults(&path, &json!({"jobs": 3, "audio_source": "soulseek"}))
+        let saved = save_gui_defaults(&paths, &json!({"jobs": 3, "audio_source": "soulseek"}))
             .map_err(std::io::Error::other)?;
         assert_eq!(saved["jobs"], 3);
         assert_eq!(saved["audio_source"], "soulseek");
+        assert_eq!(saved["output"], json!(paths.downloads()));
         assert_eq!(
-            load_gui_defaults(&path).map_err(std::io::Error::other)?,
+            load_gui_defaults(&paths).map_err(std::io::Error::other)?,
             saved
         );
         let text = fs::read_to_string(&path)?;
@@ -227,14 +222,14 @@ mod tests {
     #[test]
     fn rejects_invalid_gui_settings_without_writing() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.yaml");
+        let paths = Paths::under(dir.path());
         for value in [
             json!({"raw": "song.flac"}),
             json!({"jobs": -1}),
             json!({"audio_source": "invalid"}),
         ] {
-            assert!(save_gui_defaults(&path, &value).is_err());
-            assert!(!path.exists());
+            assert!(save_gui_defaults(&paths, &value).is_err());
+            assert!(!paths.config_file().exists());
         }
         Ok(())
     }
@@ -242,9 +237,11 @@ mod tests {
     #[test]
     fn save_keeps_an_unreadable_config_file() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.yaml");
+        let paths = Paths::under(dir.path());
+        let path = paths.config_file();
+        fs::create_dir_all(&paths.config)?;
         fs::write(&path, "spotify: [unfinished")?;
-        assert!(save_gui_defaults(&path, &json!({"jobs": 2})).is_err());
+        assert!(save_gui_defaults(&paths, &json!({"jobs": 2})).is_err());
         assert_eq!(fs::read_to_string(path)?, "spotify: [unfinished");
         Ok(())
     }

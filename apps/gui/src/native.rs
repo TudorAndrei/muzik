@@ -3,7 +3,7 @@ use chrono::{DateTime, Local};
 use muzik_core::app_config;
 use muzik_core::bandcamp;
 use muzik_core::downloads::{human_size, scan};
-use muzik_core::paths;
+use muzik_core::paths::Paths;
 use muzik_core::spotify;
 use muzik_core::watchlist::{self, Repository};
 use serde_json::{json, Value};
@@ -32,12 +32,12 @@ pub fn handles(command: &str) -> bool {
     )
 }
 
-pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
-    let path = app_config::path();
+pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, String> {
+    let path = paths.config_file();
     match command {
         "hello" => Ok(json!({
             "protocol_version": 1,
-            "defaults": app_config::load_gui_defaults(&path)?,
+            "defaults": app_config::load_gui_defaults(paths)?,
             "item_actions": [
                 "run", "retry", "download_again", "check_quality_again",
                 "parse_again", "split_again", "organize_again", "run_all_again"
@@ -49,16 +49,16 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
                 params["user"].as_str().unwrap_or(""),
                 params["cookies"].as_str().unwrap_or(""),
             )?;
-            Repository::default().ensure(&watchlist::bandcamp_source(&login.user))?;
+            Repository::open(paths).ensure(&watchlist::bandcamp_source(&login.user))?;
             Ok(bandcamp::status())
         }
         "bandcamp.logout" => {
             bandcamp::Login::clear()?;
             Ok(bandcamp::status())
         }
-        "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(&path)?})),
-        "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(&path, params)?})),
-        "library.scan" => library_scan(params),
+        "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(paths)?})),
+        "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(paths, params)?})),
+        "library.scan" => library_scan(paths, params),
         "services.check" => Ok(json!({"services": services::check()})),
         "soulseek.get" => soulseek_settings(&path),
         "soulseek.save" => {
@@ -78,7 +78,7 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
         "spotify.playlists" => spotify::list_playlists(&path, &spotify::token_path())
             .map(|playlists| json!({"playlists": playlists})),
         "watchlist.add" | "watchlist.rename" | "watchlist.remove" => {
-            watchlist_edit(&Repository::default(), command, params)
+            watchlist_edit(&Repository::open(paths), command, params)
         }
         _ => Err(format!("unknown command: {command}")),
     }
@@ -158,12 +158,12 @@ fn watchlist_edit(repository: &Repository, command: &str, params: &Value) -> Res
     Ok(result)
 }
 
-pub fn library_scan(params: &Value) -> Result<Value, String> {
+pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
     let output = params
         .get("output")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .map_or_else(paths::download_dir, |value| Path::new(value).to_path_buf());
+        .map_or_else(|| paths.downloads(), |value| Path::new(value).to_path_buf());
     let path = output.as_path();
     let items = scan(path).map_err(|error| error.to_string())?;
     let total = items
@@ -200,7 +200,11 @@ mod tests {
     fn library_scan_reports_existing_audio() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
-        let result = library_scan(&json!({"output": dir.path()})).map_err(std::io::Error::other)?;
+        let result = library_scan(
+            &muzik_core::paths::Paths::under(dir.path()),
+            &json!({"output": dir.path()}),
+        )
+        .map_err(std::io::Error::other)?;
         assert_eq!(result["total_size"], "5.0 B");
         assert_eq!(result["items"][0]["title"], "Track");
         assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");

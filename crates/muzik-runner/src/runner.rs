@@ -1,9 +1,12 @@
+use crate::agent::Chooser;
 use crate::queue::{item_key, job_id, Jobs};
+use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::watchlist::jobs::JobError;
 use muzik_core::watchlist::{ItemAction, Stage};
-use muzik_core::{app_config, DecisionKind};
+use muzik_core::DecisionKind;
 use muzik_jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
+use muzik_workflow::{classify_input, WorkflowInput};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -31,6 +34,7 @@ pub struct Options {
     pub workers: usize,
     pub sink: Sink,
     pub ask: Ask,
+    pub chooser: Option<Arc<dyn Chooser>>,
     pub generation: Arc<AtomicU64>,
 }
 
@@ -52,6 +56,7 @@ struct Shared {
     stop: AtomicBool,
     sink: Sink,
     ask: Ask,
+    chooser: Option<Arc<dyn Chooser>>,
     generation: Arc<AtomicU64>,
 }
 
@@ -103,6 +108,7 @@ impl Runner {
             stop: AtomicBool::new(false),
             sink: options.sink,
             ask: options.ask,
+            chooser: options.chooser,
             generation: options.generation,
         });
         let sink = Arc::clone(&shared.sink);
@@ -241,10 +247,20 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
     shared.publish();
 }
 
+fn settings(shared: &Shared, job: &Job) -> Result<Settings, (bool, String)> {
+    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|message| (false, message))
+}
+
 fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let pending = watchlist::sync(&job.params, cancel, &mut |event| {
-        shared.event(job_id, Source::Workflow, &event);
-    })
+    let settings = settings(shared, job)?;
+    let pending = watchlist::sync(
+        &settings,
+        job.params["playlist_id"].as_str(),
+        cancel,
+        &mut |event| {
+            shared.event(job_id, Source::Workflow, &event);
+        },
+    )
     .map_err(job_error)?;
     let mut queued = 0;
     {
@@ -284,6 +300,8 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
 }
 
 fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+    let settings = settings(shared, job)?;
+    let model = settings.agent_model.as_deref();
     let parked = RefCell::new(None);
     let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
         let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
@@ -308,13 +326,14 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
         if let Some((_, value)) = answered {
             return Ok(value);
         }
-        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
+        if let Some(value) = ask_agent(shared, job_id, model, kind, &mut payload) {
             return Ok(value);
         }
         parked.replace(Some(watchlist::Parked { kind, payload }));
         Err("waiting for a choice".to_owned())
     };
     watchlist::action(
+        &settings,
         &job.params,
         cancel,
         &mut workflow_event,
@@ -326,10 +345,12 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
 }
 
 fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+    let settings = settings(shared, job)?;
+    let model = settings.agent_model.as_deref();
     let mut workflow_event = |event: Value| shared.event(job_id, Source::Workflow, &event);
     let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
     let mut decide = |kind: DecisionKind, mut payload: Value| {
-        if let Some(value) = ask_agent(shared, job_id, kind, &mut payload) {
+        if let Some(value) = ask_agent(shared, job_id, model, kind, &mut payload) {
             return Ok(value);
         }
         gates::suspended(|| {
@@ -348,10 +369,13 @@ fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -
             error.to_string(),
         )
     };
-    if let Some(local) = local_workflow::supported(&job.params) {
-        let local = local.map_err(|message| (false, message))?;
+    if settings.request.raw.is_empty() {
+        return Err((false, "Enter a URL or path.".to_owned()));
+    }
+    let input = classify_input(&settings.request.raw);
+    if matches!(input, WorkflowInput::Local(_)) {
         return local_workflow::run(
-            local,
+            &settings,
             cancel,
             &mut workflow_event,
             &mut import_event,
@@ -359,11 +383,9 @@ fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -
         )
         .map_err(workflow_failure);
     }
-    let remote = remote_workflow::supported(&job.params)
-        .ok_or((false, "Enter a URL or path.".to_owned()))?
-        .map_err(|message| (false, message))?;
     remote_workflow::run(
-        remote,
+        input,
+        &settings,
         cancel,
         &mut workflow_event,
         &mut import_event,
@@ -375,10 +397,15 @@ fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -
 fn ask_agent(
     shared: &Shared,
     job_id: &str,
+    model: Option<&str>,
     kind: DecisionKind,
     payload: &mut Value,
 ) -> Option<Value> {
-    let model = agent_model(kind, payload)?;
+    if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
+        return None;
+    }
+    let model = model?;
+    let chooser = shared.chooser.as_ref()?;
     let message = |event: &str, data: Value| {
         shared.event(job_id, Source::Agent, &json!({"event":event,"data":data}));
     };
@@ -388,7 +415,7 @@ fn ask_agent(
             json!({"message":format!("Asking {model} to choose.")}),
         );
     }
-    match muzik_agent::decide(kind, payload, &model) {
+    match chooser.choose(kind, payload, model) {
         Ok(muzik_agent::Outcome::Decided(choice)) => {
             message(
                 "agent_decided",
@@ -409,22 +436,6 @@ fn ask_agent(
             None
         }
     }
-}
-
-fn agent_model(kind: DecisionKind, payload: &Value) -> Option<String> {
-    if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
-        return None;
-    }
-    let settings = app_config::load_gui_defaults(&app_config::path()).ok()?;
-    if settings["auto_decide"] != true {
-        return None;
-    }
-    let model = settings["agent_model"]
-        .as_str()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .unwrap_or(muzik_agent::DEFAULT_MODEL);
-    Some(model.to_owned())
 }
 
 fn job_error(error: JobError) -> (bool, String) {
@@ -462,8 +473,10 @@ pub(crate) fn park_item(store: &Store, params: &Value, data: &Value) -> Result<i
 mod tests {
     use super::{park_item, Options, Runner};
     use crate::queue::Jobs;
+    use muzik_core::paths::Paths;
     use muzik_jobs::Queue;
     use serde_json::{json, Value};
+    use std::path::Path;
     use std::sync::atomic::AtomicU64;
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
@@ -482,6 +495,7 @@ mod tests {
                     }
                 }),
                 ask: Arc::new(|_| Err("no answer in tests".into())),
+                chooser: None,
                 generation: Arc::new(AtomicU64::new(0)),
             },
         )?
@@ -491,7 +505,7 @@ mod tests {
 
     #[test]
     fn a_parked_choice_waits_for_an_answer_and_then_queues() -> Result<(), String> {
-        let jobs = Arc::new(Jobs::in_memory()?);
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(Path::new("unused")))?);
         let (runner, _) = runner(&jobs)?;
         runner.stop_workers();
         std::thread::sleep(Duration::from_millis(1200));
@@ -526,7 +540,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let audio = dir.path().join("track.flac");
         std::fs::write(&audio, b"audio")?;
-        let jobs = Arc::new(Jobs::in_memory()?);
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path()))?);
         let (runner, receiver) = runner(&jobs)?;
         let id =
             jobs.workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))?;

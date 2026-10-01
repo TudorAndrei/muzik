@@ -1,126 +1,26 @@
 //! Local audio workflow adapter with native split and Beets import.
 
 use crate::gates::{self, Gate};
+use crate::settings::Settings;
 use muzik_core::watchlist::Stage;
 use muzik_core::{
-    chapters::Chapter, paths, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer,
-    DuplicatePolicy, KEEP_CURRENT_TAGS,
+    chapters::Chapter, splitter, ChapterAnswer, DecisionKind, DuplicateAnswer, DuplicatePolicy,
+    KEEP_CURRENT_TAGS,
 };
 use muzik_import::apply::{AlbumDecision, DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
 use muzik_import::plan::{AlbumPlan, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_workflow::{
-    classify_input, run_workflow_with_events, ChapterReview, SplitProgress, SplitTask,
-    WorkflowEvent, WorkflowInput, WorkflowOperations, WorkflowOptions, WorkflowRequest,
+    run_workflow_with_events, ChapterReview, SplitProgress, SplitTask, WorkflowEvent,
+    WorkflowOperations, WorkflowOptions,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
-pub struct LocalRequest {
-    pub(crate) request: WorkflowRequest,
-    pub(crate) options: WorkflowOptions,
-}
-
-/// Return `None` when this request needs the remote workflow handler.
-pub fn supported(params: &Value) -> Option<Result<LocalRequest, String>> {
-    let raw = params.get("raw")?.as_str()?.trim();
-    if !matches!(classify_input(raw), WorkflowInput::Local(_)) {
-        return None;
-    }
-    Some(parse(raw, params))
-}
-
-pub(crate) fn parse(raw: &str, params: &Value) -> Result<LocalRequest, String> {
-    let mut options = WorkflowOptions::default();
-    for (key, target) in [
-        ("review", &mut options.review),
-        ("no_organize", &mut options.no_organize),
-        ("tag_only", &mut options.tag_only),
-        ("no_split", &mut options.no_split),
-        ("dry_run", &mut options.dry_run),
-        ("keep_source", &mut options.keep_source),
-        ("force", &mut options.force),
-    ] {
-        if let Some(value) = params.get(key) {
-            *target = value
-                .as_bool()
-                .ok_or_else(|| format!("{key} must be a boolean"))?;
-        }
-    }
-    if let Some(value) = params.get("jobs") {
-        options.jobs = value
-            .as_u64()
-            .and_then(|number| usize::try_from(number).ok())
-            .ok_or("jobs must be a non-negative integer")?;
-    }
-    options.config = path(params, "config")?;
-    if let Some(value) = params.get("interactive") {
-        options.interactive = value.as_bool().ok_or("interactive must be a boolean")?;
-    }
-    if let Some(value) = params.get("min_bitrate") {
-        options.min_bitrate = value
-            .as_u64()
-            .and_then(|number| u32::try_from(number).ok())
-            .ok_or("min_bitrate must be a non-negative integer")?;
-    }
-    if let Some(value) = params.get("audio_source") {
-        options.audio_source = choice(value, "audio_source")?;
-    }
-    if let Some(value) = params.get("fallback") {
-        options.fallback = choice(value, "fallback")?;
-    }
-    if let Some(value) = params.get("metadata_source") {
-        options.metadata_source = choice(value, "metadata_source")?;
-    }
-    if let Some(value) = params.get("quality_policy") {
-        options.quality_policy = choice(value, "quality_policy")?;
-    }
-    if let Some(value) = params.get("duplicates") {
-        options.duplicates = choice(value, "duplicates")?;
-    }
-    if let Some(value) = params.get("prefer") {
-        options.prefer = value.as_str().ok_or("prefer must be a string")?.to_owned();
-    }
-    let request = WorkflowRequest {
-        raw: raw.to_owned(),
-        output: path(params, "output")?.unwrap_or_else(paths::download_dir),
-        splits: path(params, "splits")?.unwrap_or_else(|| paths::data_dir().join("splits")),
-    };
-    Ok(LocalRequest { request, options })
-}
-
-fn choice<T: std::str::FromStr<Err = muzik_core::ChoiceError>>(
-    value: &Value,
-    name: &str,
-) -> Result<T, String> {
-    value
-        .as_str()
-        .ok_or_else(|| format!("{name} must be a string"))?
-        .parse()
-        .map_err(|error: muzik_core::ChoiceError| error.to_string())
-}
-
-fn path(params: &Value, key: &str) -> Result<Option<PathBuf>, String> {
-    let Some(value) = params.get(key) else {
-        return Ok(None);
-    };
-    let value = value
-        .as_str()
-        .ok_or_else(|| format!("{key} must be a string"))?;
-    if value.trim().is_empty() {
-        return Ok(None);
-    }
-    if let Some(rest) = value.strip_prefix("~/") {
-        let home = std::env::var_os("HOME").ok_or("HOME is not set")?;
-        return Ok(Some(PathBuf::from(home).join(rest)));
-    }
-    Ok(Some(PathBuf::from(value)))
-}
-
 pub fn run(
-    local: LocalRequest,
+    settings: &Settings,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
@@ -132,8 +32,8 @@ pub fn run(
         cancelled,
     };
     let result = run_workflow_with_events(
-        &local.request,
-        &local.options,
+        &settings.request,
+        &settings.options,
         &mut operations,
         cancelled,
         &mut |event| on_event(event_record(event)),
@@ -469,32 +369,16 @@ pub(crate) fn event_record(event: WorkflowEvent) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, run, supported};
+    use super::run;
+    use crate::settings::Settings;
+    use muzik_core::paths::Paths;
     use muzik_core::{ChapterAnswer, DecisionKind, DuplicatePolicy};
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::fs;
     use std::sync::atomic::AtomicBool;
 
-    #[test]
-    fn parses_shared_source_and_quality_settings() -> Result<(), String> {
-        let request = parse(
-            "track.flac",
-            &json!({
-                "audio_source":"soulseek",
-                "fallback":"none",
-                "metadata_source":"musicbrainz",
-                "quality_policy":"ask",
-                "min_bitrate":192,
-                "prefer":"flac"
-            }),
-        )?;
-        assert_eq!(request.options.audio_source.as_str(), "soulseek");
-        assert_eq!(request.options.fallback.as_str(), "none");
-        assert_eq!(request.options.metadata_source.as_str(), "musicbrainz");
-        assert_eq!(request.options.quality_policy.as_str(), "ask");
-        assert_eq!(request.options.min_bitrate, 192);
-        assert_eq!(request.options.prefer, "flac");
-        Ok(())
+    fn settings(root: &std::path::Path, params: &Value) -> Result<Settings, String> {
+        Settings::parse(&Paths::under(root), params)
     }
 
     #[test]
@@ -519,12 +403,13 @@ mod tests {
             let audio = dir.path().join(format!("round-{round}")).join("track.flac");
             fs::create_dir_all(audio.parent().ok_or("no parent")?)?;
             fs::copy(&fixture, &audio)?;
-            let request =
-                supported(&json!({"raw":audio,"config":config,"no_split":true,"interactive":true}))
-                    .ok_or("local request was not selected")??;
+            let request = settings(
+                dir.path(),
+                &json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
+            )?;
             assert_eq!(request.options.duplicates, DuplicatePolicy::Skip);
             run(
-                request,
+                &request,
                 &AtomicBool::new(false),
                 &mut |_| {},
                 &mut |_| {},
@@ -544,14 +429,6 @@ mod tests {
                 .len(),
             1
         );
-        let probe = dir.path().join("probe.flac");
-        fs::write(&probe, b"audio")?;
-        let request = supported(&json!({"raw":probe,"duplicates":"ask"}))
-            .ok_or("local request was not selected")??;
-        assert_eq!(request.options.duplicates, DuplicatePolicy::Ask);
-        assert!(supported(&json!({"raw":probe,"duplicates":"merge"}))
-            .ok_or("local request was not selected")?
-            .is_err());
         Ok(())
     }
 
@@ -563,12 +440,13 @@ mod tests {
         fs::write(&audio, b"audio")?;
         fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
         let splits = dir.path().join("splits");
-        let request =
-            supported(&json!({"raw":audio,"splits":splits,"no_organize":true,"dry_run":true}))
-                .ok_or("local request was not selected")??;
+        let request = settings(
+            dir.path(),
+            &json!({"raw":audio,"splits":splits,"no_organize":true,"dry_run":true}),
+        )?;
         let mut events = Vec::new();
         let result = run(
-            request,
+            &request,
             &AtomicBool::new(false),
             &mut |event| events.push(event),
             &mut |_| {},
@@ -587,12 +465,13 @@ mod tests {
         let audio = dir.path().join("album.flac");
         fs::write(&audio, b"audio")?;
         fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
-        let request =
-            supported(&json!({"raw":audio,"no_organize":true,"review":true,"dry_run":true}))
-                .ok_or("local request was not selected")??;
+        let request = settings(
+            dir.path(),
+            &json!({"raw":audio,"no_organize":true,"review":true,"dry_run":true}),
+        )?;
         let mut decisions = Vec::new();
         let result = run(
-            request,
+            &request,
             &AtomicBool::new(false),
             &mut |_| {},
             &mut |_| {},

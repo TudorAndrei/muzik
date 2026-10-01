@@ -2,14 +2,14 @@
 
 ## Phase 1: Settings, paths, and the decision agent as values
 
-- [ ] `Paths` and `expand_home` in `muzik-core/src/paths.rs`
-- [ ] `Repository` and `db` take `&Paths`
-- [ ] `muzik-runner/src/settings.rs` with `Settings::resolve`
-- [ ] Local, remote, watchlist, GUI, and CLI callers use `Settings`
-- [ ] `Chooser` seam with `CodexChooser` and `NoChooser` in `runner::Options`
-- [ ] Delete the four extra `~` expanders
-- [ ] Tests use `Paths::under(temp)`
-- [ ] Commit: `refactor(runner): resolve settings and paths once and inject the decision agent`
+- [x] `Paths` and `expand_home` in `muzik-core/src/paths.rs`
+- [x] `Repository` and `db` take `&Paths`
+- [x] `muzik-runner/src/settings.rs` with `Settings::resolve`
+- [x] Local, remote, watchlist, GUI, and CLI callers use `Settings`
+- [x] `Chooser` seam (`Codex` adapter; `None` in tests) in `runner::Options`
+- [x] Delete the four extra `~` expanders
+- [x] Tests use `Paths::under(temp)`
+- [x] Commit: `refactor(runner): resolve settings and paths once and inject the decision agent`
 
 ## Phase 2: One yt-dlp module
 

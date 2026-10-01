@@ -1,21 +1,16 @@
 use crate::jobs::{self, field, text};
+use muzik_core::paths::Paths;
 use muzik_core::watchlist::{self, ItemAction, Repository, Summary};
-use muzik_core::{app_config, paths};
-use muzik_runner::job_id;
+use muzik_runner::{Settings, job_id};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 
 fn repository() -> Repository {
-    Repository::default()
+    Repository::open(&Paths::user())
 }
 
-fn output() -> PathBuf {
-    app_config::load_gui_defaults(&app_config::path())
-        .ok()
-        .and_then(|defaults| field(&defaults, "output").as_str().map(PathBuf::from))
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(paths::download_dir)
+fn settings() -> Result<Settings, String> {
+    Settings::resolve(&Paths::user(), &json!({}))
 }
 
 fn list_of(value: &Value, key: &str) -> Vec<Value> {
@@ -24,7 +19,8 @@ fn list_of(value: &Value, key: &str) -> Vec<Value> {
 
 pub fn list(items: bool) -> Result<(), String> {
     let document = repository().load()?;
-    let visible = watchlist::view(document, &output(), &paths::cache_dir())?;
+    let settings = settings()?;
+    let visible = watchlist::view(document, &settings.request.output, &settings.paths.cache)?;
     let playlists = list_of(&visible, "playlists");
     if playlists.is_empty() {
         println!("The watchlist is empty. Add a playlist with `muzik watchlist add <url>`.");

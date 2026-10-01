@@ -1,12 +1,13 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use serde_json::{Value, json};
 
 use crate::{SetSoulseek, paths};
+use muzik_core::paths::expand_home;
 
 pub fn show(path: Option<&Path>) -> io::Result<()> {
     let library_path = path
@@ -188,18 +189,6 @@ fn value_text(value: &Value) -> String {
         .as_str()
         .map(str::to_owned)
         .unwrap_or_else(|| value.to_string())
-}
-
-fn expand_home(path: &Path) -> PathBuf {
-    if let Ok(rest) = path.strip_prefix("~") {
-        let home = env::var_os("HOME")
-            .or_else(|| env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        home.join(rest)
-    } else {
-        path.to_path_buf()
-    }
 }
 
 #[cfg(test)]

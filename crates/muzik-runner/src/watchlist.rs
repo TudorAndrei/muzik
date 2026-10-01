@@ -1,6 +1,7 @@
 //! Rust source and audio operations for saved watchlist jobs.
 
 use crate::gates::{self, Gate};
+use crate::settings::Settings;
 use crate::{local_workflow, remote_workflow};
 use muzik_core::process::background_command;
 use muzik_core::watchlist::jobs::{
@@ -10,12 +11,14 @@ use muzik_core::watchlist::{
     set_stage_status, stage_status, ItemAction, SourceKind, Stage, StageStatus,
 };
 use muzik_core::{
-    app_config, bandcamp, chapters, paths, spotify, watchlist, AudioSource, ChapterAnswer,
-    DecisionKind, QualityPolicy,
+    bandcamp, chapters, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind, QualityPolicy,
 };
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
-use muzik_workflow::{process_audio_plan_with_events, WorkflowOperations, WorkflowOptions};
+use muzik_workflow::{
+    classify_input, process_audio_plan_with_events, WorkflowInput, WorkflowOperations,
+    WorkflowOptions,
+};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -26,11 +29,12 @@ use std::time::Duration;
 use yt_dlp::executor::Executor;
 
 pub fn sync(
-    params: &Value,
+    settings: &Settings,
+    playlist_id: Option<&str>,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
 ) -> Result<Vec<PendingItem>, JobError> {
-    let prepared = Prepared::new(params)?;
+    let prepared = Prepared::new(settings);
     let events = RefCell::new(on_event);
     let parked = RefCell::new(None);
     let mut adapter = Adapter {
@@ -42,7 +46,7 @@ pub fn sync(
         cancelled,
     };
     let mut options = prepared.job_options();
-    options.playlist_id = params["playlist_id"].as_str().filter(|id| !id.is_empty());
+    options.playlist_id = playlist_id.filter(|id| !id.is_empty());
     let synced = jobs::sync(
         &prepared.repository,
         options,
@@ -59,6 +63,7 @@ pub fn sync(
 }
 
 pub fn action(
+    settings: &Settings,
     params: &Value,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
@@ -66,7 +71,7 @@ pub fn action(
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
-    let prepared = Prepared::new(params)?;
+    let prepared = Prepared::new(settings);
     let playlist_id = required(params, "playlist_id")?;
     let position = params["position"]
         .as_u64()
@@ -107,11 +112,8 @@ fn required<'a>(params: &'a Value, key: &str) -> Result<&'a str, JobError> {
         .ok_or_else(|| JobError::Operation(format!("{key} must be a non-empty string")))
 }
 
-struct Prepared {
-    params: Value,
-    local: local_workflow::LocalRequest,
-    cache: PathBuf,
-    quality_policy: QualityPolicy,
+struct Prepared<'a> {
+    settings: &'a Settings,
     repository: watchlist::Repository,
 }
 
@@ -126,53 +128,27 @@ impl Parked {
     }
 }
 
-impl Prepared {
-    fn new(params: &Value) -> Result<Self, JobError> {
-        let mut merged = app_config::load_gui_defaults(&app_config::path())?;
-        let saved = merged
-            .as_object_mut()
-            .ok_or_else(|| JobError::Operation("GUI defaults are not a mapping".into()))?;
-        let supplied = params
-            .as_object()
-            .ok_or_else(|| JobError::Operation("watchlist params must be a mapping".into()))?;
-        saved.extend(supplied.clone());
-        let quality_policy = merged["quality_policy"]
-            .as_str()
-            .and_then(|policy| policy.parse().ok())
-            .unwrap_or_default();
-        let raw = merged["raw"].as_str().unwrap_or("").to_owned();
-        let local = local_workflow::parse(&raw, &merged)?;
-        let cache = paths::cache_dir();
-        Ok(Self {
-            params: merged,
-            local,
-            cache,
-            quality_policy,
-            repository: watchlist::Repository::default(),
-        })
+impl<'a> Prepared<'a> {
+    fn new(settings: &'a Settings) -> Self {
+        Self {
+            settings,
+            repository: watchlist::Repository::open(&settings.paths),
+        }
     }
 
     fn job_options(&self) -> JobOptions<'_> {
         JobOptions {
-            reconcile: watchlist::ReconcileOptions {
-                output: &self.local.request.output,
-                splits: &self.local.request.splits,
-                cache: &self.cache,
-                config: self.local.options.config.as_deref(),
-                no_organize: self.local.options.no_organize,
-                no_split: self.local.options.no_split,
-                quality_policy: self.quality_policy,
-            },
-            output: &self.local.request.output,
-            cache: &self.cache,
-            dry_run: self.local.options.dry_run,
+            reconcile: self.settings.reconcile(),
+            output: &self.settings.request.output,
+            cache: &self.settings.paths.cache,
+            dry_run: self.settings.options.dry_run,
             playlist_id: None,
         }
     }
 }
 
 struct Adapter<'a, 'b> {
-    prepared: &'a Prepared,
+    prepared: &'a Prepared<'a>,
     events: &'a RefCell<&'b mut dyn FnMut(Value)>,
     on_import_event: &'a mut dyn FnMut(Value),
     decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -192,8 +168,11 @@ impl Operations for Adapter<'_, '_> {
             return Ok(bandcamp_items(&purchases));
         }
         if SourceKind::of(playlist) == SourceKind::Spotify {
-            let document =
-                spotify::load_playlist_document(&app_config::path(), &spotify::token_path(), id)?;
+            let document = spotify::load_playlist_document(
+                &self.prepared.settings.paths.config_file(),
+                &spotify::token_path(),
+                id,
+            )?;
             check_cancelled(self.cancelled)?;
             return spotify_items(&document);
         }
@@ -255,7 +234,7 @@ impl Adapter<'_, '_> {
         if matches!(action, ItemAction::Run | ItemAction::Retry)
             && ready_quality_directory(item).is_some()
         {
-            if !self.prepared.local.options.no_organize {
+            if !self.prepared.settings.options.no_organize {
                 return self.process_local_stage(item, ItemAction::OrganizeAgain, cancelled);
             }
             let mut updated = item.clone();
@@ -263,22 +242,26 @@ impl Adapter<'_, '_> {
             return Ok(updated);
         }
         let url = required(item, "video_url")?;
-        let mut params = self.prepared.params.clone();
-        params["raw"] = json!(url);
+        let mut settings = self.prepared.settings.clone();
+        url.clone_into(&mut settings.request.raw);
         match action {
             ItemAction::DownloadAgain => {
-                params["force"] = json!(true);
-                params["no_split"] = json!(true);
-                params["no_organize"] = json!(true);
+                settings.options.force = true;
+                settings.options.no_split = true;
+                settings.options.no_organize = true;
             }
-            ItemAction::RunAllAgain => params["force"] = json!(true),
+            ItemAction::RunAllAgain => settings.options.force = true,
             _ => {}
         }
-        let remote = remote_workflow::supported(&params).ok_or_else(|| {
-            JobError::Operation("The saved YouTube item is not a video URL.".into())
-        })??;
+        let input = classify_input(url);
+        if matches!(input, WorkflowInput::Local(_)) {
+            return Err(JobError::Operation(
+                "The saved YouTube item is not a video URL.".into(),
+            ));
+        }
         let result = remote_workflow::run(
-            remote,
+            input,
+            &settings,
             cancelled,
             &mut |event| (self.events.borrow_mut())(event),
             self.on_import_event,
@@ -286,7 +269,11 @@ impl Adapter<'_, '_> {
         )
         .map_err(workflow_error)?;
         let mut updated = item.clone();
-        save_output_paths(&mut updated, &result, &self.prepared.local.request.output)?;
+        save_output_paths(
+            &mut updated,
+            &result,
+            &self.prepared.settings.request.output,
+        )?;
         if action == ItemAction::DownloadAgain {
             set_stage(&mut updated, Stage::Download, StageStatus::Complete);
             for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
@@ -296,7 +283,7 @@ impl Adapter<'_, '_> {
             let split = result["split_dirs"]
                 .as_array()
                 .is_some_and(|dirs| !dirs.is_empty());
-            mark_full(&mut updated, &self.prepared.local.options, split);
+            mark_full(&mut updated, &self.prepared.settings.options, split);
         }
         Ok(updated)
     }
@@ -307,7 +294,7 @@ impl Adapter<'_, '_> {
         action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
-        let audio = downloaded_audio(item, &self.prepared.local.request.output)?;
+        let audio = downloaded_audio(item, &self.prepared.settings.request.output)?;
         let mut updated = item.clone();
         if action == ItemAction::OrganizeAgain {
             let target = stage_path(item, Stage::Split)
@@ -325,7 +312,7 @@ impl Adapter<'_, '_> {
                 on_import_event: self.on_import_event,
                 cancelled,
             };
-            let mut options = self.prepared.local.options.clone();
+            let mut options = self.prepared.settings.options.clone();
             options.force = true;
             options.no_organize = false;
             local.organize(&target, &options)?;
@@ -341,9 +328,9 @@ impl Adapter<'_, '_> {
                 .map_err(|_| JobError::Cancelled)?;
             let result = check_youtube_quality(
                 vec![audio],
-                self.prepared.local.options.quality_policy,
-                self.prepared.local.options.min_bitrate,
-                &self.prepared.local.options.prefer,
+                self.prepared.settings.options.quality_policy,
+                self.prepared.settings.options.min_bitrate,
+                &self.prepared.settings.options.prefer,
                 cancelled,
                 &mut |event| (self.events.borrow_mut())(event),
                 self.decide,
@@ -379,13 +366,13 @@ impl Adapter<'_, '_> {
         let stem = audio
             .file_stem()
             .ok_or_else(|| JobError::Operation("Audio file has no name.".into()))?;
-        let output = self.prepared.local.request.splits.join(stem);
+        let output = self.prepared.settings.request.splits.join(stem);
         let task = muzik_workflow::SplitTask {
             source: audio,
             chapters: found,
             output: output.clone(),
         };
-        let mut options = self.prepared.local.options.clone();
+        let mut options = self.prepared.settings.options.clone();
         options.force = true;
         options.keep_source = true;
         let mut local = local_workflow::LocalOperations {
@@ -411,7 +398,7 @@ impl Adapter<'_, '_> {
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         if action == ItemAction::OrganizeAgain {
-            let saved = downloaded_audio(item, &self.prepared.local.request.output)?;
+            let saved = downloaded_audio(item, &self.prepared.settings.request.output)?;
             return match saved {
                 Some(file) => self.process_spotify_file(item, file, cancelled),
                 None => self.process_local_stage(item, action, cancelled),
@@ -442,7 +429,7 @@ impl Adapter<'_, '_> {
             })
             .unwrap_or_default();
         let query = format!("{artists} - {title}");
-        let preference = self.prepared.local.options.prefer.as_str();
+        let preference = self.prepared.settings.options.prefer.as_str();
         if !fresh {
             let saved = stage_path(item, Stage::Download)
                 .as_str()
@@ -455,12 +442,13 @@ impl Adapter<'_, '_> {
         let entry_id = required(item, "entry_id")?;
         let root = self
             .prepared
-            .local
+            .settings
             .request
             .output
             .join("spotify-watchlist")
             .join(safe_name(entry_id));
         let files = remote_workflow::soulseek_download(
+            &self.prepared.settings.paths,
             &query,
             preference,
             false,
@@ -492,7 +480,7 @@ impl Adapter<'_, '_> {
         let entry_id = required(item, "entry_id")?;
         let directory = self
             .prepared
-            .local
+            .settings
             .request
             .output
             .join("bandcamp-watchlist")
@@ -556,7 +544,7 @@ impl Adapter<'_, '_> {
                 json!({"event":"progress_finished","data":{"task_id":"bandcamp-download","success":true}}),
             );
         }
-        let mut options = self.prepared.local.options.clone();
+        let mut options = self.prepared.settings.options.clone();
         options.no_split = true;
         options.interactive = false;
         if action == ItemAction::OrganizeAgain {
@@ -585,7 +573,7 @@ impl Adapter<'_, '_> {
         cancelled: &AtomicBool,
     ) -> Result<Value, JobError> {
         write_spotify_tags(&file, &spotify_tags(&item["track"])).map_err(JobError::Operation)?;
-        let mut options = self.prepared.local.options.clone();
+        let mut options = self.prepared.settings.options.clone();
         options.no_split = true;
         options.interactive = false;
         let mut local = local_workflow::LocalOperations {
@@ -596,7 +584,7 @@ impl Adapter<'_, '_> {
         process_audio_plan_with_events(
             std::slice::from_ref(&file),
             &[],
-            &self.prepared.local.request.splits,
+            &self.prepared.settings.request.splits,
             &options,
             &mut local,
             cancelled,
@@ -1085,8 +1073,10 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
 #[cfg(test)]
 mod tests {
     use super::{bandcamp_items, refresh_chapters_with, spotify_items, youtube_items};
+    use crate::settings::Settings;
+    use muzik_core::paths::Paths;
     use muzik_core::watchlist::ItemAction;
-    use muzik_core::{ChapterAnswer, DecisionKind, QualityPolicy};
+    use muzik_core::{ChapterAnswer, DecisionKind};
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -1137,14 +1127,11 @@ mod tests {
                 directory.path().join("state").display()
             ),
         )?;
-        let params = json!({"output":directory.path(),"config":config,"interactive":true});
-        let prepared = super::Prepared {
-            local: crate::local_workflow::parse("", &params)?,
-            params,
-            cache: directory.path().to_path_buf(),
-            quality_policy: QualityPolicy::Off,
-            repository: muzik_core::watchlist::Repository::new(directory.path().join("muzik.db")),
-        };
+        let settings = Settings::parse(
+            &Paths::under(directory.path()),
+            &json!({"output":directory.path(),"config":config,"interactive":true,"quality_policy":"off"}),
+        )?;
+        let prepared = super::Prepared::new(&settings);
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
         let mut imported = |_| {};
@@ -1222,14 +1209,11 @@ mod tests {
                 directory.path().join("state").display()
             ),
         )?;
-        let params = json!({"output":directory.path(),"config":config,"interactive":false});
-        let prepared = super::Prepared {
-            local: crate::local_workflow::parse("", &params)?,
-            params,
-            cache: directory.path().to_path_buf(),
-            quality_policy: QualityPolicy::Auto,
-            repository: muzik_core::watchlist::Repository::new(directory.path().join("muzik.db")),
-        };
+        let settings = Settings::parse(
+            &Paths::under(directory.path()),
+            &json!({"output":directory.path(),"config":config,"interactive":false,"quality_policy":"auto"}),
+        )?;
+        let prepared = super::Prepared::new(&settings);
         let mut event = |_| {};
         let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
         let mut imported = |_| {};

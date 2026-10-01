@@ -1,8 +1,10 @@
 //! JSON protocol for the Rust desktop application.
 use crate::{native, thumbnails, watchlist};
+use muzik_core::paths::Paths;
 use muzik_core::{app_config, spotify, watchlist::Repository};
 use muzik_jobs::CancelRequest;
-use muzik_runner::{gates, parse_job_id, EnqueueError, Jobs, Options, Prompt, Runner};
+use muzik_runner::agent::{Chooser, Codex};
+use muzik_runner::{gates, parse_job_id, EnqueueError, Jobs, Options, Prompt, Runner, Settings};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -25,6 +27,7 @@ pub struct Bridge {
     decisions: Decisions,
     generation: Arc<AtomicU64>,
     watchlist_gate: Arc<Mutex<()>>,
+    paths: Paths,
     next_id: u64,
 }
 
@@ -35,15 +38,15 @@ struct NativeLogin {
 
 impl Bridge {
     pub fn start() -> Result<Self, String> {
-        Self::with_runner(true)
+        Self::with(Paths::user(), true)
     }
 
-    fn with_runner(run: bool) -> Result<Self, String> {
+    fn with(paths: Paths, run: bool) -> Result<Self, String> {
         let (events, output) = mpsc::channel::<Value>();
         let jobs = Arc::new(if cfg!(test) {
-            Jobs::in_memory()?
+            Jobs::in_memory(&paths)?
         } else {
-            Jobs::open()?
+            Jobs::open(&paths)?
         });
         let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
         let generation = Arc::new(AtomicU64::new(0));
@@ -65,6 +68,7 @@ impl Bridge {
                         let number = asked.fetch_add(1, Ordering::SeqCst) + 1;
                         ask(&asker, &pending, &prompt, number)
                     }),
+                    chooser: (!cfg!(test)).then(|| Arc::new(Codex) as Arc<dyn Chooser>),
                     generation: Arc::clone(&generation),
                 },
             )?
@@ -84,6 +88,7 @@ impl Bridge {
             decisions,
             generation,
             watchlist_gate: Arc::new(Mutex::new(())),
+            paths,
             next_id: 1,
         })
     }
@@ -164,11 +169,12 @@ impl Bridge {
             if !fresh.is_empty() {
                 let sender = self.native_output.clone();
                 let pending = Arc::clone(&self.thumbnail_pending);
+                let paths = self.paths.clone();
                 thread::spawn(move || {
                     let data = thumbnails::cache_requested(
                         &fresh,
-                        &Repository::default(),
-                        &muzik_core::paths::cache_dir(),
+                        &Repository::open(&paths),
+                        &paths.cache,
                     );
                     let _ = sender
                         .send(json!({"type":"event", "event":"thumbnails.updated", "data":data}));
@@ -193,13 +199,14 @@ impl Bridge {
             let jobs = Arc::clone(&self.jobs);
             let latest = Arc::clone(&self.generation);
             let gate = Arc::clone(&self.watchlist_gate);
-            let repository = Repository::default();
+            let paths = self.paths.clone();
             thread::spawn(move || {
                 load_watchlist(WatchlistLoad {
                     sender,
                     id: response_id,
                     params,
-                    repository,
+                    repository: Repository::open(&paths),
+                    paths,
                     login,
                     jobs,
                     latest,
@@ -217,7 +224,7 @@ impl Bridge {
                 .watchlist_gate
                 .lock()
                 .map_err(|_| "Watchlist state is unavailable")?;
-            let response = native_response(&id, command, &params);
+            let response = native_response(&self.paths, &id, command, &params);
             if response["ok"] == true {
                 self.generation.fetch_add(1, Ordering::SeqCst);
             }
@@ -232,12 +239,13 @@ impl Bridge {
                 let sender = self.native_output.clone();
                 let response_id = id.clone();
                 let command = command.to_owned();
+                let paths = self.paths.clone();
                 thread::spawn(move || {
-                    let response = native_response(&response_id, &command, &params);
+                    let response = native_response(&paths, &response_id, &command, &params);
                     let _ = sender.send(response);
                 });
             } else {
-                self.respond(native_response(&id, command, &params))?;
+                self.respond(native_response(&self.paths, &id, command, &params))?;
             }
             return Ok(id);
         }
@@ -457,6 +465,7 @@ struct WatchlistLoad {
     id: String,
     params: Value,
     repository: Repository,
+    paths: Paths,
     login: Arc<Mutex<Option<NativeLogin>>>,
     jobs: Arc<Jobs>,
     latest: Arc<AtomicU64>,
@@ -477,8 +486,8 @@ impl WatchlistLoad {
 }
 
 fn load_watchlist(load: WatchlistLoad) {
-    let options = match watchlist::Options::from_params(&load.params) {
-        Ok(options) => options,
+    let settings = match Settings::resolve(&load.paths, &load.params) {
+        Ok(settings) => settings,
         Err(message) => {
             let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"invalid_request","message":message}}));
             return;
@@ -492,7 +501,7 @@ fn load_watchlist(load: WatchlistLoad) {
                 .send(json!({"type":"event","event":"watchlist.error","data":{"message":message}}));
         }
     }
-    let saved = match options.saved(&load.repository) {
+    let saved = match watchlist::saved(&settings, &load.repository) {
         Ok(saved) => saved,
         Err(message) => {
             let _ = load.sender.send(json!({"id":load.id,"type":"response","ok":false,"error":{"code":"operation_failed","message":message}}));
@@ -506,7 +515,7 @@ fn load_watchlist(load: WatchlistLoad) {
     {
         return;
     }
-    if let Err(message) = reconcile_watchlist(&load, &options) {
+    if let Err(message) = reconcile_watchlist(&load, &settings) {
         if load.generation == load.latest.load(Ordering::SeqCst) {
             let _ = load
                 .sender
@@ -515,13 +524,13 @@ fn load_watchlist(load: WatchlistLoad) {
     }
 }
 
-fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Result<(), String> {
+fn reconcile_watchlist(load: &WatchlistLoad, settings: &Settings) -> Result<(), String> {
     for _ in 0..3 {
         if load.busy()? {
             return Ok(());
         }
         let revision = load.repository.revision()?;
-        let checked = options.checked(&load.repository)?;
+        let checked = watchlist::checked(settings, &load.repository)?;
         let saved = load.repository.locked(|| -> Result<bool, String> {
             if load.busy()? {
                 return Ok(true);
@@ -538,7 +547,7 @@ fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Re
         if load.busy()? {
             return Ok(());
         }
-        let visible = options.view(checked)?;
+        let visible = watchlist::view(settings, checked)?;
         let _gate = load
             .gate
             .lock()
@@ -553,8 +562,8 @@ fn reconcile_watchlist(load: &WatchlistLoad, options: &watchlist::Options) -> Re
     Err("The watchlist changed during the local check. Reload it.".into())
 }
 
-fn native_response(id: &str, command: &str, params: &Value) -> Value {
-    match native::dispatch(command, params) {
+fn native_response(paths: &Paths, id: &str, command: &str, params: &Value) -> Value {
+    match native::dispatch(paths, command, params) {
         Ok(result) => json!({"id": id, "type":"response", "ok":true, "result":result}),
         Err(message) => {
             let code = if matches!(command, "config.save" | "spotify.set_client_id") {
@@ -570,6 +579,7 @@ fn native_response(id: &str, command: &str, params: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::{load_watchlist, Bridge, NativeLogin, WatchlistLoad};
+    use muzik_core::paths::Paths;
     use muzik_core::watchlist::Repository;
     use muzik_runner::Jobs;
     use serde_json::{json, Value};
@@ -805,7 +815,8 @@ mod tests {
 
     #[test]
     fn cancel_removes_a_queued_item_job() -> TestResult {
-        let mut bridge = Bridge::with_runner(false)?;
+        let dir = tempfile::tempdir()?;
+        let mut bridge = Bridge::with(Paths::under(dir.path()), false)?;
         let params = json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run","title":"Song"});
         let id = bridge.send("watchlist.action", params.clone())?;
         let job_id = response(&bridge, &id)?["result"]["job_id"]
@@ -854,7 +865,8 @@ mod tests {
     #[test]
     fn watchlist_load_sends_saved_cards_before_local_check() -> TestResult {
         let dir = tempfile::tempdir()?;
-        let repository = Repository::new(dir.path().join("muzik.db"));
+        let paths = Paths::under(dir.path());
+        let repository = Repository::open(&paths);
         repository
             .add("https://www.youtube.com/playlist?list=PLnative123")
             .map_err(std::io::Error::other)?;
@@ -862,10 +874,11 @@ mod tests {
         let request = WatchlistLoad {
             sender,
             id: "load-1".into(),
-            params: json!({"output": dir.path().join("downloads"), "splits": dir.path().join("splits"), "quality_policy":"off", "no_split":false, "no_organize":false}),
+            params: json!({"quality_policy":"off", "no_split":false, "no_organize":false}),
             repository,
+            jobs: Arc::new(Jobs::in_memory(&paths)?),
+            paths,
             login: Arc::new(Mutex::new(None)),
-            jobs: Arc::new(Jobs::in_memory()?),
             latest: Arc::new(AtomicU64::new(1)),
             gate: Arc::new(Mutex::new(())),
             generation: 1,

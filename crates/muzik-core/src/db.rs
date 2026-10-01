@@ -1,8 +1,7 @@
 //! The shared muzik state database.
 
-use crate::paths;
 use rusqlite::{Connection, TransactionBehavior};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 const MIGRATIONS: &[&str] = &["CREATE TABLE watchlist_playlists (
@@ -22,10 +21,6 @@ const MIGRATIONS: &[&str] = &["CREATE TABLE watchlist_playlists (
         revision INTEGER NOT NULL
     );
     INSERT INTO watchlist_revision (id, revision) VALUES (1, 0);"];
-
-pub fn default_path() -> PathBuf {
-    paths::data_dir().join("muzik.db")
-}
 
 pub fn open(path: &Path) -> Result<Connection, String> {
     if let Some(parent) = path.parent() {

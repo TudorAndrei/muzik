@@ -82,7 +82,7 @@ pub enum WorkflowInput {
 }
 
 pub fn classify_input(raw: &str) -> WorkflowInput {
-    let expanded = expand_home(raw);
+    let expanded = muzik_core::paths::expand_home(Path::new(raw));
     if expanded.exists() {
         if expanded.is_file()
             && expanded
@@ -133,20 +133,6 @@ pub fn classify_input(raw: &str) -> WorkflowInput {
         }
     }
     WorkflowInput::Search(raw.to_owned())
-}
-
-fn expand_home(raw: &str) -> PathBuf {
-    if raw == "~" {
-        return std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(raw));
-    }
-    if let Some(rest) = raw.strip_prefix("~/")
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        return PathBuf::from(home).join(rest);
-    }
-    PathBuf::from(raw)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

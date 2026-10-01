@@ -1,6 +1,7 @@
-use crate::{local_workflow, remote_workflow};
+use crate::settings::Settings;
+use muzik_core::paths::Paths;
 use muzik_core::watchlist::ItemAction;
-use muzik_core::{paths, DecisionKind, KEEP_CURRENT_TAGS};
+use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use serde_json::{json, Value};
 use std::fmt;
@@ -36,22 +37,28 @@ impl From<String> for EnqueueError {
 pub struct Jobs {
     store: Mutex<Store>,
     lock_path: Option<PathBuf>,
+    paths: Paths,
 }
 
 impl Jobs {
-    pub fn open() -> Result<Self, String> {
-        let directory = paths::data_dir();
+    pub fn open(paths: &Paths) -> Result<Self, String> {
         Ok(Self {
-            store: Mutex::new(Store::open(&directory.join("jobs.db"))?),
-            lock_path: Some(directory.join("jobs.lock")),
+            store: Mutex::new(Store::open(&paths.data.join("jobs.db"))?),
+            lock_path: Some(paths.data.join("jobs.lock")),
+            paths: paths.clone(),
         })
     }
 
-    pub fn in_memory() -> Result<Self, String> {
+    pub fn in_memory(paths: &Paths) -> Result<Self, String> {
         Ok(Self {
             store: Mutex::new(Store::open_in_memory()?),
             lock_path: None,
+            paths: paths.clone(),
         })
+    }
+
+    pub fn paths(&self) -> &Paths {
+        &self.paths
     }
 
     pub(crate) fn runner_lock(&self) -> Result<Option<Option<RunnerLock>>, String> {
@@ -90,14 +97,7 @@ impl Jobs {
         if raw.is_empty() {
             return Err(EnqueueError::Invalid("Enter a URL or path.".into()));
         }
-        let checked = local_workflow::supported(params)
-            .map(|request| request.map(drop))
-            .or_else(|| remote_workflow::supported(params).map(|request| request.map(drop)));
-        match checked {
-            Some(Ok(())) => {}
-            Some(Err(message)) => return Err(EnqueueError::Invalid(message)),
-            None => return Err(EnqueueError::Invalid("Enter a URL or path.".into())),
-        }
+        Settings::resolve(&self.paths, params).map_err(EnqueueError::Invalid)?;
         let key = format!("{raw}#{}", unique());
         Ok(self.store().enqueue(&NewJob {
             kind: Kind::Workflow,
@@ -257,11 +257,13 @@ fn unique() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{parse_job_id, EnqueueError, Jobs};
+    use muzik_core::paths::Paths;
     use serde_json::json;
+    use std::path::Path;
 
     #[test]
     fn an_item_has_one_open_job_and_a_waiting_one_gives_way() -> Result<(), String> {
-        let jobs = Jobs::in_memory()?;
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused")))?;
         let params =
             json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run"});
         let first = jobs.item(&params).map_err(|error| error.to_string())?;
@@ -280,7 +282,7 @@ mod tests {
 
     #[test]
     fn waiting_spotify_import_questions_go_back_to_the_queue() -> Result<(), String> {
-        let jobs = Jobs::in_memory()?;
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused")))?;
         let park = |playlist: &str, kind: &str| {
             jobs.store().park(
                 &muzik_jobs::NewJob {

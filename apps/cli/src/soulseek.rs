@@ -605,7 +605,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
             setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir").map(PathBuf::from)
         })
         .unwrap_or_else(|| paths::data_dir().join("soulseek"));
-    let root = expand_home(&output).join(format!("soulseek_{id}"));
+    let root = paths::expand_home(&output).join(format!("soulseek_{id}"));
     let files = local_files(&saved.candidate, &root)?;
     for file in &files {
         if file.exists() {
@@ -828,15 +828,6 @@ fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate, String> {
         return Err("cached Soulseek candidate ID does not match its files".into());
     }
     Ok(candidate)
-}
-
-fn expand_home(path: &Path) -> PathBuf {
-    if let Ok(rest) = path.strip_prefix("~")
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        return PathBuf::from(home).join(rest);
-    }
-    path.to_path_buf()
 }
 
 #[cfg(test)]

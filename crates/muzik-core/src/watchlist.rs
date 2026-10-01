@@ -1,6 +1,7 @@
 //! Versioned watchlist data shared with the existing application.
 
-use crate::{db, paths};
+use crate::db;
+use crate::paths::Paths;
 use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -232,13 +233,11 @@ pub struct Repository {
 
 static WRITER: Mutex<()> = Mutex::new(());
 
-impl Default for Repository {
-    fn default() -> Self {
-        Self::new(db::default_path()).with_legacy(paths::config_dir().join("watchlist.json"))
-    }
-}
-
 impl Repository {
+    pub fn open(paths: &Paths) -> Self {
+        Self::new(paths.database()).with_legacy(paths.config.join("watchlist.json"))
+    }
+
     pub fn new(path: PathBuf) -> Self {
         Self { path, legacy: None }
     }

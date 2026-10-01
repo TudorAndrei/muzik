@@ -2,9 +2,11 @@
 
 use crate::gates::{self, Gate};
 use crate::local_workflow;
+use crate::settings::Settings;
+use muzik_core::paths::Paths;
 use muzik_core::process::background_command;
 use muzik_core::watchlist::Stage;
-use muzik_core::{app_config, chapters::Chapter, paths, DecisionKind};
+use muzik_core::{app_config, chapters::Chapter, DecisionKind};
 use muzik_soulseek::job::{JobOutcome, JobState};
 use muzik_soulseek::ranking::{rank, search_query};
 use muzik_soulseek::session::{setting, Session, SessionSettings};
@@ -20,44 +22,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use yt_dlp::executor::Executor;
 
-pub struct RemoteRequest {
-    input: WorkflowInput,
-    local: local_workflow::LocalRequest,
-}
-
-/// Return `None` for local audio.
-pub fn supported(params: &Value) -> Option<Result<RemoteRequest, String>> {
-    let raw = params.get("raw")?.as_str()?.trim();
-    let input = classify_input(raw);
-    if matches!(input, WorkflowInput::Local(_)) || raw.is_empty() {
-        return None;
-    }
-    Some(parse(input, params))
-}
-
-fn parse(input: WorkflowInput, params: &Value) -> Result<RemoteRequest, String> {
-    let mut merged = app_config::load_gui_defaults(&app_config::path())?;
-    let supplied = params
-        .as_object()
-        .ok_or("workflow params must be a mapping")?;
-    {
-        let values = merged
-            .as_object_mut()
-            .ok_or("GUI defaults are not a mapping")?;
-        for (key, value) in supplied {
-            values.insert(key.clone(), value.clone());
-        }
-    }
-    let raw = merged["raw"]
-        .as_str()
-        .ok_or("raw must be a string")?
-        .to_owned();
-    let local = local_workflow::parse(&raw, &merged)?;
-    Ok(RemoteRequest { input, local })
-}
-
 pub fn run(
-    remote: RemoteRequest,
+    input: WorkflowInput,
+    settings: &Settings,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     on_import_event: &mut dyn FnMut(Value),
@@ -72,18 +39,19 @@ pub fn run(
             on_import_event,
             cancelled,
         },
-        prefer: remote.local.options.prefer.clone(),
-        interactive: remote.local.options.interactive,
-        audio_source: remote.local.options.audio_source,
-        fallback: remote.local.options.fallback,
-        output: remote.local.request.output.clone(),
+        paths: settings.paths.clone(),
+        prefer: settings.options.prefer.clone(),
+        interactive: settings.options.interactive,
+        audio_source: settings.options.audio_source,
+        fallback: settings.options.fallback,
+        output: settings.request.output.clone(),
         youtube_acquired: false,
     };
     let mut report = |event| on_event(event_record(event));
-    if let WorkflowInput::SpotifyExport(ref path) = remote.input {
+    if let WorkflowInput::SpotifyExport(ref path) = input {
         let result = playlist::run_spotify_export(
-            &remote.local.request,
-            &remote.local.options,
+            &settings.request,
+            &settings.options,
             &mut operations,
             cancelled,
             path,
@@ -98,10 +66,10 @@ pub fn run(
             json!({"albums":processing.plan.albums.len(),"singles":processing.plan.singles.len(),"split_dirs":processing.split_dirs,"items":result.items.len()}),
         );
     }
-    if let WorkflowInput::YoutubePlaylist { url, playlist_id } = remote.input {
+    if let WorkflowInput::YoutubePlaylist { url, playlist_id } = input {
         let result = playlist::run_youtube_playlist(
-            &remote.local.request,
-            &remote.local.options,
+            &settings.request,
+            &settings.options,
             &mut operations,
             cancelled,
             &playlist_id,
@@ -120,8 +88,8 @@ pub fn run(
         );
     }
     let result = run_workflow_with_events(
-        &remote.local.request,
-        &remote.local.options,
+        &settings.request,
+        &settings.options,
         &mut operations,
         cancelled,
         &mut report,
@@ -139,6 +107,7 @@ pub fn run(
 
 struct RemoteOperations<'a> {
     local: local_workflow::LocalOperations<'a>,
+    paths: Paths,
     prefer: String,
     interactive: bool,
     audio_source: AudioSource,
@@ -179,6 +148,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
             return Err("YouTube video has no title for Soulseek search".into());
         }
         soulseek_download(
+            &self.paths,
             &query,
             &self.prefer,
             self.interactive,
@@ -201,12 +171,24 @@ impl WorkflowOperations for RemoteOperations<'_> {
         let cancelled = self.local.cancelled;
         let prefer = self.prefer.clone();
         let interactive = self.interactive;
+        let paths = &self.paths;
         let decide = &mut *self.local.decide;
         let (files, from_youtube) = acquire_spotify_audio(
             source,
             fallback,
             ready,
-            || soulseek_download(&query, &prefer, interactive, cancelled, decide, false, None),
+            || {
+                soulseek_download(
+                    paths,
+                    &query,
+                    &prefer,
+                    interactive,
+                    cancelled,
+                    decide,
+                    false,
+                    None,
+                )
+            },
             || download(&query, &output, false, cancelled).map_err(|error| error.to_string()),
         )?;
         self.youtube_acquired = from_youtube;
@@ -214,7 +196,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 
     fn soulseek_ready(&self) -> bool {
-        soulseek_ready()
+        soulseek_ready(&self.paths)
     }
 
     fn check_quality(
@@ -282,13 +264,12 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 }
 
-pub(crate) fn soulseek_ready() -> bool {
-    app_config::load(&app_config::path())
+pub(crate) fn soulseek_ready(paths: &Paths) -> bool {
+    app_config::load(&paths.config_file())
         .ok()
         .is_some_and(|config| SessionSettings::configured(&config).is_some())
 }
 
-/// Apply the same source and fallback policy to Spotify exports and saved items.
 pub(crate) fn acquire_spotify_audio<S, Y>(
     source: AudioSource,
     fallback: AudioFallback,
@@ -331,7 +312,9 @@ fn event_record(event: WorkflowEvent) -> Value {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn soulseek_download(
+    paths: &Paths,
     query: &str,
     prefer: &str,
     interactive: bool,
@@ -344,7 +327,7 @@ pub(crate) fn soulseek_download(
         return Err("Soulseek search cancelled".into());
     }
     let _permit = gates::enter(Gate::Download, Stage::Download, cancelled)?;
-    let config = app_config::load(&app_config::path())?;
+    let config = app_config::load(&paths.config_file())?;
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
     let session = Session::shared(settings).map_err(|error| error.to_string())?;
@@ -408,7 +391,7 @@ pub(crate) fn soulseek_download(
         .or_else(|| {
             setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir").map(PathBuf::from)
         })
-        .unwrap_or_else(|| paths::data_dir().join("soulseek"));
+        .unwrap_or_else(|| paths.soulseek());
     std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
     let destination = tempfile::Builder::new()
         .prefix("soulseek-")
@@ -681,10 +664,9 @@ pub(crate) fn yt_dlp_environment_args() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{acquire_spotify_audio, candidate_row, execute_with_path, supported};
+    use super::{acquire_spotify_audio, candidate_row, execute_with_path};
     use muzik_core::{AudioFallback, AudioSource};
     use muzik_soulseek::types::{Candidate, FileEntry};
-    use serde_json::json;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -726,49 +708,6 @@ mod tests {
         .err()
         .ok_or("Soulseek failure must be returned")?;
         assert_eq!(error, "Soulseek is unavailable");
-        Ok(())
-    }
-
-    #[test]
-    fn selects_youtube_video_and_playlist() -> Result<(), Box<dyn std::error::Error>> {
-        for raw in [
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            "https://www.youtube.com/playlist?list=PLnative123",
-        ] {
-            let selected = supported(&json!({"raw":raw,"audio_source":"youtube"}))
-                .ok_or("YouTube request was not selected")??;
-            assert_eq!(
-                selected.local.request.output,
-                muzik_core::paths::download_dir()
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn selects_search_and_spotify_export() -> Result<(), Box<dyn std::error::Error>> {
-        let search =
-            supported(&json!({"raw":"artist - track","audio_source":"soulseek","review":true}))
-                .ok_or("search was not selected")??;
-        assert!(matches!(
-            search.input,
-            muzik_workflow::WorkflowInput::Search(_)
-        ));
-        assert!(search.local.options.review);
-        assert_eq!(
-            search.local.options.audio_source,
-            muzik_workflow::AudioSource::Soulseek
-        );
-
-        let dir = tempfile::tempdir()?;
-        let export = dir.path().join("spotify.json");
-        std::fs::write(&export, b"{}")?;
-        let spotify = supported(&json!({"raw":export,"audio_source":"soulseek"}))
-            .ok_or("Spotify export was not selected")??;
-        assert!(matches!(
-            spotify.input,
-            muzik_workflow::WorkflowInput::SpotifyExport(_)
-        ));
         Ok(())
     }
 
