@@ -170,3 +170,67 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.version.outputs.tag }}
         run: gh release create "$TAG" dist/* --generate-notes --verify-tag
+
+  homebrew:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read the app checksum
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          sha=$(gh release download "$TAG" -p "Muzik-${TAG}-aarch64-apple-darwin.zip.sha256" -O - | cut -d' ' -f1)
+          [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::No valid checksum for $TAG"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Update the cask in this repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          set -euo pipefail
+          cask=packaging/homebrew/Casks/muzik.rb
+          sed -i -E "s/^  version \"[^\"]+\"/  version \"${VERSION}\"/; s/^  sha256 \"[0-9a-f]{64}\"/  sha256 \"${SHA}\"/" "$cask"
+          grep -q "version \"${VERSION}\"" "$cask"
+          grep -q "sha256 \"${SHA}\"" "$cask"
+          if git diff --quiet; then
+            echo "The cask is already current."
+            exit 0
+          fi
+          gh auth setup-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(homebrew): update the cask to v${VERSION}"
+          git push origin HEAD:main
+      - name: Update the Homebrew tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/tap_key
+          chmod 600 ~/.ssh/tap_key
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git clone --depth 1 git@github.com:TudorAndrei/homebrew-muzik.git tap
+          cp packaging/homebrew/Casks/muzik.rb tap/Casks/muzik.rb
+          cd tap
+          if git diff --quiet; then
+            echo "The tap is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "feat: update muzik to ${VERSION}"
+          git push origin HEAD:main

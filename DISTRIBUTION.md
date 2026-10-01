@@ -39,7 +39,9 @@ program to use the Bandcamp command.
 
 ## Publish to Homebrew and mise
 
-After a release, copy `packaging/homebrew/Casks/muzik.rb` to the
-`TudorAndrei/homebrew-muzik` tap. Set `version` and the `sha256` of the
-`Muzik-…zip` file from its `.sha256` asset. mise needs no change: it reads the
-`muzik-cli` archive of the latest release.
+The `homebrew` job of the `Release` workflow runs after the release is
+published. It sets `version` and the `sha256` of the `Muzik-…zip` file (from its
+`.sha256` asset) in `packaging/homebrew/Casks/muzik.rb`, commits that file to
+`main`, and copies it to the `TudorAndrei/homebrew-muzik` tap. The tap push uses
+the `HOMEBREW_TAP_DEPLOY_KEY` secret, a deploy key with write access to the tap.
+mise needs no change: it reads the `muzik-cli` archive of the latest release.
