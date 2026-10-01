@@ -2356,7 +2356,7 @@ fn main() {
         }
         _ => {}
     }
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
+    let app = gpui_kit::application().with_assets(style::AppAssets);
     app.run(|cx| {
         gpui_kit::init(cx);
         style::apply_theme(cx);

@@ -8,6 +8,39 @@ use serde_json::Value;
 const THEME: &str = include_str!("../themes/muzik.json");
 const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-v2.png");
 
+gpui_kit::assets::icon_assets!(SourceIcons, [SquarePlay, ListMusic, Heart, Disc3]);
+
+pub struct AppAssets;
+
+impl AssetSource for AppAssets {
+    fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        match SourceIcons.load(path)? {
+            Some(icon) => Ok(Some(icon)),
+            None => gpui_kit::assets::Assets.load(path),
+        }
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+        let mut paths = SourceIcons.list(path)?;
+        paths.extend(gpui_kit::assets::Assets.list(path)?);
+        Ok(paths)
+    }
+}
+
+pub fn source_icon(playlist: &Value) -> gpui_kit::assets::IconName {
+    use gpui_kit::assets::IconName;
+    let id = playlist["playlist_id"].as_str().unwrap_or("");
+    if id == "spotify:liked" {
+        IconName::Heart
+    } else if id.starts_with("spotify:album:") {
+        IconName::Disc3
+    } else if id.starts_with("spotify:") {
+        IconName::ListMusic
+    } else {
+        IconName::SquarePlay
+    }
+}
+
 pub fn apply_theme(cx: &mut App) {
     if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME) {
         eprintln!("Muzik theme did not load: {error}");
@@ -186,9 +219,25 @@ pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyEleme
 
 #[cfg(test)]
 mod tests {
-    use super::{stage_headline, stage_states, Tone};
+    use super::{source_icon, stage_headline, stage_states, AppAssets, Tone};
+    use gpui_kit::AssetSource;
     use muzik_core::watchlist::{Stage, StageStatus};
     use serde_json::json;
+
+    #[test]
+    fn every_source_icon_and_the_default_icons_load() -> gpui_kit::Result<()> {
+        for id in [
+            "PL123",
+            "spotify:liked",
+            "spotify:album:abc",
+            "spotify:playlist:abc",
+        ] {
+            let path = source_icon(&json!({"playlist_id": id})).path();
+            assert!(AppAssets.load(&path)?.is_some(), "{path} is missing");
+        }
+        assert!(AppAssets.load("icons/plus.svg")?.is_some());
+        Ok(())
+    }
 
     #[test]
     fn stage_headline_names_the_stage_that_needs_attention() {

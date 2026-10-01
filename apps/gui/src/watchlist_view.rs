@@ -112,7 +112,7 @@ impl Muzik {
                 if playlist["last_error"].is_string() {
                     item.icon(IconName::TriangleAlert)
                 } else {
-                    item
+                    item.icon(style::source_icon(playlist))
                 }
             })
             .collect();
