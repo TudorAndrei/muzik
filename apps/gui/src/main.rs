@@ -4,6 +4,7 @@ mod pages;
 mod services;
 mod style;
 mod thumbnails;
+mod watch_table;
 mod watchlist;
 mod watchlist_view;
 
@@ -19,6 +20,7 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -210,7 +212,6 @@ const SWITCHES: &[(&str, &str, bool)] = &[
     ("interactive", "Interactive", true),
     ("auto_decide", "Choose automatically", true),
 ];
-const WATCH_PAGE_SIZE: usize = 8;
 const REPLACE_WARNING: &str =
     "This replaces the files from this stage. Later stages can become stale.";
 
@@ -264,7 +265,8 @@ struct Muzik {
     watchlist: Value,
     selected_playlist: usize,
     filter: usize,
-    watch_page: usize,
+    watch_table: Entity<TableState<watch_table::WatchTable>>,
+    sheet_item: Option<String>,
     thumbnail_attempted: HashSet<String>,
     library: Value,
     services: Value,
@@ -279,6 +281,20 @@ impl Muzik {
     }
 
     fn new_with_bridge(window: &mut Window, cx: &mut Context<Self>, start_bridge: bool) -> Self {
+        let view = cx.entity().downgrade();
+        let watch_table = cx.new(|cx| {
+            TableState::new(watch_table::WatchTable::new(view), window, cx)
+                .col_movable(false)
+                .row_selectable(true)
+        });
+        cx.subscribe_in(&watch_table, window, |view, table, event, window, cx| {
+            if let TableEvent::DoubleClickedRow(row) = event {
+                if let Some(key) = table.read(cx).delegate().key(*row) {
+                    view.open_item_sheet(key, window, cx);
+                }
+            }
+        })
+        .detach();
         let mut this = Self {
             page: Page::Workflow,
             raw: cx.new(|cx| InputState::new(window, cx).placeholder("URL or path")),
@@ -307,7 +323,8 @@ impl Muzik {
             watchlist: Value::Null,
             selected_playlist: 0,
             filter: 0,
-            watch_page: 0,
+            watch_table,
+            sheet_item: None,
             thumbnail_attempted: HashSet::new(),
             library: Value::Null,
             services: Value::Null,
@@ -845,6 +862,7 @@ impl Muzik {
                     }
                     "jobs.list" => {
                         self.apply_jobs(result);
+                        self.sync_watch_table(_cx);
                         self.gates = result["gates"].clone();
                     }
                     "jobs.answer" => self.status = "Answer saved; the item is queued".into(),
@@ -885,7 +903,10 @@ impl Muzik {
                                 .into(),
                         );
                     }
-                    "jobs.updated" => self.apply_jobs(data),
+                    "jobs.updated" => {
+                        self.apply_jobs(data);
+                        self.sync_watch_table(_cx);
+                    }
                     "queues.updated" => self.gates = data.clone(),
                     "jobs.remote" => {
                         self.status = data["message"]
@@ -1018,12 +1039,7 @@ impl Muzik {
                     .position(|playlist| playlist["playlist_id"] == id)
             })
             .unwrap_or_else(|| self.selected_playlist.min(count.saturating_sub(1)));
-        let page_count = playlists
-            .and_then(|all| all.get(selected))
-            .map(|playlist| watch_page_count(playlist, self.filter))
-            .unwrap_or(1);
         self.selected_playlist = selected;
-        self.watch_page = self.watch_page.min(page_count - 1);
         let name = playlists
             .and_then(|all| all.get(selected))
             .and_then(|playlist| playlist["title"].as_str())
@@ -1037,16 +1053,29 @@ impl Muzik {
             });
         }
         self.watchlist = incoming;
+        self.sync_watch_table(cx);
+    }
+
+    fn sync_watch_table(&mut self, cx: &mut Context<Self>) {
+        let rows = self.watchlist["playlists"]
+            .get(self.selected_playlist)
+            .map(|playlist| watch_table::rows(playlist, self.filter, &self.queued_items))
+            .unwrap_or_default();
+        self.watch_table.update(cx, |state, cx| {
+            state.delegate_mut().set_rows(rows);
+            cx.notify();
+        });
     }
 
     fn visible_thumbnail_ids(&self) -> Vec<String> {
+        let Some(open) = self.sheet_item.as_deref() else {
+            return Vec::new();
+        };
         self.watchlist["playlists"][self.selected_playlist]["items"]
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|item| watchlist_view::matches_filter(item, self.filter))
-            .skip(self.watch_page * WATCH_PAGE_SIZE)
-            .take(WATCH_PAGE_SIZE)
+            .filter(|item| item["video_id"] == open)
             .filter(|item| item["thumbnail_path"].is_null())
             .filter(|item| item["thumbnail_url"].is_string())
             .filter_map(|item| item["video_id"].as_str().map(str::to_owned))
@@ -2332,16 +2361,6 @@ fn describe(value: &Value) -> String {
         Value::Null => String::new(),
         _ => value.to_string(),
     }
-}
-
-fn watch_page_count(playlist: &Value, filter: usize) -> usize {
-    let matches = playlist["items"].as_array().map_or(0, |items| {
-        items
-            .iter()
-            .filter(|item| watchlist_view::matches_filter(item, filter))
-            .count()
-    });
-    matches.div_ceil(WATCH_PAGE_SIZE).max(1)
 }
 
 fn merge_thumbnail_paths(watchlist: &mut Value, visible: &HashSet<String>, data: &Value) {

@@ -2,12 +2,12 @@ use super::*;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle};
-use gpui_kit::component::pagination::Pagination;
 use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::sidebar::{
     Sidebar, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuItem,
 };
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::table::DataTable;
 
 impl Muzik {
     pub(crate) fn watchlist(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -23,8 +23,8 @@ impl Muzik {
             .v_flex()
             .gap_4()
             .p_6()
-            .w_full()
-            .max_w(px(960.))
+            .size_full()
+            .max_w(px(1240.))
             .child(self.watchlist_header(has_playlists, cx));
         content = match playlists.and_then(|all| all.get(self.selected_playlist)) {
             Some(playlist) => content.child(self.playlist_view(playlist, cx)),
@@ -49,7 +49,7 @@ impl Muzik {
                     .justify_center()
                     .flex_1()
                     .min_w_0()
-                    .overflow_y_scrollbar()
+                    .min_h_0()
                     .child(content),
             )
             .into_any_element()
@@ -152,10 +152,11 @@ impl Muzik {
         cx: &mut Context<Self>,
     ) {
         self.selected_playlist = index;
-        self.watch_page = 0;
         self.playlist_name
             .update(cx, |state, cx| state.set_value(title, window, cx));
-        self.cache_visible_thumbnails(cx);
+        self.watch_table
+            .update(cx, |state, cx| state.clear_selection(cx));
+        self.sync_watch_table(cx);
         cx.notify();
     }
 
@@ -272,7 +273,7 @@ impl Muzik {
                         );
                     })),
             );
-        let mut section = div().v_flex().gap_4().child(
+        let mut section = div().v_flex().gap_4().flex_1().min_h_0().child(
             div()
                 .v_flex()
                 .gap_1()
@@ -300,8 +301,9 @@ impl Muzik {
                 )
                 .on_click(cx.listener(|view, index: &usize, _, cx| {
                     view.filter = *index;
-                    view.watch_page = 0;
-                    view.cache_visible_thumbnails(cx);
+                    view.watch_table
+                        .update(cx, |state, cx| state.clear_selection(cx));
+                    view.sync_watch_table(cx);
                     cx.notify();
                 })),
         );
@@ -329,31 +331,14 @@ impl Muzik {
                 .child(empty_state("Nothing here", message, false))
                 .into_any_element();
         }
-        let page_count = filtered.len().div_ceil(WATCH_PAGE_SIZE).max(1);
-        let current = self.watch_page.min(page_count - 1);
-        let mut list = div().v_flex().gap_3();
-        for item in filtered
-            .into_iter()
-            .skip(current * WATCH_PAGE_SIZE)
-            .take(WATCH_PAGE_SIZE)
-        {
-            list = list.child(self.watch_item(item, playlist, cx));
-        }
-        section = section.child(list);
-        if page_count > 1 {
-            section = section.child(
-                Pagination::new("watch-pages")
-                    .current_page(current + 1)
-                    .total_pages(page_count)
-                    .compact()
-                    .on_click(cx.listener(|view, page: &usize, _, cx| {
-                        view.watch_page = page.saturating_sub(1);
-                        view.cache_visible_thumbnails(cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        section.into_any_element()
+        section
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(320.))
+                    .child(DataTable::new(&self.watch_table).stripe(true)),
+            )
+            .into_any_element()
     }
 
     fn open_rename(&mut self, playlist_id: String, window: &mut Window, cx: &mut Context<Self>) {
@@ -385,89 +370,13 @@ impl Muzik {
         });
     }
 
-    fn watch_item(&self, item: &Value, playlist: &Value, cx: &mut Context<Self>) -> AnyElement {
-        let title = item["title"].as_str().unwrap_or("Untitled").to_string();
-        let position = item["position"].as_u64().unwrap_or(0) as usize;
-        let video_id = item_video_id(item);
-        let playlist_id = playlist_id(playlist);
-        let sheet_key = (playlist_id.clone(), position, video_id.clone());
-        let mut card = div()
-            .id(("watch-item", position))
-            .v_flex()
-            .gap_3()
-            .p_4()
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded_md()
-            .bg(cx.theme().background)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .child(
-                        div()
-                            .min_w_0()
-                            .text_sm()
-                            .font_semibold()
-                            .truncate()
-                            .child(title),
-                    )
-                    .child(
-                        Button::new(("item-more", position))
-                            .ghost()
-                            .small()
-                            .icon(IconName::Ellipsis)
-                            .tooltip("More")
-                            .on_click(cx.listener(move |view, _, window, cx| {
-                                view.open_item_sheet(sheet_key.clone(), window, cx)
-                            })),
-                    ),
-            );
-        let queued = self.is_queued(&playlist_id, position, &video_id);
-        let mut state =
-            div()
-                .v_flex()
-                .gap_1()
-                .child(style::stage_track(("stages", position), item, cx));
-        if queued {
-            state = state.child(style::meta("In the queue", cx));
-        }
-        if let Some(error) = item["last_error"].as_str() {
-            state = state.child(div().text_sm().child(error.to_string()));
-        }
-        card = card.child(state);
-        let primary = item["primary_action"]["action"]
-            .as_str()
-            .and_then(|action| action.parse::<ItemAction>().ok());
-        if let (Some(action), Some(label)) = (primary, item["primary_action"]["label"].as_str()) {
-            let enabled = item["actions"][action.as_ref()]["enabled"]
-                .as_bool()
-                .unwrap_or(true);
-            let params = self.item_params(&playlist_id, position, &video_id, action, cx);
-            card = card.child(
-                div().flex().child(
-                    Button::new(("primary-action", position))
-                        .small()
-                        .label(label.to_string())
-                        .disabled(!enabled || queued)
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            view.start_job("watchlist.action", params.clone(), cx);
-                        })),
-                ),
-            );
-        }
-        card.into_any_element()
-    }
-
     fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
         self.queued_items.contains(&muzik_runner::item_key(
             &json!({"playlist_id":playlist_id,"position":position,"video_id":video_id}),
         ))
     }
 
-    fn item_params(
+    pub(crate) fn item_params(
         &self,
         playlist_id: &str,
         position: usize,
@@ -501,12 +410,14 @@ impl Muzik {
             .cloned()
     }
 
-    fn open_item_sheet(
+    pub(crate) fn open_item_sheet(
         &mut self,
         key: (String, usize, String),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.sheet_item = Some(key.2.clone());
+        self.cache_visible_thumbnails(cx);
         let view = cx.entity().downgrade();
         window.open_sheet(cx, move |sheet, _, cx| {
             let Some(entity) = view.upgrade() else {
