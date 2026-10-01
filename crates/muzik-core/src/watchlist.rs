@@ -173,7 +173,22 @@ impl SourceKind {
 }
 
 pub fn is_unavailable(item: &Value) -> bool {
-    item["unavailable"] == true || item["video_id"].as_str().is_none_or(str::is_empty)
+    is_gone(item) || item["video_id"].as_str().is_none_or(str::is_empty)
+}
+
+fn is_gone(item: &Value) -> bool {
+    item["unavailable"] == true
+        || stage_status(item, Stage::Download) == Some(StageStatus::Failed)
+            && item["stages"][Stage::Download.as_ref()]["error"]
+                .as_str()
+                .is_some_and(|error| {
+                    error.lines().any(|line| {
+                        line.contains("ERROR:")
+                            && [": Video unavailable", ": Private video"]
+                                .iter()
+                                .any(|end| line.trim_end().ends_with(end))
+                    })
+                })
 }
 
 pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {

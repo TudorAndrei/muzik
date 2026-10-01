@@ -409,3 +409,32 @@ fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> Result<(), Box<dyn 
     );
     Ok(())
 }
+
+#[test]
+fn removed_and_private_videos_leave_the_failed_list() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let failed = |id: &str, error: &str| {
+        json!({"position": 1, "title": id, "video_id": id,
+            "video_url": format!("https://www.youtube.com/watch?v={id}"),
+            "last_error": error,
+            "stages": {"download": {"status": "failed", "error": error}}})
+    };
+    let document = json!({"version": 3, "playlists": [{
+        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "items": [
+            failed("aaaaaaaaaaa", "yt-dlp failed: ERROR: [youtube] aaaaaaaaaaa: Private video"),
+            failed("bbbbbbbbbbb", "yt-dlp failed: WARNING: [youtube] unable to extract yt initial data\nERROR: [youtube] bbbbbbbbbbb: Video unavailable"),
+            failed("ccccccccccc", "yt-dlp failed: ERROR: unable to download video data: HTTP Error 403: Forbidden")
+        ]
+    }]});
+    let cards = view(document, directory.path(), directory.path())?;
+    let items = &cards["playlists"][0]["items"];
+    for gone in [&items[0], &items[1]] {
+        assert_eq!(gone["summary"], "Unavailable");
+        assert!(gone["primary_action"].is_null());
+        assert_eq!(gone["actions"]["retry"]["enabled"], false);
+    }
+    assert_eq!(items[2]["summary"], "Failed");
+    assert_eq!(items[2]["primary_action"]["action"], "retry");
+    Ok(())
+}

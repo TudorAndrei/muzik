@@ -1,5 +1,5 @@
 use super::{
-    is_unavailable, normalize, stage_statuses, ItemAction, SourceKind, Stage, StageStatus,
+    is_gone, is_unavailable, normalize, stage_statuses, ItemAction, SourceKind, Stage, StageStatus,
 };
 use crate::chapters;
 use crate::thumbnails;
@@ -108,7 +108,7 @@ pub(super) fn availability(
     action: ItemAction,
     output: &Path,
 ) -> (bool, Option<&'static str>) {
-    if item["unavailable"] == true {
+    if is_gone(item) {
         return (false, Some("This video is private or was removed."));
     }
     let video_id = item.get("video_id").and_then(Value::as_str);
