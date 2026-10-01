@@ -140,6 +140,14 @@ mise run check
 Add the release build with `mise run check-release`. The same checks run in CI
 and as individual pre-push hooks.
 
+Tests read and write only inside the repository. Temporary files go to `.tmp/`.
+On macOS, `mise run test-scoped` runs the tests in a sandbox that blocks the real
+muzik, beets, and music folders.
+
+mise runs Cargo through [mr boxington](https://mr-boxington.jdx.dev/) (`mbx`), a
+shared build cache for checkouts, worktrees, and CI. Run `mbx doctor` to check
+the setup.
+
 ## Workflow source policy
 
 `--audio-source` chooses where audio comes from: `youtube`, `soulseek`, or

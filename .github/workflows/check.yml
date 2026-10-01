@@ -37,10 +37,9 @@ jobs:
             libwebkit2gtk-4.1-dev libxkbcommon-x11-dev libx11-xcb-dev \
             libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: jdx/mr-boxington-action@v1
         with:
-          cache-bin: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          toolchain: "1.98.1"
       - run: mise run check
 
   gpui-macos:
@@ -51,10 +50,9 @@ jobs:
           persist-credentials: false
       - uses: jdx/mise-action@v4
         with:
-          install_args: rust hk
-      - uses: Swatinem/rust-cache@v2
+          install_args: rust mr-boxington hk
+      - uses: jdx/mr-boxington-action@v1
         with:
-          cache-bin: false
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          toolchain: "1.98.1"
       - run: cargo test --manifest-path apps/gui/Cargo.toml --locked
       - run: cargo run --manifest-path apps/gui/Cargo.toml --locked -- --version

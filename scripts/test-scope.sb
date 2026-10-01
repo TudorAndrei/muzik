@@ -6,6 +6,9 @@
   (subpath (string-append (param "HOME") "/.cargo"))
   (subpath (string-append (param "HOME") "/.rustup"))
   (subpath (string-append (param "HOME") "/.local/share/mise"))
+  (subpath (string-append (param "HOME") "/Library/Caches/mbx"))
+  (subpath (string-append (param "HOME") "/Library/Caches/mise"))
+  (subpath (string-append (param "HOME") "/.local/state/mise"))
   (subpath "/dev"))
 (deny file-read* file-write*
   (subpath (string-append (param "HOME") "/Library/Application Support/muzik"))

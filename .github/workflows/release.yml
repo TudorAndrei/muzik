@@ -48,7 +48,7 @@ jobs:
       - uses: jdx/mise-action@v4
         if: inputs.tag == ''
         with:
-          install_args: rust cocogitto hk
+          install_args: rust mr-boxington cocogitto hk
       - run: cargo fetch --locked
         if: inputs.tag == ''
       - name: Set release Git access
@@ -105,11 +105,11 @@ jobs:
             libssl-dev libzstd-dev vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
         with:
-          install_args: rust
-      - uses: Swatinem/rust-cache@v2
+          install_args: rust mr-boxington
+      - uses: jdx/mr-boxington-action@v1
         with:
-          cache-bin: false
-          key: ${{ matrix.target }}
+          toolchain: "1.98.1"
+          save-on-workflow-dispatch: true
       - name: Build Rust apps
         run: cargo build --release --locked -p muzik-cli -p muzik-gpui
       - name: Package the CLI, the desktop app, and license files
