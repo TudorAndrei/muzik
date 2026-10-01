@@ -1,10 +1,11 @@
 use crate::services;
 use chrono::{DateTime, Local};
 use muzik_core::app_config;
+use muzik_core::bandcamp;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths;
 use muzik_core::spotify;
-use muzik_core::watchlist::Repository;
+use muzik_core::watchlist::{self, Repository};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -12,6 +13,9 @@ pub fn handles(command: &str) -> bool {
     matches!(
         command,
         "hello"
+            | "bandcamp.get"
+            | "bandcamp.save"
+            | "bandcamp.logout"
             | "config.get"
             | "config.save"
             | "library.scan"
@@ -39,6 +43,19 @@ pub fn dispatch(command: &str, params: &Value) -> Result<Value, String> {
                 "parse_again", "split_again", "organize_again", "run_all_again"
             ]
         })),
+        "bandcamp.get" => Ok(bandcamp::status()),
+        "bandcamp.save" => {
+            let login = bandcamp::Login::save(
+                params["user"].as_str().unwrap_or(""),
+                params["cookies"].as_str().unwrap_or(""),
+            )?;
+            Repository::default().ensure(&watchlist::bandcamp_source(&login.user))?;
+            Ok(bandcamp::status())
+        }
+        "bandcamp.logout" => {
+            bandcamp::Login::clear()?;
+            Ok(bandcamp::status())
+        }
         "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(&path)?})),
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(&path, params)?})),
         "library.scan" => library_scan(params),

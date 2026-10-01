@@ -11,7 +11,7 @@ use bridge::Bridge;
 use gpui_kit::component::button::*;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState, NumberInput};
+use gpui_kit::component::input::{Input, InputState, NumberInput, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -405,6 +405,7 @@ impl Muzik {
             self.config_view =
                 Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
             self.send("soulseek.get", json!({}));
+            self.send("bandcamp.get", json!({}));
         }
         self.page = Page::Settings;
         self.error = None;
@@ -757,7 +758,10 @@ impl Muzik {
                         .unwrap_or("Request failed")
                         .into();
                     self.error = Some(self.status.clone());
-                    if matches!(command.as_str(), "config.save" | "soulseek.save") {
+                    if matches!(
+                        command.as_str(),
+                        "config.save" | "soulseek.save" | "bandcamp.save" | "bandcamp.logout"
+                    ) {
                         *self.config_status.borrow_mut() = self.status.clone();
                     }
                     return;
@@ -801,6 +805,17 @@ impl Muzik {
                             *self.config_status.borrow_mut() =
                                 "Config and Soulseek account saved".into();
                             self.send("services.check", json!({}));
+                        }
+                    }
+                    "bandcamp.get" | "bandcamp.save" | "bandcamp.logout" => {
+                        if let Some(view) = self.config_view.clone() {
+                            view.update(_cx, |view, cx| view.set_bandcamp(result, window, cx));
+                        }
+                        if command == "bandcamp.save" {
+                            *self.config_status.borrow_mut() = "Bandcamp login saved".into();
+                            self.send("watchlist.load", self.launcher_params(_cx));
+                        } else if command == "bandcamp.logout" {
+                            *self.config_status.borrow_mut() = "Bandcamp login removed".into();
                         }
                     }
                     "spotify.status"
@@ -1680,8 +1695,23 @@ struct ConfigView {
     choices: Vec<Choice>,
     switches: Vec<ConfigSwitch>,
     soulseek: SoulseekFields,
+    bandcamp: BandcampFields,
     status: Rc<RefCell<String>>,
 }
+
+struct BandcampFields {
+    user: Entity<InputState>,
+    cookies: Entity<TextareaState>,
+    logged_in: bool,
+}
+
+const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the cookies:
+1. In your browser, log in to bandcamp.com and open your collection page.
+2. Open the developer tools (Option-Command-I) and select the Network tab.
+3. Reload the page, then select the first request (your user name).
+4. In Request Headers, copy the full value of the Cookie line.
+5. Paste it below, type your user name, and select Save Bandcamp login.
+A cookies.txt file from a browser extension also works. The cookies stay on this computer.";
 
 struct SoulseekFields {
     username: Entity<InputState>,
@@ -1800,13 +1830,57 @@ impl ConfigView {
             }),
             has_password: false,
         };
+        let bandcamp = BandcampFields {
+            user: cx.new(|cx| InputState::new(window, cx).placeholder("User name")),
+            cookies: cx.new(|cx| {
+                TextareaState::new(window, cx)
+                    .placeholder("Paste the Cookie value or a cookies.txt file")
+                    .rows(4)
+            }),
+            logged_in: false,
+        };
         Self {
             main: main.downgrade(),
             fields,
             choices,
             switches,
             soulseek,
+            bandcamp,
             status,
+        }
+    }
+
+    fn set_bandcamp(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
+        self.bandcamp.logged_in = settings["logged_in"] == true;
+        if let Some(user) = settings["user"].as_str().filter(|user| !user.is_empty()) {
+            let user = user.to_string();
+            self.bandcamp
+                .user
+                .update(cx, |state, cx| state.set_value(user, window, cx));
+        }
+        let placeholder = if self.bandcamp.logged_in {
+            "Saved. Paste new cookies to change them."
+        } else {
+            "Paste the Cookie value or a cookies.txt file"
+        };
+        self.bandcamp.cookies.update(cx, |state, cx| {
+            state.set_value("", window, cx);
+            state.set_placeholder(placeholder, window, cx);
+        });
+        cx.notify();
+    }
+
+    fn send_bandcamp(&mut self, command: &str, cx: &mut Context<Self>) {
+        let params = json!({
+            "user": self.bandcamp.user.read(cx).value().trim().to_string(),
+            "cookies": self.bandcamp.cookies.read(cx).value().to_string(),
+        });
+        if let Some(main) = self.main.upgrade() {
+            main.update(cx, |main, cx| {
+                main.error = None;
+                main.send(command, params);
+                cx.notify();
+            });
         }
     }
 
@@ -2048,6 +2122,39 @@ impl Render for ConfigView {
                                         .gap_4()
                                         .child(labeled("Server", 240., Input::new(&self.soulseek.host)))
                                         .child(labeled("Port", 140., NumberInput::new(&self.soulseek.port))),
+                                ),
+                        )
+                        .child(
+                            GroupBox::new()
+                                .id("config-bandcamp")
+                                .title("BANDCAMP")
+                                .outline()
+                                .child(style::meta(BANDCAMP_HELP, cx))
+                                .child(labeled("User name", 240., Input::new(&self.bandcamp.user)))
+                                .child(Textarea::new(&self.bandcamp.cookies).h(px(96.)))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .child(
+                                            Button::new("save-bandcamp")
+                                                .label("Save Bandcamp login")
+                                                .on_click(cx.listener(|view, _, _, cx| {
+                                                    view.send_bandcamp("bandcamp.save", cx)
+                                                })),
+                                        )
+                                        .when(self.bandcamp.logged_in, |row| {
+                                            row.child(
+                                                Button::new("logout-bandcamp")
+                                                    .ghost()
+                                                    .label("Log out")
+                                                    .on_click(cx.listener(|view, _, _, cx| {
+                                                        view.send_bandcamp("bandcamp.logout", cx)
+                                                    })),
+                                            )
+                                            .child(style::meta("Logged in", cx))
+                                        }),
                                 ),
                         )
                         .child(

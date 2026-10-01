@@ -510,7 +510,11 @@ fn item_sheet(
     cx: &App,
 ) -> Sheet {
     let title = item["title"].as_str().unwrap_or("Untitled").to_string();
-    let spotify = SourceKind::of(item) == SourceKind::Spotify;
+    let (id_label, open_label) = match SourceKind::of(item) {
+        SourceKind::Spotify => ("Spotify ID", "Open in Spotify"),
+        SourceKind::Bandcamp => ("Bandcamp ID", "Open on Bandcamp"),
+        SourceKind::Youtube => ("YouTube ID", "Open on YouTube"),
+    };
     let mut body = div().v_flex().gap_5();
     if let Some(path) = item["thumbnail_path"].as_str() {
         body = body.child(
@@ -533,11 +537,7 @@ fn item_sheet(
     let mut facts = DescriptionList::horizontal()
         .columns(1)
         .label_width(px(110.))
-        .item(
-            if spotify { "Spotify ID" } else { "YouTube ID" },
-            key.2.clone(),
-            1,
-        );
+        .item(id_label, key.2.clone(), 1);
     for (stage, state) in states {
         facts = facts.item(style::stage_label(stage), style::status_word(state), 1);
     }
@@ -552,11 +552,7 @@ fn item_sheet(
             Button::new("open-item")
                 .small()
                 .icon(IconName::ExternalLink)
-                .label(if spotify {
-                    "Open in Spotify"
-                } else {
-                    "Open on YouTube"
-                })
+                .label(open_label)
                 .on_click(move |_, _, cx| cx.open_url(&url)),
         );
     }

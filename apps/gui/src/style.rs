@@ -8,7 +8,10 @@ use serde_json::Value;
 const THEME: &str = include_str!("../themes/muzik.json");
 const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-v2.png");
 
-gpui_kit::assets::icon_assets!(SourceIcons, [SquarePlay, ListMusic, Heart, Disc3]);
+gpui_kit::assets::icon_assets!(
+    SourceIcons,
+    [SquarePlay, ListMusic, Heart, Disc3, ShoppingBag]
+);
 
 pub struct AppAssets;
 
@@ -30,7 +33,9 @@ impl AssetSource for AppAssets {
 pub fn source_icon(playlist: &Value) -> gpui_kit::assets::IconName {
     use gpui_kit::assets::IconName;
     let id = playlist["playlist_id"].as_str().unwrap_or("");
-    if id == "spotify:liked" {
+    if id.starts_with("bandcamp:") {
+        IconName::ShoppingBag
+    } else if id == "spotify:liked" {
         IconName::Heart
     } else if id.starts_with("spotify:album:") {
         IconName::Disc3
@@ -231,6 +236,7 @@ mod tests {
             "spotify:liked",
             "spotify:album:abc",
             "spotify:playlist:abc",
+            "bandcamp:collection",
         ] {
             let path = source_icon(&json!({"playlist_id": id})).path();
             assert!(AppAssets.load(&path)?.is_some(), "{path} is missing");

@@ -250,10 +250,18 @@ apply to the selected source.
 You can also add a Spotify playlist, a Spotify album, or your Liked Songs.
 Connect your Spotify account first on the **Spotify** page, or run
 `muzik spotify login`. Each refresh reads the current tracks through the
-Spotify Web API. Select Soulseek or YouTube for audio. muzik reads Spotify
-metadata only; it never downloads Spotify media.
+Spotify Web API. Watchlist Spotify items get audio from Soulseek only. muzik
+reads Spotify metadata only; it never downloads Spotify media.
 See [SPOTIFY.md](SPOTIFY.md) for the application
 setup, the scopes, and the limits.
+
+The **Bandcamp collection** source shows your Bandcamp purchases. It is added
+automatically when you save a Bandcamp login in **Settings**. The Bandcamp
+section there tells you how to copy the Cookie value from the browser
+developer tools; a `cookies.txt` file also works. muzik downloads each purchase
+from Bandcamp in FLAC, then organizes it into the library. The login is kept
+in `bandcamp_cookies.txt` and `bandcamp_user` in the muzik config directory,
+so `muzik bandcamp` uses the same login.
 
 Select a source in the left rail. The page shows all current items in a paged
 card list. Each card shows its title and the Download, Quality, Parse, Split,
