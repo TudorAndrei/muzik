@@ -26,25 +26,15 @@ pub fn validate_ids(params: &Value) -> Result<Vec<String>, String> {
 pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path) -> Value {
     let updates = match repository.load() {
         Ok(watchlist) => {
-            let mut urls = BTreeMap::new();
-            if let Some(playlists) = watchlist["playlists"].as_array() {
-                for item in playlists
-                    .iter()
-                    .flat_map(|playlist| playlist["items"].as_array().into_iter().flatten())
-                {
-                    if let Some(id) = item["video_id"].as_str() {
-                        urls.insert(
-                            id.to_owned(),
-                            item["thumbnail_url"].as_str().map(str::to_owned),
-                        );
-                    }
-                }
-            }
+            let urls: BTreeMap<&str, Option<&str>> = watchlist
+                .items()
+                .filter_map(|item| Some((item.video_id.as_deref()?, item.thumbnail_url.as_deref())))
+                .collect();
             ids.iter()
                 .map(|id| {
-                    let result = match urls.get(id) {
+                    let result = match urls.get(id.as_str()) {
                         None => Err("The item is no longer in the watchlist.".to_owned()),
-                        Some(url) => cache_item(id, url.as_deref(), cache_dir).map(Some),
+                        Some(url) => cache_item(id, *url, cache_dir).map(Some),
                     };
                     update(id, result)
                 })
@@ -126,14 +116,14 @@ mod tests {
         let cache = dir.path().join("cache");
         fs::create_dir(&cache)?;
         fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"saved image")?;
-        watchlist.save(json!({
+        watchlist.save(&muzik_core::watchlist::Watchlist::from_value(json!({
             "version": 3,
             "playlists": [{
                 "playlist_id": "PL1",
                 "url": "https://www.youtube.com/playlist?list=PL1",
                 "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk", "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/default.jpg"}]
             }]
-        }))?;
+        }))?)?;
         let ids = validate_ids(&json!({"video_ids": ["abcdefghijk", "abcdefghijk"]}))?;
         let result = cache_requested(&ids, &watchlist, &cache);
         assert_eq!(result["thumbnails"].as_array().map(Vec::len), Some(1));

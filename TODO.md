@@ -41,11 +41,12 @@
 
 ## Phase 6: Typed watchlist item
 
-- [ ] `watchlist/item.rs` typed document and transitions
-- [ ] Core and runner use the typed item
-- [ ] Delete duplicated stage helpers and audio lookups
-- [ ] Stored JSON round-trip test
-- [ ] Commit: `refactor(watchlist): type the watchlist item and own its stage transitions`
+- [x] `watchlist/item.rs` typed document and transitions
+- [x] Core and runner use the typed item
+- [x] Delete duplicated stage helpers and audio lookups
+- [x] Stored JSON round-trip test
+- [x] Real watchlist: `muzik watchlist list --items` output is the same before and after
+- [x] Commit: `refactor(watchlist): type the watchlist item and own its stage transitions`
 
 ## Phase 7: Job queue in muzik.db and one item identity
 

@@ -7,14 +7,14 @@ use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
 use muzik_core::watchlist::{
-    set_stage_status, stage_status, ItemAction, SourceKind, Stage, StageStatus,
+    AudioIndex, ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem,
 };
 use muzik_core::{
     bandcamp, chapters, spotify, watchlist, AudioSource, ChapterAnswer, DecisionKind, QualityPolicy,
 };
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
-use muzik_workflow::ytdlp::YtDlp;
+use muzik_workflow::ytdlp::{is_video_id, YtDlp};
 use muzik_workflow::{
     classify_input, process_audio_plan_with_events, WorkflowInput, WorkflowOperations,
     WorkflowOptions,
@@ -22,8 +22,7 @@ use muzik_workflow::{
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn sync(
@@ -70,13 +69,13 @@ pub fn action(
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(settings);
-    let playlist_id = required(params, "playlist_id")?;
+    let playlist_id = required(params["playlist_id"].as_str(), "playlist_id")?;
     let position = params["position"]
         .as_u64()
         .filter(|value| *value > 0)
         .ok_or_else(|| JobError::Operation("position must be a positive integer".into()))?;
     let video_id = params["video_id"].as_str();
-    let name = required(params, "action")?;
+    let name = required(params["action"].as_str(), "action")?;
     let name: ItemAction = name
         .parse()
         .map_err(|_| JobError::Operation(format!("Unknown item action: {name}")))?;
@@ -103,9 +102,8 @@ pub fn action(
     )
 }
 
-fn required<'a>(params: &'a Value, key: &str) -> Result<&'a str, JobError> {
-    params[key]
-        .as_str()
+fn required<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, JobError> {
+    value
         .filter(|text| !text.trim().is_empty())
         .ok_or_else(|| JobError::Operation(format!("{key} must be a non-empty string")))
 }
@@ -143,6 +141,10 @@ impl<'a> Prepared<'a> {
             playlist_id: None,
         }
     }
+
+    fn audio(&self, item: &WatchItem) -> Option<PathBuf> {
+        item.downloaded_audio(&AudioIndex::scan(&self.settings.request.output))
+    }
 }
 
 struct Adapter<'a, 'b> {
@@ -155,44 +157,46 @@ struct Adapter<'a, 'b> {
 }
 
 impl Operations for Adapter<'_, '_> {
-    fn load(&mut self, playlist: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, playlist: &Playlist) -> Result<LoadedSource, JobError> {
         check_cancelled(self.cancelled)?;
-        let id = required(playlist, "playlist_id")?;
-        if SourceKind::of(playlist) == SourceKind::Bandcamp {
-            let login = bandcamp::Login::load()
-                .ok_or_else(|| JobError::Operation(BANDCAMP_LOGIN.into()))?;
-            let purchases = bandcamp::collection(&login)?;
-            check_cancelled(self.cancelled)?;
-            return Ok(bandcamp_items(&purchases));
+        match playlist.kind {
+            SourceKind::Bandcamp => {
+                let login = bandcamp::Login::load()
+                    .ok_or_else(|| JobError::Operation(BANDCAMP_LOGIN.into()))?;
+                let purchases = bandcamp::collection(&login)?;
+                check_cancelled(self.cancelled)?;
+                Ok(bandcamp_items(&purchases))
+            }
+            SourceKind::Spotify => {
+                let document = spotify::load_playlist_document(
+                    &self.prepared.settings.paths.config_file(),
+                    &spotify::token_path(),
+                    &playlist.playlist_id,
+                )?;
+                check_cancelled(self.cancelled)?;
+                spotify_items(&document)
+            }
+            SourceKind::Youtube => {
+                let source = YtDlp::default()
+                    .playlist(&playlist.url, self.cancelled)
+                    .map_err(workflow_error)?;
+                Ok(youtube_items(playlist, &source))
+            }
         }
-        if SourceKind::of(playlist) == SourceKind::Spotify {
-            let document = spotify::load_playlist_document(
-                &self.prepared.settings.paths.config_file(),
-                &spotify::token_path(),
-                id,
-            )?;
-            check_cancelled(self.cancelled)?;
-            return spotify_items(&document);
-        }
-        let url = required(playlist, "url")?;
-        let source = YtDlp::default()
-            .playlist(url, self.cancelled)
-            .map_err(workflow_error)?;
-        Ok(youtube_items(playlist, &source))
     }
 
     fn process(
         &mut self,
-        playlist: &Value,
-        item: &Value,
+        playlist: &Playlist,
+        item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         check_cancelled(cancelled)?;
         self.parked.replace(None);
         gates::take_stage();
-        let result = match SourceKind::of(item) {
-            SourceKind::Spotify => self.process_spotify(playlist, item, action, cancelled),
+        let result = match item.kind {
+            SourceKind::Spotify => self.process_spotify(item, action, cancelled),
             SourceKind::Youtube => self.process_youtube(item, action, cancelled),
             SourceKind::Bandcamp => self.process_bandcamp(item, action, cancelled),
         };
@@ -209,10 +213,10 @@ impl Operations for Adapter<'_, '_> {
             let stage = parked.kind.stage();
             let question = parked.question();
             (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
-                "playlist_id":playlist["playlist_id"],
-                "position":item["position"],
-                "video_id":item["video_id"].as_str().or_else(|| item["entry_id"].as_str()),
-                "title":item["title"],
+                "playlist_id":playlist.playlist_id,
+                "position":item.position,
+                "video_id":item.video_id.as_deref().or(item.entry_id.as_deref()),
+                "title":item.title,
                 "stage":stage,
                 "question":question,
             }}));
@@ -224,10 +228,10 @@ impl Operations for Adapter<'_, '_> {
 impl Adapter<'_, '_> {
     fn process_youtube(
         &mut self,
-        item: &Value,
+        item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         if action.stage() != Stage::Download {
             return self.process_local_stage(item, action, cancelled);
         }
@@ -238,10 +242,10 @@ impl Adapter<'_, '_> {
                 return self.process_local_stage(item, ItemAction::OrganizeAgain, cancelled);
             }
             let mut updated = item.clone();
-            set_stage(&mut updated, Stage::Organize, StageStatus::Skipped);
+            updated.set(Stage::Organize, StageStatus::Skipped);
             return Ok(updated);
         }
-        let url = required(item, "video_url")?;
+        let url = required(item.video_url.as_deref(), "video_url")?;
         let mut settings = self.prepared.settings.clone();
         url.clone_into(&mut settings.request.raw);
         match action {
@@ -269,16 +273,10 @@ impl Adapter<'_, '_> {
         )
         .map_err(workflow_error)?;
         let mut updated = item.clone();
-        save_output_paths(
-            &mut updated,
-            &result,
-            &self.prepared.settings.request.output,
-        )?;
+        self.save_output_paths(&mut updated, &result);
         if action == ItemAction::DownloadAgain {
-            set_stage(&mut updated, Stage::Download, StageStatus::Complete);
-            for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
-                set_stage(&mut updated, stage, StageStatus::Stale);
-            }
+            updated.set(Stage::Download, StageStatus::Complete);
+            updated.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         } else {
             let split = result["split_dirs"]
                 .as_array()
@@ -288,19 +286,38 @@ impl Adapter<'_, '_> {
         Ok(updated)
     }
 
+    fn save_output_paths(&self, item: &mut WatchItem, result: &Value) {
+        let paths = |key: &str| {
+            result[key]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(PathBuf::from)
+                .collect::<Vec<_>>()
+        };
+        let audio = paths("audio_files")
+            .into_iter()
+            .find(|path| path.is_file())
+            .or_else(|| self.prepared.audio(item));
+        item.set_path(Stage::Download, audio);
+        let split = paths("split_dirs").into_iter().find(|path| path.is_dir());
+        item.set_path(Stage::Split, split);
+    }
+
     fn process_local_stage(
         &mut self,
-        item: &Value,
+        item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
-        let audio = downloaded_audio(item, &self.prepared.settings.request.output)?;
+    ) -> Result<WatchItem, JobError> {
+        let audio = self.prepared.audio(item);
         let mut updated = item.clone();
         if action == ItemAction::OrganizeAgain {
-            let target = stage_path(item, Stage::Split)
-                .as_str()
-                .map(PathBuf::from)
+            let target = item
+                .path(Stage::Split)
                 .filter(|path| path.is_dir())
+                .map(Path::to_path_buf)
                 .or(audio)
                 .ok_or_else(|| {
                     JobError::Operation(
@@ -317,13 +334,13 @@ impl Adapter<'_, '_> {
             options.no_organize = false;
             local.organize(&target, &options)?;
             check_cancelled(cancelled)?;
-            set_stage(&mut updated, Stage::Organize, StageStatus::Complete);
+            updated.set(Stage::Organize, StageStatus::Complete);
             return Ok(updated);
         }
         let audio = audio
             .ok_or_else(|| JobError::Operation("Downloaded audio is not available.".into()))?;
         if action == ItemAction::CheckQualityAgain {
-            set_path(&mut updated, Stage::Download, json!(audio));
+            updated.set_path(Stage::Download, Some(audio.clone()));
             let _permit = gates::enter(Gate::Process, Stage::Quality, cancelled)
                 .map_err(|_| JobError::Cancelled)?;
             let result = check_youtube_quality(
@@ -347,13 +364,10 @@ impl Adapter<'_, '_> {
         }
         if action == ItemAction::ParseAgain {
             gates::mark_stage(Stage::Parse);
-            let video_url = required(item, "video_url")?;
+            let video_url = required(item.video_url.as_deref(), "video_url")?;
             let chapter_path = refresh_chapters(&audio, video_url, cancelled, self.decide)?;
-            set_stage(&mut updated, Stage::Parse, StageStatus::Complete);
-            set_path(&mut updated, Stage::Parse, json!(chapter_path));
-            for stage in [Stage::Split, Stage::Organize] {
-                set_stage(&mut updated, stage, StageStatus::Stale);
-            }
+            updated.complete(Stage::Parse, Some(chapter_path));
+            updated.invalidate(&[Stage::Split, Stage::Organize]);
             return Ok(updated);
         }
         let found = chapters::find_chapters(&audio)
@@ -384,22 +398,19 @@ impl Adapter<'_, '_> {
             .split_with_cancel(&task, &options, cancelled, &mut |_| {})
             .map_err(JobError::Operation)?;
         check_cancelled(cancelled)?;
-        set_stage(&mut updated, Stage::Split, StageStatus::Complete);
-        set_path(&mut updated, Stage::Split, json!(output));
-        set_stage(&mut updated, Stage::Organize, StageStatus::Stale);
+        updated.complete(Stage::Split, Some(output));
+        updated.invalidate(&[Stage::Organize]);
         Ok(updated)
     }
 
     fn process_spotify(
         &mut self,
-        _playlist: &Value,
-        item: &Value,
+        item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         if action == ItemAction::OrganizeAgain {
-            let saved = downloaded_audio(item, &self.prepared.settings.request.output)?;
-            return match saved {
+            return match self.prepared.audio(item) {
                 Some(file) => self.process_spotify_file(item, file, cancelled),
                 None => self.process_local_stage(item, action, cancelled),
             };
@@ -410,9 +421,13 @@ impl Adapter<'_, '_> {
             )));
         }
         let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
-        let track = item["track"].as_object().ok_or_else(|| {
-            JobError::Operation("The Spotify track has no saved metadata.".into())
-        })?;
+        let track = item
+            .track
+            .as_ref()
+            .and_then(Value::as_object)
+            .ok_or_else(|| {
+                JobError::Operation("The Spotify track has no saved metadata.".into())
+            })?;
         let title = track
             .get("title")
             .and_then(Value::as_str)
@@ -431,15 +446,11 @@ impl Adapter<'_, '_> {
         let query = format!("{artists} - {title}");
         let preference = self.prepared.settings.options.prefer.as_str();
         if !fresh {
-            let saved = stage_path(item, Stage::Download)
-                .as_str()
-                .map(PathBuf::from)
-                .filter(|path| path.is_file());
-            if let Some(file) = saved {
-                return self.process_spotify_file(item, file, cancelled);
+            if let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
+                return self.process_spotify_file(item, file.to_path_buf(), cancelled);
             }
         }
-        let entry_id = required(item, "entry_id")?;
+        let entry_id = required(item.entry_id.as_deref(), "entry_id")?;
         let root = self
             .prepared
             .settings
@@ -473,11 +484,11 @@ impl Adapter<'_, '_> {
 
     fn process_bandcamp(
         &mut self,
-        item: &Value,
+        item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
-        let entry_id = required(item, "entry_id")?;
+    ) -> Result<WatchItem, JobError> {
+        let entry_id = required(item.entry_id.as_deref(), "entry_id")?;
         let directory = self
             .prepared
             .settings
@@ -498,11 +509,16 @@ impl Adapter<'_, '_> {
             )));
         }
         if !saved {
-            let page = item["track"]["download_page"].as_str().ok_or_else(|| {
-                JobError::Operation(
-                    "The Bandcamp purchase has no download page. Refresh the collection.".into(),
-                )
-            })?;
+            let page = item
+                .track
+                .as_ref()
+                .and_then(|track| track["download_page"].as_str())
+                .ok_or_else(|| {
+                    JobError::Operation(
+                        "The Bandcamp purchase has no download page. Refresh the collection."
+                            .into(),
+                    )
+                })?;
             let login = bandcamp::Login::load()
                 .ok_or_else(|| JobError::Operation(BANDCAMP_LOGIN.into()))?;
             if directory.exists() {
@@ -562,17 +578,18 @@ impl Adapter<'_, '_> {
         }
         let mut updated = item.clone();
         mark_full(&mut updated, &options, false);
-        set_path(&mut updated, Stage::Download, json!(directory));
+        updated.set_path(Stage::Download, Some(directory));
         Ok(updated)
     }
 
     fn process_spotify_file(
         &mut self,
-        item: &Value,
+        item: &WatchItem,
         file: PathBuf,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
-        write_spotify_tags(&file, &spotify_tags(&item["track"])).map_err(JobError::Operation)?;
+    ) -> Result<WatchItem, JobError> {
+        let track = item.track.clone().unwrap_or(Value::Null);
+        write_spotify_tags(&file, &spotify_tags(&track)).map_err(JobError::Operation)?;
         let mut options = self.prepared.settings.options.clone();
         options.no_split = true;
         options.interactive = false;
@@ -596,7 +613,7 @@ impl Adapter<'_, '_> {
         let mut updated = item.clone();
         mark_full(&mut updated, &options, false);
         if file.is_file() {
-            set_path(&mut updated, Stage::Download, json!(file));
+            updated.set_path(Stage::Download, Some(file));
         }
         Ok(updated)
     }
@@ -619,90 +636,32 @@ fn spotify_tags(track: &Value) -> SpotifyTags {
     }
 }
 
-fn stage_path(item: &Value, stage: Stage) -> &Value {
-    &item["stages"][stage.as_ref()]["path"]
-}
-
-fn set_path(item: &mut Value, stage: Stage, path: Value) {
-    item["stages"][stage.as_ref()]["path"] = path;
-}
-
-fn ready_quality_directory(item: &Value) -> Option<PathBuf> {
-    if stage_status(item, Stage::Split) != Some(StageStatus::Complete)
-        || stage_path(item, Stage::Quality) != stage_path(item, Stage::Split)
+fn ready_quality_directory(item: &WatchItem) -> Option<PathBuf> {
+    if item.status(Stage::Split) != StageStatus::Complete
+        || item.path(Stage::Quality) != item.path(Stage::Split)
     {
         return None;
     }
-    stage_path(item, Stage::Split)
-        .as_str()
-        .map(PathBuf::from)
+    item.path(Stage::Split)
         .filter(|path| path.is_dir())
+        .map(Path::to_path_buf)
 }
 
-fn apply_quality_result(item: &mut Value, result: &QualityUpgradeResult) {
-    set_stage(item, Stage::Quality, StageStatus::Complete);
+fn apply_quality_result(item: &mut WatchItem, result: &QualityUpgradeResult) {
+    item.set(Stage::Quality, StageStatus::Complete);
     if let Some(directory) = result.pre_split_dirs.first() {
-        set_path(item, Stage::Quality, json!(directory));
-        set_path(item, Stage::Split, json!(directory));
-        set_stage(item, Stage::Parse, StageStatus::Skipped);
-        set_stage(item, Stage::Split, StageStatus::Complete);
-        set_stage(item, Stage::Organize, StageStatus::Stale);
+        item.set_path(Stage::Quality, Some(directory.clone()));
+        item.set_path(Stage::Split, Some(directory.clone()));
+        item.set(Stage::Parse, StageStatus::Skipped);
+        item.set(Stage::Split, StageStatus::Complete);
+        item.invalidate(&[Stage::Organize]);
     } else if let Some(replacement) = result.audio_files.first() {
-        if *stage_path(item, Stage::Download) != json!(replacement) {
-            set_path(item, Stage::Download, json!(replacement));
-            set_path(item, Stage::Quality, json!(replacement));
-            for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
-                set_stage(item, stage, StageStatus::Stale);
-            }
+        if item.path(Stage::Download) != Some(replacement.as_path()) {
+            item.set_path(Stage::Download, Some(replacement.clone()));
+            item.set_path(Stage::Quality, Some(replacement.clone()));
+            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         }
     }
-}
-
-fn downloaded_audio(item: &Value, output: &Path) -> Result<Option<PathBuf>, JobError> {
-    if let Some(path) = stage_path(item, Stage::Download)
-        .as_str()
-        .map(PathBuf::from)
-        .filter(|path| path.is_file())
-    {
-        return Ok(Some(path));
-    }
-    let Some(id) = item["video_id"].as_str().filter(|id| !id.is_empty()) else {
-        return Ok(None);
-    };
-    if !output.is_dir() {
-        return Ok(None);
-    }
-    let files =
-        muzik_workflow::find_audio_inputs(&[output.to_path_buf()]).map_err(workflow_error)?;
-    Ok(files.into_iter().find(|path| {
-        path.file_stem()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.contains(&format!("[{id}]")))
-    }))
-}
-
-fn save_output_paths(item: &mut Value, result: &Value, output: &Path) -> Result<(), JobError> {
-    let audio = result["audio_files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(PathBuf::from)
-        .find(|path| path.is_file());
-    let audio = match audio {
-        Some(path) => Some(path),
-        None => downloaded_audio(item, output)?,
-    };
-    set_path(item, Stage::Download, json!(audio));
-    let split = result["split_dirs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(PathBuf::from)
-        .find(|path| path.is_dir());
-    set_path(item, Stage::Split, json!(split));
-    Ok(())
 }
 
 fn refresh_chapters(
@@ -836,28 +795,53 @@ fn format_time(seconds: i64) -> String {
     }
 }
 
-fn youtube_items(playlist: &Value, source: &Value) -> LoadedSource {
-    let old: HashMap<&str, &Value> = playlist["items"]
+fn youtube_items(playlist: &Playlist, source: &Value) -> LoadedSource {
+    let old: HashMap<&str, &WatchItem> = playlist
+        .items
+        .iter()
+        .filter_map(|item| Some((item.video_id.as_deref()?, item)))
+        .collect();
+    let items = source["entries"]
         .as_array()
         .into_iter()
         .flatten()
-        .filter_map(|item| Some((item["video_id"].as_str()?, item)))
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let id = entry["id"].as_str().or_else(|| entry["url"].as_str())?;
+            if !is_video_id(id) {
+                return None;
+            }
+            let saved = old.get(id).copied();
+            let listed_title = entry["title"].as_str().filter(|title| {
+                !title.is_empty() && !(title.starts_with('[') && title.ends_with(" video]"))
+            });
+            let unavailable = listed_title.is_none() && entry["duration"].is_null();
+            let title = listed_title
+                .or_else(|| saved.map(|item| item.title.as_str()))
+                .unwrap_or(id);
+            let thumbnail = entry["thumbnail"]
+                .as_str()
+                .or_else(|| {
+                    entry["thumbnails"]
+                        .as_array()
+                        .and_then(|images| images.last())
+                        .and_then(|image| image["url"].as_str())
+                })
+                .map(str::to_owned)
+                .or_else(|| saved.and_then(|item| item.thumbnail_url.clone()));
+            let mut item = WatchItem::new(index as u64 + 1, title, SourceKind::Youtube);
+            item.video_id = Some(id.to_owned());
+            item.video_url = Some(format!("https://www.youtube.com/watch?v={id}"));
+            item.thumbnail_url = thumbnail;
+            item.unavailable = Some(unavailable);
+            Some(item)
+        })
         .collect();
-    let items = source["entries"].as_array().into_iter().flatten().enumerate().filter_map(|(index, entry)| {
-        let id = entry["id"].as_str().or_else(|| entry["url"].as_str())?;
-        if id.len() != 11 || !id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) { return None; }
-        let saved = old.get(id).copied();
-        let listed_title = entry["title"].as_str().filter(|title| !title.is_empty() && !(title.starts_with('[') && title.ends_with(" video]")));
-        let unavailable = listed_title.is_none() && entry["duration"].is_null();
-        let title = listed_title.or_else(|| saved.and_then(|item| item["title"].as_str())).unwrap_or(id);
-        let thumbnail = entry["thumbnail"].as_str().or_else(|| entry["thumbnails"].as_array().and_then(|images| images.last()).and_then(|image| image["url"].as_str())).map(str::to_owned).or_else(|| saved.and_then(|item| item["thumbnail_url"].as_str()).map(str::to_owned));
-        Some(json!({"position":index + 1,"title":title,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"thumbnail_url":thumbnail,"kind":SourceKind::Youtube,"unavailable":unavailable}))
-    }).collect();
     LoadedSource {
         title: source["title"]
             .as_str()
             .map(str::to_owned)
-            .or_else(|| playlist["title"].as_str().map(str::to_owned)),
+            .or_else(|| playlist.title.clone()),
         items,
     }
 }
@@ -892,9 +876,15 @@ fn spotify_items(document: &Value) -> Result<LoadedSource, JobError> {
         } else {
             format!("{artists} - {title}")
         };
-        let video_id = source.rsplit(':').next().unwrap_or("");
-        let image = track["source_metadata"]["image"].clone();
-        items.push(json!({"position":index + 1,"title":label,"video_id":video_id,"video_url":track["source_url"],"thumbnail_url":image,"kind":SourceKind::Spotify,"entry_id":entry_id,"track":track}));
+        let mut item = WatchItem::new(index as u64 + 1, &label, SourceKind::Spotify);
+        item.video_id = Some(source.rsplit(':').next().unwrap_or("").to_owned());
+        item.video_url = track["source_url"].as_str().map(str::to_owned);
+        item.thumbnail_url = track["source_metadata"]["image"]
+            .as_str()
+            .map(str::to_owned);
+        item.entry_id = Some(entry_id);
+        item.track = Some(track.clone());
+        items.push(item);
     }
     Ok(LoadedSource {
         title: document["title"].as_str().map(str::to_owned),
@@ -922,21 +912,24 @@ fn bandcamp_items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
         .iter()
         .enumerate()
         .map(|(index, purchase)| {
-            json!({
-                "position": index + 1,
-                "title": purchase.label(),
-                "video_id": purchase.key,
-                "entry_id": purchase.key,
-                "video_url": purchase.item_url.as_deref().unwrap_or(&purchase.download_page),
-                "thumbnail_url": purchase.art_url,
-                "kind": SourceKind::Bandcamp,
-                "track": {
-                    "artist": purchase.artist,
-                    "title": purchase.title,
-                    "single": purchase.single,
-                    "download_page": purchase.download_page,
-                },
-            })
+            let mut item =
+                WatchItem::new(index as u64 + 1, &purchase.label(), SourceKind::Bandcamp);
+            item.video_id = Some(purchase.key.clone());
+            item.entry_id = Some(purchase.key.clone());
+            item.video_url = Some(
+                purchase
+                    .item_url
+                    .clone()
+                    .unwrap_or_else(|| purchase.download_page.clone()),
+            );
+            item.thumbnail_url = purchase.art_url.clone();
+            item.track = Some(json!({
+                "artist": purchase.artist,
+                "title": purchase.title,
+                "single": purchase.single,
+                "download_page": purchase.download_page,
+            }));
+            item
         })
         .collect();
     LoadedSource {
@@ -945,30 +938,28 @@ fn bandcamp_items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
     }
 }
 
-fn mark_full(item: &mut Value, options: &WorkflowOptions, split: bool) {
-    let spotify = !SourceKind::of(item).is_youtube();
+fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, split: bool) {
+    let single_file = !item.kind.is_youtube();
     for stage in Stage::ALL.iter().copied() {
         let skipped = match stage {
             Stage::Download => false,
             Stage::Quality => {
-                spotify
+                single_file
                     || options.quality_policy == QualityPolicy::Off
                     || options.audio_source == AudioSource::Soulseek
             }
-            Stage::Parse | Stage::Split => spotify || !split,
+            Stage::Parse | Stage::Split => single_file || !split,
             Stage::Organize => options.no_organize,
         };
-        let status = if skipped {
-            StageStatus::Skipped
-        } else {
-            StageStatus::Complete
-        };
-        set_stage(item, stage, status);
+        item.set(
+            stage,
+            if skipped {
+                StageStatus::Skipped
+            } else {
+                StageStatus::Complete
+            },
+        );
     }
-}
-
-fn set_stage(item: &mut Value, stage: Stage, status: StageStatus) {
-    set_stage_status(item, stage, status);
 }
 
 fn workflow_error(error: muzik_workflow::Error) -> JobError {
@@ -991,11 +982,31 @@ mod tests {
     use super::{bandcamp_items, refresh_chapters_with, spotify_items, youtube_items};
     use crate::settings::Settings;
     use muzik_core::paths::Paths;
-    use muzik_core::watchlist::ItemAction;
+    use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
     use muzik_core::{ChapterAnswer, DecisionKind};
     use serde_json::json;
     use std::fs;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
+
+    fn library_config(directory: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let config = directory.join("config.yaml");
+        fs::write(
+            &config,
+            format!(
+                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
+                directory.join("music").display(),
+                directory.join("library.db").display(),
+                directory.join("state").display()
+            ),
+        )?;
+        Ok(config)
+    }
+
+    fn fixture() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/muzik-tags/tests/fixtures/blank.flac")
+    }
 
     #[test]
     fn saved_output_paths_resolve_new_and_existing_audio() -> Result<(), Box<dyn std::error::Error>>
@@ -1005,21 +1016,37 @@ mod tests {
         let split = directory.path().join("split");
         fs::write(&audio, [])?;
         fs::create_dir(&split)?;
-        let mut item = json!({"video_id":"abcdefghijk","stages":{"download":{},"split":{}}});
-        super::save_output_paths(&mut item, &json!({"split_dirs":[split]}), directory.path())?;
-        assert_eq!(item["stages"]["download"]["path"], json!(audio));
-        assert_eq!(item["stages"]["split"]["path"], json!(split));
+        let settings = Settings::parse(
+            &Paths::under(directory.path()),
+            &json!({"output":directory.path()}),
+        )?;
+        let prepared = super::Prepared::new(&settings);
+        let mut event = |_| {};
+        let events = std::cell::RefCell::new(&mut event as &mut dyn FnMut(serde_json::Value));
+        let mut imported = |_| {};
+        let mut decide = |_: DecisionKind, _: serde_json::Value| Err("unexpected decision".into());
+        let cancelled = AtomicBool::new(false);
+        let parked = std::cell::RefCell::new(None);
+        let adapter = super::Adapter {
+            prepared: &prepared,
+            events: &events,
+            on_import_event: &mut imported,
+            decide: &mut decide,
+            parked: &parked,
+            cancelled: &cancelled,
+        };
+        let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
+        item.video_id = Some("abcdefghijk".into());
+        adapter.save_output_paths(&mut item, &json!({"split_dirs":[split]}));
+        assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
+        assert_eq!(item.path(Stage::Split), Some(split.as_path()));
         let replacement = directory.path().join("replacement.flac");
         fs::write(&replacement, [])?;
-        super::save_output_paths(
+        adapter.save_output_paths(
             &mut item,
             &json!({"audio_files":[replacement],"split_dirs":[]}),
-            directory.path(),
-        )?;
-        assert_eq!(
-            super::downloaded_audio(&item, directory.path())?,
-            Some(replacement)
         );
+        assert_eq!(prepared.audio(&item), Some(replacement));
         Ok(())
     }
 
@@ -1027,22 +1054,8 @@ mod tests {
     fn spotify_organize_again_imports_saved_audio() -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let audio = directory.path().join("track.flac");
-        fs::copy(
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../crates/muzik-tags/tests/fixtures/blank.flac"),
-            &audio,
-        )?;
-        let config = directory.path().join("config.yaml");
-        let library = directory.path().join("library.db");
-        fs::write(
-            &config,
-            format!(
-                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
-                directory.path().join("music").display(),
-                library.display(),
-                directory.path().join("state").display()
-            ),
-        )?;
+        fs::copy(fixture(), &audio)?;
+        let config = library_config(directory.path())?;
         let settings = Settings::parse(
             &Paths::under(directory.path()),
             &json!({"output":directory.path(),"config":config,"interactive":true,"quality_policy":"off"}),
@@ -1062,17 +1075,17 @@ mod tests {
             parked: &parked,
             cancelled: &cancelled,
         };
-        let result = adapter.process_spotify(
-            &json!({}),
-            &json!({"kind":"spotify","stages":{"download":{"path":audio},"organize":{}},"track":{
-                "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
-                "track_number":2,"disc_number":1,"release_date":"2017-10-13"
-            }}),
-            ItemAction::OrganizeAgain,
-            &cancelled,
-        )?;
-        assert_eq!(result["stages"]["organize"]["status"], "complete");
-        let imported = muzik_library::Library::open_read_only(&library)?.items()?;
+        let mut item = WatchItem::new(1, "Warhaus - Love's a Stranger", SourceKind::Spotify);
+        item.set_path(Stage::Download, Some(audio));
+        item.track = Some(json!({
+            "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
+            "track_number":2,"disc_number":1,"release_date":"2017-10-13"
+        }));
+        let result = adapter.process_spotify(&item, ItemAction::OrganizeAgain, &cancelled)?;
+        assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
+        let imported =
+            muzik_library::Library::open_read_only(&directory.path().join("library.db"))?
+                .items()?;
         assert_eq!(imported.len(), 1);
         let text = |name: &str| match imported[0].field(name) {
             Some(muzik_library::SqlValue::Text(text)) => text.clone(),
@@ -1091,14 +1104,13 @@ mod tests {
         let original = directory.path().join("Album [abcdefghijk].flac");
         let album = directory.path().join("replacement");
         fs::create_dir(&album)?;
-        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../crates/muzik-tags/tests/fixtures/blank.flac");
         for path in [&original, &album.join("one.flac"), &album.join("two.flac")] {
-            fs::copy(&fixture, path)?;
+            fs::copy(fixture(), path)?;
         }
-        let mut item = json!({"position":1,"video_id":"abcdefghijk","video_url":"https://www.youtube.com/watch?v=abcdefghijk","title":"Album","kind":"youtube","stages":{
-            "download":{"status":"complete","path":original},"quality":{},"parse":{},"split":{},"organize":{}
-        }});
+        let mut item = WatchItem::new(1, "Album", SourceKind::Youtube);
+        item.video_id = Some("abcdefghijk".into());
+        item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
+        item.complete(Stage::Download, Some(original.clone()));
         super::apply_quality_result(
             &mut item,
             &super::QualityUpgradeResult {
@@ -1106,25 +1118,12 @@ mod tests {
                 pre_split_dirs: vec![album.clone()],
             },
         );
-        assert_eq!(
-            super::downloaded_audio(&item, directory.path())?,
-            Some(original.clone())
-        );
+        assert_eq!(item.path(Stage::Download), Some(original.as_path()));
         assert_eq!(super::ready_quality_directory(&item), Some(album.clone()));
-        assert_eq!(item["stages"]["parse"]["status"], "skipped");
-        assert_eq!(item["stages"]["split"]["status"], "complete");
-        assert_eq!(item["stages"]["organize"]["status"], "stale");
-        let config = directory.path().join("config.yaml");
-        let library = directory.path().join("library.db");
-        fs::write(
-            &config,
-            format!(
-                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
-                directory.path().join("music").display(),
-                library.display(),
-                directory.path().join("state").display()
-            ),
-        )?;
+        assert_eq!(item.status(Stage::Parse), StageStatus::Skipped);
+        assert_eq!(item.status(Stage::Split), StageStatus::Complete);
+        assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
+        let config = library_config(directory.path())?;
         let settings = Settings::parse(
             &Paths::under(directory.path()),
             &json!({"output":directory.path(),"config":config,"interactive":false,"quality_policy":"auto"}),
@@ -1145,9 +1144,9 @@ mod tests {
             cancelled: &cancelled,
         };
         let result = adapter.process_youtube(&item, ItemAction::Retry, &cancelled)?;
-        assert_eq!(result["stages"]["organize"]["status"], "complete");
+        assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
         assert_eq!(
-            muzik_library::Library::open_read_only(&library)?
+            muzik_library::Library::open_read_only(&directory.path().join("library.db"))?
                 .items()?
                 .len(),
             2
@@ -1163,9 +1162,15 @@ mod tests {
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"},
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"}
         ]}))?;
-        assert_eq!(loaded.items[0]["entry_id"], "spotify:track:t1#0");
-        assert_eq!(loaded.items[1]["entry_id"], "spotify:track:t1#1");
-        assert_eq!(loaded.items[0]["title"], "Alex - One");
+        assert_eq!(
+            loaded.items[0].entry_id.as_deref(),
+            Some("spotify:track:t1#0")
+        );
+        assert_eq!(
+            loaded.items[1].entry_id.as_deref(),
+            Some("spotify:track:t1#1")
+        );
+        assert_eq!(loaded.items[0].title, "Alex - One");
         Ok(())
     }
 
@@ -1181,61 +1186,64 @@ mod tests {
             art_url: None,
         }]);
         let item = &loaded.items[0];
-        assert_eq!(item["kind"], "bandcamp");
-        assert_eq!(item["entry_id"], "p12");
-        assert_eq!(item["video_id"], "p12");
-        assert_eq!(item["title"], "Band - Album");
-        assert_eq!(item["video_url"], "https://band.bandcamp.com/album/album");
+        assert_eq!(item.kind, SourceKind::Bandcamp);
+        assert_eq!(item.entry_id.as_deref(), Some("p12"));
+        assert_eq!(item.video_id.as_deref(), Some("p12"));
+        assert_eq!(item.title, "Band - Album");
         assert_eq!(
-            item["track"]["download_page"],
-            "https://bandcamp.com/download?id=12"
+            item.video_url.as_deref(),
+            Some("https://band.bandcamp.com/album/album")
+        );
+        assert_eq!(
+            item.track.as_ref().map(|track| &track["download_page"]),
+            Some(&json!("https://bandcamp.com/download?id=12"))
         );
     }
 
     #[test]
     fn youtube_reload_preserves_saved_card_metadata() {
-        let playlist = json!({"title":"My list", "items":[{"video_id":"abcdefghijk", "title":"Saved title", "thumbnail_url":"https://example.test/image.jpg"}]});
+        let mut playlist = Playlist::new("PL1", "u", SourceKind::Youtube, Some("My list"));
+        let mut saved = WatchItem::new(1, "Saved title", SourceKind::Youtube);
+        saved.video_id = Some("abcdefghijk".into());
+        saved.thumbnail_url = Some("https://example.test/image.jpg".into());
+        playlist.items.push(saved);
         let loaded = youtube_items(
             &playlist,
             &json!({"title":"Current list","entries":[{"id":"abcdefghijk"}]}),
         );
-        assert_eq!(loaded.items[0]["title"], "Saved title");
+        assert_eq!(loaded.items[0].title, "Saved title");
         assert_eq!(
-            loaded.items[0]["thumbnail_url"],
-            "https://example.test/image.jpg"
+            loaded.items[0].thumbnail_url.as_deref(),
+            Some("https://example.test/image.jpg")
         );
     }
 
     #[test]
     fn a_private_video_without_title_and_duration_is_unavailable() {
         let loaded = youtube_items(
-            &json!({"items":[]}),
+            &Playlist::new("PL1", "u", SourceKind::Youtube, None),
             &json!({"entries":[
                 {"id":"abcdefghijk","title":null,"duration":null},
                 {"id":"bcdefghijkl","title":"[Private video]","duration":null},
                 {"id":"cdefghijklm","title":"Song","duration":245.0}
             ]}),
         );
-        let flags: Vec<_> = loaded
-            .items
-            .iter()
-            .map(|item| item["unavailable"].clone())
-            .collect();
-        assert_eq!(flags, [json!(true), json!(true), json!(false)]);
-        assert_eq!(loaded.items[1]["title"], "bcdefghijkl");
+        let flags: Vec<_> = loaded.items.iter().map(|item| item.unavailable).collect();
+        assert_eq!(flags, [Some(true), Some(true), Some(false)]);
+        assert_eq!(loaded.items[1].title, "bcdefghijkl");
     }
 
     #[test]
     fn youtube_new_card_uses_source_title_and_thumbnail() {
         let loaded = youtube_items(
-            &json!({"items":[]}),
+            &Playlist::new("PL1", "u", SourceKind::Youtube, None),
             &json!({"title":"Playlist", "entries":[{"id":"abcdefghijk", "title":"Song", "thumbnail":"https://example.test/new.jpg"}]}),
         );
         assert_eq!(loaded.title.as_deref(), Some("Playlist"));
-        assert_eq!(loaded.items[0]["title"], "Song");
+        assert_eq!(loaded.items[0].title, "Song");
         assert_eq!(
-            loaded.items[0]["thumbnail_url"],
-            "https://example.test/new.jpg"
+            loaded.items[0].thumbnail_url.as_deref(),
+            Some("https://example.test/new.jpg")
         );
     }
 

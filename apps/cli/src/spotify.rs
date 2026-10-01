@@ -85,20 +85,12 @@ pub fn export(uri: &str, output: Option<&Path>) -> Result<(), String> {
 
 pub fn watch(reference: &str) -> Result<(), String> {
     let source = watchlist::parse_source(reference)?;
-    if source.get("kind").and_then(serde_json::Value::as_str) != Some("spotify") {
+    if source.kind != watchlist::SourceKind::Spotify {
         return Err("enter a Spotify playlist or album link, or liked".into());
     }
     let repository = watchlist::Repository::open(&muzik_core::paths::Paths::user());
     let playlist = repository.add(reference)?;
-    let name = playlist
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            playlist
-                .get("playlist_id")
-                .and_then(serde_json::Value::as_str)
-        })
-        .unwrap_or("playlist");
+    let name = playlist.title.as_deref().unwrap_or(&playlist.playlist_id);
     println!("Added {name}. Run `muzik watchlist refresh` to sync it.");
     Ok(())
 }

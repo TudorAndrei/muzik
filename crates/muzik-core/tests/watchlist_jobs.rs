@@ -1,10 +1,25 @@
 use muzik_core::watchlist::jobs::{
     self, ItemSelection, JobError, JobOptions, LoadedSource, Operations,
 };
-use muzik_core::watchlist::{ItemAction, ReconcileOptions, Repository, Stage};
+use muzik_core::watchlist::{
+    ItemAction, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
+};
 use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn processed(item: &WatchItem) -> WatchItem {
+    let mut updated = item.clone();
+    for stage in [Stage::Download, Stage::Parse, Stage::Organize] {
+        updated.set(stage, StageStatus::Complete);
+    }
+    for stage in [Stage::Quality, Stage::Split] {
+        updated.set(stage, StageStatus::Skipped);
+    }
+    updated
+}
 
 struct Fake {
     processed: Vec<String>,
@@ -12,7 +27,7 @@ struct Fake {
 }
 
 impl Operations for Fake {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         Ok(LoadedSource {
             title: Some("Current title".into()),
             items: vec![card(1, "video_a"), card(2, "video_a"), card(3, "video_b")],
@@ -21,35 +36,32 @@ impl Operations for Fake {
 
     fn process(
         &mut self,
-        _: &Value,
-        item: &Value,
+        _: &Playlist,
+        item: &WatchItem,
         _: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<Value, JobError> {
-        let id = item["video_id"]
-            .as_str()
+    ) -> Result<WatchItem, JobError> {
+        let id = item
+            .video_id
+            .clone()
             .ok_or_else(|| JobError::Operation("video ID missing".into()))?;
-        self.processed.push(id.to_owned());
+        self.processed.push(id);
         if self.cancel_after_first && self.processed.len() == 2 {
             cancelled.store(true, Ordering::SeqCst);
             return Err(JobError::Cancelled);
         }
-        let mut updated = item.clone();
-        for stage in ["download", "parse", "organize"] {
-            updated["stages"][stage]["status"] = json!("complete");
-        }
-        for stage in ["quality", "split"] {
-            updated["stages"][stage]["status"] = json!("skipped");
-        }
-        Ok(updated)
+        Ok(processed(item))
     }
 }
 
-fn card(position: usize, id: &str) -> Value {
-    json!({"position":position,"title":id,"video_id":id,"video_url":format!("https://www.youtube.com/watch?v={id}"),"kind":"youtube"})
+fn card(position: u64, id: &str) -> WatchItem {
+    let mut item = WatchItem::new(position, id, SourceKind::Youtube);
+    item.video_id = Some(id.into());
+    item.video_url = Some(format!("https://www.youtube.com/watch?v={id}"));
+    item
 }
 
-fn options<'a>(directory: &'a std::path::Path) -> JobOptions<'a> {
+fn options(directory: &std::path::Path) -> JobOptions<'_> {
     JobOptions {
         reconcile: ReconcileOptions {
             output: directory,
@@ -67,16 +79,34 @@ fn options<'a>(directory: &'a std::path::Path) -> JobOptions<'a> {
     }
 }
 
-#[test]
-fn refresh_keeps_prior_state_and_processes_each_video_once(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
+fn repository_with(
+    directory: &std::path::Path,
+    items: Vec<WatchItem>,
+) -> Result<Repository, Box<dyn std::error::Error>> {
+    let repository = Repository::new(directory.join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    saved["playlists"][0]["items"][0]["last_action"] = json!("retry");
-    repository.save(saved)?;
+    repository.update(|document| {
+        document.playlists[0].items = items;
+        Ok(())
+    })?;
+    Ok(repository)
+}
+
+fn selection(video_id: &str, action: ItemAction) -> ItemSelection<'_> {
+    ItemSelection {
+        playlist_id: "PL123",
+        position: 1,
+        video_id: Some(video_id),
+        action,
+    }
+}
+
+#[test]
+fn refresh_keeps_prior_state_and_processes_each_video_once() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let mut saved = card(1, "video_a");
+    saved.last_action = Some("retry".into());
+    let repository = repository_with(directory.path(), vec![saved])?;
     let mut fake = Fake {
         processed: Vec::new(),
         cancel_after_first: false,
@@ -108,8 +138,8 @@ fn refresh_keeps_prior_state_and_processes_each_video_once(
         "complete"
     );
     assert_eq!(
-        repository.load()?["playlists"][0]["processed_video_ids"],
-        json!(["video_a", "video_b"])
+        repository.load()?.playlists[0].processed_video_ids,
+        ["video_a", "video_b"]
     );
     Ok(())
 }
@@ -119,7 +149,7 @@ struct AsksOnFirst {
 }
 
 impl Operations for AsksOnFirst {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         Ok(LoadedSource {
             title: None,
             items: vec![card(1, "video_a"), card(2, "video_b")],
@@ -128,12 +158,12 @@ impl Operations for AsksOnFirst {
 
     fn process(
         &mut self,
-        _: &Value,
-        item: &Value,
+        _: &Playlist,
+        item: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
-        let id = item["video_id"].as_str().unwrap_or("").to_owned();
+    ) -> Result<WatchItem, JobError> {
+        let id = item.video_id.clone().unwrap_or_default();
         self.processed.push(id.clone());
         if id == "video_a" {
             return Err(JobError::Waiting {
@@ -141,22 +171,14 @@ impl Operations for AsksOnFirst {
                 question: json!({"kind": "import_match", "payload": {"task": {}}}),
             });
         }
-        let mut updated = item.clone();
-        for stage in ["download", "parse", "organize"] {
-            updated["stages"][stage]["status"] = json!("complete");
-        }
-        for stage in ["quality", "split"] {
-            updated["stages"][stage]["status"] = json!("skipped");
-        }
-        Ok(updated)
+        Ok(processed(item))
     }
 }
 
 #[test]
-fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error::Error>> {
+fn a_waiting_item_does_not_block_the_refresh() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let repository = repository_with(directory.path(), Vec::new())?;
     let mut fake = AsksOnFirst {
         processed: Vec::new(),
     };
@@ -172,9 +194,12 @@ fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error:
     assert_eq!(result["summary"]["waiting_videos"], 1);
     assert_eq!(result["summary"]["failed_videos"], 0);
     let saved = repository.load()?;
-    let waiting = &saved["playlists"][0]["items"][0]["stages"]["organize"];
-    assert_eq!(waiting["status"], "waiting");
-    assert_eq!(waiting["question"]["kind"], "import_match");
+    let waiting = saved.playlists[0].items[0].stage(Stage::Organize);
+    assert_eq!(waiting.status, StageStatus::Waiting);
+    assert_eq!(
+        waiting.question.as_ref().map(|question| &question["kind"]),
+        Some(&json!("import_match"))
+    );
     assert_eq!(
         result["watchlist"]["playlists"][0]["items"][0]["summary"],
         "Waiting"
@@ -189,8 +214,8 @@ fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error:
     )?;
     assert!(fake.processed.is_empty());
     assert_eq!(
-        repository.load()?["playlists"][0]["items"][0]["stages"]["organize"]["status"],
-        "waiting"
+        repository.load()?.playlists[0].items[0].status(Stage::Organize),
+        StageStatus::Waiting
     );
     Ok(())
 }
@@ -198,8 +223,8 @@ fn a_waiting_item_does_not_block_the_refresh() -> Result<(), Box<dyn std::error:
 struct CallLog(Vec<String>);
 
 impl Operations for CallLog {
-    fn load(&mut self, playlist: &Value) -> Result<LoadedSource, JobError> {
-        let id = playlist["playlist_id"].as_str().unwrap_or("");
+    fn load(&mut self, playlist: &Playlist) -> Result<LoadedSource, JobError> {
+        let id = &playlist.playlist_id;
         self.0.push(format!("load {id}"));
         Ok(LoadedSource {
             title: None,
@@ -209,22 +234,21 @@ impl Operations for CallLog {
 
     fn process(
         &mut self,
-        _: &Value,
-        item: &Value,
+        _: &Playlist,
+        item: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         self.0.push(format!(
             "process {}",
-            item["video_id"].as_str().unwrap_or("")
+            item.video_id.as_deref().unwrap_or("")
         ));
         Ok(item.clone())
     }
 }
 
 #[test]
-fn refresh_reads_every_playlist_before_it_processes_items() -> Result<(), Box<dyn std::error::Error>>
-{
+fn refresh_reads_every_playlist_before_it_processes_items() -> TestResult {
     let directory = tempfile::tempdir()?;
     let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PLone")?;
@@ -250,8 +274,7 @@ fn refresh_reads_every_playlist_before_it_processes_items() -> Result<(), Box<dy
 }
 
 #[test]
-fn refresh_of_one_source_reads_and_processes_only_that_source(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn refresh_of_one_source_reads_and_processes_only_that_source() -> TestResult {
     let directory = tempfile::tempdir()?;
     let repository = Repository::new(directory.path().join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PLone")?;
@@ -283,88 +306,67 @@ fn refresh_of_one_source_reads_and_processes_only_that_source(
 struct ActionFailure;
 
 impl Operations for ActionFailure {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         Err(JobError::Operation("unused".into()))
     }
 
     fn process(
         &mut self,
-        _: &Value,
-        _: &Value,
+        _: &Playlist,
+        _: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         Err(JobError::Operation("download failed".into()))
     }
 }
 
 #[test]
-fn an_action_that_needs_a_choice_parks_the_item() -> Result<(), Box<dyn std::error::Error>> {
+fn an_action_that_needs_a_choice_parks_the_item() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    repository.save(saved)?;
+    let repository = repository_with(directory.path(), vec![card(1, "video_a")])?;
     let result = jobs::action(
         &repository,
         options(directory.path()),
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("video_a"),
-            action: ItemAction::Run,
-        },
+        selection("video_a", ItemAction::Run),
         &mut AsksOnFirst {
             processed: Vec::new(),
         },
         &AtomicBool::new(false),
     )?;
     assert_eq!(result["action"]["waiting_stage"], "organize");
-    let stage = &repository.load()?["playlists"][0]["items"][0]["stages"]["organize"];
-    assert_eq!(stage["status"], "waiting");
-    assert_eq!(stage["question"]["kind"], "import_match");
+    let saved = repository.load()?;
+    let stage = saved.playlists[0].items[0].stage(Stage::Organize);
+    assert_eq!(stage.status, StageStatus::Waiting);
+    assert_eq!(
+        stage.question.as_ref().map(|question| &question["kind"]),
+        Some(&json!("import_match"))
+    );
     Ok(())
 }
 
 #[test]
-fn failed_action_saves_its_target_stage() -> Result<(), Box<dyn std::error::Error>> {
+fn failed_action_saves_its_target_stage() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    repository.save(saved)?;
+    let repository = repository_with(directory.path(), vec![card(1, "video_a")])?;
     let error = jobs::action(
         &repository,
         options(directory.path()),
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("video_a"),
-            action: ItemAction::Run,
-        },
+        selection("video_a", ItemAction::Run),
         &mut ActionFailure,
         &AtomicBool::new(false),
     );
     assert!(matches!(error, Err(JobError::Operation(_))));
-    let saved = repository.load()?;
-    assert_eq!(
-        saved["playlists"][0]["items"][0]["stages"]["download"]["status"],
-        "failed"
-    );
-    assert_eq!(
-        saved["playlists"][0]["items"][0]["last_error"],
-        "download failed"
-    );
+    let item = &repository.load()?.playlists[0].items[0];
+    assert_eq!(item.status(Stage::Download), StageStatus::Failed);
+    assert_eq!(item.last_error.as_deref(), Some("download failed"));
     Ok(())
 }
 
 #[test]
-fn cancellation_keeps_items_saved_before_the_stop() -> Result<(), Box<dyn std::error::Error>> {
+fn cancellation_keeps_items_saved_before_the_stop() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let repository = repository_with(directory.path(), Vec::new())?;
     let mut fake = Fake {
         processed: Vec::new(),
         cancel_after_first: true,
@@ -379,20 +381,16 @@ fn cancellation_keeps_items_saved_before_the_stop() -> Result<(), Box<dyn std::e
     );
     assert!(matches!(result, Err(JobError::Cancelled)));
     assert_eq!(
-        repository.load()?["playlists"][0]["processed_video_ids"],
-        json!(["video_a"])
+        repository.load()?.playlists[0].processed_video_ids,
+        ["video_a"]
     );
     Ok(())
 }
 
 #[test]
-fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Error>> {
+fn action_checks_the_saved_item_identity() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    repository.save(saved)?;
+    let repository = repository_with(directory.path(), vec![card(1, "video_a")])?;
     let mut fake = Fake {
         processed: Vec::new(),
         cancel_after_first: false,
@@ -400,12 +398,7 @@ fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Err
     let result = jobs::action(
         &repository,
         options(directory.path()),
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("other"),
-            action: ItemAction::Run,
-        },
+        selection("other", ItemAction::Run),
         &mut fake,
         &AtomicBool::new(false),
     );
@@ -415,14 +408,9 @@ fn action_checks_the_saved_item_identity() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn dry_run_preserves_saved_state_and_does_not_process_audio(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn dry_run_preserves_saved_state_and_does_not_process_audio() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    repository.save(saved)?;
+    let repository = repository_with(directory.path(), vec![card(1, "video_a")])?;
     let before = (repository.revision()?, repository.load()?);
     let mut fake = Fake {
         processed: Vec::new(),
@@ -443,12 +431,7 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
     let result = jobs::action(
         &repository,
         options,
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("video_a"),
-            action: ItemAction::DownloadAgain,
-        },
+        selection("video_a", ItemAction::DownloadAgain),
         &mut fake,
         &AtomicBool::new(false),
     )?;
@@ -461,17 +444,17 @@ fn dry_run_preserves_saved_state_and_does_not_process_audio(
 struct SplitFailure;
 
 impl Operations for SplitFailure {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         Err(JobError::Operation("unused".into()))
     }
 
     fn process(
         &mut self,
-        _: &Value,
-        _: &Value,
+        _: &Playlist,
+        _: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         Err(JobError::Failed {
             stage: Stage::Split,
             message: "split failed".into(),
@@ -480,42 +463,33 @@ impl Operations for SplitFailure {
 }
 
 #[test]
-fn a_failure_marks_the_stage_that_failed() -> Result<(), Box<dyn std::error::Error>> {
+fn a_failure_marks_the_stage_that_failed() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    repository.save(saved)?;
+    let repository = repository_with(directory.path(), vec![card(1, "video_a")])?;
     let error = jobs::run_item(
         &repository,
         options(directory.path()),
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("video_a"),
-            action: ItemAction::Run,
-        },
+        selection("video_a", ItemAction::Run),
         &mut SplitFailure,
         &AtomicBool::new(false),
     );
     assert!(matches!(error, Err(JobError::Failed { .. })));
-    let stages = &repository.load()?["playlists"][0]["items"][0]["stages"];
-    assert_eq!(stages["split"]["status"], "failed");
-    assert_eq!(stages["split"]["error"], "split failed");
-    assert_eq!(stages["download"]["status"], "not_started");
+    let item = &repository.load()?.playlists[0].items[0];
+    assert_eq!(item.status(Stage::Split), StageStatus::Failed);
+    assert_eq!(
+        item.stage(Stage::Split).error.as_deref(),
+        Some("split failed")
+    );
+    assert_eq!(item.status(Stage::Download), StageStatus::NotStarted);
     Ok(())
 }
 
 #[test]
-fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std::error::Error>> {
+fn sync_lists_pending_items_and_keeps_running_stages() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a")]);
-    saved["playlists"][0]["items"][0]["stages"]["download"]["status"] = json!("running");
-    repository.save(saved)?;
+    let mut running = card(1, "video_a");
+    running.set(Stage::Download, StageStatus::Running);
+    let repository = repository_with(directory.path(), vec![running])?;
     let mut fake = Fake {
         processed: Vec::new(),
         cancel_after_first: false,
@@ -546,8 +520,8 @@ fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std
         ]
     );
     assert_eq!(
-        repository.load()?["playlists"][0]["items"][0]["stages"]["download"]["status"],
-        "running"
+        repository.load()?.playlists[0].items[0].status(Stage::Download),
+        StageStatus::Running
     );
     Ok(())
 }
@@ -555,9 +529,9 @@ fn sync_lists_pending_items_and_keeps_running_stages() -> Result<(), Box<dyn std
 struct PrivateSecond;
 
 impl Operations for PrivateSecond {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         let mut private = card(2, "video_b");
-        private["unavailable"] = json!(true);
+        private.unavailable = Some(true);
         Ok(LoadedSource {
             title: None,
             items: vec![card(1, "video_a"), private],
@@ -566,21 +540,19 @@ impl Operations for PrivateSecond {
 
     fn process(
         &mut self,
-        _: &Value,
-        _: &Value,
+        _: &Playlist,
+        _: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         Err(JobError::Operation("unused".into()))
     }
 }
 
 #[test]
-fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dyn std::error::Error>>
-{
+fn a_private_video_is_not_queued_and_shows_as_unavailable() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let repository = repository_with(directory.path(), Vec::new())?;
     let synced = jobs::sync(
         &repository,
         options(directory.path()),
@@ -597,7 +569,7 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dy
         [1]
     );
     let visible =
-        muzik_core::watchlist::view(repository.load()?, directory.path(), directory.path())?;
+        muzik_core::watchlist::view(&repository.load()?, directory.path(), directory.path())?;
     let private = &visible["playlists"][0]["items"][1];
     assert_eq!(private["summary"], "Unavailable");
     assert_eq!(private["primary_action"], Value::Null);
@@ -606,19 +578,15 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() -> Result<(), Box<dy
 }
 
 #[test]
-fn parallel_updates_keep_every_change() -> Result<(), Box<dyn std::error::Error>> {
+fn parallel_updates_keep_every_change() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = std::sync::Arc::new(Repository::new(directory.path().join("muzik.db")));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
+    let repository = std::sync::Arc::new(repository_with(directory.path(), Vec::new())?);
     let workers: Vec<_> = (0..8)
         .map(|index| {
             let repository = std::sync::Arc::clone(&repository);
             std::thread::spawn(move || {
                 repository.update(|document| {
-                    document["playlists"][0]["processed_video_ids"]
-                        .as_array_mut()
-                        .ok_or("processed IDs are missing")?
-                        .push(json!(format!("video_{index}")));
+                    document.playlists[0].mark_processed(&format!("video_{index}"), true);
                     Ok(())
                 })
             })
@@ -627,43 +595,42 @@ fn parallel_updates_keep_every_change() -> Result<(), Box<dyn std::error::Error>
     for worker in workers {
         worker.join().map_err(|_| "worker panicked")??;
     }
-    let processed = repository.load()?["playlists"][0]["processed_video_ids"].clone();
-    assert_eq!(processed.as_array().map(Vec::len), Some(8));
+    assert_eq!(repository.load()?.playlists[0].processed_video_ids.len(), 8);
     Ok(())
 }
 
 struct RepeatDownload;
 
 impl Operations for RepeatDownload {
-    fn load(&mut self, _: &Value) -> Result<LoadedSource, JobError> {
+    fn load(&mut self, _: &Playlist) -> Result<LoadedSource, JobError> {
         Err(JobError::Operation("unused".into()))
     }
+
     fn process(
         &mut self,
-        _: &Value,
-        item: &Value,
+        _: &Playlist,
+        item: &WatchItem,
         _: ItemAction,
         _: &AtomicBool,
-    ) -> Result<Value, JobError> {
+    ) -> Result<WatchItem, JobError> {
         let mut item = item.clone();
-        item["stages"]["download"]["status"] = json!("complete");
-        for stage in ["parse", "split", "organize"] {
-            item["stages"][stage]["status"] = json!("stale");
-        }
+        item.set(Stage::Download, StageStatus::Complete);
+        item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         Ok(item)
     }
 }
 
 #[test]
-fn repeat_action_preserves_stale_stages_across_cached_reconciliation(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn repeat_action_preserves_stale_stages_across_cached_reconciliation() -> TestResult {
     let directory = tempfile::tempdir()?;
-    let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.add("https://www.youtube.com/playlist?list=PL123")?;
-    let mut saved = repository.load()?;
-    saved["playlists"][0]["items"] = json!([card(1, "video_a"), card(2, "video_a")]);
-    saved["playlists"][0]["processed_video_ids"] = json!(["video_a"]);
-    repository.save(saved)?;
+    let repository = repository_with(
+        directory.path(),
+        vec![card(1, "video_a"), card(2, "video_a")],
+    )?;
+    repository.update(|document| {
+        document.playlists[0].mark_processed("video_a", true);
+        Ok(())
+    })?;
     std::fs::write(
         directory.path().join("playlist_PL123.json"),
         serde_json::to_vec(&json!({
@@ -673,23 +640,18 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation(
     jobs::action(
         &repository,
         options(directory.path()),
-        ItemSelection {
-            playlist_id: "PL123",
-            position: 1,
-            video_id: Some("video_a"),
-            action: ItemAction::DownloadAgain,
-        },
+        selection("video_a", ItemAction::DownloadAgain),
         &mut RepeatDownload,
         &AtomicBool::new(false),
     )?;
     let mut saved = repository.load()?;
     muzik_core::watchlist::reconcile(&mut saved, options(directory.path()).reconcile)?;
-    assert_eq!(saved["playlists"][0]["processed_video_ids"], json!([]));
+    assert!(saved.playlists[0].processed_video_ids.is_empty());
     for (index, position) in [(0, 1), (1, 2)] {
-        let item = &saved["playlists"][0]["items"][index];
-        assert_eq!(item["position"], position);
-        assert_eq!(item["stages"]["download"]["status"], "complete");
-        assert_eq!(item["stages"]["organize"]["status"], "stale");
+        let item = &saved.playlists[0].items[index];
+        assert_eq!(item.position, position);
+        assert_eq!(item.status(Stage::Download), StageStatus::Complete);
+        assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
     }
     Ok(())
 }

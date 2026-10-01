@@ -20,7 +20,7 @@ fn list_of(value: &Value, key: &str) -> Vec<Value> {
 pub fn list(items: bool) -> Result<(), String> {
     let document = repository().load()?;
     let settings = settings()?;
-    let visible = watchlist::view(document, &settings.request.output, &settings.paths.cache)?;
+    let visible = watchlist::view(&document, &settings.request.output, &settings.paths.cache)?;
     let playlists = list_of(&visible, "playlists");
     if playlists.is_empty() {
         println!("The watchlist is empty. Add a playlist with `muzik watchlist add <url>`.");
@@ -68,10 +68,7 @@ pub fn add(url: &str) -> Result<(), String> {
     let playlist = repository().add(url)?;
     println!(
         "Added {}. Run `muzik watchlist refresh` to sync it.",
-        field(&playlist, "title")
-            .as_str()
-            .or_else(|| field(&playlist, "playlist_id").as_str())
-            .unwrap_or("the playlist")
+        playlist.title.as_deref().unwrap_or(&playlist.playlist_id)
     );
     Ok(())
 }
@@ -112,22 +109,19 @@ pub fn item(
         format!("Unknown action {action}. Use one of: {names}.")
     })?;
     let document = repository().load()?;
-    let playlist = list_of(&document, "playlists")
-        .into_iter()
-        .find(|playlist| field(playlist, "playlist_id") == playlist_id)
+    let playlist = document
+        .playlist(playlist_id)
         .ok_or_else(|| format!("{playlist_id} is not in the watchlist."))?;
-    let item = list_of(&playlist, "items")
-        .into_iter()
-        .find(|item| field(item, "position") == position)
+    let item = playlist
+        .items
+        .iter()
+        .find(|item| item.position == position)
         .ok_or_else(|| format!("{playlist_id} has no item at position {position}."))?;
-    let title = field(&item, "title")
-        .as_str()
-        .unwrap_or("the item")
-        .to_owned();
+    let title = item.title.clone();
     let params = json!({
         "playlist_id": playlist_id,
         "position": position,
-        "video_id": field(&item, "video_id"),
+        "video_id": item.video_id,
         "title": title,
         "action": action,
     });

@@ -265,8 +265,7 @@ mod tests {
         .map_err(std::io::Error::other)?;
         assert_eq!(renamed["renamed"], true);
         let saved = repository.load().map_err(std::io::Error::other)?;
-        assert_eq!(saved["version"], 3);
-        assert_eq!(saved["playlists"][0]["title"], "New name");
+        assert_eq!(saved.playlists[0].title.as_deref(), Some("New name"));
         let removed = watchlist_edit(
             &repository,
             "watchlist.remove",
@@ -274,10 +273,11 @@ mod tests {
         )
         .map_err(std::io::Error::other)?;
         assert_eq!(removed["removed"], true);
-        assert_eq!(
-            repository.load().map_err(std::io::Error::other)?["playlists"],
-            json!([])
-        );
+        assert!(repository
+            .load()
+            .map_err(std::io::Error::other)?
+            .playlists
+            .is_empty());
         Ok(())
     }
 }

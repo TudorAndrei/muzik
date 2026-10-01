@@ -1,20 +1,23 @@
 //! Saved watchlist reads and local checks for the desktop app.
 
-use muzik_core::watchlist;
+use muzik_core::watchlist::{self, Watchlist};
 use muzik_runner::Settings;
 use serde_json::Value;
 
 pub fn saved(settings: &Settings, repository: &watchlist::Repository) -> Result<Value, String> {
-    view(settings, repository.load()?)
+    view(settings, &repository.load()?)
 }
 
-pub fn checked(settings: &Settings, repository: &watchlist::Repository) -> Result<Value, String> {
+pub fn checked(
+    settings: &Settings,
+    repository: &watchlist::Repository,
+) -> Result<Watchlist, String> {
     let mut document = repository.load()?;
     watchlist::reconcile(&mut document, settings.reconcile())?;
     Ok(document)
 }
 
-pub fn view(settings: &Settings, document: Value) -> Result<Value, String> {
+pub fn view(settings: &Settings, document: &Watchlist) -> Result<Value, String> {
     watchlist::view(document, &settings.request.output, &settings.paths.cache)
 }
 

@@ -538,7 +538,7 @@ fn reconcile_watchlist(load: &WatchlistLoad, settings: &Settings) -> Result<(), 
             if load.repository.revision()? != revision {
                 return Ok(false);
             }
-            load.repository.save(checked.clone())?;
+            load.repository.save(&checked)?;
             Ok(true)
         })?;
         if !saved {
@@ -547,7 +547,7 @@ fn reconcile_watchlist(load: &WatchlistLoad, settings: &Settings) -> Result<(), 
         if load.busy()? {
             return Ok(());
         }
-        let visible = watchlist::view(settings, checked)?;
+        let visible = watchlist::view(settings, &checked)?;
         let _gate = load
             .gate
             .lock()
