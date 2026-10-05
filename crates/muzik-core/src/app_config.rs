@@ -109,6 +109,15 @@ pub fn save_section_string(
     if value.is_empty() {
         return Err(format!("{key} must be a non-empty string"));
     }
+    save_section_value(path, section, key, json!(value))
+}
+
+pub fn save_section_value(
+    path: &Path,
+    section: &str,
+    key: &str,
+    value: Value,
+) -> Result<(), String> {
     let mut config = load(path)?;
     let root = config
         .as_object_mut()
@@ -120,7 +129,7 @@ pub fn save_section_string(
     section_value
         .as_object_mut()
         .ok_or("config section is not a mapping")?
-        .insert(key.to_owned(), json!(value));
+        .insert(key.to_owned(), value);
     let parent = path.parent().ok_or("config path has no parent")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let yaml = serde_saphyr::to_string(&config).map_err(|error| error.to_string())?;

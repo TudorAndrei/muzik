@@ -229,7 +229,7 @@ fn scan_library(
     Ok((scanned, flagged))
 }
 
-fn stored_path(value: &SqlValue) -> Option<PathBuf> {
+pub(crate) fn stored_path(value: &SqlValue) -> Option<PathBuf> {
     match value {
         SqlValue::Text(path) => Some(PathBuf::from(path)),
         SqlValue::Blob(bytes) => {
