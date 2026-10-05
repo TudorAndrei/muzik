@@ -19,6 +19,17 @@ local linters = new Mapping<String, Step | Group> {
     // ── tier 3: formatters. ──
     ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
 
+    ["cargo-fmt"] = new Step {
+        glob = "**/*.rs"
+        check = "cargo fmt --all --check"
+        fix = "cargo fmt --all"
+    }
+    ["cargo-clippy"] = new Step {
+        glob = "**/*.rs"
+        depends = "cargo-fmt"
+        check = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    }
+
     // ── tier 4: whole-repo hygiene. One barrier, both steps inside it. ──
     ["hygiene"] = new Group {
         steps {
