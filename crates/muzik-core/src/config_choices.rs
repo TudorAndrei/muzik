@@ -215,10 +215,45 @@ pub enum DuplicatePolicy {
 
 config_choice!(DuplicatePolicy, "duplicate policy", duplicate_policy_error);
 
+/// Audio formats that a sync target device receives.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "kebab-case")]
+#[strum(
+    serialize_all = "kebab-case",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = sync_preset_error
+)]
+pub enum SyncPreset {
+    /// Highest quality that the FiiO Snowsky Echo Mini plays.
+    #[default]
+    EchoMini,
+    /// Opus for lossless audio; other lossy audio unchanged.
+    Opus,
+}
+
+config_choice!(SyncPreset, "sync preset", sync_preset_error);
+
 #[cfg(test)]
 mod tests {
     use super::{
         AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, QualityPolicy,
+        SyncPreset,
     };
 
     #[test]
@@ -243,6 +278,7 @@ mod tests {
         check!(MetadataSource);
         check!(QualityPolicy);
         check!(DuplicatePolicy);
+        check!(SyncPreset);
         assert_eq!(
             "lossy".parse::<QualityPolicy>(),
             Err(ChoiceError {

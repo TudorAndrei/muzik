@@ -4421,6 +4421,7 @@ dependencies = [
  "open",
  "regex",
  "rusqlite",
+ "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",

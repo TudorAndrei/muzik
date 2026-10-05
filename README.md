@@ -186,9 +186,35 @@ files provide metadata; the selected audio source acquires each track.
 | `muzik organize <dir>` | Import audio by default, or write library tags with `--tag-only` |
 | `muzik import <dir>` | Import audio into a Beets-compatible library |
 | `muzik archive <dir>` | Process existing downloaded files (split + import by default) |
+| `muzik sync <target>` | Copy library tracks to a device in formats the device plays |
 | `muzik validate <dir>` | Validate audio files, chapters, and metadata |
 | `muzik cache` | Manage the platform-specific `muzik` cache |
 | `muzik config` | Manage music library configuration |
+
+## Device sync
+
+`muzik sync <target>` copies library tracks to a device folder. It keeps the
+library folder layout and converts only the files that the device cannot play
+or that you want smaller. Each target has a preset:
+
+| Preset | Behavior |
+|--------|----------|
+| `echo-mini` (default) | Copies FLAC, ALAC, WAV, APE, DSD, MP3, AAC, Vorbis, and WMA. Converts other audio, such as Opus, to MP3 320 kbps. Converts lossless audio above 24-bit/192 kHz to FLAC 24-bit/192 kHz or lower. |
+| `opus` | Converts lossless and uncommon audio to Opus 192 kbps. Copies MP3, AAC, Vorbis, and Opus. |
+
+```sh
+muzik config set-sync-target snowsky /Volumes/SNOWSKY/Music --preset echo-mini
+muzik config set-sync-target phone ~/Phone/Music --preset opus --bitrate 160
+muzik sync snowsky --dry-run
+muzik sync snowsky --query "artist:Mogwai" --delete
+```
+
+The target folder must exist, so a disconnected device does not receive a new
+folder on the computer disk. A later run writes only new or changed tracks.
+`--query` selects tracks with a beets query. muzik compares the size of the
+files to write with the free space on the device and stops before it writes if
+they do not fit. `--delete` removes audio and cover files on the device that
+are not in the selection, and macOS `._` files.
 
 ## Spotify playlist exports
 

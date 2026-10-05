@@ -11,6 +11,7 @@ mod organize;
 mod soulseek;
 mod split;
 mod spotify;
+mod sync;
 use muzik_core::paths;
 mod validate;
 mod watchlist;
@@ -56,6 +57,8 @@ enum Command {
     Soulseek(Soulseek),
     /// Split an audio file at chapter markers.
     Split(Split),
+    /// Copy library tracks to a device in formats the device plays.
+    Sync(Sync),
     /// Check audio files and metadata sidecars.
     Validate(Validate),
     /// Manage watched playlists and queue their items.
@@ -146,6 +149,27 @@ struct Split {
     /// Replace existing output and ignore the split cache.
     #[usage(long, short = 'f')]
     force: bool,
+}
+
+#[derive(Args)]
+struct Sync {
+    /// Sync target name from `muzik config set-sync-target`.
+    target: String,
+    /// Beets query that selects the tracks to sync.
+    #[usage(long, short = 'q')]
+    query: Option<String>,
+    /// Delete audio and cover files on the target that are not in the selection.
+    #[usage(long)]
+    delete: bool,
+    /// Show the plan without writing files.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
+    /// Number of parallel ffmpeg jobs (0 selects a default).
+    #[usage(long, short = 'j', default = "0")]
+    jobs: usize,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -394,6 +418,8 @@ enum ConfigCommand {
     SetLibrary(SetLibrary),
     /// Set Soulseek connection settings.
     SetSoulseek(SetSoulseek),
+    /// Add or change a device folder for `muzik sync`.
+    SetSyncTarget(SetSyncTarget),
     /// Open the library config in an editor.
     Edit(ConfigFile),
 }
@@ -434,6 +460,20 @@ struct SetSoulseek {
     /// Completed download directory.
     #[usage(long)]
     download_dir: Option<PathBuf>,
+}
+
+#[derive(Args)]
+struct SetSyncTarget {
+    /// Target name, such as snowsky or phone.
+    name: String,
+    /// Device music folder.
+    path: PathBuf,
+    /// Audio formats for the device.
+    #[usage(long, short = 'p', value_enum, default = "echo-mini")]
+    preset: muzik_core::SyncPreset,
+    /// Bitrate in kbps for converted files (echo-mini: MP3, 320 by default; opus: 192 by default).
+    #[usage(long, short = 'b')]
+    bitrate: Option<u32>,
 }
 
 #[derive(Args)]
@@ -652,6 +692,7 @@ fn run(command: Command) -> Result<(), String> {
             }
             ConfigCommand::SetSoulseek(args) => config::set_soulseek(&args),
             ConfigCommand::Edit(args) => config::edit(args.config.as_deref()),
+            ConfigCommand::SetSyncTarget(args) => return sync::set_target(&args),
         }
         .map_err(|error| error.to_string()),
         Command::Download(args) => download::run(&args),
@@ -687,6 +728,7 @@ fn run(command: Command) -> Result<(), String> {
             SoulseekCommand::Download(args) => soulseek::download(&args),
         },
         Command::Split(args) => split::run(&args).map(|_| ()),
+        Command::Sync(args) => sync::run(&args),
         Command::Validate(args) => validate::run(&args),
         Command::Watchlist(args) => match args.command {
             WatchlistCommand::List(args) => watchlist::list(args.items),

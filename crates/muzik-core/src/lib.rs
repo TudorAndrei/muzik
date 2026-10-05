@@ -13,6 +13,7 @@ pub mod process;
 pub mod quality;
 pub mod splitter;
 pub mod spotify;
+pub mod sync;
 pub mod thumbnails;
 mod types;
 pub mod watchlist;
@@ -20,6 +21,7 @@ pub mod watchlist;
 pub use config::{default_config_path, BeetsConfig, Error as ConfigError};
 pub use config_choices::{
     AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, QualityPolicy,
+    SyncPreset,
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
 pub use types::{AlbumId, LocalTrack, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
