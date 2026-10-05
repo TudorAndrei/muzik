@@ -43,6 +43,10 @@ const MIGRATIONS: &[&str] = &[
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );",
+    "CREATE TABLE sync_files (
+        destination TEXT PRIMARY KEY,
+        encoding TEXT NOT NULL
+    ) WITHOUT ROWID;",
 ];
 
 pub fn open(path: &Path) -> Result<Connection, String> {

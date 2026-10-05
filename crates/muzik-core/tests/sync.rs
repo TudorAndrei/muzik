@@ -1,7 +1,7 @@
 use muzik_core::quality::MeasuredQuality;
 use muzik_core::sync::{self, Action, Encoding, Target};
 use muzik_core::SyncPreset;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -121,7 +121,8 @@ fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn st
         }))
     };
     let tracks = vec![flac.clone(), opus.clone(), outside.clone()];
-    let plan = sync::plan(&echo, &library, &tracks, &[cover], 2, &probe);
+    let none = BTreeMap::new();
+    let plan = sync::plan(&echo, &library, &tracks, &[cover], &none, 2, &probe);
     let destinations: Vec<PathBuf> = plan
         .pending
         .iter()
@@ -144,7 +145,7 @@ fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn st
             sync::transfer(transfer)?;
         }
     }
-    let again = sync::plan(&echo, &library, &tracks, &[], 2, &probe);
+    let again = sync::plan(&echo, &library, &tracks, &[], &none, 2, &probe);
     assert_eq!(again.fresh, 1);
     assert_eq!(again.pending.len(), 1);
     Ok(())
@@ -173,7 +174,7 @@ fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error
         Ok(Some(audio(format, 44_100, Some(16))))
     };
     let mp3 = target(&dir.path().join("card"), SyncPreset::Mp3);
-    let plan = sync::plan(&mp3, &library, &tracks, &[], 2, &probe);
+    let plan = sync::plan(&mp3, &library, &tracks, &[], &BTreeMap::new(), 2, &probe);
     let sources: Vec<&Path> = plan
         .pending
         .iter()
@@ -181,6 +182,61 @@ fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error
         .collect();
     assert_eq!(sources, vec![tracks[0].as_path(), tracks[3].as_path()]);
     assert_eq!(plan.duplicates, vec![tracks[1].clone(), tracks[2].clone()]);
+    Ok(())
+}
+
+#[test]
+fn a_converted_file_is_current_only_with_the_recorded_encoding(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let library = dir.path().join("library");
+    let card = dir.path().join("card");
+    fs::create_dir_all(library.join("Album"))?;
+    let tracks = vec![library.join("Album/01 Song.flac")];
+    fs::write(&tracks[0], b"audio")?;
+    let probe = |_: &Path| -> Result<Option<MeasuredQuality>, String> {
+        Ok(Some(audio("flac", 44_100, Some(16))))
+    };
+    let connection = muzik_core::db::open_in_memory()?;
+    let mp3 = target(&card, SyncPreset::Mp3);
+    let plan_with = |target: &Target| -> Result<sync::Plan, String> {
+        let encodings = sync::encodings(&connection, &card)?;
+        Ok(sync::plan(
+            target,
+            &library,
+            &tracks,
+            &[],
+            &encodings,
+            1,
+            &probe,
+        ))
+    };
+
+    let first = plan_with(&mp3)?;
+    let transfer = &first.pending[0];
+    fs::create_dir_all(card.join("Album"))?;
+    fs::write(&transfer.destination, b"converted")?;
+    assert_eq!(plan_with(&mp3)?.fresh, 0);
+
+    sync::record(&connection, transfer)?;
+    assert_eq!(plan_with(&mp3)?.fresh, 1);
+    let lower = Target {
+        bitrate: Some(128),
+        ..mp3.clone()
+    };
+    assert_eq!(
+        plan_with(&lower)?.pending[0].action,
+        Action::Convert(Encoding::Mp3 { kbps: 128 })
+    );
+
+    sync::record(
+        &connection,
+        &sync::Transfer {
+            action: Action::Copy,
+            ..transfer.clone()
+        },
+    )?;
+    assert!(sync::encodings(&connection, &card)?.is_empty());
     Ok(())
 }
 
