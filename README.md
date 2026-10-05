@@ -204,7 +204,7 @@ or that you want smaller. Each target has a preset:
 | `opus` | Converts lossless and uncommon audio to Opus 192 kbps. Copies MP3, AAC, Vorbis, and Opus. |
 
 ```sh
-muzik config set-sync-target snowsky /Volumes/SNOWSKY/Music --preset mp3
+muzik config set-sync-target snowsky /Volumes/SNOWSKY/Music --preset mp3 --no-covers
 muzik config set-sync-target phone ~/Phone/Music --preset opus --bitrate 160
 muzik sync snowsky --dry-run
 muzik sync snowsky --query "artist:Mogwai" --delete
@@ -215,7 +215,9 @@ folder on the computer disk. A later run writes only new or changed tracks.
 `--query` selects tracks with a beets query. muzik compares the size of the
 files to write with the free space on the device and stops before it writes if
 they do not fit. `--delete` removes audio and cover files on the device that
-are not in the selection, and macOS `._` files.
+are not in the selection, and macOS `._` files. `--no-covers` on
+`set-sync-target` stops the copy of album cover images, for a device with no
+display.
 
 ## Spotify playlist exports
 
