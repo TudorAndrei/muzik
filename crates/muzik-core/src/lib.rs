@@ -8,6 +8,7 @@ pub mod config_choices;
 pub mod db;
 mod decision;
 pub mod downloads;
+pub mod ffmpeg;
 pub mod paths;
 pub mod process;
 pub mod quality;

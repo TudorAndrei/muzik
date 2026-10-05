@@ -2,6 +2,7 @@
 
 use crate::app_config;
 use crate::config_choices::SyncPreset;
+use crate::ffmpeg::{Convert, Ffmpeg};
 use crate::paths;
 use crate::quality::MeasuredQuality;
 use serde_json::{json, Map, Value};
@@ -9,9 +10,10 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
+
+pub use crate::ffmpeg::Encoding;
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
@@ -26,20 +28,6 @@ pub struct Target {
     pub preset: SyncPreset,
     pub bitrate: Option<u32>,
     pub covers: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Encoding {
-    Mp3 {
-        kbps: u32,
-    },
-    Opus {
-        kbps: u32,
-    },
-    Flac {
-        sample_rate: Option<u32>,
-        bit_depth: Option<u32>,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -215,16 +203,6 @@ impl Target {
                 .join(relative)
                 .with_extension(encoding.extension()),
         })
-    }
-}
-
-impl Encoding {
-    pub fn extension(&self) -> &'static str {
-        match self {
-            Self::Mp3 { .. } => "mp3",
-            Self::Opus { .. } => "opus",
-            Self::Flac { .. } => "flac",
-        }
     }
 }
 
@@ -426,19 +404,21 @@ pub fn transfer(transfer: &Transfer) -> Result<(), String> {
     let partial = parent.join(format!(".{}.{PARTIAL}.{extension}", stem.to_string_lossy()));
     let result = match &transfer.action {
         Action::Copy => copy(&transfer.source, &partial),
-        Action::Convert(encoding) => convert(
-            &transfer.source,
-            &partial,
-            encoding,
-            transfer.tags_in_stream,
-        )
-        .and_then(|()| {
-            if transfer.cover {
-                copy_cover(&transfer.source, &partial)
-            } else {
-                Ok(())
-            }
-        }),
+        Action::Convert(encoding) => Ffmpeg::default()
+            .convert(&Convert {
+                source: &transfer.source,
+                destination: &partial,
+                encoding,
+                tags_in_stream: transfer.tags_in_stream,
+            })
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                if transfer.cover {
+                    copy_cover(&transfer.source, &partial)
+                } else {
+                    Ok(())
+                }
+            }),
     }
     .and_then(|()| fs::rename(&partial, &transfer.destination).map_err(|error| error.to_string()));
     if result.is_err() {
@@ -461,64 +441,6 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     let mut writer = File::create(destination).map_err(|error| error.to_string())?;
     io::copy(&mut reader, &mut writer).map_err(|error| error.to_string())?;
     Ok(())
-}
-
-fn convert(
-    source: &Path,
-    destination: &Path,
-    encoding: &Encoding,
-    tags_in_stream: bool,
-) -> Result<(), String> {
-    let mut command = crate::process::background_command("ffmpeg");
-    command
-        .args(["-nostdin", "-v", "error", "-y", "-i"])
-        .arg(source)
-        .args(["-map", "0:a:0", "-map_metadata"])
-        .arg(if tags_in_stream { "0:s:a:0" } else { "0" });
-    match encoding {
-        Encoding::Mp3 { kbps } => {
-            command
-                .args(["-c:a", "libmp3lame", "-b:a"])
-                .arg(format!("{kbps}k"))
-                .args(["-id3v2_version", "3", "-f", "mp3"]);
-        }
-        Encoding::Opus { kbps } => {
-            command
-                .args(["-c:a", "libopus", "-b:a"])
-                .arg(format!("{kbps}k"))
-                .args(["-f", "opus"]);
-        }
-        Encoding::Flac {
-            sample_rate,
-            bit_depth,
-        } => {
-            command.args(["-c:a", "flac"]);
-            if let Some(rate) = sample_rate {
-                command.arg("-ar").arg(rate.to_string());
-            }
-            if let Some(depth) = bit_depth {
-                command
-                    .args(["-sample_fmt", "s32", "-bits_per_raw_sample"])
-                    .arg(depth.to_string());
-            }
-            command.args(["-f", "flac"]);
-        }
-    }
-    let output = command
-        .arg(destination)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| format!("cannot start ffmpeg: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "ffmpeg failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ))
-    }
 }
 
 pub fn run(

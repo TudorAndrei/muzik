@@ -1,6 +1,7 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
 use crate::chapters::{sidecar_path, Chapter};
+use crate::ffmpeg::{self, Cut, Ffmpeg};
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -8,10 +9,8 @@ use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 use unicode_normalization::UnicodeNormalization;
 
 const THUMB_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp"];
@@ -52,8 +51,8 @@ pub enum SplitError {
     OutputContainsSource,
     #[error("failed to split {0} track(s): {1}")]
     TracksFailed(usize, String),
-    #[error("cannot run ffmpeg: {0}")]
-    Ffmpeg(#[source] io::Error),
+    #[error(transparent)]
+    Ffmpeg(ffmpeg::Error),
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -104,7 +103,7 @@ pub fn split_audio_with_cancel(
         options,
         cancelled,
         on_progress,
-        Path::new("ffmpeg"),
+        &Ffmpeg::default(),
     )
 }
 
@@ -115,7 +114,7 @@ fn split_audio_with_binary(
     options: &SplitOptions,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(SplitProgress),
-    ffmpeg: &Path,
+    ffmpeg: &Ffmpeg,
 ) -> Result<PathBuf, SplitError> {
     if cancelled.load(Ordering::SeqCst) {
         return Err(SplitError::Cancelled);
@@ -240,7 +239,7 @@ fn split_audio_with_binary(
                         .lock()
                         .unwrap_or_else(|error| error.into_inner())
                         .push(chapter.title.clone()),
-                    Err(error) if error.kind() == io::ErrorKind::Interrupted => break,
+                    Err(SplitError::Cancelled) => break,
                     Err(error) => {
                         *launch_error
                             .lock()
@@ -262,7 +261,7 @@ fn split_audio_with_binary(
         .into_inner()
         .unwrap_or_else(|error| error.into_inner())
     {
-        return Err(SplitError::Ffmpeg(error));
+        return Err(error);
     }
     let failed = failures
         .into_inner()
@@ -371,7 +370,7 @@ struct SplitTrackContext<'a> {
     metadata: &'a Metadata,
     compilation: bool,
     cancelled: &'a AtomicBool,
-    ffmpeg: &'a Path,
+    ffmpeg: &'a Ffmpeg,
 }
 
 fn track_file_name(source: &Path, index: u32, title: &str) -> String {
@@ -393,7 +392,7 @@ fn expected_track_name(source: &Path, chapter: &Chapter, compilation: bool) -> S
     track_file_name(source, chapter.index, &title)
 }
 
-fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, io::Error> {
+fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, SplitError> {
     let SplitTrackContext {
         source,
         output,
@@ -423,59 +422,26 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         artist.push_str(&featured.join(", "));
     }
     let destination = output.join(track_file_name(source, chapter.index, &title));
-    let mut command = crate::process::background_command(ffmpeg);
-    command
-        .arg("-i")
-        .arg(source)
-        .arg("-nostdin")
-        .arg("-y")
-        .arg("-ss")
-        .arg(timestamp(chapter.start));
-    if let Some(end) = chapter.end {
-        command.arg("-to").arg(timestamp(end));
-    }
-    command
-        .arg("-vn")
-        .arg("-c:a")
-        .arg("copy")
-        .arg("-map_metadata")
-        .arg("-1")
-        .arg("-metadata")
-        .arg(format!("title={title}"))
-        .arg("-metadata")
-        .arg(format!("artist={artist}"))
-        .arg("-metadata")
-        .arg(format!("albumartist={albumartist}"))
-        .arg("-metadata")
-        .arg(format!("album={}", metadata.album))
-        .arg("-metadata")
-        .arg(format!("date={}", metadata.year))
-        .arg("-metadata")
-        .arg(format!("track={}/{}", chapter.index, count))
-        .arg("-metadata")
-        .arg(format!("compilation={}", u8::from(compilation)))
-        .arg(&destination);
-    let mut child = command
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let status = loop {
-        if cancelled.load(Ordering::SeqCst) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = fs::remove_file(&destination);
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "split cancelled",
-            ));
-        }
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        std::thread::sleep(Duration::from_millis(25));
+    let cut = Cut {
+        source,
+        destination: &destination,
+        start: chapter.start,
+        end: chapter.end,
+        tags: &[
+            ("title", title.clone()),
+            ("artist", artist),
+            ("albumartist", albumartist.to_owned()),
+            ("album", metadata.album.clone()),
+            ("date", metadata.year.clone()),
+            ("track", format!("{}/{}", chapter.index, count)),
+            ("compilation", u8::from(compilation).to_string()),
+        ],
     };
-    if !status.success() {
-        return Ok(false);
+    match ffmpeg.cut(&cut, cancelled) {
+        Ok(()) => {}
+        Err(ffmpeg::Error::Failed(_)) => return Ok(false),
+        Err(ffmpeg::Error::Cancelled) => return Err(SplitError::Cancelled),
+        Err(error) => return Err(SplitError::Ffmpeg(error)),
     }
     if let Some(source_id) = &metadata.source_id {
         let sidecar = destination.with_extension("muzik.json");
@@ -488,15 +454,6 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         fs::write(sidecar, format!("{text}\n"))?;
     }
     Ok(true)
-}
-
-fn timestamp(seconds: i64) -> String {
-    format!(
-        "{:02}:{:02}:{:02}",
-        seconds / 3600,
-        seconds % 3600 / 60,
-        seconds % 60
-    )
 }
 
 fn extract_metadata(source: &Path) -> Metadata {
@@ -758,6 +715,7 @@ mod tests {
     fn cancellation_stops_active_ffmpeg_and_keeps_source() {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::Arc;
+        use std::time::Duration;
 
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("album.mp3");
@@ -797,7 +755,7 @@ mod tests {
             &SplitOptions::default(),
             &cancelled,
             &mut |_| panic!("cancelled track cannot finish"),
-            &binary,
+            &Ffmpeg::at(&binary),
         );
         watcher.join().unwrap();
         assert!(marker.exists(), "ffmpeg did not start");
@@ -852,7 +810,7 @@ mod tests {
                 options,
                 &AtomicBool::new(false),
                 &mut |_| {},
-                &binary,
+                &Ffmpeg::at(&binary),
             )
         };
         assert!(matches!(
