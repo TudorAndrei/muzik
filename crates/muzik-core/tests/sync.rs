@@ -161,7 +161,7 @@ fn stale_files_lists_unplanned_media_and_macos_leftovers() -> Result<(), Box<dyn
         "Album/01.mp3",
         "Album/02.flac",
         "Album/._01.mp3",
-        "Album/.03.mp3.part",
+        "Album/.03.muzik-part.mp3",
         "Album/notes.txt",
     ] {
         fs::write(root.join(name), b"x")?;
@@ -170,7 +170,7 @@ fn stale_files_lists_unplanned_media_and_macos_leftovers() -> Result<(), Box<dyn
     assert_eq!(
         sync::stale_files(root, &planned)?,
         vec![
-            root.join("Album/.03.mp3.part"),
+            root.join("Album/.03.muzik-part.mp3"),
             root.join("Album/._01.mp3"),
             root.join("Album/02.flac"),
         ]

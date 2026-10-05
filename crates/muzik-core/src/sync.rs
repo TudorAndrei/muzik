@@ -14,6 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 const SECTION: &str = "sync";
+const PARTIAL: &str = "muzik-part";
 const MEDIA_EXTENSIONS: &[&str] = &[
     "aac", "aif", "aiff", "ape", "dff", "dsf", "flac", "jpeg", "jpg", "m4a", "mp3", "mp4", "ogg",
     "opus", "png", "wav", "wma",
@@ -53,6 +54,7 @@ pub struct Transfer {
     pub destination: PathBuf,
     pub action: Action,
     pub tags_in_stream: bool,
+    pub cover: bool,
     pub bytes: u64,
 }
 
@@ -312,6 +314,7 @@ fn plan_track(
         source: source.to_path_buf(),
         destination,
         tags_in_stream: matches!(audio.format.as_str(), "opus" | "vorbis"),
+        cover: target.covers && action != Action::Copy,
         action,
         bytes,
     })
@@ -332,6 +335,7 @@ fn plan_cover(target: &Target, directory: &Path, source: &Path) -> Step {
         destination,
         action: Action::Copy,
         tags_in_stream: false,
+        cover: false,
         bytes: meta.len(),
     })
 }
@@ -410,11 +414,16 @@ pub fn transfer(transfer: &Transfer) -> Result<(), String> {
         .ok_or("destination has no folder")?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    let name = transfer
+    let stem = transfer
         .destination
-        .file_name()
+        .file_stem()
         .ok_or("destination has no file name")?;
-    let partial = parent.join(format!(".{}.part", name.to_string_lossy()));
+    let extension = transfer
+        .destination
+        .extension()
+        .map(|extension| extension.to_string_lossy())
+        .unwrap_or_default();
+    let partial = parent.join(format!(".{}.{PARTIAL}.{extension}", stem.to_string_lossy()));
     let result = match &transfer.action {
         Action::Copy => copy(&transfer.source, &partial),
         Action::Convert(encoding) => convert(
@@ -422,13 +431,29 @@ pub fn transfer(transfer: &Transfer) -> Result<(), String> {
             &partial,
             encoding,
             transfer.tags_in_stream,
-        ),
+        )
+        .and_then(|()| {
+            if transfer.cover {
+                copy_cover(&transfer.source, &partial)
+            } else {
+                Ok(())
+            }
+        }),
     }
     .and_then(|()| fs::rename(&partial, &transfer.destination).map_err(|error| error.to_string()));
     if result.is_err() {
         fs::remove_file(&partial).ok();
     }
     result
+}
+
+fn copy_cover(source: &Path, destination: &Path) -> Result<(), String> {
+    let cover = muzik_tags::front_cover(source).map_err(|error| error.to_string())?;
+    match cover {
+        Some((image, mime)) => muzik_tags::embed_cover(destination, &image, &mime)
+            .map_err(|error| format!("cannot embed the cover: {error}")),
+        None => Ok(()),
+    }
 }
 
 fn copy(source: &Path, destination: &Path) -> Result<(), String> {
@@ -526,8 +551,8 @@ pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<P
                 }
                 continue;
             }
-            let leftover =
-                name.starts_with("._") || (name.starts_with('.') && name.ends_with(".part"));
+            let leftover = name.starts_with("._")
+                || (name.starts_with('.') && name.contains(&format!(".{PARTIAL}.")));
             let media = !name.starts_with('.')
                 && path
                     .extension()

@@ -130,6 +130,20 @@ pub fn embed_cover(
     Ok(())
 }
 
+/// Return the front cover image and its MIME type, or the first picture.
+pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, String)>, TagsError> {
+    let audio = lofty::read_from_path(path)?;
+    let pictures: Vec<&Picture> = audio.tags().iter().flat_map(|tag| tag.pictures()).collect();
+    let picture = pictures
+        .iter()
+        .find(|picture| picture.pic_type() == PictureType::CoverFront)
+        .or_else(|| pictures.first());
+    Ok(picture.and_then(|picture| {
+        let mime = picture.mime_type()?.as_str().to_owned();
+        Some((picture.data().to_vec(), mime))
+    }))
+}
+
 /// Return whether a file has a front cover.
 pub fn has_front_cover(path: impl AsRef<Path>) -> Result<bool, TagsError> {
     let audio = lofty::read_from_path(path)?;

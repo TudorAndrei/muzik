@@ -2,7 +2,7 @@
 
 pub mod cover;
 pub mod probe;
-pub use cover::{embed_cover, find_cover, has_front_cover};
+pub use cover::{embed_cover, find_cover, front_cover, has_front_cover};
 pub use probe::{probe, AudioProperties};
 
 use std::collections::BTreeMap;
