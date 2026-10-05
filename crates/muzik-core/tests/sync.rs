@@ -59,6 +59,18 @@ fn opus_converts_lossless_and_keeps_common_lossy_audio() {
 }
 
 #[test]
+fn mp3_converts_everything_except_mp3() {
+    let player = target(Path::new("/card"), SyncPreset::Mp3);
+    for format in ["flac", "opus", "aac", "vorbis"] {
+        assert_eq!(
+            player.action(&audio(format, 44_100, Some(16))),
+            Action::Convert(Encoding::Mp3 { kbps: 320 })
+        );
+    }
+    assert_eq!(player.action(&audio("mp3", 44_100, None)), Action::Copy);
+}
+
+#[test]
 fn targets_round_trip_through_the_config_file() -> Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let config = dir.path().join("config.yaml");

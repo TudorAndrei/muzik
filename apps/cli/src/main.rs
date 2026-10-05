@@ -471,7 +471,7 @@ struct SetSyncTarget {
     /// Audio formats for the device.
     #[usage(long, short = 'p', value_enum, default = "echo-mini")]
     preset: muzik_core::SyncPreset,
-    /// Bitrate in kbps for converted files (echo-mini: MP3, 320 by default; opus: 192 by default).
+    /// Bitrate in kbps for converted files (echo-mini and mp3: 320 by default; opus: 192 by default).
     #[usage(long, short = 'b')]
     bitrate: Option<u32>,
 }

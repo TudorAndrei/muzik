@@ -200,10 +200,11 @@ or that you want smaller. Each target has a preset:
 | Preset | Behavior |
 |--------|----------|
 | `echo-mini` (default) | Copies FLAC, ALAC, WAV, APE, DSD, MP3, AAC, Vorbis, and WMA. Converts other audio, such as Opus, to MP3 320 kbps. Converts lossless audio above 24-bit/192 kHz to FLAC 24-bit/192 kHz or lower. |
+| `mp3` | Converts all audio to MP3 320 kbps. Copies MP3. |
 | `opus` | Converts lossless and uncommon audio to Opus 192 kbps. Copies MP3, AAC, Vorbis, and Opus. |
 
 ```sh
-muzik config set-sync-target snowsky /Volumes/SNOWSKY/Music --preset echo-mini
+muzik config set-sync-target snowsky /Volumes/SNOWSKY/Music --preset mp3
 muzik config set-sync-target phone ~/Phone/Music --preset opus --bitrate 160
 muzik sync snowsky --dry-run
 muzik sync snowsky --query "artist:Mogwai" --delete
