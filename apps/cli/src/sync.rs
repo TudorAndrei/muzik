@@ -88,6 +88,12 @@ pub fn run(args: &Sync) -> Result<(), String> {
     for source in &plan.unreadable {
         eprintln!("skip (cannot read audio): {}", source.display());
     }
+    for source in &plan.duplicates {
+        eprintln!(
+            "skip (another track has the same device file name): {}",
+            source.display()
+        );
+    }
     let converts = plan
         .pending
         .iter()

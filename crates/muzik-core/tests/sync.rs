@@ -151,6 +151,40 @@ fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = tempfile::tempdir()?;
+    let library = dir.path().join("library");
+    let album = library.join("Album");
+    fs::create_dir_all(&album)?;
+    let tracks = vec![
+        album.join("01 Song.flac"),
+        album.join("01 Song.opus"),
+        album.join("01 song.mp3"),
+        album.join("02 Other.flac"),
+    ];
+    for path in &tracks {
+        fs::write(path, b"audio")?;
+    }
+    let probe = |path: &Path| -> Result<Option<MeasuredQuality>, String> {
+        let format = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .unwrap_or("");
+        Ok(Some(audio(format, 44_100, Some(16))))
+    };
+    let mp3 = target(&dir.path().join("card"), SyncPreset::Mp3);
+    let plan = sync::plan(&mp3, &library, &tracks, &[], 2, &probe);
+    let sources: Vec<&Path> = plan
+        .pending
+        .iter()
+        .map(|transfer| transfer.source.as_path())
+        .collect();
+    assert_eq!(sources, vec![tracks[0].as_path(), tracks[3].as_path()]);
+    assert_eq!(plan.duplicates, vec![tracks[1].clone(), tracks[2].clone()]);
+    Ok(())
+}
+
+#[test]
 fn stale_files_lists_unplanned_media_and_macos_leftovers() -> Result<(), Box<dyn std::error::Error>>
 {
     let dir = tempfile::tempdir()?;

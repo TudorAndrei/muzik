@@ -6,7 +6,7 @@ use crate::ffmpeg::{Convert, Ffmpeg};
 use crate::paths;
 use crate::quality::MeasuredQuality;
 use serde_json::{json, Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -52,6 +52,7 @@ pub struct Plan {
     pub pending: Vec<Transfer>,
     pub outside: Vec<PathBuf>,
     pub unreadable: Vec<PathBuf>,
+    pub duplicates: Vec<PathBuf>,
     pub planned: BTreeSet<PathBuf>,
 }
 
@@ -235,16 +236,19 @@ pub fn plan(
             .map(|source| plan_cover(target, directory, source)),
     );
     let mut plan = Plan::default();
-    for step in steps {
+    let mut taken = HashSet::new();
+    let mut claim = |destination: &Path| taken.insert(destination.to_string_lossy().to_lowercase());
+    for (source, step) in tracks.iter().chain(covers).zip(steps) {
         match step {
-            Step::Fresh(destination) => {
+            Step::Fresh(destination) if claim(&destination) => {
                 plan.fresh += 1;
                 plan.planned.insert(destination);
             }
-            Step::Pending(transfer) => {
+            Step::Pending(transfer) if claim(&transfer.destination) => {
                 plan.planned.insert(transfer.destination.clone());
                 plan.pending.push(transfer);
             }
+            Step::Fresh(_) | Step::Pending(_) => plan.duplicates.push(source.clone()),
             Step::Outside(source) => plan.outside.push(source),
             Step::Unreadable(source) => plan.unreadable.push(source),
         }
