@@ -2,11 +2,13 @@
 
 use crate::app_config;
 use crate::config_choices::SyncPreset;
+use crate::db;
 use crate::ffmpeg::{Convert, Ffmpeg};
 use crate::paths;
 use crate::quality::MeasuredQuality;
+use rusqlite::Connection;
 use serde_json::{json, Map, Value};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -224,11 +226,12 @@ pub fn plan(
     directory: &Path,
     tracks: &[PathBuf],
     covers: &[PathBuf],
+    encodings: &BTreeMap<PathBuf, Encoding>,
     jobs: usize,
     probe: &(dyn Fn(&Path) -> Result<Option<MeasuredQuality>, String> + Sync),
 ) -> Plan {
     let mut steps = parallel(tracks, jobs, |source| {
-        plan_track(target, directory, source, probe)
+        plan_track(target, directory, source, encodings, probe)
     });
     steps.extend(
         covers
@@ -260,6 +263,7 @@ fn plan_track(
     target: &Target,
     directory: &Path,
     source: &Path,
+    encodings: &BTreeMap<PathBuf, Encoding>,
     probe: &(dyn Fn(&Path) -> Result<Option<MeasuredQuality>, String> + Sync),
 ) -> Step {
     if source.strip_prefix(directory).is_err() {
@@ -267,7 +271,7 @@ fn plan_track(
     }
     if let Some(action) = guess(source).map(|audio| target.action(&audio)) {
         if let Some(destination) = target.destination(directory, source, &action) {
-            if is_fresh(source, &destination, action == Action::Copy) {
+            if is_current(source, &destination, &action, encodings) {
                 return Step::Fresh(destination);
             }
         }
@@ -279,7 +283,7 @@ fn plan_track(
     let Some(destination) = target.destination(directory, source, &action) else {
         return Step::Outside(source.to_path_buf());
     };
-    if is_fresh(source, &destination, action == Action::Copy) {
+    if is_current(source, &destination, &action, encodings) {
         return Step::Fresh(destination);
     }
     let size = audio.size.unwrap_or(0);
@@ -351,6 +355,20 @@ fn lossless(codec: &str) -> bool {
     matches!(codec, "flac" | "alac" | "ape" | "wavpack" | "tta")
         || codec.starts_with("pcm_")
         || codec.starts_with("dsd_")
+}
+
+fn is_current(
+    source: &Path,
+    destination: &Path,
+    action: &Action,
+    encodings: &BTreeMap<PathBuf, Encoding>,
+) -> bool {
+    match action {
+        Action::Copy => is_fresh(source, destination, true),
+        Action::Convert(encoding) => {
+            encodings.get(destination) == Some(encoding) && is_fresh(source, destination, false)
+        }
+    }
 }
 
 fn is_fresh(source: &Path, destination: &Path, same_size: bool) -> bool {
@@ -445,6 +463,52 @@ fn copy(source: &Path, destination: &Path) -> Result<(), String> {
     let mut writer = File::create(destination).map_err(|error| error.to_string())?;
     io::copy(&mut reader, &mut writer).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub fn encodings(
+    connection: &Connection,
+    root: &Path,
+) -> Result<BTreeMap<PathBuf, Encoding>, String> {
+    let mut statement = connection
+        .prepare("SELECT destination, encoding FROM sync_files")
+        .map_err(db::text)?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(db::text)?;
+    let mut encodings = BTreeMap::new();
+    for row in rows {
+        let (destination, encoding) = row.map_err(db::text)?;
+        let destination = PathBuf::from(destination);
+        if let (true, Ok(encoding)) = (
+            destination.starts_with(root),
+            serde_json::from_str(&encoding),
+        ) {
+            encodings.insert(destination, encoding);
+        }
+    }
+    Ok(encodings)
+}
+
+pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String> {
+    let destination = transfer.destination.to_string_lossy();
+    match &transfer.action {
+        Action::Copy => connection.execute(
+            "DELETE FROM sync_files WHERE destination = ?1",
+            [destination],
+        ),
+        Action::Convert(encoding) => connection.execute(
+            "INSERT INTO sync_files (destination, encoding) VALUES (?1, ?2)
+             ON CONFLICT (destination) DO UPDATE SET encoding = excluded.encoding",
+            (
+                destination,
+                serde_json::to_string(encoding).map_err(|error| error.to_string())?,
+            ),
+        ),
+    }
+    .map(drop)
+    .map_err(db::text)
 }
 
 pub fn run(

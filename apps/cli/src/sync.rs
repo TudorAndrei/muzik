@@ -2,9 +2,11 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 
+use muzik_core::paths::Paths;
 use muzik_core::sync::{self, Action, Encoding, Target, Transfer};
-use muzik_core::{app_config, quality};
+use muzik_core::{app_config, db, quality};
 use muzik_import::beets;
 use muzik_library::{Item, Library};
 use serde_json::json;
@@ -74,11 +76,14 @@ pub fn run(args: &Sync) -> Result<(), String> {
         target.path.display(),
         target.preset
     );
+    let connection = db::open(&Paths::user().database())?;
+    let encodings = sync::encodings(&connection, &target.path)?;
     let plan = sync::plan(
         &target,
         &paths.directory,
         &tracks,
         &covers,
+        &encodings,
         args.jobs,
         &quality::measure,
     );
@@ -163,6 +168,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
     }
     let total = plan.pending.len();
     let count = AtomicUsize::new(0);
+    let connection = Mutex::new(connection);
     let failed = sync::run(
         &plan.pending,
         args.jobs,
@@ -174,7 +180,16 @@ pub fn run(args: &Sync) -> Result<(), String> {
                 .unwrap_or(&transfer.destination)
                 .display();
             match result {
-                Ok(()) => println!("[{done}/{total}] {}\t{name}", label(&transfer.action)),
+                Ok(()) => {
+                    println!("[{done}/{total}] {}\t{name}", label(&transfer.action));
+                    let recorded = sync::record(
+                        &connection.lock().unwrap_or_else(PoisonError::into_inner),
+                        transfer,
+                    );
+                    if let Err(error) = recorded {
+                        eprintln!("cannot record the encoding of {name}: {error}");
+                    }
+                }
                 Err(error) => eprintln!("[{done}/{total}] failed\t{name}: {error}"),
             }
         },
