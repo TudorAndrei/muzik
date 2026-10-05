@@ -243,6 +243,8 @@ pub enum SyncPreset {
     /// Highest quality that the FiiO Snowsky Echo Mini plays.
     #[default]
     EchoMini,
+    /// MP3 for all audio; MP3 files unchanged.
+    Mp3,
     /// Opus for lossless audio; other lossy audio unchanged.
     Opus,
 }

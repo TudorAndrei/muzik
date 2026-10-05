@@ -132,7 +132,7 @@ impl Target {
 
     fn validate(&self) -> Result<(), String> {
         let range = match self.preset {
-            SyncPreset::EchoMini => 32..=320,
+            SyncPreset::EchoMini | SyncPreset::Mp3 => 32..=320,
             SyncPreset::Opus => 6..=512,
         };
         match self.bitrate {
@@ -171,6 +171,15 @@ impl Target {
                     Action::Convert(Encoding::Flac {
                         sample_rate,
                         bit_depth,
+                    })
+                }
+            }
+            SyncPreset::Mp3 => {
+                if codec == "mp3" {
+                    Action::Copy
+                } else {
+                    Action::Convert(Encoding::Mp3 {
+                        kbps: self.bitrate.unwrap_or(320),
                     })
                 }
             }
