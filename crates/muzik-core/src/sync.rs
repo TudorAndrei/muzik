@@ -24,6 +24,7 @@ pub struct Target {
     pub path: PathBuf,
     pub preset: SyncPreset,
     pub bitrate: Option<u32>,
+    pub covers: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,10 +107,17 @@ impl Target {
                     .ok_or_else(|| format!("sync target {name}: bitrate must be kbps"))?,
             ),
         };
+        let covers = match entry.get("covers") {
+            None | Some(Value::Null) => true,
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| format!("sync target {name}: covers must be true or false"))?,
+        };
         let target = Self {
             path: paths::expand_home(Path::new(path)),
             preset,
             bitrate,
+            covers,
         };
         target.validate()?;
         Ok(target)
@@ -127,6 +135,7 @@ impl Target {
         if let Some(bitrate) = self.bitrate {
             entry.insert("bitrate".into(), json!(bitrate));
         }
+        entry.insert("covers".into(), json!(self.covers));
         app_config::save_section_value(config_path, SECTION, name, Value::Object(entry))
     }
 

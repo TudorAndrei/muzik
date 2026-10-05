@@ -22,6 +22,7 @@ fn target(path: &Path, preset: SyncPreset) -> Target {
         path: path.to_path_buf(),
         preset,
         bitrate: None,
+        covers: true,
     }
 }
 
@@ -77,6 +78,7 @@ fn targets_round_trip_through_the_config_file() -> Result<(), Box<dyn std::error
     fs::write(&config, "spotify:\n  client_id: kept\n")?;
     let phone = Target {
         bitrate: Some(160),
+        covers: false,
         ..target(&dir.path().join("phone"), SyncPreset::Opus)
     };
     phone.save(&config, "phone")?;

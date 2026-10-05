@@ -17,6 +17,7 @@ pub fn set_target(args: &SetSyncTarget) -> Result<(), String> {
         path: muzik_core::paths::expand_home(&args.path),
         preset: args.preset,
         bitrate: args.bitrate,
+        covers: !args.no_covers,
     };
     target.save(&app_config::path(), &args.name)?;
     println!(
@@ -48,7 +49,11 @@ pub fn run(args: &Sync) -> Result<(), String> {
         .filter_map(|item| item.field("path").and_then(stored_path))
         .map(|path| absolute(&paths.directory, path))
         .collect();
-    let album_ids: BTreeSet<i64> = items.iter().filter_map(Item::album_id).collect();
+    let album_ids: BTreeSet<i64> = if target.covers {
+        items.iter().filter_map(Item::album_id).collect()
+    } else {
+        BTreeSet::new()
+    };
     let mut covers = Vec::new();
     for id in album_ids {
         let album = library.album(id).map_err(|error| error.to_string())?;

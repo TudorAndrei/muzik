@@ -474,6 +474,9 @@ struct SetSyncTarget {
     /// Bitrate in kbps for converted files (echo-mini and mp3: 320 by default; opus: 192 by default).
     #[usage(long, short = 'b')]
     bitrate: Option<u32>,
+    /// Do not copy album cover images.
+    #[usage(long)]
+    no_covers: bool,
 }
 
 #[derive(Args)]
