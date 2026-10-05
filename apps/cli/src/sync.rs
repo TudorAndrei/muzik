@@ -107,7 +107,14 @@ pub fn run(args: &Sync) -> Result<(), String> {
         converts,
         size(needed)
     );
-    let stale = if args.delete {
+    let delete = args.delete && plan.unreadable.is_empty();
+    if args.delete && !delete {
+        eprintln!(
+            "not deleting old files: {} tracks could not be read, so muzik cannot tell which device files are old",
+            plan.unreadable.len()
+        );
+    }
+    let stale = if delete {
         sync::stale_files(&target.path, &plan.planned).map_err(|error| error.to_string())?
     } else {
         Vec::new()
@@ -117,7 +124,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
         .filter_map(|path| fs::metadata(path).ok())
         .map(|meta| meta.len())
         .sum();
-    if args.delete {
+    if delete {
         println!("{} files to delete ({})", stale.len(), size(freed));
     }
     if let Some(available) = sync::available_bytes(&target.path) {
@@ -151,7 +158,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
     for path in &stale {
         fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
     }
-    if args.delete {
+    if delete {
         sync::remove_empty_folders(&target.path).map_err(|error| error.to_string())?;
     }
     let total = plan.pending.len();
