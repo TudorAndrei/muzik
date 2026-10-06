@@ -129,6 +129,22 @@ mise run develop
 cargo run --locked -p muzik-cli -- init
 ```
 
+### Folders
+
+muzik uses the standard folders of each system:
+
+| Folder | macOS | Linux |
+| --- | --- | --- |
+| Data | `~/Library/Application Support/com.tudorandrei.muzik` | `$XDG_DATA_HOME/muzik` (`~/.local/share/muzik`) |
+| Config | Same as data | `$XDG_CONFIG_HOME/muzik` (`~/.config/muzik`) |
+| Cache | `~/Library/Caches/com.tudorandrei.muzik` | `$XDG_CACHE_HOME/muzik` (`~/.cache/muzik`) |
+
+On macOS, muzik moves the old `~/Library/Application Support/muzik` and
+`~/Library/Caches/muzik` folders to the new folders when it starts. A link stays at each old path,
+so paths that you saved before continue to work. If the old and the new data
+folder both have files, muzik stops. Merge the two folders, then remove the old
+one.
+
 ## Development
 
 Run the locked checks that CI runs on each push:
