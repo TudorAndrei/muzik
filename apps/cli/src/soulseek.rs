@@ -4,7 +4,9 @@ use muzik_library::Library;
 use muzik_media::quality::{self, MeasuredQuality};
 use muzik_soulseek::fetch::{Timeouts, local_files};
 use muzik_soulseek::ranking::RankedCandidate;
-use muzik_soulseek::session::{Session, SessionSettings, setting};
+use muzik_soulseek::session::{
+    DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, Session, SessionSettings, setting,
+};
 use muzik_soulseek::types::FileEntry;
 use muzik_workflow::upgrade::{
     CachedCandidate, candidate_id, load_candidate, save_candidate, scan_library, select_upgrade,
@@ -26,8 +28,8 @@ pub fn check() -> Result<(), String> {
     let host = settings
         .server_host
         .clone()
-        .unwrap_or_else(|| "server.slsknet.org".into());
-    let port = settings.server_port.unwrap_or(2416);
+        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
+    let port = settings.server_port.unwrap_or(DEFAULT_SERVER_PORT);
     let download_dir = setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| paths::data_dir().join("soulseek"));

@@ -31,6 +31,7 @@ use muzik_core::{
 use muzik_jobs::Status as JobStatus;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
+use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1842,13 +1843,13 @@ impl ConfigView {
             }),
             host: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("server.slsknet.org")
-                    .default_value("server.slsknet.org")
+                    .placeholder(DEFAULT_SERVER_HOST)
+                    .default_value(DEFAULT_SERVER_HOST)
             }),
             port: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("2416")
-                    .default_value("2416")
+                    .placeholder(DEFAULT_SERVER_PORT.to_string())
+                    .default_value(DEFAULT_SERVER_PORT.to_string())
                     .step(1.)
                     .min(1.)
                     .max(65535.)

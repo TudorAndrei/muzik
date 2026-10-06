@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 use crate::{SetSoulseek, paths};
 use muzik_core::paths::expand_home;
+use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 
 pub fn show(path: Option<&Path>) -> io::Result<()> {
     let library_path = path
@@ -111,11 +112,11 @@ pub fn set_soulseek(args: &SetSoulseek) -> io::Result<()> {
     }
     settings.insert(
         "server_host".to_owned(),
-        json!(args.server_host.as_deref().unwrap_or("server.slsknet.org")),
+        json!(args.server_host.as_deref().unwrap_or(DEFAULT_SERVER_HOST)),
     );
     settings.insert(
         "server_port".to_owned(),
-        json!(args.server_port.unwrap_or(2416)),
+        json!(args.server_port.unwrap_or(DEFAULT_SERVER_PORT)),
     );
     let downloads = args
         .download_dir

@@ -4,6 +4,7 @@ use muzik_bandcamp as bandcamp;
 use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
+use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use muzik_spotify as spotify;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -87,9 +88,6 @@ fn required_string<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> 
         .ok_or_else(|| format!("{key} must be a non-empty string."))
 }
 
-const SOULSEEK_HOST: &str = "server.slsknet.org";
-const SOULSEEK_PORT: u64 = 2416;
-
 fn soulseek_settings(path: &Path) -> Result<Value, String> {
     let config = app_config::load(path)?;
     let section = &config["soulseek"];
@@ -97,10 +95,10 @@ fn soulseek_settings(path: &Path) -> Result<Value, String> {
     let port = section["server_port"]
         .as_u64()
         .or_else(|| section["server_port"].as_str()?.parse().ok())
-        .unwrap_or(SOULSEEK_PORT);
+        .unwrap_or(u64::from(DEFAULT_SERVER_PORT));
     let host = Some(text("server_host"))
         .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| SOULSEEK_HOST.to_owned());
+        .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
     Ok(json!({
         "username": text("username"),
         "has_password": !text("password").is_empty(),
@@ -115,7 +113,7 @@ fn save_soulseek(path: &Path, params: &Value) -> Result<(), String> {
         .as_str()
         .map(str::trim)
         .filter(|host| !host.is_empty())
-        .unwrap_or(SOULSEEK_HOST);
+        .unwrap_or(DEFAULT_SERVER_HOST);
     let port = params["server_port"]
         .as_u64()
         .or_else(|| params["server_port"].as_str()?.trim().parse().ok())

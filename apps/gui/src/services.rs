@@ -1,6 +1,6 @@
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
-use muzik_soulseek::session::{Session, SessionSettings};
+use muzik_soulseek::session::{Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use serde::Serialize;
 use serde_json::Value;
 use std::process::Command;
@@ -85,8 +85,8 @@ fn check_soulseek(paths: &Paths) -> ServiceStatus {
     let host = settings
         .server_host
         .clone()
-        .unwrap_or_else(|| "server.slsknet.org".into());
-    let port = settings.server_port.unwrap_or(2416);
+        .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
+    let port = settings.server_port.unwrap_or(DEFAULT_SERVER_PORT);
     match Session::shared(settings) {
         Ok(_session) => ServiceStatus {
             name: "Soulseek",

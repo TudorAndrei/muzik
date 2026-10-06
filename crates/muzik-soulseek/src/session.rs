@@ -21,6 +21,9 @@ use crate::error::BridgeError;
 use crate::job::{JobHandle, JobOutcome, JobState};
 use crate::types::{Candidate, DownloadProgress, DownloadTarget};
 
+pub const DEFAULT_SERVER_HOST: &str = "server.slsknet.org";
+pub const DEFAULT_SERVER_PORT: u16 = 2416;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSettings {
     pub username: String,
@@ -38,10 +41,10 @@ impl SessionSettings {
         let username = setting(config, "MUZIK_SOULSEEK_USERNAME", "username")?;
         let password = setting(config, "MUZIK_SOULSEEK_PASSWORD", "password")?;
         let host = setting(config, "MUZIK_SOULSEEK_SERVER_HOST", "server_host")
-            .unwrap_or_else(|| "server.slsknet.org".into());
+            .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
         let port = setting(config, "MUZIK_SOULSEEK_SERVER_PORT", "server_port")
             .and_then(|value| value.parse::<u16>().ok())
-            .unwrap_or(2416);
+            .unwrap_or(DEFAULT_SERVER_PORT);
         let listen_port = setting(config, "MUZIK_SOULSEEK_LISTEN_PORT", "listen_port")
             .and_then(|value| value.parse::<u16>().ok());
         Some(Self {
