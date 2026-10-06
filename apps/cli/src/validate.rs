@@ -110,7 +110,10 @@ fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
             }
             format!(
                 "codec={} duration={:.0}s",
-                properties.codec,
+                properties
+                    .codec
+                    .as_ref()
+                    .map_or_else(|| properties.format.to_string(), ToString::to_string),
                 properties.duration_seconds.unwrap_or(0.0)
             )
         }

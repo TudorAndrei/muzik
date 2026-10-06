@@ -1,3 +1,4 @@
+use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
 use muzik_media::quality::MeasuredQuality;
 use muzik_sync::{self as sync, Action, Encoding, Target};
@@ -7,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 fn audio(format: &str, sample_rate: u32, bit_depth: Option<u32>) -> MeasuredQuality {
     MeasuredQuality {
-        format: format.into(),
+        format: Codec::from_ffprobe(format),
         lossless: false,
         bitrate_kbps: Some(128),
         sample_rate: Some(sample_rate),

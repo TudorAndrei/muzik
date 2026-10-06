@@ -4573,6 +4573,7 @@ dependencies = [
 name = "muzik-soulseek"
 version = "2.12.0"
 dependencies = [
+ "muzik-core",
  "serde",
  "serde_json",
  "soulseek-rs-lib",
@@ -4632,6 +4633,7 @@ name = "muzik-tags"
 version = "2.12.0"
 dependencies = [
  "lofty",
+ "muzik-core",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

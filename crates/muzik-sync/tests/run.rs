@@ -1,3 +1,4 @@
+use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
 use muzik_library::{Fields, Library, SqlValue};
 use muzik_media::quality::MeasuredQuality;
@@ -41,7 +42,7 @@ fn probe(path: &Path) -> Result<Option<MeasuredQuality>, String> {
         return Ok(None);
     }
     Ok(Some(MeasuredQuality {
-        format: "mp3".into(),
+        format: Codec::Mp3,
         lossless: false,
         bitrate_kbps: Some(128),
         sample_rate: Some(44_100),

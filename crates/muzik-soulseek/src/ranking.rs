@@ -1,6 +1,7 @@
 //! Rank peer results by audio quality and match to the search text.
 
 use crate::types::{Candidate, FileEntry};
+use muzik_core::audio::AudioFormat;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -47,55 +48,31 @@ pub fn rank(
     ranked
 }
 
-pub fn format(file: &FileEntry) -> &str {
-    let extension = file.name.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
-    if extension.eq_ignore_ascii_case("aif") {
-        "aiff"
-    } else if extension.eq_ignore_ascii_case("flac") {
-        "flac"
-    } else if extension.eq_ignore_ascii_case("alac") {
-        "alac"
-    } else if extension.eq_ignore_ascii_case("wav") {
-        "wav"
-    } else if extension.eq_ignore_ascii_case("aiff") {
-        "aiff"
-    } else if extension.eq_ignore_ascii_case("ape") {
-        "ape"
-    } else if extension.eq_ignore_ascii_case("wv") {
-        "wv"
-    } else if extension.eq_ignore_ascii_case("mp3") {
-        "mp3"
-    } else if extension.eq_ignore_ascii_case("m4a") {
-        "m4a"
-    } else if extension.eq_ignore_ascii_case("aac") {
-        "aac"
-    } else if extension.eq_ignore_ascii_case("opus") {
-        "opus"
-    } else if extension.eq_ignore_ascii_case("ogg") {
-        "ogg"
-    } else {
-        ""
-    }
-}
-
-pub fn is_lossless(format: &str) -> bool {
-    matches!(format, "flac" | "alac" | "wav" | "aiff" | "ape" | "wv")
+pub fn format(file: &FileEntry) -> Option<AudioFormat> {
+    let (_, extension) = file.name.rsplit_once('.')?;
+    AudioFormat::from_extension(extension).filter(|format| {
+        !matches!(
+            format,
+            AudioFormat::Mp4 | AudioFormat::Mpc | AudioFormat::Speex
+        )
+    })
 }
 
 fn quality(file: &FileEntry, prefer: &str) -> f64 {
     let fmt = format(file);
-    let mut score = if is_lossless(fmt) {
+    let lossless = fmt.is_some_and(AudioFormat::is_lossless);
+    let mut score = if lossless {
         100.0
-    } else if fmt == "mp3" {
+    } else if fmt == Some(AudioFormat::Mp3) {
         50.0
-    } else if !fmt.is_empty() {
+    } else if fmt.is_some() {
         40.0
     } else {
         0.0
     };
-    if (prefer == "lossless" && is_lossless(fmt))
-        || (prefer == "mp3-320" && fmt == "mp3" && file.bitrate_kbps == Some(320))
-        || prefer == fmt
+    if (prefer == "lossless" && lossless)
+        || (prefer == "mp3-320" && fmt == Some(AudioFormat::Mp3) && file.bitrate_kbps == Some(320))
+        || fmt.is_some_and(|format| format.as_ref() == prefer)
     {
         score += 30.0;
     }
@@ -115,7 +92,7 @@ fn score(candidate: &Candidate, query: &str, prefer: &str) -> f64 {
     let audio: Vec<_> = candidate
         .files
         .iter()
-        .filter(|file| !format(file).is_empty())
+        .filter(|file| format(file).is_some())
         .collect();
     let mut score = audio
         .iter()

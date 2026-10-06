@@ -1,3 +1,4 @@
+use muzik_core::audio::AudioFormat;
 use muzik_library::{Item, SqlValue, path_from_sql, scalar_text};
 use muzik_media::quality::MeasuredQuality;
 use muzik_soulseek::ranking::RankedCandidate;
@@ -106,7 +107,9 @@ pub fn select_upgrade(
     prefer: &str,
 ) -> Option<(Candidate, f64)> {
     let current = quality_score(
-        &track.quality.format,
+        track.quality.format.audio_format(),
+        track.quality.format.is_lossless(),
+        true,
         track.quality.bitrate_kbps,
         track.quality.sample_rate,
         track.quality.bit_depth,
@@ -138,6 +141,8 @@ pub fn select_upgrade(
             let format = muzik_soulseek::ranking::format(file);
             let score = quality_score(
                 format,
+                format.is_some_and(AudioFormat::is_lossless),
+                format.is_some(),
                 file.bitrate_kbps,
                 file.sample_rate_hz,
                 file.bit_depth,
@@ -187,7 +192,7 @@ pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
     let files = candidate
         .files
         .iter()
-        .filter(|file| !muzik_soulseek::ranking::format(file).is_empty())
+        .filter(|file| muzik_soulseek::ranking::format(file).is_some())
         .collect::<Vec<_>>();
     if files.len() != candidate.files.len() {
         return false;
@@ -255,26 +260,26 @@ fn version_tokens(value: &str) -> HashSet<String> {
 }
 
 fn quality_score(
-    format: &str,
+    format: Option<AudioFormat>,
+    lossless: bool,
+    known: bool,
     bitrate: Option<u32>,
     sample_rate: Option<u32>,
     bit_depth: Option<u32>,
     prefer: &str,
 ) -> f64 {
-    let lossless = muzik_soulseek::ranking::is_lossless(format)
-        || muzik_core::audio::is_lossless_codec(format);
     let mut score = if lossless {
         100.0
-    } else if format == "mp3" {
+    } else if format == Some(AudioFormat::Mp3) {
         50.0
-    } else if !format.is_empty() {
+    } else if known {
         40.0
     } else {
         0.0
     };
     if (prefer == "lossless" && lossless)
-        || (prefer == "mp3-320" && format == "mp3" && bitrate == Some(320))
-        || prefer == format
+        || (prefer == "mp3-320" && format == Some(AudioFormat::Mp3) && bitrate == Some(320))
+        || format.is_some_and(|format| format.as_ref() == prefer)
     {
         score += 30.0;
     }
@@ -329,6 +334,7 @@ mod tests {
         CachedCandidate, FlaggedTrack, Wanted, candidate_id, load_candidate, safe_match,
         save_candidate, scan_library, select_upgrade,
     };
+    use muzik_core::audio::Codec;
     use muzik_library::{Fields, Library, SqlValue};
     use muzik_media::quality::MeasuredQuality;
     use muzik_soulseek::ranking::RankedCandidate;
@@ -397,7 +403,7 @@ mod tests {
             title: "Moon River".into(),
             duration: Some(180.0),
             quality: MeasuredQuality {
-                format: "mp3".into(),
+                format: Codec::Mp3,
                 lossless: false,
                 bitrate_kbps: Some(128),
                 sample_rate: Some(44_100),

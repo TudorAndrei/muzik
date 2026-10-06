@@ -396,9 +396,8 @@ fn candidate_row(candidate: &Candidate, score: f64) -> Value {
     let format = candidate
         .files
         .iter()
-        .map(muzik_soulseek::ranking::format)
-        .find(|format| !format.is_empty())
-        .unwrap_or("");
+        .find_map(muzik_soulseek::ranking::format)
+        .map_or_else(String::new, |format| format.to_string());
     json!({"title":title,"score":score,"user":candidate.username,"quality":{"format":format},"files":candidate.files,"path":path})
 }
 

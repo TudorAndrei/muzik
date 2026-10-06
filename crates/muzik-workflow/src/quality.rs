@@ -1,5 +1,6 @@
 //! Safe quality replacement for a freshly acquired YouTube audio file.
 
+use muzik_core::audio::AudioFormat;
 use muzik_core::chapters::sidecar_path;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, QualityPolicy, app_config};
@@ -330,8 +331,7 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
 
 fn better(candidate: &Candidate, current: &MeasuredQuality) -> bool {
     candidate.files.iter().all(|file| {
-        let format = file_format(file);
-        let lossless = muzik_soulseek::ranking::is_lossless(format);
+        let lossless = file_format(file).is_some_and(AudioFormat::is_lossless);
         if lossless && !current.lossless {
             return true;
         }
@@ -356,7 +356,7 @@ fn candidate_payload(candidate: &Candidate) -> Value {
     json!({
         "username":candidate.username,
         "title":first.name.rsplit(['/', '\\']).next().unwrap_or("Audio file"),
-        "quality":{"format":file_format(first).to_ascii_uppercase(),"bitrate":first.bitrate_kbps},
+        "quality":{"format":file_format(first).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.bitrate_kbps},
         "files":candidate.files,
     })
 }
@@ -481,6 +481,7 @@ impl Backend for SoulseekBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muzik_core::audio::Codec;
     use muzik_soulseek::types::FileEntry;
 
     struct FakeBackend {
@@ -524,7 +525,7 @@ mod tests {
                 .extension()
                 .is_some_and(|extension| extension == "flac");
             Ok(Some(MeasuredQuality {
-                format: if lossless { "flac" } else { "mp3" }.into(),
+                format: if lossless { Codec::Flac } else { Codec::Mp3 },
                 lossless,
                 bitrate_kbps: Some(if lossless { 950 } else { 128 }),
                 sample_rate: None,

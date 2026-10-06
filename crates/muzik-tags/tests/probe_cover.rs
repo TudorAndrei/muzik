@@ -14,7 +14,7 @@ fn probes_audio_properties_in_five_formats() {
     for suffix in SUFFIXES {
         let path = fixtures().join(format!("mediafile.{suffix}"));
         let audio = probe(&path).unwrap();
-        assert_eq!(audio.format, *suffix);
+        assert_eq!(audio.format.to_string(), *suffix);
         assert!(
             audio
                 .duration_seconds

@@ -58,7 +58,7 @@ impl Candidate {
             files: self
                 .files
                 .iter()
-                .filter(|file| !format(file).is_empty())
+                .filter(|file| format(file).is_some())
                 .take(limit)
                 .cloned()
                 .collect(),

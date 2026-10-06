@@ -160,7 +160,7 @@ fn quality_label(quality: &MeasuredQuality) -> String {
 fn file_quality_label(file: &FileEntry) -> String {
     format!(
         "{} {}kbps",
-        muzik_soulseek::ranking::format(file),
+        muzik_soulseek::ranking::format(file).map_or_else(String::new, |format| format.to_string()),
         file.bitrate_kbps
             .map_or_else(|| "?".into(), |rate| rate.to_string())
     )
@@ -242,9 +242,8 @@ fn candidate_row(item: &RankedCandidate, id: &str) -> Value {
         .candidate
         .files
         .iter()
-        .map(muzik_soulseek::ranking::format)
-        .find(|format| !format.is_empty())
-        .unwrap_or("?");
+        .find_map(muzik_soulseek::ranking::format)
+        .map_or_else(|| "?".to_owned(), |format| format.to_string());
     let path = item
         .candidate
         .files

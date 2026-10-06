@@ -715,7 +715,10 @@ fn item_fields(
     fields.insert("comp".into(), SqlValue::Integer(i64::from(compilation)));
     insert_dates(&mut fields, tags);
     fields.insert("path".into(), path_to_sql(path));
-    fields.insert("format".into(), SqlValue::Text(properties.format.clone()));
+    fields.insert(
+        "format".into(),
+        SqlValue::Text(properties.format.to_string()),
+    );
     fields.insert("added".into(), SqlValue::Real(now()));
     if let Some(value) = properties.duration_seconds {
         fields.insert("length".into(), SqlValue::Real(value));

@@ -1,5 +1,6 @@
 //! Copy library tracks to a device folder in formats that the device plays.
 
+use muzik_core::audio::Codec;
 use muzik_core::{app_config, paths, SyncPreset};
 use muzik_media::ffmpeg::{Convert, Ffmpeg};
 use muzik_media::quality::MeasuredQuality;
@@ -149,17 +150,20 @@ impl Target {
     }
 
     pub fn action(&self, audio: &MeasuredQuality) -> Action {
-        let codec = audio.format.as_str();
+        let codec = &audio.format;
         match self.preset {
             SyncPreset::EchoMini => {
-                let plays = muzik_core::audio::is_lossless_codec(codec)
-                    || matches!(codec, "aac" | "mp3" | "vorbis" | "wmav1" | "wmav2");
+                let plays = codec.is_lossless()
+                    || matches!(
+                        codec,
+                        Codec::Aac | Codec::Mp3 | Codec::Vorbis | Codec::WmaV1 | Codec::WmaV2
+                    );
                 if !plays {
                     return Action::Convert(Encoding::Mp3 {
                         kbps: self.bitrate.unwrap_or(320),
                     });
                 }
-                if codec.starts_with("dsd_") {
+                if matches!(codec, Codec::Dsd(_)) {
                     return Action::Copy;
                 }
                 let sample_rate = audio
@@ -177,7 +181,7 @@ impl Target {
                 }
             }
             SyncPreset::Mp3 => {
-                if codec == "mp3" {
+                if *codec == Codec::Mp3 {
                     Action::Copy
                 } else {
                     Action::Convert(Encoding::Mp3 {
@@ -186,7 +190,7 @@ impl Target {
                 }
             }
             SyncPreset::Opus => {
-                if matches!(codec, "aac" | "mp3" | "opus" | "vorbis") {
+                if matches!(codec, Codec::Aac | Codec::Mp3 | Codec::Opus | Codec::Vorbis) {
                     Action::Copy
                 } else {
                     Action::Convert(Encoding::Opus {
@@ -299,7 +303,7 @@ fn plan_track(
     Step::Pending(Transfer {
         source: source.to_path_buf(),
         destination,
-        tags_in_stream: matches!(audio.format.as_str(), "opus" | "vorbis"),
+        tags_in_stream: matches!(audio.format, Codec::Opus | Codec::Vorbis),
         cover: target.covers && action != Action::Copy,
         action,
         bytes,
@@ -329,20 +333,20 @@ fn plan_cover(target: &Target, directory: &Path, source: &Path) -> Step {
 fn guess(source: &Path) -> Option<MeasuredQuality> {
     let extension = source.extension()?.to_str()?.to_ascii_lowercase();
     let format = match extension.as_str() {
-        "flac" => "flac",
-        "mp3" => "mp3",
-        "opus" => "opus",
-        "wav" => "pcm_s16le",
-        "aif" | "aiff" => "pcm_s16be",
-        "ape" => "ape",
-        "dsf" => "dsd_lsbf_planar",
-        "dff" => "dsd_msbf",
-        "wma" => "wmav2",
+        "flac" => Codec::Flac,
+        "mp3" => Codec::Mp3,
+        "opus" => Codec::Opus,
+        "wav" => Codec::Pcm("pcm_s16le".into()),
+        "aif" | "aiff" => Codec::Pcm("pcm_s16be".into()),
+        "ape" => Codec::Ape,
+        "dsf" => Codec::Dsd("dsd_lsbf_planar".into()),
+        "dff" => Codec::Dsd("dsd_msbf".into()),
+        "wma" => Codec::WmaV2,
         _ => return None,
     };
     Some(MeasuredQuality {
-        format: format.to_owned(),
-        lossless: muzik_core::audio::is_lossless_codec(format),
+        lossless: format.is_lossless(),
+        format,
         bitrate_kbps: None,
         sample_rate: None,
         bit_depth: None,
