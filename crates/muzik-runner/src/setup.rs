@@ -80,7 +80,11 @@ pub fn move_soulseek_password(config_file: &Path) -> Result<(), String> {
     if password.is_empty() || session::save_password(password).is_err() {
         return Ok(());
     }
-    app_config::remove_section_key(config_file, "soulseek", "password")
+    Ok(app_config::remove_section_key(
+        config_file,
+        "soulseek",
+        "password",
+    )?)
 }
 
 #[derive(Debug, Serialize)]

@@ -19,6 +19,8 @@ pub enum Error {
     Tags(#[from] muzik_tags::TagsError),
     #[error(transparent)]
     Soulseek(#[from] muzik_soulseek::error::BridgeError),
+    #[error(transparent)]
+    Config(#[from] muzik_core::Error),
     #[error("{0}")]
     Operation(String),
     #[error("playlist workflow needs a playlist adapter")]

@@ -3,24 +3,30 @@ pub enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
+    Persist(#[from] tempfile::PersistError),
+    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Choice(#[from] muzik_core::ChoiceError),
+    ReadYaml(Box<serde_saphyr::Error>),
     #[error(transparent)]
-    Library(#[from] muzik_library::Error),
-    #[error(transparent)]
-    Tags(#[from] muzik_tags::TagsError),
-    #[error(transparent)]
-    Ffmpeg(#[from] muzik_media::ffmpeg::Error),
-    #[error(transparent)]
-    Store(#[from] muzik_store::Error),
-    #[error(transparent)]
-    Config(#[from] muzik_core::Error),
+    WriteYaml(Box<serde_saphyr::ser::Error>),
     #[error("{0}")]
     Message(String),
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<serde_saphyr::Error> for Error {
+    fn from(error: serde_saphyr::Error) -> Self {
+        Self::ReadYaml(Box::new(error))
+    }
+}
+
+impl From<serde_saphyr::ser::Error> for Error {
+    fn from(error: serde_saphyr::ser::Error) -> Self {
+        Self::WriteYaml(Box::new(error))
+    }
+}
 
 impl From<String> for Error {
     fn from(message: String) -> Self {

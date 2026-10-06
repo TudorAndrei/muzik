@@ -4,6 +4,7 @@ use crate::config_choices::{
     AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
 };
 use crate::paths::{self, Paths};
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -79,7 +80,7 @@ impl GuiDefaults {
         }
     }
 
-    fn checked(mut self, paths: &Paths) -> Result<Self, String> {
+    fn checked(mut self, paths: &Paths) -> Result<Self> {
         let standard = Self::standard(paths);
         for (path, fallback) in [
             (&mut self.output, standard.output),
@@ -99,16 +100,16 @@ impl GuiDefaults {
     }
 }
 
-pub fn load(path: &Path) -> Result<Value, String> {
+pub fn load(path: &Path) -> Result<Value> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(error.into()),
     };
     if contents.trim().is_empty() {
         return Ok(json!({}));
     }
-    let value: Value = serde_saphyr::from_str(&contents).map_err(|error| error.to_string())?;
+    let value: Value = serde_saphyr::from_str(&contents)?;
     if !value.is_object() {
         return Err("muzik config must be a mapping".into());
     }
@@ -124,50 +125,34 @@ pub fn load_gui_defaults(paths: &Paths) -> GuiDefaults {
         .unwrap_or_else(|| GuiDefaults::standard(paths))
 }
 
-pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<GuiDefaults, String> {
+pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<GuiDefaults> {
     let changes = params
         .as_object()
         .ok_or("config params must be an object")?;
-    let mut values =
-        serde_json::to_value(load_gui_defaults(paths)).map_err(|error| error.to_string())?;
+    let mut values = serde_json::to_value(load_gui_defaults(paths))?;
     if let Some(values) = values.as_object_mut() {
         values.extend(changes.clone());
     }
-    let defaults = serde_json::from_value::<GuiDefaults>(values)
-        .map_err(|error| error.to_string())?
-        .checked(paths)?;
+    let defaults = serde_json::from_value::<GuiDefaults>(values)?.checked(paths)?;
     let path = paths.config_file();
     let mut config = load(&path)?;
     config
         .as_object_mut()
         .ok_or("config file is not a mapping")?
-        .insert(
-            "native_gui".into(),
-            serde_json::to_value(&defaults).map_err(|error| error.to_string())?,
-        );
+        .insert("native_gui".into(), serde_json::to_value(&defaults)?);
     write(&path, &config)?;
     Ok(defaults)
 }
 
-pub fn save_section_string(
-    path: &Path,
-    section: &str,
-    key: &str,
-    value: &str,
-) -> Result<(), String> {
+pub fn save_section_string(path: &Path, section: &str, key: &str, value: &str) -> Result<()> {
     let value = value.trim();
     if value.is_empty() {
-        return Err(format!("{key} must be a non-empty string"));
+        return Err(format!("{key} must be a non-empty string").into());
     }
     save_section_value(path, section, key, json!(value))
 }
 
-pub fn save_section_value(
-    path: &Path,
-    section: &str,
-    key: &str,
-    value: Value,
-) -> Result<(), String> {
+pub fn save_section_value(path: &Path, section: &str, key: &str, value: Value) -> Result<()> {
     let mut config = load(path)?;
     let root = config
         .as_object_mut()
@@ -183,7 +168,7 @@ pub fn save_section_value(
     write(path, &config)
 }
 
-pub fn remove_section_key(path: &Path, section: &str, key: &str) -> Result<(), String> {
+pub fn remove_section_key(path: &Path, section: &str, key: &str) -> Result<()> {
     let mut config = load(path)?;
     let removed = config
         .get_mut(section)
@@ -196,24 +181,18 @@ pub fn remove_section_key(path: &Path, section: &str, key: &str) -> Result<(), S
     Ok(())
 }
 
-fn write(path: &Path, config: &Value) -> Result<(), String> {
+fn write(path: &Path, config: &Value) -> Result<()> {
     let parent = path.parent().ok_or("config path has no parent")?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let yaml = serde_saphyr::to_string(&config).map_err(|error| error.to_string())?;
+    fs::create_dir_all(parent)?;
+    let yaml = serde_saphyr::to_string(&config)?;
     let mut temporary = tempfile::Builder::new()
         .prefix(".config.yaml.")
-        .tempfile_in(parent)
-        .map_err(|error| error.to_string())?;
+        .tempfile_in(parent)?;
     use std::io::Write;
-    temporary
-        .write_all(yaml.as_bytes())
-        .map_err(|error| error.to_string())?;
-    temporary.flush().map_err(|error| error.to_string())?;
-    temporary
-        .as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    temporary.persist(path).map_err(|error| error.to_string())?;
+    temporary.write_all(yaml.as_bytes())?;
+    temporary.flush()?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
     Ok(())
 }
 
