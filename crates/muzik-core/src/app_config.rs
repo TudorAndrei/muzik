@@ -1,11 +1,11 @@
 //! Read and update the existing muzik config file.
 
 use crate::config_choices::{
-    choices_for_field, AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio,
-    QualityPolicy,
+    AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
 };
 use crate::paths::{self, Paths};
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,31 +13,90 @@ pub fn path() -> PathBuf {
     Paths::user().config_file()
 }
 
-pub fn gui_defaults(paths: &Paths) -> Value {
-    json!({
-        "output": paths.downloads(),
-        "splits": paths.splits(),
-        "review": false,
-        "no_split": false,
-        "no_organize": false,
-        "import_": false,
-        "tag_only": false,
-        "dry_run": false,
-        "jobs": 0,
-        "config": "",
-        "keep_source": false,
-        "force": false,
-        "metadata_source": MetadataSource::default(),
-        "audio_source": AudioSource::default(),
-        "prefer": PreferredAudio::default().to_string(),
-        "fallback": AudioFallback::default(),
-        "interactive": true,
-        "quality_policy": QualityPolicy::default(),
-        "duplicates": DuplicatePolicy::default(),
-        "min_bitrate": 256,
-        "auto_decide": true,
-        "agent_model": "gpt-6-luna"
-    })
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GuiDefaults {
+    pub output: PathBuf,
+    pub splits: PathBuf,
+    pub review: bool,
+    pub no_split: bool,
+    pub no_organize: bool,
+    #[serde(rename = "import_")]
+    pub import: bool,
+    pub tag_only: bool,
+    pub dry_run: bool,
+    pub jobs: usize,
+    pub config: PathBuf,
+    pub keep_source: bool,
+    pub force: bool,
+    pub metadata_source: MetadataSource,
+    pub audio_source: AudioSource,
+    pub prefer: PreferredAudio,
+    pub fallback: AudioFallback,
+    pub interactive: bool,
+    pub quality_policy: QualityPolicy,
+    pub duplicates: DuplicatePolicy,
+    pub min_bitrate: u32,
+    pub auto_decide: bool,
+    pub agent_model: String,
+}
+
+impl Default for GuiDefaults {
+    fn default() -> Self {
+        Self {
+            output: PathBuf::new(),
+            splits: PathBuf::new(),
+            review: false,
+            no_split: false,
+            no_organize: false,
+            import: false,
+            tag_only: false,
+            dry_run: false,
+            jobs: 0,
+            config: PathBuf::new(),
+            keep_source: false,
+            force: false,
+            metadata_source: MetadataSource::default(),
+            audio_source: AudioSource::default(),
+            prefer: PreferredAudio::default(),
+            fallback: AudioFallback::default(),
+            interactive: true,
+            quality_policy: QualityPolicy::default(),
+            duplicates: DuplicatePolicy::default(),
+            min_bitrate: 256,
+            auto_decide: true,
+            agent_model: "gpt-6-luna".into(),
+        }
+    }
+}
+
+impl GuiDefaults {
+    pub fn standard(paths: &Paths) -> Self {
+        Self {
+            output: paths.downloads(),
+            splits: paths.splits(),
+            ..Self::default()
+        }
+    }
+
+    fn checked(mut self, paths: &Paths) -> Result<Self, String> {
+        let standard = Self::standard(paths);
+        for (path, fallback) in [
+            (&mut self.output, standard.output),
+            (&mut self.splits, standard.splits),
+            (&mut self.config, PathBuf::new()),
+        ] {
+            if path.as_os_str().as_encoded_bytes().contains(&0) {
+                return Err("a folder must not contain a null byte".into());
+            }
+            *path = if path.as_os_str().is_empty() {
+                fallback
+            } else {
+                paths::expand_home(path)
+            };
+        }
+        Ok(self)
+    }
 }
 
 pub fn load(path: &Path) -> Result<Value, String> {
@@ -56,46 +115,37 @@ pub fn load(path: &Path) -> Result<Value, String> {
     Ok(value)
 }
 
-pub fn load_gui_defaults(paths: &Paths) -> Result<Value, String> {
-    let standard = gui_defaults(paths);
-    let saved = load(&paths.config_file()).unwrap_or_else(|_| json!({}));
-    let Some(section) = saved.get("native_gui").and_then(Value::as_object) else {
-        return Ok(standard);
-    };
-    let mut defaults = standard.clone();
-    let Some(values) = defaults.as_object_mut() else {
-        return Err("GUI defaults are not a mapping".into());
-    };
-    values.extend(section.clone());
-    validate(defaults, &standard).or(Ok(standard))
+pub fn load_gui_defaults(paths: &Paths) -> GuiDefaults {
+    load(&paths.config_file())
+        .ok()
+        .and_then(|config| config.get("native_gui").cloned())
+        .and_then(|section| serde_json::from_value::<GuiDefaults>(section).ok())
+        .and_then(|defaults| defaults.checked(paths).ok())
+        .unwrap_or_else(|| GuiDefaults::standard(paths))
 }
 
-pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<Value, String> {
-    let path = &paths.config_file();
+pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<GuiDefaults, String> {
     let changes = params
         .as_object()
         .ok_or("config params must be an object")?;
-    let mut defaults = load_gui_defaults(paths)?;
-    let values = defaults
-        .as_object_mut()
-        .ok_or("GUI defaults are not a mapping")?;
-    for (key, value) in changes {
-        if !values.contains_key(key) {
-            return Err(format!("unknown config field: {key}"));
-        }
-        values.insert(key.clone(), value.clone());
+    let mut values =
+        serde_json::to_value(load_gui_defaults(paths)).map_err(|error| error.to_string())?;
+    if let Some(values) = values.as_object_mut() {
+        values.extend(changes.clone());
     }
-    let defaults = validate(defaults, &gui_defaults(paths))?;
-    let mut config = load(path)?;
-    let sections = config
+    let defaults = serde_json::from_value::<GuiDefaults>(values)
+        .map_err(|error| error.to_string())?
+        .checked(paths)?;
+    let path = paths.config_file();
+    let mut config = load(&path)?;
+    config
         .as_object_mut()
-        .ok_or("config file is not a mapping")?;
-    sections.insert("native_gui".into(), defaults.clone());
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let yaml = serde_saphyr::to_string(&config).map_err(|error| error.to_string())?;
-    fs::write(path, yaml).map_err(|error| error.to_string())?;
+        .ok_or("config file is not a mapping")?
+        .insert(
+            "native_gui".into(),
+            serde_json::to_value(&defaults).map_err(|error| error.to_string())?,
+        );
+    write(&path, &config)?;
     Ok(defaults)
 }
 
@@ -167,62 +217,10 @@ fn write(path: &Path, config: &Value) -> Result<(), String> {
     Ok(())
 }
 
-fn validate(value: Value, standard: &Value) -> Result<Value, String> {
-    let expected = standard
-        .as_object()
-        .ok_or("GUI defaults are not a mapping")?;
-    let entries = value.as_object().ok_or("GUI config must be a mapping")?;
-    if let Some(key) = entries.keys().find(|key| !expected.contains_key(*key)) {
-        return Err(format!("unknown config field: {key}"));
-    }
-    let mut valid = Map::new();
-    for (key, default) in expected {
-        let item = entries
-            .get(key)
-            .ok_or_else(|| format!("missing config field: {key}"))?;
-        if default.is_boolean() && !item.is_boolean() {
-            return Err(format!("{key} must be a boolean"));
-        }
-        if default.is_number() && item.as_u64().is_none() {
-            return Err(format!("{key} must be a non-negative integer"));
-        }
-        if default.is_string() {
-            let text = item
-                .as_str()
-                .ok_or_else(|| format!("{key} must be a string"))?;
-            if text.contains('\0') {
-                return Err(format!("{key} must not contain a null byte"));
-            }
-            if matches!(key.as_str(), "output" | "splits" | "prefer") && text.trim().is_empty() {
-                return Err(format!("{key} must not be empty"));
-            }
-            if key == "prefer" {
-                text.parse::<PreferredAudio>()
-                    .map_err(|error| error.to_string())?;
-            }
-            if choices_for_field(key).is_some_and(|choices| !choices.contains(&text)) {
-                return Err(format!("invalid {key}: {text}"));
-            }
-        }
-        let item = if matches!(key.as_str(), "output" | "splits" | "config") {
-            item.as_str()
-                .map(|text| {
-                    paths::expand_home(Path::new(text))
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .map_or_else(|| item.clone(), Value::String)
-        } else {
-            item.clone()
-        };
-        valid.insert(key.clone(), item);
-    }
-    Ok(Value::Object(valid))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{load, load_gui_defaults, save_gui_defaults, save_section_string};
+    use crate::config_choices::AudioSource;
     use crate::paths::Paths;
     use serde_json::json;
     use std::fs;
@@ -237,13 +235,10 @@ mod tests {
         fs::write(&path, "spotify:\n  client_id: saved\n")?;
         let saved = save_gui_defaults(&paths, &json!({"jobs": 3, "audio_source": "soulseek"}))
             .map_err(std::io::Error::other)?;
-        assert_eq!(saved["jobs"], 3);
-        assert_eq!(saved["audio_source"], "soulseek");
-        assert_eq!(saved["output"], json!(paths.downloads()));
-        assert_eq!(
-            load_gui_defaults(&paths).map_err(std::io::Error::other)?,
-            saved
-        );
+        assert_eq!(saved.jobs, 3);
+        assert_eq!(saved.audio_source, AudioSource::Soulseek);
+        assert_eq!(saved.output, paths.downloads());
+        assert_eq!(load_gui_defaults(&paths), saved);
         let text = fs::read_to_string(&path)?;
         assert!(text.contains("client_id: saved"));
         Ok(())

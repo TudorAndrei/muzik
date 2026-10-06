@@ -34,7 +34,7 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
     match command {
         "hello" => Ok(json!({
             "protocol_version": 1,
-            "defaults": app_config::load_gui_defaults(paths)?,
+            "defaults": app_config::load_gui_defaults(paths),
             "item_actions": [
                 "run", "retry", "download_again", "check_quality_again",
                 "parse_again", "split_again", "organize_again", "run_all_again"
@@ -54,7 +54,7 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
             bandcamp::Login::clear(paths)?;
             Ok(bandcamp::status(paths))
         }
-        "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(paths)?})),
+        "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(paths)})),
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(paths, params)?})),
         "library.scan" => library_scan(paths, params),
         "services.check" => Ok(json!({"services": setup::check_services(paths)})),

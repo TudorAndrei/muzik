@@ -15,7 +15,8 @@ pub struct Settings {
 
 impl Settings {
     pub fn resolve(paths: &Paths, params: &Value) -> Result<Self, String> {
-        let mut merged = app_config::load_gui_defaults(paths)?;
+        let mut merged = serde_json::to_value(app_config::load_gui_defaults(paths))
+            .map_err(|error| error.to_string())?;
         merged
             .as_object_mut()
             .ok_or("GUI defaults are not a mapping")?
