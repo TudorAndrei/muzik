@@ -13,6 +13,7 @@ serde-saphyr = "1.3"
 thiserror = "2"
 tracing = "0.1"
 tempfile = "3"
+etcetera = "0.11"
 regex = "1"
 usage = { package = "usage-rs", version = "6.11.1" }
 strum = "0.28"

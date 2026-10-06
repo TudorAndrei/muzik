@@ -663,6 +663,9 @@ struct SetSpotifyClientId {
 }
 
 fn run(command: Command) -> Result<(), String> {
+    for (old, new) in paths::migrate_legacy(&paths::Paths::user()).map_err(|e| e.to_string())? {
+        eprintln!("Moved {} to {}", old.display(), new.display());
+    }
     match command {
         Command::Archive(args) => archive::run(&args),
         Command::Bandcamp(args) => bandcamp::download(&args),

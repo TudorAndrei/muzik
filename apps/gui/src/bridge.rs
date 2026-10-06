@@ -37,7 +37,9 @@ struct NativeLogin {
 
 impl Bridge {
     pub fn start() -> Result<Self, String> {
-        Self::with(Paths::user(), true)
+        let paths = Paths::user();
+        muzik_core::paths::migrate_legacy(&paths).map_err(|error| error.to_string())?;
+        Self::with(paths, true)
     }
 
     fn with(paths: Paths, run: bool) -> Result<Self, String> {
