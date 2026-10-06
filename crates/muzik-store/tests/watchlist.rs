@@ -1,7 +1,7 @@
-use muzik_core::watchlist::{
+use muzik_core::QualityPolicy;
+use muzik_store::watchlist::{
     bandcamp_source, import_cache, reconcile, view, ReconcileOptions, Repository, Watchlist,
 };
-use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
@@ -492,8 +492,8 @@ fn removed_and_private_videos_leave_the_failed_list() -> TestResult {
 
 #[test]
 fn each_decision_kind_maps_to_its_stage() {
-    use muzik_core::watchlist::Stage;
     use muzik_core::DecisionKind;
+    use muzik_store::watchlist::Stage;
     assert_eq!(
         Stage::of_decision(DecisionKind::ImportMatch),
         Stage::Organize

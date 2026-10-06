@@ -3,9 +3,9 @@ use super::{
 };
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::watchlist::jobs::{JobError, LoadedSource};
-use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
 use muzik_spotify as spotify;
+use muzik_store::watchlist::jobs::{JobError, LoadedSource};
+use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::process_audio_plan_with_events;
 use serde_json::Value;
@@ -209,7 +209,7 @@ mod tests {
     use super::items;
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
-    use muzik_core::watchlist::{ItemAction, SourceKind, Stage, StageStatus, WatchItem};
+    use muzik_store::watchlist::{ItemAction, SourceKind, Stage, StageStatus, WatchItem};
     use serde_json::json;
     use std::fs;
 

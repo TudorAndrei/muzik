@@ -1,7 +1,7 @@
 //! Versioned watchlist data shared with the existing application.
 
 use crate::db;
-use crate::paths::Paths;
+use muzik_core::paths::Paths;
 use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -52,14 +52,16 @@ pub enum Stage {
 impl Stage {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn of_decision(kind: crate::DecisionKind) -> Self {
+    pub fn of_decision(kind: muzik_core::DecisionKind) -> Self {
         match kind {
-            crate::DecisionKind::ImportMatch | crate::DecisionKind::ImportDuplicate => {
+            muzik_core::DecisionKind::ImportMatch | muzik_core::DecisionKind::ImportDuplicate => {
                 Self::Organize
             }
-            crate::DecisionKind::ChapterReview | crate::DecisionKind::ChapterEdit => Self::Parse,
-            crate::DecisionKind::QualityReplacement => Self::Quality,
-            crate::DecisionKind::SoulseekCandidate => Self::Download,
+            muzik_core::DecisionKind::ChapterReview | muzik_core::DecisionKind::ChapterEdit => {
+                Self::Parse
+            }
+            muzik_core::DecisionKind::QualityReplacement => Self::Quality,
+            muzik_core::DecisionKind::SoulseekCandidate => Self::Download,
         }
     }
 

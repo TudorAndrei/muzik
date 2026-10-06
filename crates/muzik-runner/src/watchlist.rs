@@ -2,14 +2,14 @@
 
 use crate::settings::Settings;
 use crate::sources;
-use muzik_core::watchlist::jobs::{
+use muzik_core::DecisionKind;
+use muzik_store::jobs::{park_on, Kind, NewJob};
+use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
-use muzik_core::watchlist::{
+use muzik_store::watchlist::{
     import_cache, AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
 };
-use muzik_core::DecisionKind;
-use muzik_jobs::{park_on, Kind, NewJob};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::cell::RefCell;

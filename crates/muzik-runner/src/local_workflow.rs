@@ -2,7 +2,6 @@
 
 use crate::gates::{self, Gate};
 use crate::settings::Settings;
-use muzik_core::watchlist::Stage;
 use muzik_core::{
     chapters::Chapter, ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS,
 };
@@ -12,6 +11,7 @@ use muzik_import::decide::{decide_album, Ask, ImportPolicy};
 use muzik_import::plan::{AlbumPlan, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_media::splitter;
+use muzik_store::watchlist::Stage;
 use muzik_workflow::{
     run_workflow_with_events, ChapterReview, SplitProgress, SplitTask, WorkflowEvent,
     WorkflowOperations, WorkflowOptions,

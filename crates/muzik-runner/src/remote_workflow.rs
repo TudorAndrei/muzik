@@ -4,11 +4,11 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::Stage;
 use muzik_core::{app_config, chapters::Chapter, DecisionKind};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::session::{setting, Session, SessionSettings};
 use muzik_soulseek::types::Candidate;
+use muzik_store::watchlist::Stage;
 use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
     classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,

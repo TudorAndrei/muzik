@@ -23,14 +23,14 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use muzik_core::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };
-use muzik_jobs::Status as JobStatus;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
 use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use muzik_store::jobs::Status as JobStatus;
+use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

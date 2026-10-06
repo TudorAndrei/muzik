@@ -1,6 +1,6 @@
 use super::source::availability;
 use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
-use crate::thumbnails;
+use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;

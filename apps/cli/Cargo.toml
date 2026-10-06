@@ -23,7 +23,7 @@ path = "src/main.rs"
 [dependencies]
 muzik-bandcamp = { path = "../../crates/muzik-bandcamp" }
 muzik-core = { path = "../../crates/muzik-core" }
-muzik-jobs = { path = "../../crates/muzik-jobs" }
+muzik-store = { path = "../../crates/muzik-store" }
 muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-import = { path = "../../crates/muzik-import" }
 muzik-library = { path = "../../crates/muzik-library" }

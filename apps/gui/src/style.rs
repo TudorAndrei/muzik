@@ -2,7 +2,7 @@ use gpui_kit::component::theme::{Theme, ThemeRegistry};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::*;
 use gpui_kit::*;
-use muzik_core::watchlist::{stage_status, Stage, StageStatus};
+use muzik_store::watchlist::{stage_status, Stage, StageStatus};
 use serde_json::Value;
 
 const THEME: &str = include_str!("../themes/muzik.json");
@@ -226,7 +226,7 @@ pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyEleme
 mod tests {
     use super::{source_icon, stage_headline, stage_states, AppAssets, Tone};
     use gpui_kit::AssetSource;
-    use muzik_core::watchlist::{Stage, StageStatus};
+    use muzik_store::watchlist::{Stage, StageStatus};
     use serde_json::json;
 
     #[test]

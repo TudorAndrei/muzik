@@ -3,11 +3,11 @@
 use crate::local_workflow;
 use crate::watchlist::Adapter;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::jobs::{JobError, LoadedSource};
-use muzik_core::watchlist::{
+use muzik_core::{AudioSource, QualityPolicy};
+use muzik_store::watchlist::jobs::{JobError, LoadedSource};
+use muzik_store::watchlist::{
     ItemAction, Playlist, Repository, SourceKind, Stage, StageStatus, WatchItem,
 };
-use muzik_core::{AudioSource, QualityPolicy};
 use muzik_workflow::{WorkflowOperations, WorkflowOptions};
 use std::cell::Cell;
 use std::path::Path;

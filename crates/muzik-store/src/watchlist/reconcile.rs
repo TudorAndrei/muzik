@@ -1,6 +1,6 @@
 use super::library_lookup::MusicLibrary;
 use super::{AudioIndex, Stage, StageStatus, WatchItem, Watchlist};
-use crate::QualityPolicy;
+use muzik_core::QualityPolicy;
 use std::path::Path;
 
 /// Refresh saved stage state from the files on disk and the music library.

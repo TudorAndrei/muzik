@@ -13,10 +13,7 @@ serde-saphyr = "1.3"
 thiserror = "2"
 tracing = "0.1"
 tempfile = "3"
-muzik-library = { path = "../muzik-library" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
 usage = { package = "usage-rs", version = "6.11.1" }
 strum = "0.28"
 strum_macros = "0.28"

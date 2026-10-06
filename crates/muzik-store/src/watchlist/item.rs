@@ -484,7 +484,7 @@ impl AudioIndex {
             for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
                 if path.is_dir() {
                     pending.push(path);
-                } else if crate::audio::is_audio(&path) {
+                } else if muzik_core::audio::is_audio(&path) {
                     if let Some(id) = bracketed_id(&path) {
                         index
                             .by_id

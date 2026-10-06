@@ -197,7 +197,7 @@ fn a_converted_file_is_current_only_with_the_recorded_encoding(
     let probe = |_: &Path| -> Result<Option<MeasuredQuality>, String> {
         Ok(Some(audio("flac", 44_100, Some(16))))
     };
-    let connection = muzik_core::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory()?;
     let mp3 = target(&card, SyncPreset::Mp3);
     let plan_with = |target: &Target| -> Result<sync::Plan, String> {
         let encodings = sync::encodings(&connection, &card)?;

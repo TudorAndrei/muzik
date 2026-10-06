@@ -1,4 +1,4 @@
-use crate::BeetsConfig;
+use muzik_core::BeetsConfig;
 use muzik_library::{Library, SqlValue};
 use regex::Regex;
 use serde_json::json;

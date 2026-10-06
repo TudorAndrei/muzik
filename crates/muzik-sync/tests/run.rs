@@ -93,7 +93,7 @@ fn prepare_blocks_delete_when_a_track_cannot_be_read() -> Outcome {
     let layout = layout()?;
     let selection = add_tracks(&layout, &["good.mp3", "broken.mp3"])?;
     stray(&layout)?;
-    let connection = muzik_core::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
     assert!(!prepared.delete);
     assert!(prepared.delete_blocked);
@@ -107,7 +107,7 @@ fn prepare_lists_stale_files_when_delete_is_safe() -> Outcome {
     let layout = layout()?;
     let selection = add_tracks(&layout, &["good.mp3"])?;
     let old = stray(&layout)?;
-    let connection = muzik_core::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
     assert!(prepared.delete);
     assert!(!prepared.delete_blocked);
@@ -137,7 +137,7 @@ fn apply_deletes_stale_files_and_copies_pending() -> Outcome {
     let layout = layout()?;
     let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
     let old = stray(&layout)?;
-    let connection = muzik_core::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
     let calls = AtomicUsize::new(0);
     let report = muzik_sync::apply(&prepared, &layout.target, connection, 1, &|done| {

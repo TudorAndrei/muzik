@@ -1,0 +1,27 @@
+[package]
+name = "muzik-store"
+version = "2.12.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "The muzik.db state database: job queue, watchlist, and sync records"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[dependencies]
+muzik-core = { path = "../muzik-core" }
+muzik-library = { path = "../muzik-library" }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strum = "0.28"
+strum_macros = "0.28"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

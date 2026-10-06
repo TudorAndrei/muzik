@@ -1,9 +1,9 @@
 use crate::settings::Settings;
-use muzik_core::db;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::{ItemAction, ItemId, SourceKind};
 use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
-use muzik_jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
+use muzik_store::db;
+use muzik_store::jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
+use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
 use serde_json::{json, Value};
 use std::fmt;
 use std::path::PathBuf;
@@ -275,8 +275,8 @@ mod tests {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused")))?;
         let park = |playlist: &str, kind: &str| {
             jobs.store().park(
-                &muzik_jobs::NewJob {
-                    kind: muzik_jobs::Kind::Item,
+                &muzik_store::jobs::NewJob {
+                    kind: muzik_store::jobs::Kind::Item,
                     item_key: &format!("{playlist}:1:x"),
                     title: "Song",
                     params: &json!({"playlist_id":playlist,"position":1,"action":"organize_again"}),

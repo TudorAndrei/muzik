@@ -1,9 +1,9 @@
-use muzik_core::watchlist::jobs::{self, JobError, JobOptions, LoadedSource, Operations};
-use muzik_core::watchlist::{
+use muzik_core::QualityPolicy;
+use muzik_store::watchlist::jobs::{self, JobError, JobOptions, LoadedSource, Operations};
+use muzik_store::watchlist::{
     ItemAction, ItemId, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus,
     WatchItem,
 };
-use muzik_core::QualityPolicy;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -564,7 +564,7 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() -> TestResult {
         [1]
     );
     let visible =
-        muzik_core::watchlist::view(&repository.load()?, directory.path(), directory.path())?;
+        muzik_store::watchlist::view(&repository.load()?, directory.path(), directory.path())?;
     let private = &visible["playlists"][0]["items"][1];
     assert_eq!(private["summary"], "Unavailable");
     assert_eq!(private["primary_action"], Value::Null);
@@ -641,7 +641,7 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation() -> TestRe
         &AtomicBool::new(false),
     )?;
     let mut saved = repository.load()?;
-    muzik_core::watchlist::reconcile(&mut saved, options(directory.path()).reconcile)?;
+    muzik_store::watchlist::reconcile(&mut saved, options(directory.path()).reconcile)?;
     assert!(saved.playlists[0].processed_video_ids.is_empty());
     for (index, position) in [(0, 1), (1, 2)] {
         let item = &saved.playlists[0].items[index];

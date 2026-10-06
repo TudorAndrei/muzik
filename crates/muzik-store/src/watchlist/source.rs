@@ -1,7 +1,7 @@
 //! The rules that differ between YouTube, Spotify, and Bandcamp items.
 
 use super::{ItemAction, SourceKind, Stage, WatchItem, BANDCAMP_PLAYLIST_ID};
-use crate::chapters;
+use muzik_core::chapters;
 use std::path::Path;
 
 pub type Availability = (bool, Option<&'static str>);
