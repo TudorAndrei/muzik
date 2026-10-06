@@ -2,19 +2,19 @@
 
 ## Phase 1: Atomic queue admission
 
-- [ ] Normal second pause: confirm one waiting row and a done running row (`run_job` calls `finish`).
-- [ ] Cancelled resumed job: confirm whether `park_on` can insert a waiting row before `reopen`; record the result in PLAN.md.
-- [ ] Add a failing single-connection test: a lower-id waiting row and a queued row; an explicit request reports busy and keeps the waiting row.
-- [ ] Put the admission check and writes in one immediate transaction in `crates/muzik-store/src/jobs.rs`; admission methods take `&mut self`.
-- [ ] Preserve explicit-request busy results, waiting-job replacement, and existing-ID results from `Store::enqueue`.
-- [ ] Replace caller admission sequences in `Jobs::item` and `run_refresh`; count only new refresh jobs.
-- [ ] Test competing admissions from two connections to one temporary database with a barrier; check that only one open job exists.
-- [ ] Test independent item keys and preserve existing active jobs without partial cancellation.
-- [ ] Test waiting replacement and rollback after a failed insertion.
-- [ ] Add the missing waiting-job case to the existing queue test.
-- [ ] Preserve pause, answer, resume, cancellation, and legacy import behavior.
-- [ ] Record that the two-connection race test does not fail reliably on the baseline; the partial-cancellation test is the baseline failure.
-- [ ] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
+- [x] Normal second pause: confirm one waiting row and a done running row (`run_job` calls `finish`).
+- [x] Cancelled resumed job: confirm whether `park_on` can insert a waiting row before `reopen`; record the result in PLAN.md.
+- [x] Add a failing single-connection test: a lower-id waiting row and a queued row; an explicit request reports busy and keeps the waiting row.
+- [x] Put the admission check and writes in one immediate transaction in `crates/muzik-store/src/jobs.rs`; admission methods take `&mut self`.
+- [x] Preserve explicit-request busy results, waiting-job replacement, and existing-ID results from `Store::enqueue`.
+- [x] Replace caller admission sequences in `Jobs::item` and `run_refresh`; count only new refresh jobs.
+- [x] Test competing admissions from two connections to one temporary database with a barrier; check that only one open job exists.
+- [x] Test independent item keys and preserve existing active jobs without partial cancellation.
+- [x] Test waiting replacement and rollback after a failed insertion.
+- [x] Add the missing waiting-job case to the existing queue test.
+- [x] Preserve pause, answer, resume, cancellation, and legacy import behavior.
+- [x] Record that the two-connection race test does not fail reliably on the baseline; the partial-cancellation test is the baseline failure.
+- [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
 - [ ] Commit: `fix(jobs): make queue admission atomic across processes`
 
 ## Phase 2: Atomic checked watchlist writes

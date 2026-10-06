@@ -2,7 +2,8 @@ use crate::settings::Settings;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_store::db;
-use muzik_store::jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
+use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
+use muzik_store::watchlist::jobs::PendingItem;
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{json, Value};
@@ -100,12 +101,15 @@ impl Jobs {
                 )
             },
         );
-        Ok(self.store().enqueue(&NewJob {
-            kind: Kind::Refresh,
-            item_key: &key,
-            title: &title,
-            params,
-        })?)
+        Ok(self
+            .store()
+            .enqueue(&NewJob {
+                kind: Kind::Refresh,
+                item_key: &key,
+                title: &title,
+                params,
+            })?
+            .id())
     }
 
     pub fn workflow(&self, params: &Value) -> Result<i64, EnqueueError> {
@@ -116,39 +120,59 @@ impl Jobs {
         Settings::resolve(&self.paths, params)
             .map_err(|error| EnqueueError::Invalid(error.to_string()))?;
         let key = format!("{raw}#{}", unique());
-        Ok(self.store().enqueue(&NewJob {
-            kind: Kind::Workflow,
-            item_key: &key,
-            title: &raw,
-            params,
-        })?)
+        Ok(self
+            .store()
+            .enqueue(&NewJob {
+                kind: Kind::Workflow,
+                item_key: &key,
+                title: &raw,
+                params,
+            })?
+            .id())
     }
 
     pub fn item(&self, params: &Value) -> Result<i64, EnqueueError> {
         let key = validate_item(params)
             .map_err(|error| EnqueueError::Invalid(error.to_string()))?
             .to_string();
-        let store = self.store();
-        for open in store.find_open(Kind::Item, &key)? {
-            if open.status == Status::Waiting {
-                store.cancel_open(open.id)?;
-            } else {
-                return Err(EnqueueError::Busy(
-                    "This item already has a job in the queue.".into(),
-                ));
-            }
-        }
         let title = params["title"]
             .as_str()
             .or_else(|| params["video_id"].as_str())
             .unwrap_or("Item")
             .to_owned();
-        Ok(store.enqueue(&NewJob {
-            kind: Kind::Item,
-            item_key: &key,
-            title: &title,
-            params,
-        })?)
+        self.store()
+            .replace_waiting(&NewJob {
+                kind: Kind::Item,
+                item_key: &key,
+                title: &title,
+                params,
+            })?
+            .ok_or_else(|| EnqueueError::Busy("This item already has a job in the queue.".into()))
+    }
+
+    pub(crate) fn queue_pending(
+        &self,
+        params: &Value,
+        pending: &[PendingItem],
+    ) -> crate::Result<usize> {
+        let mut store = self.store();
+        let mut queued = 0;
+        for item in pending {
+            let mut params = params.clone();
+            item.id.write(&mut params);
+            params["title"] = json!(item.title);
+            params["action"] = json!(ItemAction::Run);
+            let admission = store.enqueue(&NewJob {
+                kind: Kind::Item,
+                item_key: &item.id.to_string(),
+                title: &item.title,
+                params: &params,
+            })?;
+            if matches!(admission, Admission::Inserted(_)) {
+                queued += 1;
+            }
+        }
+        Ok(queued)
     }
 
     pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
@@ -257,6 +281,9 @@ fn unique() -> u128 {
 mod tests {
     use super::{parse_job_id, EnqueueError, Jobs};
     use muzik_core::paths::Paths;
+    use muzik_store::jobs::{Kind, NewJob, Status};
+    use muzik_store::watchlist::jobs::PendingItem;
+    use muzik_store::watchlist::ItemId;
     use serde_json::json;
     use std::path::Path;
 
@@ -265,7 +292,20 @@ mod tests {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused")))?;
         let params =
             json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run"});
+        let waiting = jobs.store().park(
+            &NewJob {
+                kind: Kind::Item,
+                item_key: "PL1:2:abcdefghijk",
+                title: "Song",
+                params: &params,
+            },
+            &json!({"kind":"import_match","payload":{}}),
+        )?;
         let first = jobs.item(&params).map_err(|error| error.to_string())?;
+        assert_eq!(
+            jobs.get(waiting)?.map(|job| job.status),
+            Some(Status::Cancelled)
+        );
         assert!(matches!(jobs.item(&params), Err(EnqueueError::Busy(_))));
         assert!(matches!(
             jobs.item(&json!({"playlist_id":"PL1","position":2,"action":"sing"})),
@@ -276,6 +316,78 @@ mod tests {
         assert_eq!(jobs.snapshot()["open"], json!([]));
         assert_eq!(parse_job_id("queue-7"), Some(7));
         assert_eq!(parse_job_id("7"), Some(7));
+        Ok(())
+    }
+
+    #[test]
+    fn a_refresh_keeps_open_item_jobs_and_counts_new_ones() -> Result<(), String> {
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused")))?;
+        let existing = jobs
+            .item(
+                &json!({"playlist_id":"PL1","position":1,"video_id":"abcdefghijk","action":"run"}),
+            )
+            .map_err(|error| error.to_string())?;
+        let pending = [
+            PendingItem {
+                id: ItemId::new("PL1", 1, Some("abcdefghijk")),
+                title: "Old".into(),
+            },
+            PendingItem {
+                id: ItemId::new("PL1", 2, Some("bcdefghijkl")),
+                title: "New".into(),
+            },
+        ];
+        assert_eq!(
+            jobs.queue_pending(&json!({"playlist_id":"PL1"}), &pending)?,
+            1
+        );
+        let open: Vec<_> = jobs.snapshot()["open"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|job| (job["job_id"].clone(), job["item"].clone()))
+            .collect();
+        assert_eq!(
+            open,
+            [
+                (json!(super::job_id(existing)), json!("PL1:1:abcdefghijk")),
+                (
+                    json!(super::job_id(existing + 1)),
+                    json!("PL1:2:bcdefghijkl")
+                ),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_busy_item_keeps_its_older_waiting_job() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let paths = Paths::under(dir.path());
+        let jobs = Jobs::open(&paths)?;
+        let params =
+            json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run"});
+        let question = json!({"kind":"import_match","payload":{}});
+        let waiting = jobs.store().park(
+            &NewJob {
+                kind: Kind::Item,
+                item_key: "PL1:2:abcdefghijk",
+                title: "Song",
+                params: &params,
+            },
+            &question,
+        )?;
+        muzik_store::db::open(&paths.database())?.execute(
+            "INSERT INTO jobs (queue, kind, item_key, status, created_at, updated_at)
+             VALUES ('item', 'item', 'PL1:2:abcdefghijk', 'queued', 1, 1)",
+            [],
+        )?;
+        assert!(matches!(jobs.item(&params), Err(EnqueueError::Busy(_))));
+        let kept = jobs.get(waiting)?.ok_or("job is missing")?;
+        assert_eq!(
+            (kept.status, kept.question),
+            (Status::Waiting, Some(question))
+        );
         Ok(())
     }
 

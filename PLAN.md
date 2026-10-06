@@ -73,6 +73,30 @@ starts, check these two paths separately:
 
 Admission must cancel every waiting row for the key in either case.
 
+Result of the Phase 1 check (code inspection, 2026-10-06):
+
+- Normal second pause: the resumed row is `running`, so the `UPDATE` in
+  `park_on` matches no row and inserts one new waiting row. `run_item`
+  returns `ItemOutcome::Waiting`, `watchlist::action` returns success, and
+  `run_job` calls `finish` on the running row. The item has one waiting
+  row and one done row.
+- Cancellation of a resumed job: `park_on` cannot run before `reopen`.
+  `park_on` runs only in the `JobError::Waiting` branch of `run_item`, and
+  that branch becomes a success result. The adapter in
+  `crates/muzik-runner/src/watchlist.rs` converts any process error to
+  `JobError::Waiting` when a question is parked, also after a cancel. The
+  `JobError::Cancelled` branch does not call `park_on`, and only that result
+  makes `run_job` call `reopen`. After the cancel, the reopened row is the
+  only waiting row for the item.
+- `replace_waiting` cancels every waiting row for the key, so a duplicate
+  waiting row from an older database also goes away on the next request.
+
+The two-connection admission test with a barrier cannot run on the
+baseline, because the baseline has no store admission operation, and the
+baseline race between two autocommit statements does not fail reliably.
+The single-connection test `a_busy_item_keeps_its_older_waiting_job` in
+`crates/muzik-runner/src/queue.rs` is the test that fails on the baseline.
+
 ### Conditional watchlist writes
 
 `WatchlistCheck::check` in `crates/muzik-runner/src/app.rs` owns a revision,
