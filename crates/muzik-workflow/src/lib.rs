@@ -5,8 +5,8 @@
 
 use muzik_core::chapters::{self, Chapter};
 use muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE;
-pub use muzik_core::splitter::SplitProgress;
 pub use muzik_core::{AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy};
+pub use muzik_media::splitter::SplitProgress;
 use std::collections::HashSet;
 use std::fs;
 use std::io;

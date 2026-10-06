@@ -1,6 +1,6 @@
 //! Measured audio quality for library scans and workflow decisions.
 
-use crate::QualityPolicy;
+use muzik_core::QualityPolicy;
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
@@ -80,7 +80,7 @@ fn from_probe(document: &Value, size: Option<u64>) -> Option<MeasuredQuality> {
         .or_else(|| number(&document["format"]["bit_rate"]))
         .and_then(|value| u32::try_from(value / 1000).ok());
     Some(MeasuredQuality {
-        lossless: crate::audio::is_lossless_codec(&format),
+        lossless: muzik_core::audio::is_lossless_codec(&format),
         format,
         bitrate_kbps,
         sample_rate: number(&audio["sample_rate"]).and_then(|value| u32::try_from(value).ok()),
@@ -101,7 +101,7 @@ fn number(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{decide, from_probe, QualityDecision};
-    use crate::QualityPolicy;
+    use muzik_core::QualityPolicy;
     use serde_json::json;
 
     #[test]

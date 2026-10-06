@@ -1,8 +1,8 @@
 //! Copy library tracks to a device folder in formats that the device plays.
 
-use muzik_core::ffmpeg::{Convert, Ffmpeg};
-use muzik_core::quality::MeasuredQuality;
 use muzik_core::{app_config, paths, SyncPreset};
+use muzik_media::ffmpeg::{Convert, Ffmpeg};
+use muzik_media::quality::MeasuredQuality;
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -14,7 +14,7 @@ use std::sync::{Mutex, PoisonError};
 
 mod run;
 
-pub use muzik_core::ffmpeg::Encoding;
+pub use muzik_media::ffmpeg::Encoding;
 pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection};
 
 const SECTION: &str = "sync";

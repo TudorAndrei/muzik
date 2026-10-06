@@ -1,5 +1,5 @@
-use muzik_core::quality::MeasuredQuality;
 use muzik_core::SyncPreset;
+use muzik_media::quality::MeasuredQuality;
 use muzik_sync::{self as sync, Action, Encoding, Target};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

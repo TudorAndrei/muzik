@@ -2,8 +2,8 @@ use crate::{
     available_bytes, encodings, plan, record, remove_empty_folders, run as transfer_all,
     stale_files, Plan, Target, Transfer,
 };
-use muzik_core::quality::MeasuredQuality;
 use muzik_library::{path_from_sql, Item, Library};
+use muzik_media::quality::MeasuredQuality;
 use rusqlite::Connection;
 use std::collections::BTreeSet;
 use std::fs;

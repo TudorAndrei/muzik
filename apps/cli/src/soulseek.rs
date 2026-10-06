@@ -1,9 +1,7 @@
-use muzik_core::{
-    app_config, paths,
-    quality::{self, MeasuredQuality},
-};
+use muzik_core::{app_config, paths};
 use muzik_import::beets;
 use muzik_library::{Item, Library, SqlValue, path_from_sql, scalar_text};
+use muzik_media::quality::{self, MeasuredQuality};
 use muzik_soulseek::fetch::{Timeouts, local_files};
 use muzik_soulseek::ranking::RankedCandidate;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
@@ -715,8 +713,8 @@ mod tests {
         safe_track_match, save_candidate, scan_library, select_upgrade,
     };
     use crate::SoulseekCheckLibrary;
-    use muzik_core::quality::MeasuredQuality;
     use muzik_library::{Fields, Library, SqlValue};
+    use muzik_media::quality::MeasuredQuality;
     use muzik_soulseek::ranking::RankedCandidate;
     use muzik_soulseek::types::{Candidate, FileEntry};
     use std::fs;

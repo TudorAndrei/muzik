@@ -1,5 +1,5 @@
 use crate::{Error, WorkflowInput, classify_input, find_audio_inputs};
-use muzik_core::process::background_command;
+use muzik_media::process::background_command;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io::{Read, Seek};

@@ -26,6 +26,7 @@ muzik-jobs = { path = "../../crates/muzik-jobs" }
 muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-import = { path = "../../crates/muzik-import" }
 muzik-library = { path = "../../crates/muzik-library" }
+muzik-media = { path = "../../crates/muzik-media" }
 muzik-tags = { path = "../../crates/muzik-tags" }
 muzik-workflow = { path = "../../crates/muzik-workflow" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use muzik_core::chapters::{self, Chapter};
-use muzik_core::splitter::{self, SplitOptions};
+use muzik_media::splitter::{self, SplitOptions};
 
 use crate::Split;
 

@@ -11,6 +11,7 @@ muzik-core = { path = "../muzik-core" }
 muzik-import = { path = "../muzik-import" }
 muzik-jobs = { path = "../muzik-jobs" }
 muzik-library = { path = "../muzik-library" }
+muzik-media = { path = "../muzik-media" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-workflow = { path = "../muzik-workflow" }
 rusqlite = { version = "0.40", features = ["bundled"] }

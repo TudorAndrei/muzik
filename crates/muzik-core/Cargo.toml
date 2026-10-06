@@ -24,8 +24,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-muzik-tags = { path = "../muzik-tags" }
-unicode-normalization = "0.1"
 usage = { package = "usage-rs", version = "6.11.1" }
 strum = "0.28"
 strum_macros = "0.28"

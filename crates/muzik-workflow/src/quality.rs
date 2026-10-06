@@ -2,8 +2,8 @@
 
 use muzik_core::chapters::sidecar_path;
 use muzik_core::paths::Paths;
-use muzik_core::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_core::{DecisionKind, QualityPolicy, app_config};
+use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::ranking::{format as file_format, rank};
 use muzik_soulseek::session::{Session, SessionSettings};

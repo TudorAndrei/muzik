@@ -1,7 +1,8 @@
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, db, quality};
+use muzik_core::{app_config, db};
 use muzik_import::beets;
 use muzik_library::Library;
+use muzik_media::quality;
 use muzik_sync::{self as sync, Action, Encoding, Options, Target};
 use serde_json::json;
 

@@ -4397,6 +4397,7 @@ dependencies = [
  "muzik-import",
  "muzik-jobs",
  "muzik-library",
+ "muzik-media",
  "muzik-runner",
  "muzik-soulseek",
  "muzik-sync",
@@ -4418,7 +4419,6 @@ dependencies = [
  "chrono",
  "getrandom 0.4.3",
  "muzik-library",
- "muzik-tags",
  "open",
  "regex",
  "rusqlite",
@@ -4431,7 +4431,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
- "unicode-normalization",
  "ureq",
  "url",
  "usage-rs",
@@ -4523,6 +4522,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "muzik-media"
+version = "2.12.0"
+dependencies = [
+ "chrono",
+ "muzik-core",
+ "muzik-tags",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror 2.0.21",
+ "unicode-normalization",
+]
+
+[[package]]
 name = "muzik-metadata"
 version = "2.12.0"
 dependencies = [
@@ -4549,6 +4564,7 @@ dependencies = [
  "muzik-import",
  "muzik-jobs",
  "muzik-library",
+ "muzik-media",
  "muzik-soulseek",
  "muzik-workflow",
  "rusqlite",
@@ -4575,6 +4591,7 @@ version = "2.12.0"
 dependencies = [
  "muzik-core",
  "muzik-library",
+ "muzik-media",
  "muzik-tags",
  "rusqlite",
  "rustix",
@@ -4599,6 +4616,7 @@ version = "2.12.0"
 dependencies = [
  "csv",
  "muzik-core",
+ "muzik-media",
  "muzik-metadata",
  "muzik-soulseek",
  "muzik-tags",

@@ -1,7 +1,7 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
-use crate::chapters::{sidecar_path, Chapter};
 use crate::ffmpeg::{self, Cut, Ffmpeg};
+use muzik_core::chapters::{sidecar_path, Chapter};
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -144,7 +144,7 @@ fn split_audio_with_binary(
             options
                 .cache_dir
                 .clone()
-                .unwrap_or_else(crate::paths::cache_dir)
+                .unwrap_or_else(muzik_core::paths::cache_dir)
                 .join(format!("{key}.txt")),
         )
     } else {

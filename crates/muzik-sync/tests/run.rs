@@ -1,6 +1,6 @@
-use muzik_core::quality::MeasuredQuality;
 use muzik_core::SyncPreset;
 use muzik_library::{Fields, Library, SqlValue};
+use muzik_media::quality::MeasuredQuality;
 use muzik_sync::{Options, Plan, Prepared, Selection, Target};
 use rusqlite::Connection;
 use std::fs;
