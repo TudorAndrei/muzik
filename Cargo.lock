@@ -1460,6 +1460,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ctrlc"
+version = "3.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0b1fab2ae45819af2d0731d60f2afe17227ebb1a1538a236da84c93e9a60162"
+dependencies = [
+ "dispatch2",
+ "nix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "darling"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4413,6 +4424,7 @@ dependencies = [
 name = "muzik-cli"
 version = "2.12.0"
 dependencies = [
+ "ctrlc",
  "muzik-bandcamp",
  "muzik-core",
  "muzik-import",

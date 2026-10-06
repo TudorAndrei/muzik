@@ -168,11 +168,18 @@ impl Runner {
     }
 
     pub fn wait_until_idle(&self, interrupted: &AtomicBool) {
-        while !self.is_idle() {
+        loop {
             if interrupted.load(Ordering::SeqCst) {
-                for cancel in self.shared.running().values() {
+                self.shared.stop.store(true, Ordering::SeqCst);
+                let running = self.shared.running();
+                if running.is_empty() {
+                    return;
+                }
+                for cancel in running.values() {
                     cancel.store(true, Ordering::SeqCst);
                 }
+            } else if self.is_idle() {
+                return;
             }
             thread::sleep(Duration::from_millis(300));
         }
@@ -563,6 +570,26 @@ mod tests {
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
         assert!(runner.is_idle());
+        Ok(())
+    }
+
+    #[test]
+    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let audio = dir.path().join("track.flac");
+        std::fs::write(&audio, b"audio")?;
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path()))?);
+        let (runner, _receiver) = runner(&jobs)?;
+        runner.wait_until_idle(&AtomicBool::new(true));
+        let id =
+            jobs.workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))?;
+        runner.wake();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(
+            jobs.store().get(id)?.map(|job| job.status),
+            Some(muzik_store::jobs::Status::Queued)
+        );
         Ok(())
     }
 }

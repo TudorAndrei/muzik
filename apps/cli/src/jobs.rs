@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 const WORKERS: usize = 5;
 
 static PROMPT: Mutex<()> = Mutex::new(());
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static NULL: Value = Value::Null;
 
 pub(crate) fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
@@ -142,7 +143,15 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
         println!("The desktop app or another muzik process runs the queue. It will do these jobs.");
         return Ok(());
     };
-    runner.wait_until_idle(&AtomicBool::new(false));
+    let _ = ctrlc::set_handler(|| {
+        if !INTERRUPTED.swap(true, Ordering::SeqCst) {
+            eprintln!("Stopping the running jobs.");
+        }
+    });
+    runner.wait_until_idle(&INTERRUPTED);
+    if INTERRUPTED.load(Ordering::SeqCst) {
+        return Err("Interrupted. Queued jobs stay in the queue.".into());
+    }
     let waiting = entries(&jobs.snapshot(), "waiting").len();
     if waiting > 0 {
         println!("{waiting} item(s) wait for a choice. Run `muzik jobs list`.");
