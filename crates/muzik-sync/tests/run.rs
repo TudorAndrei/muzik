@@ -180,6 +180,29 @@ fn apply_skips_stale_files_that_are_already_gone() -> Outcome {
 }
 
 #[test]
+fn apply_counts_transfers_whose_encoding_was_not_saved() -> Outcome {
+    let layout = layout()?;
+    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
+    let migrated = muzik_store::db::open_in_memory()?;
+    let prepared = prepare(&layout, &selection, &migrated, false)?;
+    let bare = Connection::open_in_memory()?;
+    let unsaved = AtomicUsize::new(0);
+    let report = muzik_sync::apply(&prepared, &layout.target, bare, 1, &|done| {
+        assert!(done.result.is_ok());
+        if done.record_error.is_some() {
+            unsaved.fetch_add(1, Ordering::Relaxed);
+        }
+    })?;
+    let pending = prepared.plan.pending.len();
+    assert_eq!(pending, 2);
+    assert_eq!(report.written, pending);
+    assert_eq!(report.failed, 0);
+    assert_eq!(report.unrecorded, pending);
+    assert_eq!(unsaved.load(Ordering::Relaxed), pending);
+    Ok(())
+}
+
+#[test]
 fn select_reads_track_and_cover_paths() -> Outcome {
     let temp = tempfile::tempdir()?;
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

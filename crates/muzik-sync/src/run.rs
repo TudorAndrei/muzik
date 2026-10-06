@@ -43,6 +43,7 @@ pub struct Done<'a> {
 pub struct Report {
     pub written: usize,
     pub failed: usize,
+    pub unrecorded: usize,
 }
 
 impl Prepared {
@@ -154,6 +155,7 @@ pub fn apply(
     }
     let total = prepared.plan.pending.len();
     let count = AtomicUsize::new(0);
+    let unrecorded = AtomicUsize::new(0);
     let connection = Mutex::new(connection);
     let finished = |transfer: &Transfer, result: &Result<(), String>| {
         let index = count.fetch_add(1, Ordering::Relaxed) + 1;
@@ -165,6 +167,9 @@ pub fn apply(
             .err(),
             Err(_) => None,
         };
+        if record_error.is_some() {
+            unrecorded.fetch_add(1, Ordering::Relaxed);
+        }
         done(Done {
             index,
             total,
@@ -177,6 +182,7 @@ pub fn apply(
     Ok(Report {
         written: total,
         failed,
+        unrecorded: unrecorded.load(Ordering::Relaxed),
     })
 }
 

@@ -150,6 +150,12 @@ pub fn run(args: &Sync) -> Result<(), String> {
             report.failed, report.written
         ));
     }
+    if report.unrecorded > 0 {
+        return Err(format!(
+            "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
+            report.unrecorded, report.written
+        ));
+    }
     println!("Sync complete: {} files written", report.written);
     Ok(())
 }
