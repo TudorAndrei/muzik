@@ -316,7 +316,7 @@ pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
                 .collect::<Result<Vec<_>, _>>()?;
             children.sort();
             pending.extend(children.into_iter().rev());
-        } else if path.is_file() && is_audio(&path) {
+        } else if path.is_file() && muzik_core::audio::is_audio(&path) {
             let identity = fs::canonicalize(&path)?;
             if seen.insert(identity) {
                 result.push(path);
@@ -325,27 +325,6 @@ pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     }
     result.sort();
     Ok(result)
-}
-
-fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "flac"
-                    | "mp3"
-                    | "m4a"
-                    | "opus"
-                    | "wav"
-                    | "aac"
-                    | "ogg"
-                    | "aiff"
-                    | "aif"
-                    | "ape"
-                    | "wv"
-            )
-        })
 }
 
 pub fn plan_audio_processing(

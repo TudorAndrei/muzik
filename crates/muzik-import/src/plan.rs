@@ -308,7 +308,7 @@ fn group_audio_paths(
             for entry in fs::read_dir(path)? {
                 visit(&entry?.path(), found, visited_dirs, false, cancelled)?;
             }
-        } else if metadata.is_file() && is_audio(path) {
+        } else if metadata.is_file() && muzik_core::audio::is_audio(path) {
             found.insert(path.canonicalize()?);
         } else if metadata.is_file() && supplied {
             return Err(ImportError::UnsupportedAudio(path.to_owned()));
@@ -327,18 +327,6 @@ fn group_audio_paths(
         }
     }
     Ok(groups)
-}
-
-fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|value| value.to_str())
-        .is_some_and(|extension| {
-            [
-                "mp3", "flac", "m4a", "mp4", "opus", "ogg", "wav", "aiff", "aif", "ape", "wv",
-                "aac", "alac", "mpc", "spx",
-            ]
-            .contains(&extension.to_ascii_lowercase().as_str())
-        })
 }
 
 fn number(value: Option<&String>) -> u32 {

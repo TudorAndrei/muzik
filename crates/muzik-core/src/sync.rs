@@ -152,7 +152,7 @@ impl Target {
         let codec = audio.format.as_str();
         match self.preset {
             SyncPreset::EchoMini => {
-                let plays = lossless(codec)
+                let plays = crate::audio::is_lossless_codec(codec)
                     || matches!(codec, "aac" | "mp3" | "vorbis" | "wmav1" | "wmav2");
                 if !plays {
                     return Action::Convert(Encoding::Mp3 {
@@ -342,19 +342,13 @@ fn guess(source: &Path) -> Option<MeasuredQuality> {
     };
     Some(MeasuredQuality {
         format: format.to_owned(),
-        lossless: lossless(format),
+        lossless: crate::audio::is_lossless_codec(format),
         bitrate_kbps: None,
         sample_rate: None,
         bit_depth: None,
         channels: None,
         size: None,
     })
-}
-
-fn lossless(codec: &str) -> bool {
-    matches!(codec, "flac" | "alac" | "ape" | "wavpack" | "tta")
-        || codec.starts_with("pcm_")
-        || codec.starts_with("dsd_")
 }
 
 fn is_current(

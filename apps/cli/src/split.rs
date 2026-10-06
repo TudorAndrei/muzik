@@ -1,7 +1,7 @@
 //! Chapter review and the native ffmpeg splitter command.
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use muzik_core::chapters::{self, Chapter};
@@ -135,15 +135,4 @@ pub(crate) fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String
     }
     let text = std::fs::read_to_string(file.path()).map_err(|error| error.to_string())?;
     Ok(chapters::parse_chapters(&text))
-}
-
-pub fn audio_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "flac" | "mp3" | "m4a" | "opus" | "wav" | "aac" | "ogg" | "aiff" | "aif"
-            )
-        })
 }

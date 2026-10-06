@@ -80,18 +80,7 @@ fn from_probe(document: &Value, size: Option<u64>) -> Option<MeasuredQuality> {
         .or_else(|| number(&document["format"]["bit_rate"]))
         .and_then(|value| u32::try_from(value / 1000).ok());
     Some(MeasuredQuality {
-        lossless: matches!(
-            format.as_str(),
-            "flac"
-                | "alac"
-                | "wav"
-                | "pcm_s16le"
-                | "pcm_s24le"
-                | "pcm_s32le"
-                | "aiff"
-                | "ape"
-                | "wavpack"
-        ),
+        lossless: crate::audio::is_lossless_codec(&format),
         format,
         bitrate_kbps,
         sample_rate: number(&audio["sample_rate"]).and_then(|value| u32::try_from(value).ok()),
@@ -151,6 +140,16 @@ mod tests {
             decide(&measured, QualityPolicy::Auto, 320),
             QualityDecision::Keep
         );
+        assert!(measured.lossless);
+    }
+
+    #[test]
+    fn big_endian_pcm_from_aiff_is_lossless() {
+        let measured = from_probe(
+            &json!({"streams":[{"codec_type":"audio","codec_name":"pcm_s16be"}]}),
+            None,
+        )
+        .unwrap();
         assert!(measured.lossless);
     }
 }

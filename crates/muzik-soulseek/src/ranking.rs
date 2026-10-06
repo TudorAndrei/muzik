@@ -78,13 +78,13 @@ pub fn format(file: &FileEntry) -> &str {
     }
 }
 
-fn lossless(format: &str) -> bool {
+pub fn is_lossless(format: &str) -> bool {
     matches!(format, "flac" | "alac" | "wav" | "aiff" | "ape" | "wv")
 }
 
 fn quality(file: &FileEntry, prefer: &str) -> f64 {
     let fmt = format(file);
-    let mut score = if lossless(fmt) {
+    let mut score = if is_lossless(fmt) {
         100.0
     } else if fmt == "mp3" {
         50.0
@@ -93,7 +93,7 @@ fn quality(file: &FileEntry, prefer: &str) -> f64 {
     } else {
         0.0
     };
-    if (prefer == "lossless" && lossless(fmt))
+    if (prefer == "lossless" && is_lossless(fmt))
         || (prefer == "mp3-320" && fmt == "mp3" && file.bitrate_kbps == Some(320))
         || prefer == fmt
     {

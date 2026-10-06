@@ -1,8 +1,7 @@
 //! A one-time import of the cache files that the Python version wrote.
 
-use super::{
-    is_audio, now, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist,
-};
+use super::{now, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist};
+use crate::audio::is_audio;
 use crate::db;
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};

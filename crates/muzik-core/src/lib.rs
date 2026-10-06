@@ -1,6 +1,7 @@
 //! Domain data shared by muzik's native libraries.
 
 pub mod app_config;
+pub mod audio;
 pub mod bandcamp;
 pub mod chapters;
 mod config;

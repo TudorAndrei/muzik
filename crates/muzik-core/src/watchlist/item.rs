@@ -484,7 +484,7 @@ impl AudioIndex {
             for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
                 if path.is_dir() {
                     pending.push(path);
-                } else if is_audio(&path) {
+                } else if crate::audio::is_audio(&path) {
                     if let Some(id) = bracketed_id(&path) {
                         index
                             .by_id
@@ -512,17 +512,6 @@ fn bracketed_id(path: &Path) -> Option<String> {
     let start = stem.rfind('[')?;
     let id = stem[start + 1..].strip_suffix(']')?;
     (!id.is_empty()).then(|| id.to_owned())
-}
-
-pub fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "flac" | "mp3" | "m4a" | "opus" | "wav" | "aac"
-            )
-        })
 }
 
 #[cfg(test)]

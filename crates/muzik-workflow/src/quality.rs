@@ -404,7 +404,7 @@ fn version_tokens(value: &str) -> HashSet<String> {
 fn better(candidate: &Candidate, current: &MeasuredQuality) -> bool {
     candidate.files.iter().all(|file| {
         let format = file_format(file);
-        let lossless = matches!(format, "flac" | "alac" | "wav" | "aiff" | "ape" | "wv");
+        let lossless = muzik_soulseek::ranking::is_lossless(format);
         if lossless && !current.lossless {
             return true;
         }

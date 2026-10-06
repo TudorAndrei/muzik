@@ -16,7 +16,7 @@ pub fn run(args: &Archive) -> Result<(), String> {
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<PathBuf>, _>>()
         .map_err(|error| error.to_string())?;
-    audio.retain(|path| path.is_file() && split::audio_file(path));
+    audio.retain(|path| path.is_file() && muzik_core::audio::is_audio(path));
     audio.sort();
     if audio.is_empty() {
         println!("No audio files found in {}", args.directory.display());

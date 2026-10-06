@@ -382,19 +382,8 @@ fn quality_score(
     bit_depth: Option<u32>,
     prefer: &str,
 ) -> f64 {
-    let lossless = matches!(
-        format,
-        "flac"
-            | "alac"
-            | "wav"
-            | "pcm_s16le"
-            | "pcm_s24le"
-            | "pcm_s32le"
-            | "aiff"
-            | "ape"
-            | "wavpack"
-            | "wv"
-    );
+    let lossless = muzik_soulseek::ranking::is_lossless(format)
+        || muzik_core::audio::is_lossless_codec(format);
     let mut score = if lossless {
         100.0
     } else if format == "mp3" {

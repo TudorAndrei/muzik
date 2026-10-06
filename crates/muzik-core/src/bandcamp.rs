@@ -13,9 +13,6 @@ const USER_AGENT: &str =
 const PAGE_LIMIT: u64 = 64 * 1024 * 1024;
 const REQUEST_BUDGET: Duration = Duration::from_secs(120);
 const DOWNLOAD_ATTEMPTS: u32 = 5;
-const AUDIO: &[&str] = &[
-    "flac", "wav", "aif", "aiff", "m4a", "mp3", "ogg", "opus", "alac",
-];
 
 pub const FORMATS: &[&str] = &[
     "flac",
@@ -705,11 +702,7 @@ pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
         for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
             if path.is_dir() {
                 pending.push(path);
-            } else if path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| AUDIO.contains(&extension.to_ascii_lowercase().as_str()))
-            {
+            } else if crate::audio::is_audio(&path) {
                 files.push(path);
             }
         }
