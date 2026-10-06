@@ -1,12 +1,11 @@
 //! Read Spotify track metadata into the existing version 1 export format.
 
-use super::{connected, utc, Result};
+use super::{utc, Client, Result};
 use chrono::{DateTime, Utc};
-use rspotify::clients::{BaseClient, OAuthClient};
-use rspotify::model::{
-    AlbumId, FullTrack, Image, PlayableItem, PlaylistId, SimplifiedArtist, SimplifiedTrack,
+use rspotify_model::{
+    AlbumId, FullAlbum, FullPlaylist, FullTrack, Id, Image, PlayableItem, PlaylistId, PlaylistItem,
+    SavedTrack, SimplifiedArtist, SimplifiedTrack,
 };
-use rspotify::prelude::Id;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 use url::Url;
@@ -39,7 +38,7 @@ struct Album<'a> {
 
 pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) -> Result<Value> {
     let reference = parse_reference(uri)?;
-    let spotify = connected(config_path, token_path)?;
+    let mut spotify = Client::connect(config_path, token_path)?;
     let mut entries = Vec::new();
     let mut push = |entry: Option<Map<String, Value>>| {
         if let Some(mut entry) = entry {
@@ -49,17 +48,16 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
     };
     let (id, title, snapshot) = match reference {
         Reference::Liked => {
-            for saved in spotify.current_user_saved_tracks(None) {
-                let saved = saved?;
+            for saved in spotify.pages::<SavedTrack>("me/tracks?limit=50")? {
                 push(full_entry(&saved.track, Some(saved.added_at)));
             }
             ("liked".to_owned(), "Liked Songs".to_owned(), None)
         }
         Reference::Playlist(id) => {
             let playlist = PlaylistId::from_id(id.as_str())?;
-            let details = spotify.playlist(playlist.clone(), None, None)?;
-            for item in spotify.playlist_items(playlist, None, None) {
-                let item = item?;
+            let details: FullPlaylist = spotify.get(&format!("playlists/{}", playlist.id()))?;
+            let items = format!("playlists/{}/items?limit=50", playlist.id());
+            for item in spotify.pages::<PlaylistItem>(&items)? {
                 if let Some(PlayableItem::Track(track)) = &item.item {
                     push(full_entry(track, item.added_at));
                 }
@@ -70,15 +68,16 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
         }
         Reference::Album(id) => {
             let album_id = AlbumId::from_id(id.as_str())?;
-            let album = spotify.album(album_id.clone(), None)?;
+            let album: FullAlbum = spotify.get(&format!("albums/{}", album_id.id()))?;
             let fields = Album {
                 name: &album.name,
                 release_date: Some(&album.release_date),
                 images: &album.images,
                 artists: &album.artists,
             };
-            for track in spotify.album_track(album_id, None) {
-                push(entry(&simple_track(&track?), &fields, None));
+            let tracks = format!("albums/{}/tracks?limit=50", album_id.id());
+            for track in spotify.pages::<SimplifiedTrack>(&tracks)? {
+                push(entry(&simple_track(&track), &fields, None));
             }
             let title = Some(album.name.clone()).filter(|name| !name.is_empty());
             (id.clone(), title.unwrap_or(id), None)
@@ -235,7 +234,7 @@ fn names(artists: &[SimplifiedArtist]) -> Vec<String> {
 mod tests {
     use super::{entry, parse_reference, Album, Reference, Track};
     use chrono::{TimeZone, Utc};
-    use rspotify::model::{Image, SimplifiedArtist};
+    use rspotify_model::{Image, SimplifiedArtist};
     use std::collections::HashMap;
 
     fn artist(name: &str) -> SimplifiedArtist {

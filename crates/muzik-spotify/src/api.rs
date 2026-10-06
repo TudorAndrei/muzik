@@ -1,9 +1,7 @@
 //! Spotify playlist references shared by the CLI and desktop app.
 
-use super::{connected, Result};
-use rspotify::clients::OAuthClient;
-use rspotify::model::SimplifiedPlaylist;
-use rspotify::prelude::Id;
+use super::{Client, Result};
+use rspotify_model::{Id, SimplifiedPlaylist};
 use serde::Serialize;
 use std::path::Path;
 
@@ -17,7 +15,7 @@ pub struct PlaylistRef {
 }
 
 pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<PlaylistRef>> {
-    let spotify = connected(config_path, token_path)?;
+    let mut spotify = Client::connect(config_path, token_path)?;
     let mut playlists = vec![PlaylistRef {
         uri: "spotify:liked".into(),
         name: "Liked Songs".into(),
@@ -25,9 +23,8 @@ pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<Playl
         total: None,
         image_url: None,
     }];
-    for playlist in spotify.current_user_playlists() {
-        playlists.push(PlaylistRef::from(playlist?));
-    }
+    let saved = spotify.pages::<SimplifiedPlaylist>("me/playlists?limit=50")?;
+    playlists.extend(saved.into_iter().map(PlaylistRef::from));
     Ok(playlists)
 }
 
@@ -58,7 +55,7 @@ mod tests {
     #[test]
     fn a_playlist_reference_keeps_its_name_owner_total_and_image(
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let playlist: rspotify::model::SimplifiedPlaylist = serde_json::from_value(json!({
+        let playlist: rspotify_model::SimplifiedPlaylist = serde_json::from_value(json!({
             "collaborative": false,
             "external_urls": {},
             "href": "https://api.spotify.com/v1/playlists/one",

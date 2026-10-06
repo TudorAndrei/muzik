@@ -2,17 +2,15 @@
 
 use chrono::{DateTime, TimeDelta, Utc};
 use muzik_core::app_config;
-use rspotify::clients::OAuthClient;
-use rspotify::prelude::Id;
-use rspotify::{
-    AuthCodePkceSpotify, CallbackError, ClientError, Config, Credentials, OAuth, Token,
-    TokenCallback,
-};
+use rspotify_model::{Id, Page, PrivateUser, Token};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+use url::Url;
 
 mod login;
 pub use login::login;
@@ -21,11 +19,8 @@ pub use api::{list_playlists, PlaylistRef};
 mod reader;
 pub use reader::load_playlist_document;
 
-const SCOPES: [&str; 3] = [
-    "playlist-read-private",
-    "playlist-read-collaborative",
-    "user-library-read",
-];
+const API: &str = "https://api.spotify.com/v1";
+const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -37,10 +32,8 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Config(#[from] muzik_core::Error),
-    #[error("Spotify request failed: {0}")]
-    Client(#[from] ClientError),
     #[error(transparent)]
-    Id(#[from] rspotify::model::IdError),
+    Id(#[from] rspotify_model::IdError),
     #[error("cancelled")]
     Cancelled,
     #[error("{0}")]
@@ -183,35 +176,134 @@ fn save_token(path: &Path, token: &Token) -> Result<()> {
     Ok(())
 }
 
-fn client(settings: &Settings, token_path: &Path) -> AuthCodePkceSpotify {
-    let path = token_path.to_path_buf();
-    let save = move |token: Token| {
-        save_token(&path, &token).map_err(|error| CallbackError::CustomizedError(error.into()))
-    };
-    AuthCodePkceSpotify::with_config(
-        Credentials::new_pkce(&settings.client_id),
-        OAuth {
-            redirect_uri: settings.redirect_uri(),
-            scopes: SCOPES.iter().map(|scope| (*scope).to_owned()).collect(),
-            ..OAuth::default()
-        },
-        Config {
-            token_refreshing: true,
-            token_callback_fn: Arc::new(Some(TokenCallback(Box::new(save)))),
-            ..Config::default()
-        },
-    )
+fn request_token(form: &[(&str, &str)]) -> Result<Token> {
+    let mut response = ureq::post(TOKEN_URL)
+        .config()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .http_status_as_error(false)
+        .build()
+        .send_form(form.iter().copied())
+        .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Spotify rejected the token request ({})", response.status()).into());
+    }
+    let mut token: Token = response
+        .body_mut()
+        .read_json()
+        .map_err(|error| format!("Spotify returned an invalid token response: {error}"))?;
+    token.expires_at = Utc::now().checked_add_signed(token.expires_in);
+    Ok(token)
 }
 
-fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotify> {
-    let token = load_token(token_path)
-        .ok_or("muzik is not connected to Spotify. Run 'muzik spotify login'.")?;
-    let client = client(&settings(config_path)?, token_path);
-    *client
-        .token
-        .lock()
-        .map_err(|_| "the Spotify token is not available")? = Some(token);
-    Ok(client)
+struct Client {
+    client_id: String,
+    token_path: PathBuf,
+    token: Token,
+}
+
+impl Client {
+    fn connect(config_path: &Path, token_path: &Path) -> Result<Self> {
+        let token = load_token(token_path)
+            .ok_or("muzik is not connected to Spotify. Run 'muzik spotify login'.")?;
+        Ok(Self {
+            client_id: settings(config_path)?.client_id,
+            token_path: token_path.to_path_buf(),
+            token,
+        })
+    }
+
+    fn get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
+        let url = if path.starts_with("https://") {
+            let parsed =
+                Url::parse(path).map_err(|error| format!("invalid Spotify URL: {error}"))?;
+            if parsed.host_str() != Some("api.spotify.com") {
+                return Err("Spotify returned a page outside its API".into());
+            }
+            path.to_owned()
+        } else {
+            format!("{API}/{path}")
+        };
+        if self.token.is_expired() {
+            self.refresh()?;
+        }
+        let mut refreshed = false;
+        for attempt in 0..3 {
+            let mut response = ureq::get(&url)
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.token.access_token),
+                )
+                .config()
+                .timeout_global(Some(Duration::from_secs(30)))
+                .http_status_as_error(false)
+                .build()
+                .call()
+                .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
+            match response.status().as_u16() {
+                401 if !refreshed => {
+                    self.refresh()?;
+                    refreshed = true;
+                }
+                429 if attempt < 2 => {
+                    let seconds = response
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|value| value.to_str().ok())
+                        .and_then(|value| value.parse::<u64>().ok())
+                        .unwrap_or(1)
+                        .min(30);
+                    std::thread::sleep(Duration::from_secs(seconds));
+                }
+                status if !(200..300).contains(&status) => {
+                    return Err(
+                        format!("Spotify rejected the request ({})", response.status()).into(),
+                    );
+                }
+                _ => {
+                    return Ok(response.body_mut().read_json().map_err(|error| {
+                        format!("Spotify returned an invalid response: {error}")
+                    })?);
+                }
+            }
+        }
+        Err("Spotify did not accept the refreshed token".into())
+    }
+
+    fn pages<T: DeserializeOwned>(&mut self, path: &str) -> Result<Vec<T>> {
+        let mut page: Page<T> = self.get(path)?;
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        loop {
+            items.append(&mut page.items);
+            let Some(next) = page.next.take() else {
+                return Ok(items);
+            };
+            if !seen.insert(next.clone()) {
+                return Err("Spotify returned a repeated page".into());
+            }
+            page = self.get(&next)?;
+        }
+    }
+
+    fn refresh(&mut self) -> Result<()> {
+        if self.client_id.is_empty() {
+            return Err("No Spotify client ID is configured".into());
+        }
+        let refresh = self
+            .token
+            .refresh_token
+            .clone()
+            .ok_or("Spotify returned no refresh token")?;
+        let mut token = request_token(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh),
+            ("client_id", &self.client_id),
+        ])?;
+        token.refresh_token.get_or_insert(refresh);
+        save_token(&self.token_path, &token)?;
+        self.token = token;
+        Ok(())
+    }
 }
 
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
@@ -222,7 +314,9 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
         "connected": false,
     });
     if load_token(token_path).is_some() {
-        match connected(config_path, token_path).and_then(|client| account_name(&client)) {
+        match Client::connect(config_path, token_path)
+            .and_then(|mut client| account_name(&mut client))
+        {
             Ok(name) => {
                 result["connected"] = json!(true);
                 result["account_name"] = json!(name);
@@ -233,8 +327,8 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
     Ok(result)
 }
 
-fn account_name(client: &AuthCodePkceSpotify) -> Result<String> {
-    let user = client.current_user()?;
+fn account_name(client: &mut Client) -> Result<String> {
+    let user: PrivateUser = client.get("me")?;
     Ok(user
         .display_name
         .filter(|name| !name.is_empty())
@@ -247,8 +341,19 @@ fn utc(time: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_tokens, load_token, save_token, status};
+    use super::{clear_tokens, load_token, save_token, status, Client};
     use std::fs;
+
+    #[test]
+    fn a_page_outside_the_spotify_api_never_gets_the_token() {
+        let mut client = Client {
+            client_id: "client".into(),
+            token_path: "token.json".into(),
+            token: rspotify_model::Token::default(),
+        };
+        let page = client.get::<serde_json::Value>("https://example.test/steal");
+        assert!(page.is_err_and(|error| error.to_string().contains("outside its API")));
+    }
 
     #[test]
     fn logout_removes_existing_tokens() -> Result<(), Box<dyn std::error::Error>> {
@@ -277,7 +382,7 @@ mod tests {
         );
         assert!(token.scopes.contains("user-library-read"));
 
-        let refreshed = rspotify::Token {
+        let refreshed = rspotify_model::Token {
             access_token: "new".into(),
             refresh_token: None,
             ..token
