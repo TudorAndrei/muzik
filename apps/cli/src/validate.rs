@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use serde_json::Value;
+use strum_macros::Display;
 
 use crate::Validate;
 
@@ -85,26 +86,36 @@ fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::R
     Ok(())
 }
 
-fn kind(path: &Path) -> Option<&'static str> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+#[strum(serialize_all = "lowercase")]
+enum FileKind {
+    Audio,
+    Chapters,
+    #[strum(to_string = "info.json")]
+    InfoJson,
+    Muzik,
+}
+
+fn kind(path: &Path) -> Option<FileKind> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     if muzik_core::audio::is_audio(path) {
-        Some("audio")
+        Some(FileKind::Audio)
     } else if name.ends_with(".chapters.txt") {
-        Some("chapters")
+        Some(FileKind::Chapters)
     } else if name.ends_with(".info.json") {
-        Some("info.json")
+        Some(FileKind::InfoJson)
     } else if name.ends_with(".muzik.json") {
-        Some("muzik")
+        Some(FileKind::Muzik)
     } else {
         None
     }
 }
 
-fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
+fn check(path: &Path) -> anyhow::Result<(FileKind, String, Vec<String>)> {
     let file_kind = kind(path).context("unsupported file")?;
     let mut warnings = Vec::new();
     let details = match file_kind {
-        "audio" => {
+        FileKind::Audio => {
             let properties = muzik_tags::probe(path)?;
             if metadata_for_audio(path).is_none() {
                 warnings.push("metadata sidecar missing".into());
@@ -118,7 +129,7 @@ fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
                 properties.duration_seconds.unwrap_or(0.0)
             )
         }
-        "chapters" => {
+        FileKind::Chapters => {
             let source = fs::read_to_string(path)?;
             let count = source.lines().filter(|line| chapter_line(line)).count();
             if count == 0 {
@@ -126,7 +137,7 @@ fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
             }
             format!("{count} chapters")
         }
-        "info.json" => {
+        FileKind::InfoJson => {
             let value = read_object(path)?;
             let title = value.get("title").and_then(Value::as_str).unwrap_or("?");
             let chapters = value
@@ -135,7 +146,7 @@ fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
                 .map_or(0, Vec::len);
             format!("title={title} chapters={chapters}")
         }
-        "muzik" => {
+        FileKind::Muzik => {
             let value = read_object(path)?;
             if value
                 .get("source")
@@ -169,7 +180,6 @@ fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
                 value.get("source").and_then(Value::as_str).unwrap_or("?")
             )
         }
-        _ => bail!("unsupported file"),
     };
     Ok((file_kind, details, warnings))
 }
@@ -206,7 +216,7 @@ fn count_audio(root: &Path) -> anyhow::Result<usize> {
     collect(root, true, &mut files)?;
     Ok(files
         .into_iter()
-        .filter(|path| kind(path) == Some("audio"))
+        .filter(|path| kind(path) == Some(FileKind::Audio))
         .count())
 }
 
