@@ -141,7 +141,7 @@ pub(crate) mod testing {
     use crate::settings::Settings;
     use crate::watchlist::{Adapter, Prepared};
     use muzik_core::paths::Paths;
-    use muzik_core::DecisionKind;
+    use muzik_core::{DecisionKind, JobEvent};
     use serde_json::Value;
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
@@ -179,7 +179,7 @@ pub(crate) mod testing {
     ) -> T {
         let prepared = Prepared::new(settings);
         let mut event = |_| {};
-        let events = RefCell::new(&mut event as &mut dyn FnMut(Value));
+        let events = RefCell::new(&mut event as &mut dyn FnMut(JobEvent));
         let mut imported = |_| {};
         let mut decide = |_: DecisionKind, _: Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);

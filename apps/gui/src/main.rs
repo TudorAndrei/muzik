@@ -25,7 +25,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
-    AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
+    AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, JobEvent, MetadataSource,
+    QualityPolicy, Task as JobTask,
 };
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
@@ -70,7 +71,7 @@ struct ChapterRow {
 #[derive(Default)]
 struct ActivityProgress {
     description: String,
-    task_id: String,
+    task: Option<JobTask>,
     completed: f64,
     total: Option<f64>,
 }
@@ -445,34 +446,41 @@ impl Muzik {
         self.runs.sort_by_key(|run| run.queued);
     }
 
-    fn record_job_event(&mut self, job_id: &str, kind: &str, payload: &Value) {
-        let line = match kind {
-            "progress_started" => {
+    fn record_job_event(&mut self, job_id: &str, event: &JobEvent) {
+        let line = match event {
+            JobEvent::ProgressStarted {
+                task,
+                description,
+                total,
+            } => {
                 let run = self.run_mut(job_id);
                 let progress = &mut run.progress;
-                progress.task_id = describe(&payload["task_id"]);
-                progress.description = describe(&payload["description"]);
+                progress.task = Some(*task);
+                progress.description = description.clone();
                 progress.completed = 0.;
-                progress.total = payload["total"].as_f64().filter(|total| *total > 0.);
+                progress.total = total.filter(|total| *total > 0).map(|total| total as f64);
                 run.status = progress.description.clone();
                 run.status.clone()
             }
-            "progress_advanced" => {
+            JobEvent::ProgressAdvanced {
+                task,
+                completed,
+                total,
+            } => {
                 let progress = &mut self.run_mut(job_id).progress;
-                if payload["task_id"].as_str() != Some(progress.task_id.as_str()) {
+                if progress.task != Some(*task) {
                     return;
                 }
-                if let Some(total) = payload["total"].as_f64().filter(|total| *total > 0.) {
-                    progress.total = Some(total);
+                if let Some(total) = total.filter(|total| *total > 0) {
+                    progress.total = Some(total as f64);
                 }
-                progress.completed = payload["completed"]
-                    .as_f64()
-                    .unwrap_or(progress.completed + payload["advance"].as_f64().unwrap_or(1.));
+                progress.completed =
+                    completed.map_or(progress.completed + 1., |completed| completed as f64);
                 String::new()
             }
-            "progress_finished" => {
+            JobEvent::ProgressFinished { task, .. } => {
                 let progress = &mut self.run_mut(job_id).progress;
-                if payload["task_id"].as_str() != Some(progress.task_id.as_str()) {
+                if progress.task != Some(*task) {
                     return;
                 }
                 if let Some(total) = progress.total {
@@ -480,103 +488,49 @@ impl Muzik {
                 }
                 format!("{} finished", progress.description)
             }
-            "step_started" => {
-                let name = describe(&payload["name"]);
-                self.set_status(job_id, name.clone());
-                format!("Started {name}")
+            JobEvent::StepStarted(step) => {
+                self.set_status(job_id, step.to_string());
+                format!("Started {step}")
             }
-            "step_finished" => {
+            JobEvent::StepFinished(step) => {
                 let progress = &mut self.run_mut(job_id).progress;
                 if progress.total.is_some() {
                     progress.completed += 1.;
                 }
-                format!(
-                    "{} {}",
-                    describe(&payload["name"]),
-                    if payload["success"] == false {
-                        "failed"
-                    } else {
-                        "finished"
-                    }
-                )
+                format!("{step} finished")
             }
-            "message" | "log" => {
-                let message = describe(&payload["message"]);
+            JobEvent::Message { message, .. } => {
                 self.set_status(job_id, message.clone());
-                message
+                message.clone()
             }
-            "error" => {
-                let message = describe(&payload["message"]);
-                self.error = Some(message.clone());
-                format!("Error: {message}")
-            }
-            "candidates_found" => {
+            JobEvent::CandidatesFound { source, candidates } => {
                 self.set_activity_section(activity_section(
                     "Source candidates",
-                    &payload["candidates"],
+                    candidates,
                     candidate_summary,
                 ));
                 format!(
-                    "{} {} candidates found",
+                    "{} {source} candidates found",
                     self.activity_sections
                         .iter()
                         .find(|section| section.title == "Source candidates")
                         .map_or(0, |section| section.count),
-                    payload["source"].as_str().unwrap_or("source")
                 )
             }
-            "chapter_review_requested" => {
-                self.set_activity_section(activity_section(
-                    "Chapters",
-                    &payload["chapters"],
-                    chapter_summary,
-                ));
-                format!("Chapter review: {}", describe(&payload["source"]))
-            }
-            "task" => {
-                self.set_activity_section(activity_section(
-                    "Album matches",
-                    &payload["task"]["matches"],
-                    import_match_summary,
-                ));
-                let task = &payload["task"];
-                let message = format!(
-                    "Import: {} · {}",
-                    task["current_artist"].as_str().unwrap_or("Unknown artist"),
-                    task["current_album"].as_str().unwrap_or("Unknown album")
-                );
-                self.set_status(job_id, message.clone());
-                message
-            }
-            "item_waiting" => {
-                let title = describe(&payload["title"]);
-                let kind = choices::title(choices::kind(&payload["question"]));
+            JobEvent::ItemWaiting { title, question } => {
+                let kind = choices::title(choices::kind(question));
                 self.set_status(job_id, format!("Waiting for you: {kind}"));
                 format!("{title} waits for you: {kind}")
             }
-            "agent_decided" => {
-                let label = describe(&payload["label"]);
+            JobEvent::AgentDecided {
+                label,
+                confidence,
+                reason,
+            } => {
                 self.set_status(job_id, format!("Chose {label}"));
-                format!(
-                    "Chose {label} ({:.0}%): {}",
-                    payload["confidence"].as_f64().unwrap_or(0.0) * 100.0,
-                    describe(&payload["reason"])
-                )
+                format!("Chose {label} ({:.0}%): {reason}", confidence * 100.0)
             }
-            "import_started" => {
-                self.set_status(job_id, "Import started");
-                "Import started".into()
-            }
-            "import_finished" => {
-                let status = if payload["success"] == false {
-                    "Import failed"
-                } else {
-                    "Import finished"
-                };
-                self.set_status(job_id, status);
-                status.into()
-            }
-            _ => kind.replace('_', " "),
+            JobEvent::WatchlistSaved => return,
         };
         if !line.is_empty() {
             self.logs.push(short_text(&shorten_paths(&line), 180));
@@ -683,10 +637,8 @@ impl Muzik {
                         run.title = title;
                         run.status = "Starting".into();
                     }
-                    AppEvent::JobEvent {
-                        job_id, name, data, ..
-                    } => {
-                        self.record_job_event(&job_id, &name, &data);
+                    AppEvent::JobEvent { job_id, event, .. } => {
+                        self.record_job_event(&job_id, &event);
                         if self.logs.len() > 300 {
                             self.logs.drain(..100);
                         }
@@ -1548,16 +1500,14 @@ fn short_text(value: &str, limit: usize) -> String {
 
 fn activity_section(
     title: &'static str,
-    items: &Value,
+    items: &[Value],
     summary: fn(&Value) -> String,
 ) -> ActivitySection {
-    let items = items.as_array();
     ActivitySection {
         title,
-        count: items.map_or(0, Vec::len),
+        count: items.len(),
         rows: items
-            .into_iter()
-            .flatten()
+            .iter()
             .take(4)
             .map(|item| short_text(&summary(item), 120))
             .collect(),
@@ -1571,25 +1521,6 @@ fn candidate_summary(candidate: &Value) -> String {
         .unwrap_or("Unknown format");
     let user = candidate["user"].as_str().unwrap_or("Unknown user");
     format!("{title} · {format} · {user}")
-}
-
-fn chapter_summary(chapter: &Value) -> String {
-    let index = chapter["index"].as_u64().unwrap_or(0);
-    let start = chapter["start"].as_u64().unwrap_or(0);
-    let title = chapter["title"].as_str().unwrap_or("Untitled");
-    format!("{index}. {title} · {start} s")
-}
-
-fn import_match_summary(candidate: &Value) -> String {
-    let artist = candidate["artist"].as_str().unwrap_or("Unknown artist");
-    let album = candidate["album"]
-        .as_str()
-        .or_else(|| candidate["title"].as_str())
-        .unwrap_or("Unknown album");
-    match candidate["distance"].as_f64() {
-        Some(distance) => format!("{artist} — {album} · difference {distance:.3}"),
-        None => format!("{artist} — {album}"),
-    }
 }
 
 fn job_label(kind: RunKind, title: &str) -> String {
@@ -1801,6 +1732,7 @@ mod tests {
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
     use muzik_core::app_config::GuiDefaults;
+    use muzik_core::{JobEvent, Step};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -1844,7 +1776,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn native_import_events_show_matches_and_progress(cx: &mut TestAppContext) {
+    fn job_events_show_candidates_and_status(cx: &mut TestAppContext) {
         let main = cx.update(|cx| {
             gpui_kit::init(cx);
             let (_, main) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1862,36 +1794,31 @@ mod tests {
                         .map(|run| run.status.clone())
                         .unwrap_or_default()
                 };
+                view.record_job_event("queue-1", &JobEvent::StepStarted(Step::Import));
+                assert_eq!(status(view), "import");
                 view.record_job_event(
                     "queue-1",
-                    "import_started",
-                    &json!({"paths": ["/music/album"], "dry_run": false}),
-                );
-                assert_eq!(status(view), "Import started");
-                view.record_job_event(
-                    "queue-1",
-                    "task",
-                    &json!({"task": {
-                        "current_artist": "Artist",
-                        "current_album": "Album",
-                        "matches": [{
-                            "artist": "Artist", "album": "Album", "distance": 0.05
-                        }]
-                    }}),
+                    &JobEvent::CandidatesFound {
+                        source: "soulseek".into(),
+                        candidates: vec![json!({
+                            "title": "Album", "quality": {"format": "FLAC"}, "user": "peer"
+                        })],
+                    },
                 );
                 let section = view
                     .activity_sections
                     .iter()
-                    .find(|section| section.title == "Album matches")
+                    .find(|section| section.title == "Source candidates")
                     .unwrap();
                 assert_eq!(section.count, 1);
-                assert!(section.rows[0].contains("Artist"));
-                assert!(status(view).contains("Album"));
-                view.record_job_event("queue-1", "log", &json!({"message": "Writing tags"}));
+                assert!(section.rows[0].contains("Album"));
+                view.record_job_event("queue-1", &JobEvent::message("Writing tags"));
                 assert_eq!(status(view), "Writing tags");
-                view.record_job_event("queue-1", "import_finished", &json!({"success": true}));
-                assert_eq!(status(view), "Import finished");
                 assert!(view.logs.iter().any(|line| line == "Writing tags"));
+                assert!(view
+                    .logs
+                    .iter()
+                    .any(|line| line == "1 soulseek candidates found"));
             });
         });
     }
@@ -1918,13 +1845,15 @@ mod tests {
 
     #[test]
     fn activity_summary_keeps_count_and_bounds_visible_rows() {
-        let candidates = json!((0..6)
-            .map(|index| json!({
-                "title": format!("Album {index}"),
-                "quality": {"format": "FLAC"},
-                "user": "listener"
-            }))
-            .collect::<Vec<_>>());
+        let candidates = (0..6)
+            .map(|index| {
+                json!({
+                    "title": format!("Album {index}"),
+                    "quality": {"format": "FLAC"},
+                    "user": "listener"
+                })
+            })
+            .collect::<Vec<_>>();
         let section = activity_section("Source candidates", &candidates, candidate_summary);
         assert_eq!(section.count, 6);
         assert_eq!(section.rows.len(), 4);

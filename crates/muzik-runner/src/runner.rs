@@ -3,7 +3,7 @@ use crate::events::{AppEvent, Source};
 use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, JobEvent};
 use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
 use muzik_store::watchlist::jobs::JobError;
 use muzik_store::watchlist::Stage;
@@ -59,17 +59,14 @@ impl Shared {
         self.jobs.store()
     }
 
-    fn event(&self, job_id: &str, source: Source, event: &Value) {
-        let name = event["event"].as_str().unwrap_or("");
-        (self.sink)(if name == "watchlist_saved" {
-            AppEvent::WatchlistSaved
-        } else {
-            AppEvent::JobEvent {
+    fn event(&self, job_id: &str, source: Source, event: JobEvent) {
+        (self.sink)(match event {
+            JobEvent::WatchlistSaved => AppEvent::WatchlistSaved,
+            event => AppEvent::JobEvent {
                 job_id: job_id.to_owned(),
                 source,
-                name: name.to_owned(),
-                data: event["data"].clone(),
-            }
+                event,
+            },
         });
     }
 
@@ -259,9 +256,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
         &settings,
         job.params["playlist_id"].as_str(),
         cancel,
-        &mut |event| {
-            shared.event(job_id, Source::Workflow, &event);
-        },
+        &mut |event| shared.event(job_id, Source::Workflow, event),
     )
     .map_err(job_error)?;
     let queued = shared
@@ -271,7 +266,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
     shared.event(
         job_id,
         Source::Workflow,
-        &json!({"event":"message","data":{"message":format!("Queued {queued} item(s).")}}),
+        JobEvent::message(format!("Queued {queued} item(s).")),
     );
     shared.wake.notify_all();
     Ok(json!({"pending":pending.len(),"queued":queued}))
@@ -285,13 +280,13 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
         let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
         Some((kind, answer["value"].clone()))
     }));
-    let mut workflow_event = |event: Value| {
-        if event["event"] == "item_waiting" {
+    let mut workflow_event = |event: JobEvent| {
+        if matches!(event, JobEvent::ItemWaiting { .. }) {
             shared.publish();
         }
-        shared.event(job_id, Source::Workflow, &event);
+        shared.event(job_id, Source::Workflow, event);
     };
-    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
+    let mut import_event = |event: JobEvent| shared.event(job_id, Source::Native, event);
     let mut decide = |kind: DecisionKind, mut payload: Value| {
         let answered = {
             let mut resume = resume.borrow_mut();
@@ -324,8 +319,8 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
 fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
     let settings = settings(shared, job)?;
     let model = settings.agent_model.as_deref();
-    let mut workflow_event = |event: Value| shared.event(job_id, Source::Workflow, &event);
-    let mut import_event = |event: Value| shared.event(job_id, Source::Native, &event);
+    let mut workflow_event = |event: JobEvent| shared.event(job_id, Source::Workflow, event);
+    let mut import_event = |event: JobEvent| shared.event(job_id, Source::Native, event);
     let mut decide = |kind: DecisionKind, mut payload: Value| {
         if let Some(value) = ask_agent(shared, job_id, model, kind, &mut payload) {
             return Ok(value);
@@ -384,21 +379,17 @@ fn ask_agent(
     }
     let model = model?;
     let chooser = shared.chooser.as_ref()?;
-    let message = |event: &str, data: Value| {
-        shared.event(job_id, Source::Agent, &json!({"event":event,"data":data}));
-    };
+    let message = |event: JobEvent| shared.event(job_id, Source::Agent, event);
     if muzik_agent::strong_match(kind, payload).is_none() {
-        message(
-            "message",
-            json!({"message":format!("Asking {model} to choose.")}),
-        );
+        message(JobEvent::message(format!("Asking {model} to choose.")));
     }
     match chooser.choose(kind, payload, model) {
         Ok(muzik_agent::Outcome::Decided(choice)) => {
-            message(
-                "agent_decided",
-                json!({"kind":kind,"label":choice.label,"confidence":choice.confidence,"reason":choice.reason}),
-            );
+            message(JobEvent::AgentDecided {
+                label: choice.label,
+                confidence: choice.confidence,
+                reason: choice.reason,
+            });
             Some(choice.value)
         }
         Ok(muzik_agent::Outcome::Unsure {

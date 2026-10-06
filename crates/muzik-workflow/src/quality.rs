@@ -3,7 +3,7 @@
 use muzik_core::audio::AudioFormat;
 use muzik_core::chapters::sidecar_path;
 use muzik_core::paths::Paths;
-use muzik_core::{DecisionKind, PreferredAudio, QualityPolicy, app_config};
+use muzik_core::{DecisionKind, JobEvent, PreferredAudio, QualityPolicy, Severity, app_config};
 use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::ranking::{format as file_format, rank};
@@ -68,7 +68,7 @@ pub fn check_youtube_quality(
     min_bitrate: u32,
     prefer: PreferredAudio,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult> {
     let mut backend = SoulseekBackend {
@@ -95,7 +95,7 @@ fn check_with_backend(
     min_bitrate: u32,
     prefer: PreferredAudio,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult> {
     let keep = QualityUpgradeResult::keep(&audio_files);
@@ -180,9 +180,10 @@ fn check_with_backend(
         ));
         return Ok(no_safe());
     };
-    on_event(
-        json!({"event":"candidates_found","data":{"candidates":[candidate_payload(&candidate)],"source":"soulseek","limit":10}}),
-    );
+    on_event(JobEvent::CandidatesFound {
+        source: "soulseek".into(),
+        candidates: vec![candidate_payload(&candidate)],
+    });
     if quality_decision == QualityDecision::Ask {
         let answer = decide(
             DecisionKind::QualityReplacement,
@@ -318,8 +319,15 @@ fn check_with_backend(
     })
 }
 
-fn message(text: String, warning: bool) -> Value {
-    json!({"event":"message","data":{"message":text,"severity":if warning {"warning"} else {"info"}}})
+fn message(text: String, warning: bool) -> JobEvent {
+    JobEvent::Message {
+        message: text,
+        severity: if warning {
+            Severity::Warning
+        } else {
+            Severity::Info
+        },
+    }
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {

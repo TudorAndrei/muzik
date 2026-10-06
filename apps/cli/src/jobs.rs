@@ -1,7 +1,7 @@
 use anyhow::{Context, bail};
-use muzik_core::DecisionKind;
 use muzik_core::chapters::Chapter;
 use muzik_core::paths::Paths;
+use muzik_core::{DecisionKind, JobEvent};
 use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
 use muzik_runner::{AppEvent, Jobs, Options, Prompt, Runner, job_id, parse_job_id};
@@ -177,25 +177,18 @@ fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
             println!("{id} started: {title}");
         }
         AppEvent::JobEvent {
-            job_id: id,
-            name,
-            data: payload,
-            ..
+            job_id: id, event, ..
         } => {
-            let line = match name.as_str() {
-                "message" | "log" => text(field(payload, "message")),
-                "step_started" => format!("{} started", text(field(payload, "name"))),
-                "item_waiting" => format!(
-                    "{} waits for a choice: {}",
-                    text(field(payload, "title")),
-                    choices::title(choices::kind(field(payload, "question")))
+            let line = match event {
+                JobEvent::Message { message, .. } => message.clone(),
+                JobEvent::StepStarted(step) => format!("{step} started"),
+                JobEvent::ItemWaiting { title, question } => format!(
+                    "{title} waits for a choice: {}",
+                    choices::title(choices::kind(question))
                 ),
-                "agent_decided" => format!(
-                    "chose {} ({:.0}%)",
-                    text(field(payload, "label")),
-                    field(payload, "confidence").as_f64().unwrap_or(0.0) * 100.0
-                ),
-                "import_finished" => "import finished".into(),
+                JobEvent::AgentDecided {
+                    label, confidence, ..
+                } => format!("chose {label} ({:.0}%)", confidence * 100.0),
                 _ => String::new(),
             };
             if !line.is_empty() {

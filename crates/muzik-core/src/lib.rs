@@ -8,6 +8,7 @@ pub mod config_choices;
 mod decision;
 pub mod downloads;
 mod error;
+mod job_event;
 pub mod paths;
 pub mod thumbnails;
 mod types;
@@ -19,4 +20,5 @@ pub use config_choices::{
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
 pub use error::{Error, Result};
+pub use job_event::{JobEvent, Severity, Step, Task};
 pub use types::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

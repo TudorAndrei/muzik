@@ -3,7 +3,8 @@
 use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use muzik_core::{
-    chapters::Chapter, ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS,
+    chapters::Chapter, ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, Step, Task,
+    KEEP_CURRENT_TAGS,
 };
 use muzik_import::apply::{DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
@@ -24,8 +25,8 @@ use std::sync::atomic::AtomicBool;
 pub fn run(
     settings: &Settings,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
-    on_import_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
+    on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<Value, muzik_workflow::Error> {
     let stage = Cell::new(Stage::Download);
@@ -51,7 +52,7 @@ pub fn run(
 
 pub(crate) struct LocalOperations<'a> {
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-    pub(crate) on_import_event: &'a mut dyn FnMut(Value),
+    pub(crate) on_import_event: &'a mut dyn FnMut(JobEvent),
     pub(crate) cancelled: &'a AtomicBool,
     pub(crate) stage: &'a Cell<Stage>,
 }
@@ -108,14 +109,12 @@ impl WorkflowOperations for LocalOperations<'_> {
         if options.tag_only {
             let count =
                 beets::write_library_tags(target, options.config.as_deref(), options.dry_run)?;
-            (self.on_import_event)(
-                json!({"event":"message","data":{"message":format!("Wrote library tags for {count} item(s).")}}),
-            );
+            (self.on_import_event)(JobEvent::message(format!(
+                "Wrote library tags for {count} item(s)."
+            )));
             return Ok(());
         }
-        (self.on_import_event)(
-            json!({"event":"step_started","data":{"name":"import","path":target}}),
-        );
+        (self.on_import_event)(JobEvent::StepStarted(Step::Import));
         let preview = beets::plan_import_with_cancel(
             ImportRequest {
                 source: target.to_path_buf(),
@@ -131,9 +130,12 @@ impl WorkflowOperations for LocalOperations<'_> {
             if self.cancelled.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err("import cancelled".into());
             }
-            (self.on_import_event)(
-                json!({"event":"message","data":{"message":format!("Import group {} of {}: {}",index + 1,preview.plan.albums.len(),album.source_dir.display())}}),
-            );
+            (self.on_import_event)(JobEvent::message(format!(
+                "Import group {} of {}: {}",
+                index + 1,
+                preview.plan.albums.len(),
+                album.source_dir.display()
+            )));
             decisions.push(decide_album(
                 album,
                 ImportPolicy {
@@ -152,13 +154,11 @@ impl WorkflowOperations for LocalOperations<'_> {
             self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
         })?;
         if outcome.apply.already_in_library > 0 {
-            (self.on_import_event)(
-                json!({"event":"message","data":{"message":"The album is already in the library. Muzik did not import it again."}}),
-            );
+            (self.on_import_event)(JobEvent::message(
+                "The album is already in the library. Muzik did not import it again.",
+            ));
         }
-        (self.on_import_event)(
-            json!({"event":"step_finished","data":{"name":"import","items":outcome.apply.destinations.len(),"skipped":outcome.apply.skipped_albums + outcome.apply.skipped_incremental}}),
-        );
+        (self.on_import_event)(JobEvent::StepFinished(Step::Import));
         Ok(())
     }
 
@@ -340,38 +340,33 @@ fn match_score(distance: f64) -> u64 {
     ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
 }
 
-pub(crate) fn event_record(event: WorkflowEvent) -> Value {
-    let (name, data) = match event {
-        WorkflowEvent::InputClassified(_) => ("message", json!({"message":"Reading local audio."})),
-        WorkflowEvent::AcquisitionStarted => ("step_started", json!({"name":"read"})),
-        WorkflowEvent::AcquisitionCompleted { files } => {
-            ("step_finished", json!({"name":"read","files":files}))
+pub(crate) fn event_record(event: WorkflowEvent) -> JobEvent {
+    match event {
+        WorkflowEvent::InputClassified(_) => JobEvent::message("Reading local audio."),
+        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted(Step::Read),
+        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished(Step::Read),
+        WorkflowEvent::PlanReady { albums, singles } => {
+            JobEvent::message(format!("Found {albums} album(s) and {singles} single(s)."))
         }
-        WorkflowEvent::PlanReady { albums, singles } => (
-            "message",
-            json!({"message":format!("Found {albums} album(s) and {singles} single(s).")}),
-        ),
-        WorkflowEvent::SplitStarted(task) => (
-            "progress_started",
-            json!({"task_id":"local-split","description":format!("Splitting {}",task.source.display()),"total":task.chapters.len()}),
-        ),
-        WorkflowEvent::SplitProgress { progress, .. } => (
-            "progress_advanced",
-            json!({"task_id":"local-split","completed":progress.completed,"total":progress.total}),
-        ),
-        WorkflowEvent::SplitCompleted { .. } => (
-            "progress_finished",
-            json!({"task_id":"local-split","success":true}),
-        ),
+        WorkflowEvent::SplitStarted(task) => JobEvent::ProgressStarted {
+            task: Task::LocalSplit,
+            description: format!("Splitting {}", task.source.display()),
+            total: Some(task.chapters.len() as u64),
+        },
+        WorkflowEvent::SplitProgress { progress, .. } => JobEvent::ProgressAdvanced {
+            task: Task::LocalSplit,
+            completed: Some(progress.completed as u64),
+            total: Some(progress.total as u64),
+        },
+        WorkflowEvent::SplitCompleted { .. } => JobEvent::ProgressFinished {
+            task: Task::LocalSplit,
+            success: true,
+        },
         WorkflowEvent::OrganizeStarted { .. } | WorkflowEvent::OrganizeCompleted { .. } => {
-            ("message", json!({"message":"Organizing audio."}))
+            JobEvent::message("Organizing audio.")
         }
-        WorkflowEvent::Completed => (
-            "message",
-            json!({"message":"Local audio workflow complete."}),
-        ),
-    };
-    json!({"event":name,"data":data})
+        WorkflowEvent::Completed => JobEvent::message("Local audio workflow complete."),
+    }
 }
 
 #[cfg(test)]
@@ -379,7 +374,7 @@ mod tests {
     use super::run;
     use crate::settings::Settings;
     use muzik_core::paths::Paths;
-    use muzik_core::{ChapterAnswer, DecisionKind, DuplicatePolicy};
+    use muzik_core::{ChapterAnswer, DecisionKind, DuplicatePolicy, JobEvent};
     use serde_json::{json, Value};
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -460,7 +455,9 @@ mod tests {
             &mut |_, _| Err("unexpected decision".into()),
         )?;
         assert_eq!(result["albums"], 1);
-        assert!(events.iter().any(|event| event["event"] == "message"));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, JobEvent::Message { .. })));
         assert!(audio.exists());
         assert!(!splits.exists());
         Ok(())

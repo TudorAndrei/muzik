@@ -1,4 +1,4 @@
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, JobEvent};
 use muzik_store::jobs::Kind;
 use serde_json::Value;
 
@@ -21,8 +21,7 @@ pub enum AppEvent {
     JobEvent {
         job_id: String,
         source: Source,
-        name: String,
-        data: Value,
+        event: JobEvent,
     },
     JobCompleted {
         job_id: String,
