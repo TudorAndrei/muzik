@@ -6,6 +6,7 @@ publish = false
 license = "GPL-3.0-only"
 
 [dependencies]
+anyhow = "1"
 async-channel = "2.5"
 bytesize = "2.3"
 gpui-kit = "=0.7.0"

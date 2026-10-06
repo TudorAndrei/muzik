@@ -289,7 +289,7 @@ impl Muzik {
                     this.hello(cx);
                     this.load_jobs(cx);
                 }
-                Err(error) => this.status = error,
+                Err(error) => this.status = error.to_string(),
             }
         }
         cx.observe_window_appearance(window, |_, window, cx| {
@@ -1776,7 +1776,7 @@ fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<
     paths
 }
 
-fn check_backend() -> Result<(), String> {
+fn check_backend() -> anyhow::Result<()> {
     Backend::start()?;
     println!("Rust backend ready");
     Ok(())

@@ -1,4 +1,5 @@
 use crate::thumbnails;
+use anyhow::{anyhow, bail, Context};
 use async_channel::Receiver;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
@@ -8,7 +9,7 @@ use muzik_core::downloads::scan;
 use muzik_core::paths::Paths;
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::app::WatchlistCheck;
-use muzik_runner::{setup, App, AppEvent, AppOptions, EnqueueError};
+use muzik_runner::{setup, App, AppEvent, AppOptions};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::{ItemAction, ItemId, Playlist};
 use parking_lot::Mutex;
@@ -80,24 +81,20 @@ pub struct Backend {
     writes: Mutex<()>,
 }
 
-fn required<'a>(key: &str, value: &'a str) -> Result<&'a str, String> {
+fn required<'a>(key: &str, value: &'a str) -> anyhow::Result<&'a str> {
     Some(value.trim())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{key} must be a non-empty string."))
-}
-
-fn queued(result: Result<String, EnqueueError>) -> Result<String, String> {
-    result.map_err(|error| error.to_string())
+        .with_context(|| format!("{key} must be a non-empty string."))
 }
 
 impl Backend {
-    pub fn start() -> Result<(Self, Receiver<AppEvent>), String> {
+    pub fn start() -> anyhow::Result<(Self, Receiver<AppEvent>)> {
         let paths = Paths::user();
-        muzik_core::paths::migrate_legacy(&paths).map_err(|error| error.to_string())?;
+        muzik_core::paths::migrate_legacy(&paths)?;
         Self::with(paths, true)
     }
 
-    fn with(paths: Paths, run: bool) -> Result<(Self, Receiver<AppEvent>), String> {
+    fn with(paths: Paths, run: bool) -> anyhow::Result<(Self, Receiver<AppEvent>)> {
         let (sender, events) = async_channel::unbounded();
         let app = App::start(AppOptions {
             paths,
@@ -127,8 +124,8 @@ impl Backend {
         app_config::load_gui_defaults(self.paths())
     }
 
-    pub fn save_defaults(&self, defaults: &GuiDefaults) -> Result<GuiDefaults, String> {
-        let params = serde_json::to_value(defaults).map_err(|error| error.to_string())?;
+    pub fn save_defaults(&self, defaults: &GuiDefaults) -> anyhow::Result<GuiDefaults> {
+        let params = serde_json::to_value(defaults)?;
         let _write = self.writes.lock();
         Ok(app_config::save_gui_defaults(self.paths(), &params)?)
     }
@@ -137,19 +134,19 @@ impl Backend {
         self.app.jobs()
     }
 
-    pub fn start_workflow(&self, params: &Value) -> Result<String, String> {
-        queued(self.app.start_workflow(params))
+    pub fn start_workflow(&self, params: &Value) -> anyhow::Result<String> {
+        Ok(self.app.start_workflow(params)?)
     }
 
-    pub fn refresh(&self, source: Option<(&str, &str)>) -> Result<String, String> {
-        queued(self.app.refresh(source))
+    pub fn refresh(&self, source: Option<(&str, &str)>) -> anyhow::Result<String> {
+        Ok(self.app.refresh(source)?)
     }
 
-    pub fn run_item(&self, item: &ItemRequest) -> Result<String, String> {
-        queued(self.app.run_item(&item.id, &item.title, item.action))
+    pub fn run_item(&self, item: &ItemRequest) -> anyhow::Result<String> {
+        Ok(self.app.run_item(&item.id, &item.title, item.action)?)
     }
 
-    pub fn cancel(&self, job_id: &str) -> Result<(), String> {
+    pub fn cancel(&self, job_id: &str) -> anyhow::Result<()> {
         let job_id = required("job_id", job_id)?;
         if self.app.cancel(job_id)? {
             return Ok(());
@@ -163,41 +160,41 @@ impl Backend {
             active.cancel.store(true, Ordering::Relaxed);
             return Ok(());
         }
-        Err("The job is not active.".into())
+        bail!("The job is not active.")
     }
 
-    pub fn reply(&self, decision_id: &str, value: Value) -> Result<(), String> {
+    pub fn reply(&self, decision_id: &str, value: Value) -> anyhow::Result<()> {
         let decision_id = required("decision_id", decision_id)?;
         if self.app.reply(decision_id, value) {
             Ok(())
         } else {
-            Err("The decision is not pending.".into())
+            bail!("The decision is not pending.")
         }
     }
 
-    pub fn answer(&self, id: i64, value: &Value) -> Result<bool, String> {
+    pub fn answer(&self, id: i64, value: &Value) -> anyhow::Result<bool> {
         Ok(self.app.answer(id, value)?)
     }
 
-    pub fn load_watchlist(&self) -> Result<(Value, WatchlistCheck), String> {
+    pub fn load_watchlist(&self) -> anyhow::Result<(Value, WatchlistCheck)> {
         let login = Arc::clone(&self.login);
         Ok(self
             .app
             .load_watchlist(Arc::new(move || login.lock().is_some()))?)
     }
 
-    pub fn add_source(&self, url: &str) -> Result<Playlist, String> {
+    pub fn add_source(&self, url: &str) -> anyhow::Result<Playlist> {
         Ok(self.app.add_source(required("url", url)?)?)
     }
 
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> anyhow::Result<bool> {
         Ok(self.app.rename_source(
             required("playlist_id", playlist_id)?,
             required("title", title)?,
         )?)
     }
 
-    pub fn remove_source(&self, playlist_id: &str) -> Result<bool, String> {
+    pub fn remove_source(&self, playlist_id: &str) -> anyhow::Result<bool> {
         Ok(self
             .app
             .remove_source(required("playlist_id", playlist_id)?)?)
@@ -221,7 +218,7 @@ impl Backend {
         Some(data)
     }
 
-    pub fn library_scan(&self, output: &Path) -> Result<Value, String> {
+    pub fn library_scan(&self, output: &Path) -> anyhow::Result<Value> {
         library_scan(self.paths(), output)
     }
 
@@ -229,18 +226,18 @@ impl Backend {
         json!({"services": setup::check_services(self.paths())})
     }
 
-    pub fn soulseek_account(&self) -> Result<Value, String> {
+    pub fn soulseek_account(&self) -> anyhow::Result<Value> {
         Ok(setup::soulseek_account(&self.paths().config_file())?)
     }
 
-    pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<Value, String> {
+    pub fn save_soulseek(&self, form: &SoulseekForm) -> anyhow::Result<Value> {
         let path = self.paths().config_file();
         let username = required("username", &form.username)?;
         let server_port = form
             .server_port
             .trim()
             .parse()
-            .map_err(|_| "Enter a server port from 1 to 65535.")?;
+            .map_err(|_| anyhow!("Enter a server port from 1 to 65535."))?;
         let _write = self.writes.lock();
         setup::save_soulseek_account(
             &path,
@@ -258,33 +255,33 @@ impl Backend {
         bandcamp::status(self.paths())
     }
 
-    pub fn save_bandcamp(&self, user: &str, cookies: &str) -> Result<Value, String> {
+    pub fn save_bandcamp(&self, user: &str, cookies: &str) -> anyhow::Result<Value> {
         let _write = self.writes.lock();
         bandcamp::Login::save(self.paths(), user, cookies)?;
         muzik_runner::watchlist::ensure_sources(self.paths())?;
         Ok(bandcamp::status(self.paths()))
     }
 
-    pub fn logout_bandcamp(&self) -> Result<Value, String> {
+    pub fn logout_bandcamp(&self) -> anyhow::Result<Value> {
         let _write = self.writes.lock();
         bandcamp::Login::clear(self.paths())?;
         Ok(bandcamp::status(self.paths()))
     }
 
-    pub fn spotify_status(&self) -> Result<Value, String> {
+    pub fn spotify_status(&self) -> anyhow::Result<Value> {
         Ok(spotify::status(
             &self.paths().config_file(),
             &self.paths().spotify_token(),
         )?)
     }
 
-    pub fn spotify_playlists(&self) -> Result<Value, String> {
+    pub fn spotify_playlists(&self) -> anyhow::Result<Value> {
         let playlists =
             spotify::list_playlists(&self.paths().config_file(), &self.paths().spotify_token())?;
-        serde_json::to_value(playlists).map_err(|error| error.to_string())
+        Ok(serde_json::to_value(playlists)?)
     }
 
-    pub fn set_spotify_client_id(&self, client_id: &str) -> Result<String, String> {
+    pub fn set_spotify_client_id(&self, client_id: &str) -> anyhow::Result<String> {
         let _write = self.writes.lock();
         Ok(spotify::set_client_id(
             &self.paths().config_file(),
@@ -292,15 +289,15 @@ impl Backend {
         )?)
     }
 
-    pub fn spotify_logout(&self) -> Result<bool, String> {
+    pub fn spotify_logout(&self) -> anyhow::Result<bool> {
         let _write = self.writes.lock();
         Ok(spotify::clear_tokens(&self.paths().spotify_token())?)
     }
 
-    pub fn spotify_login(&self) -> Result<SpotifyLogin, String> {
+    pub fn spotify_login(&self) -> anyhow::Result<SpotifyLogin> {
         let mut slot = self.login.lock();
         if slot.is_some() {
-            return Err("A Spotify login is already active.".into());
+            bail!("A Spotify login is already active.");
         }
         let number = self.logins.fetch_add(1, Ordering::Relaxed) + 1;
         let job_id = format!("spotify-login-{number}");
@@ -319,13 +316,13 @@ impl Backend {
     }
 }
 
-fn library_scan(paths: &Paths, output: &Path) -> Result<Value, String> {
+fn library_scan(paths: &Paths, output: &Path) -> anyhow::Result<Value> {
     let output = if output.as_os_str().is_empty() {
         paths.downloads()
     } else {
         output.to_path_buf()
     };
-    let items = scan(&output).map_err(|error| error.to_string())?;
+    let items = scan(&output)?;
     let total = items
         .iter()
         .fold(0_u64, |size, item| size.saturating_add(item.size));
@@ -334,10 +331,10 @@ fn library_scan(paths: &Paths, output: &Path) -> Result<Value, String> {
         .map(|item| {
             let modified: DateTime<Local> = item.modified_at.into();
             let size_label = ByteSize(item.size).to_string();
-            let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
+            let mut value = serde_json::to_value(item)?;
             let fields = value
                 .as_object_mut()
-                .ok_or("invalid audio inventory item")?;
+                .context("invalid audio inventory item")?;
             fields.insert("size_label".into(), json!(size_label));
             fields.insert(
                 "modified".into(),
@@ -345,7 +342,7 @@ fn library_scan(paths: &Paths, output: &Path) -> Result<Value, String> {
             );
             Ok(value)
         })
-        .collect::<Result<Vec<Value>, String>>()?;
+        .collect::<anyhow::Result<Vec<Value>>>()?;
     Ok(json!({"output": output, "total_size": ByteSize(total).to_string(), "items": items}))
 }
 

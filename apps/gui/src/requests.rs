@@ -69,7 +69,7 @@ impl Muzik {
         &mut self,
         name: &'static str,
         cx: &mut Context<Self>,
-        work: impl FnOnce(&Backend) -> Result<T, String> + Send + 'static,
+        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         self.spawn_call(
@@ -78,7 +78,7 @@ impl Muzik {
             work,
             move |view, result, window, cx| match result {
                 Ok(value) => done(view, value, window, cx),
-                Err(message) => view.failed(name, message),
+                Err(error) => view.failed(name, error.to_string()),
             },
         );
     }
@@ -87,7 +87,7 @@ impl Muzik {
         &mut self,
         read: Read,
         cx: &mut Context<Self>,
-        work: impl FnOnce(&Backend) -> Result<T, String> + Send + 'static,
+        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         if self.backend.is_none() {
@@ -104,7 +104,7 @@ impl Muzik {
             view.reads.remove(&read);
             match result {
                 Ok(value) => done(view, value, window, cx),
-                Err(message) => view.failed(read.name(), message),
+                Err(error) => view.failed(read.name(), error.to_string()),
             }
         });
     }
@@ -176,7 +176,7 @@ impl Muzik {
                         *view.config_status.borrow_mut() = view.status.clone();
                         view.apply_defaults(defaults, cx);
                     }
-                    Err(message) => view.failed("config.save", message),
+                    Err(error) => view.failed("config.save", error.to_string()),
                 }
                 match account {
                     Some(Ok(account)) => {
@@ -185,7 +185,7 @@ impl Muzik {
                             "Config and Soulseek account saved".into();
                         view.check_services(cx);
                     }
-                    Some(Err(message)) => view.failed("soulseek.save", message),
+                    Some(Err(error)) => view.failed("soulseek.save", error.to_string()),
                     None => {}
                 }
             },
@@ -332,7 +332,7 @@ impl Muzik {
         &mut self,
         name: &'static str,
         cx: &mut Context<Self>,
-        work: impl FnOnce(&Backend) -> Result<String, String> + Send + 'static,
+        work: impl FnOnce(&Backend) -> anyhow::Result<String> + Send + 'static,
     ) {
         self.error = None;
         self.call(name, cx, work, |view, _, _, _| {
@@ -500,7 +500,7 @@ impl Muzik {
                     |view, event, window, cx| view.app_events(vec![event], window, cx),
                 );
             }
-            Err(message) => self.failed("spotify.login", message),
+            Err(error) => self.failed("spotify.login", error.to_string()),
         }
         cx.notify();
     }
