@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use strum_macros::EnumString;
 
 mod error;
 mod run;
@@ -22,14 +23,17 @@ pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString)]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 enum DeviceFile {
     Aac,
+    #[strum(serialize = "aif", serialize = "aiff")]
     Aiff,
     Ape,
     Dff,
     Dsf,
     Flac,
+    #[strum(serialize = "jpeg", serialize = "jpg")]
     Jpeg,
     M4a,
     Mp3,
@@ -43,25 +47,7 @@ enum DeviceFile {
 
 impl DeviceFile {
     fn from_path(path: &Path) -> Option<Self> {
-        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-        Some(match extension.as_str() {
-            "aac" => Self::Aac,
-            "aif" | "aiff" => Self::Aiff,
-            "ape" => Self::Ape,
-            "dff" => Self::Dff,
-            "dsf" => Self::Dsf,
-            "flac" => Self::Flac,
-            "jpeg" | "jpg" => Self::Jpeg,
-            "m4a" => Self::M4a,
-            "mp3" => Self::Mp3,
-            "mp4" => Self::Mp4,
-            "ogg" => Self::Ogg,
-            "opus" => Self::Opus,
-            "png" => Self::Png,
-            "wav" => Self::Wav,
-            "wma" => Self::Wma,
-            _ => return None,
-        })
+        path.extension()?.to_str()?.parse().ok()
     }
 
     fn codec(self) -> Option<Codec> {
