@@ -128,10 +128,10 @@ impl Muzik {
             .iter()
             .filter(|service| service["available"] == false && service["optional"] != true)
             .count();
-        let mut section = GroupBox::new()
-            .id("settings-services")
-            .title("SERVICES")
-            .outline()
+        let mut section = div()
+            .v_flex()
+            .gap_3()
+            .w_full()
             .child(div().flex().justify_end().child(check));
         if missing > 0 {
             section = section.child(Alert::warning(

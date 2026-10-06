@@ -1,6 +1,7 @@
 mod bridge;
 mod native;
 mod pages;
+mod settings;
 mod style;
 mod thumbnails;
 mod watch_table;
@@ -10,28 +11,27 @@ use bridge::{Bridge, Message};
 use gpui_kit::component::button::*;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState, NumberInput, Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
-use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use muzik_store::jobs::Status as JobStatus;
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
+use settings::ConfigView;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -58,24 +58,6 @@ const PAGES: [(Page, &str); 5] = [
     (Page::Settings, "Settings"),
     (Page::Spotify, "Spotify"),
 ];
-
-struct Field {
-    key: &'static str,
-    label: &'static str,
-    state: Entity<InputState>,
-}
-struct Choice {
-    key: &'static str,
-    label: &'static str,
-    values: &'static [&'static str],
-    selected: usize,
-    state: Entity<SelectState<Vec<&'static str>>>,
-}
-struct ConfigSwitch {
-    key: &'static str,
-    label: &'static str,
-    enabled: bool,
-}
 
 struct ChapterRow {
     index: Entity<InputState>,
@@ -184,30 +166,6 @@ struct ActivitySection {
     rows: Vec<String>,
 }
 
-const CHOICES: &[(&str, &str, &[&str])] = &[
-    ("audio_source", "Audio source", AudioSource::CHOICES),
-    ("metadata_source", "Metadata", MetadataSource::CHOICES),
-    ("prefer", "Prefer", muzik_core::PreferredAudio::CHOICES),
-    ("fallback", "Fallback", AudioFallback::CHOICES),
-    ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
-    (
-        "duplicates",
-        "Album already in library",
-        DuplicatePolicy::CHOICES,
-    ),
-];
-const SWITCHES: &[(&str, &str, bool)] = &[
-    ("review", "Review chapters", false),
-    ("no_split", "No split", false),
-    ("no_organize", "No organize", false),
-    ("import_", "Import", false),
-    ("tag_only", "Tag only", false),
-    ("dry_run", "Dry run", false),
-    ("keep_source", "Keep source", false),
-    ("force", "Force", false),
-    ("interactive", "Interactive", true),
-    ("auto_decide", "Choose automatically", true),
-];
 const REPLACE_WARNING: &str =
     "This replaces the files from this stage. Later stages can become stale.";
 
@@ -406,14 +364,13 @@ impl Muzik {
     }
 
     fn open_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.defaults.is_object() {
+        let Ok(defaults) = serde_json::from_value::<GuiDefaults>(self.defaults.clone()) else {
             self.status = "Config is loading".into();
             cx.notify();
             return;
-        }
+        };
         if self.config_view.is_none() {
             let main = cx.entity();
-            let defaults = self.defaults.clone();
             let status = self.config_status.clone();
             self.config_view =
                 Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
@@ -1710,506 +1667,6 @@ impl Muzik {
     }
 }
 
-struct ConfigView {
-    main: WeakEntity<Muzik>,
-    fields: Vec<Field>,
-    choices: Vec<Choice>,
-    switches: Vec<ConfigSwitch>,
-    soulseek: SoulseekFields,
-    bandcamp: BandcampFields,
-    status: Rc<RefCell<String>>,
-}
-
-struct BandcampFields {
-    user: Entity<InputState>,
-    cookies: Entity<TextareaState>,
-    logged_in: bool,
-}
-
-const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the login cookie:
-1. In your browser, log in to bandcamp.com.
-2. Open the developer tools (Option-Command-I), then open Storage (Firefox, Zen) or Application (Chrome).
-3. Select Cookies, then https://bandcamp.com.
-4. Double-click the Value of the identity row and copy it.
-5. Paste it below and select Save Bandcamp login. Muzik finds your user name.
-A full Cookie header or a cookies.txt file also works. The cookie stays on this computer. Do not share it.";
-
-struct SoulseekFields {
-    username: Entity<InputState>,
-    password: Entity<InputState>,
-    host: Entity<InputState>,
-    port: Entity<InputState>,
-    has_password: bool,
-}
-
-impl ConfigView {
-    fn new(
-        main: Entity<Muzik>,
-        defaults: Value,
-        status: Rc<RefCell<String>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        cx.observe(&main, |_, _, cx| cx.notify()).detach();
-        let fields = [
-            ("output", "Downloads"),
-            ("splits", "Splits"),
-            ("config", "Beets config"),
-            ("jobs", "Jobs"),
-            ("min_bitrate", "Min bitrate"),
-            ("agent_model", "Model"),
-        ]
-        .into_iter()
-        .map(|(key, label)| {
-            let value = match &defaults[key] {
-                Value::String(value) => value.clone(),
-                Value::Number(value) => value.to_string(),
-                _ => String::new(),
-            };
-            Field {
-                key,
-                label,
-                state: cx.new(|cx| {
-                    let state = InputState::new(window, cx)
-                        .placeholder(label)
-                        .default_value(value);
-                    match key {
-                        "jobs" => state.step(1.).min(0.),
-                        "min_bitrate" => state.step(32.).min(0.),
-                        _ => state,
-                    }
-                }),
-            }
-        })
-        .collect();
-        let choices: Vec<Choice> = CHOICES
-            .iter()
-            .map(|(key, label, values)| {
-                let selected = values
-                    .iter()
-                    .position(|value| Some(*value) == defaults[*key].as_str())
-                    .unwrap_or(0);
-                Choice {
-                    key,
-                    label,
-                    values,
-                    selected,
-                    state: cx.new(|cx| {
-                        SelectState::new(
-                            values.to_vec(),
-                            Some(IndexPath::new(selected)),
-                            window,
-                            cx,
-                        )
-                    }),
-                }
-            })
-            .collect();
-        for (index, choice) in choices.iter().enumerate() {
-            cx.subscribe_in(&choice.state, window, move |view, _, event, _, cx| {
-                let SelectEvent::Confirm(value) = event;
-                if let Some(value) = value {
-                    if let Some(selected) = view.choices[index]
-                        .values
-                        .iter()
-                        .position(|item| item == value)
-                    {
-                        view.choices[index].selected = selected;
-                        cx.notify();
-                    }
-                }
-            })
-            .detach();
-        }
-        let switches = SWITCHES
-            .iter()
-            .map(|(key, label, initial)| ConfigSwitch {
-                key,
-                label,
-                enabled: defaults[*key].as_bool().unwrap_or(*initial),
-            })
-            .collect();
-        let soulseek = SoulseekFields {
-            username: cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
-            password: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Password")
-                    .masked(true)
-            }),
-            host: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(DEFAULT_SERVER_HOST)
-                    .default_value(DEFAULT_SERVER_HOST)
-            }),
-            port: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(DEFAULT_SERVER_PORT.to_string())
-                    .default_value(DEFAULT_SERVER_PORT.to_string())
-                    .step(1.)
-                    .min(1.)
-                    .max(65535.)
-            }),
-            has_password: false,
-        };
-        let bandcamp = BandcampFields {
-            user: cx.new(|cx| InputState::new(window, cx).placeholder("Found automatically")),
-            cookies: cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .placeholder("Paste the identity cookie value")
-                    .rows(4)
-            }),
-            logged_in: false,
-        };
-        Self {
-            main: main.downgrade(),
-            fields,
-            choices,
-            switches,
-            soulseek,
-            bandcamp,
-            status,
-        }
-    }
-
-    fn set_bandcamp(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.bandcamp.logged_in = settings["logged_in"] == true;
-        if let Some(user) = settings["user"].as_str().filter(|user| !user.is_empty()) {
-            let user = user.to_string();
-            self.bandcamp
-                .user
-                .update(cx, |state, cx| state.set_value(user, window, cx));
-        }
-        let placeholder = if self.bandcamp.logged_in {
-            "Saved. Paste new cookies to change them."
-        } else {
-            "Paste the identity cookie value"
-        };
-        self.bandcamp.cookies.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-            state.set_placeholder(placeholder, window, cx);
-        });
-        cx.notify();
-    }
-
-    fn send_bandcamp(&mut self, command: &str, cx: &mut Context<Self>) {
-        let params = json!({
-            "user": self.bandcamp.user.read(cx).value().trim().to_string(),
-            "cookies": self.bandcamp.cookies.read(cx).value().to_string(),
-        });
-        if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send(command, params);
-                cx.notify();
-            });
-        }
-    }
-
-    fn set_soulseek(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let text = |key: &str| describe(&settings[key]);
-        for (state, value) in [
-            (&self.soulseek.username, text("username")),
-            (&self.soulseek.host, text("server_host")),
-            (&self.soulseek.port, text("server_port")),
-        ] {
-            if !value.is_empty() {
-                state.update(cx, |state, cx| state.set_value(value, window, cx));
-            }
-        }
-        self.soulseek.has_password = settings["has_password"] == true;
-        let placeholder = if self.soulseek.has_password {
-            "Saved. Type a new one to change it."
-        } else {
-            "Password"
-        };
-        self.soulseek.password.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-            state.set_placeholder(placeholder, window, cx);
-        });
-        cx.notify();
-    }
-
-    fn soulseek_params(&self, cx: &App) -> Option<Value> {
-        let username = self.soulseek.username.read(cx).value().trim().to_string();
-        if username.is_empty() {
-            return None;
-        }
-        Some(json!({
-            "username": username,
-            "password": self.soulseek.password.read(cx).value().to_string(),
-            "server_host": self.soulseek.host.read(cx).value().trim().to_string(),
-            "server_port": self.soulseek.port.read(cx).value().trim().to_string(),
-        }))
-    }
-
-    fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let directories = matches!(self.fields[index].key, "output" | "splits");
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: !directories,
-            directories,
-            multiple: false,
-            prompt: Some("Select".into()),
-        });
-        cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let value = path.to_string_lossy().into_owned();
-                    let _ = view.update_in(cx, |view, window, cx| {
-                        view.fields[index]
-                            .state
-                            .update(cx, |state, cx| state.set_value(value, window, cx));
-                        cx.notify();
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let mut params = Map::new();
-        for field in &self.fields {
-            let value = field.state.read(cx).value().to_string();
-            if matches!(field.key, "jobs" | "min_bitrate") {
-                let Ok(number) = value.parse::<u64>() else {
-                    *self.status.borrow_mut() = format!("Enter a number for {}", field.label);
-                    cx.notify();
-                    return;
-                };
-                params.insert(field.key.into(), json!(number));
-            } else {
-                params.insert(field.key.into(), json!(value));
-            }
-        }
-        for choice in &self.choices {
-            params.insert(choice.key.into(), json!(choice.values[choice.selected]));
-        }
-        for switch in &self.switches {
-            params.insert(switch.key.into(), json!(switch.enabled));
-        }
-        let soulseek = self.soulseek_params(cx);
-        if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send("config.save", Value::Object(params));
-                if let Some(soulseek) = soulseek {
-                    main.send("soulseek.save", soulseek);
-                }
-                cx.notify();
-            });
-        }
-        *self.status.borrow_mut() = "Saving config".into();
-        cx.notify();
-    }
-}
-
-impl Render for ConfigView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut destinations = div().v_flex().gap_3();
-        let mut tuning = div().flex().flex_wrap().gap_4();
-        let mut agent = div().v_flex().gap_3().child(style::meta(
-            "Muzik asks this Codex model to pick album matches and Soulseek downloads. It asks you when the model is not sure.",
-            cx,
-        ));
-        for (index, field) in self.fields.iter().enumerate() {
-            let numeric = matches!(field.key, "jobs" | "min_bitrate");
-            let control = if numeric {
-                NumberInput::new(&field.state).into_any_element()
-            } else {
-                Input::new(&field.state).into_any_element()
-            };
-            let mut row = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().flex_1().child(control));
-            if matches!(field.key, "output" | "splits" | "config") {
-                row = row.child(
-                    Button::new(("config-pick", index))
-                        .icon(IconName::FolderOpen)
-                        .label("Choose…")
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.pick_path(index, window, cx)
-                        })),
-                );
-            }
-            let field_view = div()
-                .v_flex()
-                .gap_1()
-                .child(div().text_sm().font_semibold().child(field.label))
-                .child(row);
-            if numeric {
-                tuning = tuning.child(div().w(px(180.)).child(field_view));
-            } else if field.key == "agent_model" {
-                agent = agent.child(div().w(px(240.)).child(field_view));
-            } else {
-                destinations = destinations.child(field_view);
-            }
-        }
-        let mut choices = div().flex().flex_wrap().gap_4();
-        for choice in &self.choices {
-            choices = choices.child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .w(px(240.))
-                    .child(div().text_sm().font_semibold().child(choice.label))
-                    .child(Select::new(&choice.state).w_full()),
-            );
-        }
-        let mut switches = div().flex().flex_wrap().gap_x_6().gap_y_3();
-        for (index, switch) in self.switches.iter().enumerate() {
-            let control = Switch::new(("config-switch", index))
-                .label(switch.label)
-                .checked(switch.enabled)
-                .on_click(cx.listener(move |view, checked: &bool, _, cx| {
-                    view.switches[index].enabled = *checked;
-                    cx.notify();
-                }));
-            if switch.key == "auto_decide" {
-                agent = agent.child(control);
-            } else {
-                switches = switches.child(div().w(px(200.)).child(control));
-            }
-        }
-        let status = self.status.borrow().clone();
-        div()
-            .v_flex()
-            .size_full()
-            .bg(cx.theme().muted)
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .p_6()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(style::page_title("Settings"))
-                    .child(style::meta(
-                        "Workflow uses these settings for each run. Services shows the tools muzik can use.",
-                        cx,
-                    )),
-            )
-            .child(
-                div().flex_1().overflow_y_scrollbar().child(
-                    div()
-                        .v_flex()
-                        .gap_6()
-                        .p_6()
-                        .max_w(px(720.))
-                        .child(
-                            GroupBox::new()
-                                .id("config-destinations")
-                                .title("DESTINATIONS")
-                                .outline()
-                                .child(destinations),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-quality")
-                                .title("SOURCES AND QUALITY")
-                                .outline()
-                                .child(choices),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-agent")
-                                .title("AI DECISIONS")
-                                .outline()
-                                .child(agent),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-soulseek")
-                                .title("SOULSEEK")
-                                .outline()
-                                .child(style::meta(
-                                    "Your Soulseek account. Workflow uses it when Audio source is soulseek or as a fallback.",
-                                    cx,
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .gap_4()
-                                        .child(labeled("Username", 240., Input::new(&self.soulseek.username)))
-                                        .child(labeled("Password", 240., Input::new(&self.soulseek.password))),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .gap_4()
-                                        .child(labeled("Server", 240., Input::new(&self.soulseek.host)))
-                                        .child(labeled("Port", 140., NumberInput::new(&self.soulseek.port))),
-                                ),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-bandcamp")
-                                .title("BANDCAMP")
-                                .outline()
-                                .child(style::meta(BANDCAMP_HELP, cx))
-                                .child(labeled("User name", 240., Input::new(&self.bandcamp.user)))
-                                .child(Textarea::new(&self.bandcamp.cookies).h(px(96.)))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .child(
-                                            Button::new("save-bandcamp")
-                                                .label("Save Bandcamp login")
-                                                .on_click(cx.listener(|view, _, _, cx| {
-                                                    view.send_bandcamp("bandcamp.save", cx)
-                                                })),
-                                        )
-                                        .when(self.bandcamp.logged_in, |row| {
-                                            row.child(
-                                                Button::new("logout-bandcamp")
-                                                    .ghost()
-                                                    .label("Log out")
-                                                    .on_click(cx.listener(|view, _, _, cx| {
-                                                        view.send_bandcamp("bandcamp.logout", cx)
-                                                    })),
-                                            )
-                                            .child(style::meta("Logged in", cx))
-                                        }),
-                                ),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-processing")
-                                .title("PROCESSING")
-                                .outline()
-                                .child(tuning)
-                                .child(switches),
-                        )
-                        .child(Muzik::services_section(self.main.clone(), cx)),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(div().text_sm().child(status))
-                    .child(
-                        Button::new("save-config")
-                            .primary()
-                            .label("Save config")
-                            .on_click(cx.listener(|view, _, _, cx| view.save(cx))),
-                    ),
-            )
-    }
-}
-
 impl Render for Muzik {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
@@ -2329,15 +1786,6 @@ fn import_match_summary(candidate: &Value) -> String {
         Some(distance) => format!("{artist} — {album} · difference {distance:.3}"),
         None => format!("{artist} — {album}"),
     }
-}
-
-fn labeled(label: &'static str, width: f32, control: impl IntoElement) -> Div {
-    div()
-        .v_flex()
-        .gap_1()
-        .w(px(width))
-        .child(div().text_sm().font_semibold().child(label))
-        .child(control)
 }
 
 fn job_label(kind: RunKind, title: &str) -> String {
@@ -2592,6 +2040,8 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             window.within("pages").click(3usize, cx);
+            window.render_frame(cx);
+            window.within("settings-sidebar").click("0-2", cx);
             window.render_frame(cx);
             assert!(window.try_find("service-refresh").is_some());
             window.click("save-config", cx);
