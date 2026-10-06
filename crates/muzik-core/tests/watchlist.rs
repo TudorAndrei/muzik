@@ -489,3 +489,30 @@ fn removed_and_private_videos_leave_the_failed_list() -> TestResult {
     assert_eq!(items[2]["primary_action"]["action"], "retry");
     Ok(())
 }
+
+#[test]
+fn each_decision_kind_maps_to_its_stage() {
+    use muzik_core::watchlist::Stage;
+    use muzik_core::DecisionKind;
+    assert_eq!(
+        Stage::of_decision(DecisionKind::ImportMatch),
+        Stage::Organize
+    );
+    assert_eq!(
+        Stage::of_decision(DecisionKind::ImportDuplicate),
+        Stage::Organize
+    );
+    assert_eq!(
+        Stage::of_decision(DecisionKind::ChapterReview),
+        Stage::Parse
+    );
+    assert_eq!(Stage::of_decision(DecisionKind::ChapterEdit), Stage::Parse);
+    assert_eq!(
+        Stage::of_decision(DecisionKind::QualityReplacement),
+        Stage::Quality
+    );
+    assert_eq!(
+        Stage::of_decision(DecisionKind::SoulseekCandidate),
+        Stage::Download
+    );
+}

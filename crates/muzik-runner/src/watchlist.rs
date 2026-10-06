@@ -163,7 +163,7 @@ impl Operations for Adapter<'_, '_> {
             let Some(parked) = self.parked.replace(None) else {
                 return error;
             };
-            let stage = parked.kind.stage();
+            let stage = Stage::of_decision(parked.kind);
             let question = parked.question();
             (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
                 "playlist_id":playlist.playlist_id,

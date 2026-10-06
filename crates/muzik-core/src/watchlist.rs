@@ -54,6 +54,17 @@ pub enum Stage {
 impl Stage {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
+    pub fn of_decision(kind: crate::DecisionKind) -> Self {
+        match kind {
+            crate::DecisionKind::ImportMatch | crate::DecisionKind::ImportDuplicate => {
+                Self::Organize
+            }
+            crate::DecisionKind::ChapterReview | crate::DecisionKind::ChapterEdit => Self::Parse,
+            crate::DecisionKind::QualityReplacement => Self::Quality,
+            crate::DecisionKind::SoulseekCandidate => Self::Download,
+        }
+    }
+
     pub fn resume_action(self) -> ItemAction {
         match self {
             Self::Organize => ItemAction::OrganizeAgain,

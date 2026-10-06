@@ -25,4 +25,4 @@ pub use config_choices::{
     SyncPreset,
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
-pub use types::{AlbumId, LocalTrack, RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
+pub use types::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

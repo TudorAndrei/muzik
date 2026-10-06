@@ -1,4 +1,3 @@
-use crate::watchlist::Stage;
 use serde::{Deserialize, Serialize};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
 
@@ -71,15 +70,4 @@ pub enum DuplicateAnswer {
     Skip,
     KeepAll,
     RemoveOld,
-}
-
-impl DecisionKind {
-    pub fn stage(self) -> Stage {
-        match self {
-            Self::ImportMatch | Self::ImportDuplicate => Stage::Organize,
-            Self::ChapterReview | Self::ChapterEdit => Stage::Parse,
-            Self::QualityReplacement => Stage::Quality,
-            Self::SoulseekCandidate => Stage::Download,
-        }
-    }
 }

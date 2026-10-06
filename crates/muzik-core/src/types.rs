@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 macro_rules! string_id {
     ($name:ident) => {
@@ -21,23 +20,8 @@ macro_rules! string_id {
     };
 }
 
-string_id!(AlbumId);
 string_id!(ReleaseId);
 string_id!(RecordingId);
-
-/// The file data needed to match a local track to a release track.
-#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
-pub struct LocalTrack {
-    pub path: PathBuf,
-    pub title: String,
-    pub artist: String,
-    pub album: Option<String>,
-    pub album_artist: Option<String>,
-    pub length_seconds: Option<f64>,
-    pub track_number: Option<u32>,
-    pub disc_number: Option<u32>,
-    pub recording_id: Option<RecordingId>,
-}
 
 /// Metadata for one track of a candidate release.
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

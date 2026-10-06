@@ -4,7 +4,7 @@ version = "2.12.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Domain types and beets-compatible config for muzik"
+description = "Shared muzik vocabulary, configuration, paths, and the watchlist"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
