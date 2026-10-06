@@ -20,10 +20,64 @@ pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
-const MEDIA_EXTENSIONS: &[&str] = &[
-    "aac", "aif", "aiff", "ape", "dff", "dsf", "flac", "jpeg", "jpg", "m4a", "mp3", "mp4", "ogg",
-    "opus", "png", "wav", "wma",
-];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceFile {
+    Aac,
+    Aiff,
+    Ape,
+    Dff,
+    Dsf,
+    Flac,
+    Jpeg,
+    M4a,
+    Mp3,
+    Mp4,
+    Ogg,
+    Opus,
+    Png,
+    Wav,
+    Wma,
+}
+
+impl DeviceFile {
+    fn from_path(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        Some(match extension.as_str() {
+            "aac" => Self::Aac,
+            "aif" | "aiff" => Self::Aiff,
+            "ape" => Self::Ape,
+            "dff" => Self::Dff,
+            "dsf" => Self::Dsf,
+            "flac" => Self::Flac,
+            "jpeg" | "jpg" => Self::Jpeg,
+            "m4a" => Self::M4a,
+            "mp3" => Self::Mp3,
+            "mp4" => Self::Mp4,
+            "ogg" => Self::Ogg,
+            "opus" => Self::Opus,
+            "png" => Self::Png,
+            "wav" => Self::Wav,
+            "wma" => Self::Wma,
+            _ => return None,
+        })
+    }
+
+    fn codec(self) -> Option<Codec> {
+        match self {
+            Self::Flac => Some(Codec::Flac),
+            Self::Mp3 => Some(Codec::Mp3),
+            Self::Opus => Some(Codec::Opus),
+            Self::Wav => Some(Codec::Pcm("pcm_s16le".into())),
+            Self::Aiff => Some(Codec::Pcm("pcm_s16be".into())),
+            Self::Ape => Some(Codec::Ape),
+            Self::Dsf => Some(Codec::Dsd("dsd_lsbf_planar".into())),
+            Self::Dff => Some(Codec::Dsd("dsd_msbf".into())),
+            Self::Wma => Some(Codec::WmaV2),
+            Self::Aac | Self::Jpeg | Self::M4a | Self::Mp4 | Self::Ogg | Self::Png => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -331,19 +385,7 @@ fn plan_cover(target: &Target, directory: &Path, source: &Path) -> Step {
 }
 
 fn guess(source: &Path) -> Option<MeasuredQuality> {
-    let extension = source.extension()?.to_str()?.to_ascii_lowercase();
-    let format = match extension.as_str() {
-        "flac" => Codec::Flac,
-        "mp3" => Codec::Mp3,
-        "opus" => Codec::Opus,
-        "wav" => Codec::Pcm("pcm_s16le".into()),
-        "aif" | "aiff" => Codec::Pcm("pcm_s16be".into()),
-        "ape" => Codec::Ape,
-        "dsf" => Codec::Dsd("dsd_lsbf_planar".into()),
-        "dff" => Codec::Dsd("dsd_msbf".into()),
-        "wma" => Codec::WmaV2,
-        _ => return None,
-    };
+    let format = DeviceFile::from_path(source)?.codec()?;
     Some(MeasuredQuality {
         lossless: format.is_lossless(),
         format,
@@ -519,13 +561,7 @@ pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<P
             }
             let leftover = name.starts_with("._")
                 || (name.starts_with('.') && name.contains(&format!(".{PARTIAL}.")));
-            let media = !name.starts_with('.')
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| {
-                        MEDIA_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-                    });
+            let media = !name.starts_with('.') && DeviceFile::from_path(&path).is_some();
             if leftover || (media && !planned.contains(&path)) {
                 stale.push(path);
             }
@@ -587,4 +623,25 @@ fn parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R +
     let mut results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
     results.sort_by_key(|(index, _)| *index);
     results.into_iter().map(|(_, result)| result).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceFile;
+    use std::path::Path;
+
+    #[test]
+    fn device_files_cover_the_media_extensions() {
+        for extension in [
+            "aac", "aif", "aiff", "ape", "dff", "dsf", "flac", "jpeg", "jpg", "m4a", "mp3", "mp4",
+            "ogg", "opus", "png", "wav", "wma", "WAV",
+        ] {
+            let path = Path::new("track").with_extension(extension);
+            assert!(DeviceFile::from_path(&path).is_some(), "{extension}");
+        }
+        for extension in ["wv", "mpc", "txt"] {
+            let path = Path::new("track").with_extension(extension);
+            assert_eq!(DeviceFile::from_path(&path), None, "{extension}");
+        }
+    }
 }
