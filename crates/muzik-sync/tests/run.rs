@@ -160,6 +160,26 @@ fn apply_deletes_stale_files_and_copies_pending() -> Outcome {
 }
 
 #[test]
+fn apply_skips_stale_files_that_are_already_gone() -> Outcome {
+    let layout = layout()?;
+    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
+    let old = stray(&layout)?;
+    let connection = muzik_store::db::open_in_memory()?;
+    let prepared = prepare(&layout, &selection, &connection, true)?;
+    assert_eq!(prepared.stale, vec![old.clone()]);
+    fs::remove_file(&old)?;
+    let report = muzik_sync::apply(&prepared, &layout.target, connection, 1, &|_| {})?;
+    let pending = prepared.plan.pending.len();
+    assert_eq!(pending, 2);
+    for transfer in &prepared.plan.pending {
+        assert!(transfer.destination.is_file());
+    }
+    assert_eq!(report.written, pending);
+    assert_eq!(report.failed, 0);
+    Ok(())
+}
+
+#[test]
 fn select_reads_track_and_cover_paths() -> Outcome {
     let temp = tempfile::tempdir()?;
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -143,7 +143,11 @@ pub fn apply(
     done: &(dyn Fn(Done<'_>) + Sync),
 ) -> Result<Report, String> {
     for path in &prepared.stale {
-        fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("{}: {error}", path.display())),
+        }
     }
     if prepared.delete {
         remove_empty_folders(&target.path).map_err(|error| error.to_string())?;
