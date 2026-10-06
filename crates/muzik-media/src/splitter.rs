@@ -2,6 +2,8 @@
 
 use crate::ffmpeg::{self, Cut, Ffmpeg};
 use muzik_core::chapters::{sidecar_path, Chapter};
+use parking_lot::Mutex;
+use rayon::prelude::*;
 use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -10,7 +12,6 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Mutex;
 use unicode_normalization::UnicodeNormalization;
 
 const THUMB_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp"];
@@ -197,9 +198,11 @@ fn split_audio_with_binary(
         options.jobs
     }
     .min(chapters.len());
-    let next = AtomicUsize::new(0);
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .map_err(io::Error::other)?;
     let failures = Mutex::new(Vec::new());
-    let launch_error = Mutex::new(None);
     let completed = AtomicUsize::new(0);
     let track_context = SplitTrackContext {
         source: &source,
@@ -210,62 +213,41 @@ fn split_audio_with_binary(
         cancelled,
         ffmpeg,
     };
-    std::thread::scope(|scope| {
-        let (sender, receiver) = std::sync::mpsc::channel();
-        for _ in 0..workers {
-            let sender = sender.clone();
-            let next = &next;
-            let failures = &failures;
-            let launch_error = &launch_error;
-            let completed = &completed;
-            scope.spawn(move || loop {
-                if cancelled.load(Ordering::SeqCst) {
-                    break;
-                }
-                let index = next.fetch_add(1, Ordering::Relaxed);
-                let Some(chapter) = chapters.get(index) else {
-                    break;
-                };
-                match split_track(&track_context, chapter) {
-                    Ok(true) => {
-                        let count = completed.fetch_add(1, Ordering::SeqCst) + 1;
-                        let _ = sender.send(SplitProgress {
-                            completed: count,
-                            total: chapters.len(),
-                            chapter_index: chapter.index,
-                        });
-                    }
-                    Ok(false) => failures
-                        .lock()
-                        .unwrap_or_else(|error| error.into_inner())
-                        .push(chapter.title.clone()),
-                    Err(SplitError::Cancelled) => break,
-                    Err(error) => {
-                        *launch_error
-                            .lock()
-                            .unwrap_or_else(|error| error.into_inner()) = Some(error);
-                        break;
-                    }
-                }
-            });
-        }
-        drop(sender);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let split = std::thread::scope(|scope| {
+        let work = scope.spawn(|| {
+            pool.install(|| {
+                chapters
+                    .par_iter()
+                    .try_for_each_with(sender, |sender, chapter| {
+                        if cancelled.load(Ordering::SeqCst) {
+                            return Err(SplitError::Cancelled);
+                        }
+                        if split_track(&track_context, chapter)? {
+                            let count = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                            let _ = sender.send(SplitProgress {
+                                completed: count,
+                                total: chapters.len(),
+                                chapter_index: chapter.index,
+                            });
+                        } else {
+                            failures.lock().push(chapter.title.clone());
+                        }
+                        Ok(())
+                    })
+            })
+        });
         for progress in receiver {
             on_progress(progress);
         }
+        work.join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     });
     if cancelled.load(Ordering::SeqCst) {
         return Err(SplitError::Cancelled);
     }
-    if let Some(error) = launch_error
-        .into_inner()
-        .unwrap_or_else(|error| error.into_inner())
-    {
-        return Err(error);
-    }
-    let failed = failures
-        .into_inner()
-        .unwrap_or_else(|error| error.into_inner());
+    split?;
+    let failed = failures.into_inner();
     if !failed.is_empty() {
         return Err(SplitError::TracksFailed(failed.len(), failed.join(", ")));
     }

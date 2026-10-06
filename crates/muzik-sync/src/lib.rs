@@ -5,13 +5,12 @@ use muzik_core::{app_config, paths, SyncPreset};
 use muzik_media::ffmpeg::{Convert, Ffmpeg};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::{sync_files, Connection};
+use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 
 mod run;
 
@@ -597,32 +596,15 @@ pub fn available_bytes(_path: &Path) -> Option<u64> {
     None
 }
 
-fn parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let next = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::with_capacity(items.len()));
-    let workers = if jobs == 0 {
-        std::thread::available_parallelism().map_or(4, usize::from)
-    } else {
-        jobs
-    };
-    std::thread::scope(|scope| {
-        for _ in 0..workers.min(items.len()) {
-            scope.spawn(|| loop {
-                let index = next.fetch_add(1, Ordering::Relaxed);
-                let Some(item) = items.get(index) else {
-                    break;
-                };
-                let result = work(item);
-                results
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push((index, result));
-            });
-        }
-    });
-    let mut results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
-    results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, result)| result).collect()
+fn parallel<T: Sync, R: Send>(
+    items: &[T],
+    jobs: usize,
+    work: impl Fn(&T) -> R + Sync + Send,
+) -> Vec<R> {
+    match rayon::ThreadPoolBuilder::new().num_threads(jobs).build() {
+        Ok(pool) => pool.install(|| items.par_iter().map(work).collect()),
+        Err(_) => items.iter().map(work).collect(),
+    }
 }
 
 #[cfg(test)]
