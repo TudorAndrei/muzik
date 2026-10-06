@@ -1,12 +1,11 @@
 //! Typed ffmpeg commands for splitting and converting audio.
 
-use crate::process::background_command;
+use crate::process::{self, background_command, Stopped};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Encoding {
@@ -93,24 +92,19 @@ impl Ffmpeg {
         for (key, value) in cut.tags {
             command.arg("-metadata").arg(format!("{key}={value}"));
         }
-        let mut child = command
+        command
             .arg(cut.destination)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(Error::Run)?;
-        let status = loop {
-            if cancelled.load(Ordering::SeqCst) {
-                let _ = child.kill();
-                let _ = child.wait();
+            .stderr(Stdio::null());
+        let mut child = process::spawn(command).map_err(Error::Run)?;
+        let status = match process::wait(&mut child, None, cancelled) {
+            Ok(status) => status,
+            Err(Stopped::Io(error)) => return Err(Error::Run(error)),
+            Err(Stopped::Cancelled | Stopped::TimedOut) => {
                 let _ = fs::remove_file(cut.destination);
                 return Err(Error::Cancelled);
             }
-            if let Some(status) = child.try_wait().map_err(Error::Run)? {
-                break status;
-            }
-            std::thread::sleep(Duration::from_millis(25));
         };
         if status.success() {
             Ok(())

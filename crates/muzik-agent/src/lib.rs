@@ -1,10 +1,12 @@
 use muzik_core::DecisionKind;
+use muzik_media::process::{self, Stopped};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 use strum_macros::EnumString;
 
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
@@ -248,7 +250,8 @@ fn run_codex(prompt: &str, model: &str) -> Result<Value, String> {
     std::fs::write(&schema, SCHEMA).map_err(|error| error.to_string())?;
     let log_path = directory.path().join("codex.log");
     let log = std::fs::File::create(&log_path).map_err(|error| error.to_string())?;
-    let mut child = Command::new("codex")
+    let mut command = Command::new("codex");
+    command
         .args([
             "exec",
             "--skip-git-repo-check",
@@ -265,31 +268,25 @@ fn run_codex(prompt: &str, model: &str) -> Result<Value, String> {
         .current_dir(directory.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(log)
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "Codex is not installed.".to_owned()
-            } else {
-                format!("Cannot start Codex: {error}")
-            }
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
+        .stderr(log);
+    let mut child = process::spawn(command).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "Codex is not installed.".to_owned()
+        } else {
+            format!("Cannot start Codex: {error}")
+        }
+    })?;
+    if let Some(mut stdin) = child.stdin().take() {
         stdin
             .write_all(prompt.as_bytes())
             .map_err(|error| format!("Cannot send the question to Codex: {error}"))?;
     }
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
-        }
-        if started.elapsed() > TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+    let status = match process::wait(&mut child, Some(TIMEOUT), &AtomicBool::new(false)) {
+        Ok(status) => status,
+        Err(Stopped::TimedOut | Stopped::Cancelled) => {
             return Err("Codex did not answer within 2 minutes.".into());
         }
-        std::thread::sleep(Duration::from_millis(100));
+        Err(Stopped::Io(error)) => return Err(error.to_string()),
     };
     if !status.success() {
         let stderr = std::fs::read_to_string(&log_path).unwrap_or_default();

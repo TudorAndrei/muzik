@@ -1,12 +1,12 @@
 use crate::{Error, WorkflowInput, classify_input, find_audio_inputs};
-use muzik_media::process::background_command;
+use muzik_media::process::{self, Stopped, background_command};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const LOOKUP: Duration = Duration::from_secs(600);
 const SHORT_LOOKUP: Duration = Duration::from_secs(120);
@@ -229,30 +229,20 @@ impl YtDlp {
         check(cancelled)?;
         let mut stdout = tempfile::tempfile()?;
         let mut stderr = tempfile::tempfile()?;
-        let mut child = background_command(&self.executable)
+        let mut command = background_command(&self.executable);
+        command
             .args(environment_args(std::env::var_os("PATH")))
             .args(args)
             .stdin(Stdio::null())
             .stdout(stdout.try_clone()?)
-            .stderr(stderr.try_clone()?)
-            .spawn()
+            .stderr(stderr.try_clone()?);
+        let mut child = process::spawn(command)
             .map_err(|error| Error::Operation(format!("cannot start yt-dlp: {error}")))?;
-        let started = Instant::now();
-        let status = loop {
-            if cancelled.load(Ordering::SeqCst) {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::Cancelled);
-            }
-            if started.elapsed() >= timeout {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(Error::Operation("yt-dlp timed out".into()));
-            }
-            match child.try_wait()? {
-                Some(status) => break status,
-                None => std::thread::sleep(Duration::from_millis(100)),
-            }
+        let status = match process::wait(&mut child, Some(timeout), cancelled) {
+            Ok(status) => status,
+            Err(Stopped::Cancelled) => return Err(Error::Cancelled),
+            Err(Stopped::TimedOut) => return Err(Error::Operation("yt-dlp timed out".into())),
+            Err(Stopped::Io(error)) => return Err(error.into()),
         };
         check(cancelled)?;
         let mut output = Vec::new();

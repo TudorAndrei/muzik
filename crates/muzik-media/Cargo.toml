@@ -11,6 +11,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 muzik-core = { path = "../muzik-core" }
 muzik-tags = { path = "../muzik-tags" }
 parking_lot = "0.12"
+process-wrap = { version = "10.0", default-features = false, features = ["std", "process-group", "job-object"] }
 rayon = "1.12"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
