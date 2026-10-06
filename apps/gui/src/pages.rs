@@ -6,10 +6,7 @@ use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHe
 
 impl Muzik {
     pub(crate) fn library(&self, cx: &mut Context<Self>) -> AnyElement {
-        let scanning = self
-            .pending
-            .values()
-            .any(|command| command == "library.scan");
+        let scanning = self.reading(Read::Library);
         let items = self.library["items"]
             .as_array()
             .or_else(|| self.library.as_array());
@@ -103,10 +100,7 @@ impl Muzik {
             return div().into_any_element();
         };
         let view = main_view.read(cx);
-        let checking = view
-            .pending
-            .values()
-            .any(|command| command == "services.check");
+        let checking = view.reading(Read::Services);
         let services = view.services["services"]
             .as_array()
             .or_else(|| view.services.as_array())
@@ -120,7 +114,7 @@ impl Muzik {
             .disabled(checking)
             .on_click(move |_, _, cx| {
                 let _ = main.update(cx, |view, cx| {
-                    view.send("services.check", json!({}));
+                    view.check_services(cx);
                     cx.notify();
                 });
             });
@@ -219,14 +213,8 @@ impl Muzik {
             .as_str()
             .unwrap_or("")
             .to_string();
-        let checking = self
-            .pending
-            .values()
-            .any(|command| command == "spotify.status");
-        let loading_playlists = self
-            .pending
-            .values()
-            .any(|command| command == "spotify.playlists");
+        let checking = self.reading(Read::SpotifyStatus);
+        let loading_playlists = self.reading(Read::SpotifyPlaylists);
         let mut redirect_row = div()
             .flex()
             .items_center()
@@ -268,10 +256,7 @@ impl Muzik {
                                 cx.listener(|view, _, _, cx| {
                                     let client_id =
                                         view.spotify_client_id.read(cx).value().to_string();
-                                    view.send(
-                                        "spotify.set_client_id",
-                                        json!({"client_id":client_id}),
-                                    );
+                                    view.set_spotify_client_id(client_id, cx);
                                     cx.notify();
                                 }),
                             )),
@@ -342,15 +327,9 @@ impl Muzik {
                                     } else {
                                         "Add Liked Songs to watchlist"
                                     })
-                                    .disabled(
-                                        liked_saved
-                                            || self
-                                                .pending
-                                                .values()
-                                                .any(|command| command == "watchlist.load"),
-                                    )
+                                    .disabled(liked_saved || self.reading(Read::Watchlist))
                                     .on_click(cx.listener(|view, _, _, cx| {
-                                        view.send("watchlist.add", json!({"url":"liked"}));
+                                        view.add_source("liked".into(), cx);
                                         cx.notify();
                                     })),
                             )
@@ -360,7 +339,7 @@ impl Muzik {
                                     .icon(IconName::RefreshCw)
                                     .label("Reload playlists")
                                     .on_click(cx.listener(|view, _, _, cx| {
-                                        view.send("spotify.playlists", json!({}));
+                                        view.spotify_playlists(cx);
                                         cx.notify();
                                     })),
                             )
@@ -369,7 +348,7 @@ impl Muzik {
                                     .ghost()
                                     .label("Disconnect")
                                     .on_click(cx.listener(|view, _, _, cx| {
-                                        view.send("spotify.logout", json!({}));
+                                        view.spotify_logout(cx);
                                         cx.notify();
                                     })),
                             ),
@@ -387,8 +366,7 @@ impl Muzik {
                                 .label("Connect to Spotify")
                                 .disabled(self.has_run(RunKind::SpotifyLogin))
                                 .on_click(cx.listener(|view, _, _, cx| {
-                                    view.start_job("spotify.login", json!({}), cx);
-                                    cx.notify();
+                                    view.spotify_login(cx);
                                 })),
                         ),
                     )
@@ -450,7 +428,7 @@ impl Muzik {
                                     .label(if saved { "Saved" } else { "Add to watchlist" })
                                     .disabled(saved)
                                     .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.send("watchlist.add", json!({"url":uri}));
+                                        view.add_source(uri.clone(), cx);
                                         cx.notify();
                                     })),
                             ),

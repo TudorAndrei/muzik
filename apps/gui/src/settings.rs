@@ -1,4 +1,5 @@
 use super::*;
+use crate::backend::SoulseekForm;
 use gpui_kit::component::group_box::GroupBoxVariant;
 use gpui_kit::component::input::{NumberInput, Textarea, TextareaState};
 use gpui_kit::component::setting::{
@@ -226,17 +227,17 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn send_bandcamp(&mut self, command: &str, cx: &mut Context<Self>) {
-        let params = json!({
-            "user": self.bandcamp.user.read(cx).value().trim().to_string(),
-            "cookies": self.bandcamp.cookies.read(cx).value().to_string(),
-        });
+    fn save_bandcamp(&mut self, cx: &mut Context<Self>) {
+        let user = self.bandcamp.user.read(cx).value().trim().to_string();
+        let cookies = self.bandcamp.cookies.read(cx).value().to_string();
         if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send(command, params);
-                cx.notify();
-            });
+            main.update(cx, |main, cx| main.save_bandcamp(user, cookies, cx));
+        }
+    }
+
+    fn logout_bandcamp(&mut self, cx: &mut Context<Self>) {
+        if let Some(main) = self.main.upgrade() {
+            main.update(cx, |main, cx| main.logout_bandcamp(cx));
         }
     }
 
@@ -269,17 +270,17 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn soulseek_params(&self, cx: &App) -> Option<Value> {
+    fn soulseek_form(&self, cx: &App) -> Option<SoulseekForm> {
         let username = self.soulseek.username.read(cx).value().trim().to_string();
         if username.is_empty() {
             return None;
         }
-        Some(json!({
-            "username": username,
-            "password": self.soulseek.password.read(cx).value().to_string(),
-            "server_host": self.soulseek.host.read(cx).value().trim().to_string(),
-            "server_port": self.soulseek.port.read(cx).value().trim().to_string(),
-        }))
+        Some(SoulseekForm {
+            username,
+            password: self.soulseek.password.read(cx).value().to_string(),
+            server_host: self.soulseek.host.read(cx).value().trim().to_string(),
+            server_port: self.soulseek.port.read(cx).value().trim().to_string(),
+        })
     }
 
     fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -315,24 +316,9 @@ impl ConfigView {
         ]) {
             *path = PathBuf::from(state.read(cx).value().to_string());
         }
-        let params = match serde_json::to_value(&defaults) {
-            Ok(params) => params,
-            Err(error) => {
-                *self.status.borrow_mut() = error.to_string();
-                cx.notify();
-                return;
-            }
-        };
-        let soulseek = self.soulseek_params(cx);
+        let soulseek = self.soulseek_form(cx);
         if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send("config.save", params);
-                if let Some(soulseek) = soulseek {
-                    main.send("soulseek.save", soulseek);
-                }
-                cx.notify();
-            });
+            main.update(cx, |main, cx| main.save_config(defaults, soulseek, cx));
         }
         *self.status.borrow_mut() = "Saving config".into();
         cx.notify();
@@ -521,8 +507,7 @@ impl ConfigView {
                         Button::new("save-bandcamp")
                             .label("Save Bandcamp login")
                             .on_click(move |_, _, cx| {
-                                let _ = save
-                                    .update(cx, |view, cx| view.send_bandcamp("bandcamp.save", cx));
+                                let _ = save.update(cx, |view, cx| view.save_bandcamp(cx));
                             }),
                     )
                     .when(logged_in, |row| {
@@ -531,9 +516,7 @@ impl ConfigView {
                                 .ghost()
                                 .label("Log out")
                                 .on_click(move |_, _, cx| {
-                                    let _ = logout.update(cx, |view, cx| {
-                                        view.send_bandcamp("bandcamp.logout", cx)
-                                    });
+                                    let _ = logout.update(cx, |view, cx| view.logout_bandcamp(cx));
                                 }),
                         )
                         .child(style::meta("Logged in", cx))
