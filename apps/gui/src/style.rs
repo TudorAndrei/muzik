@@ -48,7 +48,7 @@ pub fn source_icon(playlist: &Value) -> gpui_kit::assets::IconName {
 
 pub fn apply_theme(cx: &mut App) {
     if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(THEME) {
-        eprintln!("Muzik theme did not load: {error}");
+        tracing::error!(%error, "Muzik theme did not load");
         return;
     }
     let themes = ThemeRegistry::global(cx).themes();

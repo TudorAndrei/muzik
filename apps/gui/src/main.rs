@@ -2474,6 +2474,22 @@ fn main() {
         }
         _ => {}
     }
+    if let Ok(appender) = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("muzik")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(muzik_core::paths::Paths::user().logs())
+    {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_env("MUZIK_LOG")
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with_writer(appender)
+            .with_ansi(false)
+            .init();
+    }
     let app = gpui_kit::application().with_assets(style::AppAssets);
     app.run(|cx| {
         gpui_kit::init(cx);

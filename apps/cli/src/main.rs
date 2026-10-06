@@ -739,6 +739,13 @@ fn run(command: Command) -> Result<(), String> {
 }
 
 fn main() -> std::process::ExitCode {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_env("MUZIK_LOG")
+                .unwrap_or_else(|_| "warn".into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     if let Err(error) = run(Muzik::parse().command) {
         eprintln!("error: {error}");
         std::process::ExitCode::FAILURE
