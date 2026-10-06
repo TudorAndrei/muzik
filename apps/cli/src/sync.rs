@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
 use muzik_import::beets;
@@ -86,7 +87,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
         plan.fresh,
         plan.pending.len() - converts,
         converts,
-        size(prepared.needed)
+        ByteSize(prepared.needed)
     );
     if prepared.delete_blocked {
         eprintln!(
@@ -98,14 +99,14 @@ pub fn run(args: &Sync) -> Result<(), String> {
         println!(
             "{} files to delete ({})",
             prepared.stale.len(),
-            size(prepared.freed)
+            ByteSize(prepared.freed)
         );
     }
     if let (false, Some(space)) = (prepared.fits(), prepared.space()) {
         return Err(format!(
             "not enough space: {} needed, {} available; select fewer tracks with --query{}",
-            size(prepared.needed),
-            size(space),
+            ByteSize(prepared.needed),
+            ByteSize(space),
             if args.delete {
                 ""
             } else {
@@ -166,14 +167,5 @@ fn label(action: &Action) -> String {
         Action::Convert(Encoding::Mp3 { kbps }) => format!("mp3 {kbps}k"),
         Action::Convert(Encoding::Opus { kbps }) => format!("opus {kbps}k"),
         Action::Convert(Encoding::Flac { .. }) => "flac".into(),
-    }
-}
-
-fn size(bytes: u64) -> String {
-    let megabytes = bytes / 1_000_000;
-    if megabytes >= 1_000 {
-        format!("{}.{} GB", megabytes / 1_000, megabytes % 1_000 / 100)
-    } else {
-        format!("{megabytes} MB")
     }
 }

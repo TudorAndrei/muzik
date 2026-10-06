@@ -1,3 +1,4 @@
+use bytesize::ByteSize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -15,9 +16,9 @@ pub fn list() -> io::Result<()> {
     for file in &files {
         let metadata = fs::metadata(file)?;
         total += metadata.len();
-        println!("{}\t{} bytes", file.display(), metadata.len());
+        println!("{}\t{}", file.display(), ByteSize(metadata.len()));
     }
-    println!("Total: {} file(s), {total} bytes", files.len());
+    println!("Total: {} file(s), {}", files.len(), ByteSize(total));
     Ok(())
 }
 
@@ -28,9 +29,10 @@ pub fn size() -> io::Result<()> {
         total += fs::metadata(file)?.len();
     }
     println!(
-        "Cache: {}\n  {} file(s), {total} bytes",
+        "Cache: {}\n  {} file(s), {}",
         paths::cache_dir().display(),
-        files.len()
+        files.len(),
+        ByteSize(total)
     );
     Ok(())
 }

@@ -1,7 +1,8 @@
 use std::io;
 use std::path::Path;
 
-use muzik_core::downloads::{human_size, scan};
+use bytesize::ByteSize;
+use muzik_core::downloads::scan;
 
 pub fn list(directory: &Path) -> io::Result<()> {
     let items = scan(directory)?;
@@ -21,13 +22,13 @@ pub fn list(directory: &Path) -> io::Result<()> {
             "{}\t{}\t{}",
             item.title,
             item.youtube_id.as_deref().unwrap_or(""),
-            human_size(item.size)
+            ByteSize(item.size)
         );
     }
     println!(
         "Total: {} file(s), {}; {} with a YouTube id.",
         items.len(),
-        human_size(total_bytes),
+        ByteSize(total_bytes),
         with_id
     );
     Ok(())

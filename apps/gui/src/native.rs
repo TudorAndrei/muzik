@@ -1,7 +1,8 @@
+use bytesize::ByteSize;
 use chrono::{DateTime, Local};
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config;
-use muzik_core::downloads::{human_size, scan};
+use muzik_core::downloads::scan;
 use muzik_core::paths::Paths;
 use muzik_runner::setup;
 use muzik_spotify as spotify;
@@ -110,7 +111,7 @@ pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
         .into_iter()
         .map(|item| {
             let modified: DateTime<Local> = item.modified_at.into();
-            let size_label = human_size(item.size);
+            let size_label = ByteSize(item.size).to_string();
             let mut value = serde_json::to_value(item).map_err(|error| error.to_string())?;
             let fields = value
                 .as_object_mut()
@@ -123,7 +124,7 @@ pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
             Ok(value)
         })
         .collect::<Result<Vec<Value>, String>>()?;
-    Ok(json!({"output": output, "total_size": human_size(total), "items": items}))
+    Ok(json!({"output": output, "total_size": ByteSize(total).to_string(), "items": items}))
 }
 
 #[cfg(test)]
