@@ -83,7 +83,7 @@ fn fetch_and_save(
         .body_mut()
         .read_to_vec()
         .map_err(|error| error.to_string())?;
-    cache::save(id, &content_type, &bytes, cache_dir)
+    Ok(cache::save(id, &content_type, &bytes, cache_dir)?)
 }
 
 #[cfg(test)]

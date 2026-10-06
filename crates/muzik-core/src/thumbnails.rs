@@ -1,5 +1,6 @@
 //! Thumbnail cache shared with saved watchlist items.
 
+use crate::Result;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -27,7 +28,7 @@ pub fn cached_path(id: &str, root: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn save(id: &str, content_type: &str, bytes: &[u8], root: &Path) -> Result<PathBuf, String> {
+pub fn save(id: &str, content_type: &str, bytes: &[u8], root: &Path) -> Result<PathBuf> {
     if !valid_id(id) {
         return Err("Invalid thumbnail ID.".into());
     }
@@ -45,20 +46,15 @@ pub fn save(id: &str, content_type: &str, bytes: &[u8], root: &Path) -> Result<P
         }
         _ => return Err("Thumbnail response is not a JPEG or PNG image.".into()),
     };
-    fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    fs::create_dir_all(root)?;
     let path = root.join(format!("yt_thumbnail_{id}.{extension}"));
     let mut temporary = tempfile::Builder::new()
         .prefix(&format!(".yt_thumbnail_{id}.{extension}."))
         .suffix(".tmp")
-        .tempfile_in(root)
-        .map_err(|error| error.to_string())?;
-    temporary
-        .write_all(bytes)
-        .map_err(|error| error.to_string())?;
-    temporary.flush().map_err(|error| error.to_string())?;
-    temporary
-        .persist(&path)
-        .map_err(|error| error.to_string())?;
+        .tempfile_in(root)?;
+    temporary.write_all(bytes)?;
+    temporary.flush()?;
+    temporary.persist(&path)?;
     Ok(path)
 }
 
@@ -74,8 +70,7 @@ mod tests {
             "image/jpeg; charset=binary",
             b"\xff\xd8\xffdata",
             root.path(),
-        )
-        .map_err(std::io::Error::other)?;
+        )?;
         assert_eq!(
             jpeg.file_name().and_then(|name| name.to_str()),
             Some("yt_thumbnail_abcdefghijk.jpg")
