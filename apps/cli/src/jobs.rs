@@ -8,7 +8,7 @@ use muzik_store::jobs::CancelRequest;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, IsTerminal, Write};
+use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -229,31 +229,15 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
         prompt.title,
         choices::title(choices::kind(&question))
     );
-    print_question(&question);
-    let options = choices::choices(&question);
-    let mut line = String::new();
-    loop {
-        print!("Choice [1-{}]: ", options.len());
-        std::io::stdout()
-            .flush()
-            .map_err(|error| error.to_string())?;
-        line.clear();
-        if std::io::stdin()
-            .lock()
-            .read_line(&mut line)
-            .map_err(|error| error.to_string())?
-            == 0
-        {
-            return Err("No answer was given.".into());
-        }
-        match line.trim().parse::<usize>() {
-            Ok(choice) => match pick(&options, choice) {
-                Ok(value) => return Ok(value),
-                Err(message) => println!("{message}"),
-            },
-            Err(_) => println!("Enter a number."),
-        }
-    }
+    print_notes(&question);
+    let index = dialoguer::Select::new()
+        .with_prompt("Choice")
+        .items(option_lines(&question))
+        .default(choices::suggestion(&question).unwrap_or(0))
+        .interact_opt()
+        .map_err(|error| error.to_string())?
+        .ok_or("No answer was given.")?;
+    pick(&choices::choices(&question), index + 1)
 }
 
 fn edit_chapters(payload: &Value) -> Result<Value, String> {
@@ -282,6 +266,13 @@ fn edit_chapters(payload: &Value) -> Result<Value, String> {
 }
 
 fn print_question(question: &Value) {
+    print_notes(question);
+    for (index, line) in option_lines(question).iter().enumerate() {
+        println!("{:>3}. {line}", index + 1);
+    }
+}
+
+fn print_notes(question: &Value) {
     if let Some(note) = choices::note(question) {
         println!("{note}");
     }
@@ -291,20 +282,27 @@ fn print_question(question: &Value) {
     for detail in choices::details(question).iter().take(8) {
         println!("  {detail}");
     }
+}
+
+fn option_lines(question: &Value) -> Vec<String> {
     let suggested = choices::suggestion(question);
-    for (index, option) in choices::choices(question).iter().enumerate() {
-        let mut line = format!("{:>3}. {}", index + 1, option.label);
-        if !option.meta.is_empty() {
-            line.push_str(&format!(" · {}", option.meta));
-        }
-        if let Some(score) = option.score {
-            line.push_str(&format!(" · {score}%"));
-        }
-        if suggested == Some(index) {
-            line.push_str(" (suggested)");
-        }
-        println!("{line}");
-    }
+    choices::choices(question)
+        .iter()
+        .enumerate()
+        .map(|(index, option)| {
+            let mut line = option.label.clone();
+            if !option.meta.is_empty() {
+                line.push_str(&format!(" · {}", option.meta));
+            }
+            if let Some(score) = option.score {
+                line.push_str(&format!(" · {score}%"));
+            }
+            if suggested == Some(index) {
+                line.push_str(" (suggested)");
+            }
+            line
+        })
+        .collect()
 }
 
 fn pick(options: &[Choice], choice: usize) -> Result<Value, String> {

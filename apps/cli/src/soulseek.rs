@@ -14,7 +14,6 @@ use muzik_workflow::upgrade::{
 };
 use serde_json::{Value, json};
 use std::fs;
-use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
@@ -399,28 +398,20 @@ fn choose_index(count: usize, no_interactive: bool) -> Result<usize, String> {
     if no_interactive {
         return Ok(0);
     }
-    print!("Candidate number [1]: ");
-    io::stdout().flush().map_err(|error| error.to_string())?;
-    let mut answer = String::new();
-    let count_read = io::stdin()
-        .read_line(&mut answer)
-        .map_err(|error| error.to_string())?;
-    if count_read == 0 {
-        return Err(
-            "no candidate was selected; use --no-interactive to select the first result".into(),
-        );
-    }
-    let number = if answer.trim().is_empty() {
-        1
-    } else {
-        answer
-            .trim()
-            .parse::<usize>()
-            .map_err(|_| "candidate number must be an integer")?
-    };
-    if !(1..=count).contains(&number) {
-        return Err("candidate number is out of range".into());
-    }
+    let number = dialoguer::Input::<usize>::new()
+        .with_prompt("Candidate number")
+        .default(1)
+        .validate_with(|number: &usize| {
+            if (1..=count).contains(number) {
+                Ok(())
+            } else {
+                Err(format!("Enter a number from 1 to {count}."))
+            }
+        })
+        .interact_text()
+        .map_err(
+            |_| "no candidate was selected; use --no-interactive to select the first result",
+        )?;
     Ok(number - 1)
 }
 

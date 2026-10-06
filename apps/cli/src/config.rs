@@ -1,8 +1,6 @@
-use std::env;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::process::Command;
 
 use serde_json::{Value, json};
 
@@ -135,23 +133,7 @@ pub fn edit(path: Option<&Path>) -> io::Result<()> {
              library: ~/music/.library.db\n",
         )?;
     }
-    let editor = env::var("EDITOR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| env::var("VISUAL").ok())
-        .unwrap_or_else(|| "vi".to_owned());
-    let mut words = editor.split_whitespace();
-    let executable = words
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "EDITOR is empty"))?;
-    let status = Command::new(executable).args(words).arg(&path).status()?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "editor exited with status {status}"
-        )))
-    }
+    edit::edit_file(&path)
 }
 
 fn read_yaml(path: &Path) -> io::Result<Value> {
