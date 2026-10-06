@@ -55,7 +55,7 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
             }
             Err(error) => {
                 invalid += 1;
-                println!("{}\tFAIL\t{error:#}", name.display());
+                println!("{}\tFAIL\t{}", name.display(), crate::describe(&error));
             }
         }
     }

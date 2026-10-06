@@ -736,6 +736,17 @@ fn run(command: Command) -> anyhow::Result<()> {
     }
 }
 
+pub(crate) fn describe(error: &anyhow::Error) -> String {
+    let mut text = error.to_string();
+    for cause in error.chain().skip(1) {
+        let cause = cause.to_string();
+        if !text.contains(&cause) {
+            text = format!("{text}: {cause}");
+        }
+    }
+    text
+}
+
 fn main() -> std::process::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -751,9 +762,28 @@ fn main() -> std::process::ExitCode {
         tracing::warn!(%error, "the Soulseek password did not move to the keychain");
     }
     if let Err(error) = run(Muzik::parse().command) {
-        eprintln!("error: {error:#}");
+        eprintln!("error: {}", describe(&error));
         std::process::ExitCode::FAILURE
     } else {
         std::process::ExitCode::SUCCESS
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe;
+    use anyhow::Context;
+
+    #[test]
+    fn an_error_shows_each_cause_once() {
+        let io = std::io::Error::other("disk full");
+        let wrapped: anyhow::Result<()> = Err(io).context("cannot write config");
+        let error = wrapped.err().map(|error| describe(&error));
+        assert_eq!(error.as_deref(), Some("cannot write config: disk full"));
+
+        let error = anyhow::Error::from(muzik_workflow::Error::from(std::io::Error::other(
+            "disk full",
+        )));
+        assert_eq!(describe(&error), "file operation failed: disk full");
     }
 }

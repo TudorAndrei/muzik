@@ -258,7 +258,7 @@ fn edit_chapters(payload: &Value) -> Result<Value, String> {
         })
         .collect::<Option<Vec<_>>>()
         .ok_or("The chapters to edit are not valid.")?;
-    let edited = crate::split::edit_chapters(&chapters).map_err(|error| format!("{error:#}"))?;
+    let edited = crate::split::edit_chapters(&chapters).map_err(|error| crate::describe(&error))?;
     let chosen = if edited.is_empty() { chapters } else { edited };
     Ok(Value::Array(
         chosen

@@ -68,7 +68,11 @@ pub fn run(args: &Archive) -> anyhow::Result<()> {
             match split::run(&request) {
                 Ok(_) => processed += 1,
                 Err(error) => {
-                    eprintln!("Split failed for {}: {error:#}", path.display());
+                    eprintln!(
+                        "Split failed for {}: {}",
+                        path.display(),
+                        crate::describe(&error)
+                    );
                     failed += 1;
                 }
             }

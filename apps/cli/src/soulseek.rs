@@ -99,7 +99,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
                 safe_display(&track.artist),
                 safe_display(&track.title),
                 current,
-                safe_display(&format!("{error:#}"))
+                safe_display(&crate::describe(&error))
             ),
             Ok(ranked) => match select_upgrade(track, &ranked, prefer) {
                 None => println!(
