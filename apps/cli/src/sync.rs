@@ -8,10 +8,9 @@ use muzik_core::paths::Paths;
 use muzik_core::sync::{self, Action, Encoding, Target, Transfer};
 use muzik_core::{app_config, db, quality};
 use muzik_import::beets;
-use muzik_library::{Item, Library};
+use muzik_library::{Item, Library, path_from_sql};
 use serde_json::json;
 
-use crate::soulseek::stored_path;
 use crate::{SetSyncTarget, Sync};
 
 pub fn set_target(args: &SetSyncTarget) -> Result<(), String> {
@@ -48,7 +47,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let tracks: Vec<PathBuf> = items
         .iter()
-        .filter_map(|item| item.field("path").and_then(stored_path))
+        .filter_map(|item| item.field("path").and_then(path_from_sql))
         .map(|path| absolute(&paths.directory, path))
         .collect();
     let album_ids: BTreeSet<i64> = if target.covers {
@@ -62,7 +61,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
         if let Some(path) = album
             .as_ref()
             .and_then(|album| album.field("artpath"))
-            .and_then(stored_path)
+            .and_then(path_from_sql)
             .map(|path| absolute(&paths.directory, path))
             .filter(|path| path.is_file())
         {

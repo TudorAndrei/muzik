@@ -10,7 +10,7 @@ use crate::ftclean;
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
 use crate::plan::{AlbumPlan, ImportMode, ImportPlan};
 use muzik_core::BeetsConfig;
-use muzik_library::{Fields as LibraryFields, Library, SqlValue};
+use muzik_library::{Fields as LibraryFields, Library, SqlValue, path_from_sql, path_to_sql};
 use muzik_tags::TagData;
 
 pub use crate::Error as ApplyError;
@@ -582,7 +582,7 @@ fn prepare(
         if !reserved.insert(destination.clone()) {
             return Err(ApplyError::DestinationCollision(destination.clone()));
         }
-        album_fields.insert("artpath".into(), sql_path_value(destination));
+        album_fields.insert("artpath".into(), path_to_sql(destination));
     }
     old_paths.retain(|old| {
         !prepared.iter().any(|item| item.destination == *old)
@@ -714,7 +714,7 @@ fn item_fields(
     }
     fields.insert("comp".into(), SqlValue::Integer(i64::from(compilation)));
     insert_dates(&mut fields, tags);
-    fields.insert("path".into(), sql_path_value(path));
+    fields.insert("path".into(), path_to_sql(path));
     fields.insert("format".into(), SqlValue::Text(properties.format.clone()));
     fields.insert("added".into(), SqlValue::Real(now()));
     if let Some(value) = properties.duration_seconds {
@@ -772,41 +772,11 @@ fn insert_dates(fields: &mut LibraryFields, tags: &TagData) {
     }
 }
 
-fn sql_path_value(path: &Path) -> SqlValue {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        SqlValue::Blob(path.as_os_str().as_bytes().to_vec())
-    }
-    #[cfg(not(unix))]
-    {
-        SqlValue::Blob(path.to_string_lossy().as_bytes().to_vec())
-    }
-}
-
-fn sql_path(value: &SqlValue) -> Option<PathBuf> {
-    match value {
-        SqlValue::Blob(bytes) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStringExt;
-                Some(std::ffi::OsString::from_vec(bytes.clone()).into())
-            }
-            #[cfg(not(unix))]
-            {
-                Some(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
-            }
-        }
-        SqlValue::Text(value) => Some(PathBuf::from(value)),
-        _ => None,
-    }
-}
-
 fn in_library(library: &Library, path: &Path, library_root: &Path) -> Result<bool, ApplyError> {
     Ok(library.items()?.iter().any(|item| {
         item.fields
             .get("path")
-            .and_then(sql_path)
+            .and_then(path_from_sql)
             .map(|known| {
                 if known.is_relative() {
                     library_root.join(known)
@@ -826,12 +796,12 @@ fn replacement_paths(
     let mut paths = BTreeSet::new();
     for id in album_ids {
         for item in library.items_for_album(*id)? {
-            if let Some(path) = item.fields.get("path").and_then(sql_path) {
+            if let Some(path) = item.fields.get("path").and_then(path_from_sql) {
                 paths.insert(safe_old_path(path, library_root)?);
             }
         }
         if let Some(album) = library.album(*id)?
-            && let Some(path) = album.fields.get("artpath").and_then(sql_path)
+            && let Some(path) = album.fields.get("artpath").and_then(path_from_sql)
         {
             paths.insert(safe_old_path(path, library_root)?);
         }

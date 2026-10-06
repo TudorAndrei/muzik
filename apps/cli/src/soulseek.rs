@@ -3,7 +3,7 @@ use muzik_core::{
     quality::{self, MeasuredQuality},
 };
 use muzik_import::beets;
-use muzik_library::{Item, Library, SqlValue};
+use muzik_library::{Item, Library, SqlValue, path_from_sql, scalar_text};
 use muzik_soulseek::fetch::{Timeouts, local_files};
 use muzik_soulseek::ranking::RankedCandidate;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
@@ -171,7 +171,7 @@ fn scan_library(
     let mut scanned = 0_usize;
     let mut flagged = Vec::new();
     for item in items {
-        let Some(path) = item.field("path").and_then(stored_path) else {
+        let Some(path) = item.field("path").and_then(path_from_sql) else {
             continue;
         };
         let path = if path.is_absolute() {
@@ -227,33 +227,6 @@ fn scan_library(
         });
     }
     Ok((scanned, flagged))
-}
-
-pub(crate) fn stored_path(value: &SqlValue) -> Option<PathBuf> {
-    match value {
-        SqlValue::Text(path) => Some(PathBuf::from(path)),
-        SqlValue::Blob(bytes) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStringExt;
-                Some(std::ffi::OsString::from_vec(bytes.clone()).into())
-            }
-            #[cfg(not(unix))]
-            {
-                Some(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn scalar_text(value: &SqlValue) -> Option<String> {
-    match value {
-        SqlValue::Text(text) => Some(text.clone()),
-        SqlValue::Integer(number) => Some(number.to_string()),
-        SqlValue::Real(number) => Some(number.to_string()),
-        _ => None,
-    }
 }
 
 fn scalar_number(value: &SqlValue) -> Option<f64> {
