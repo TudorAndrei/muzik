@@ -50,7 +50,7 @@ fn compare(name: &str, actual: &Distance, expected: &Expected, config: &MatchCon
     let penalties: Value = actual
         .penalties()
         .iter()
-        .map(|(key, values)| (key.clone(), json!(values)))
+        .map(|(key, values)| (key.to_string(), json!(values)))
         .collect::<serde_json::Map<_, _>>()
         .into();
     assert_eq!(penalties, expected.penalties, "{name} penalties");

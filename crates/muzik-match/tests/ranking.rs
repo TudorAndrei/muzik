@@ -1,7 +1,7 @@
 use muzik_core::BeetsConfig;
 use muzik_match::{
-    assign_items, rank_albums, track_distance, MatchAlbum, MatchConfig, MatchItem, MatchTrack,
-    Recommendation,
+    assign_items, rank_albums, track_distance, Error, MatchAlbum, MatchConfig, MatchItem,
+    MatchTrack, Recommendation,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -111,4 +111,14 @@ fn matches_beets_assignment_and_ranking() {
             case.name
         );
     }
+}
+
+#[test]
+fn rejects_an_unknown_max_rec_limit() {
+    let beets =
+        BeetsConfig::from_layers("", json!({"match": {"max_rec": {"year": "high"}}})).unwrap();
+    assert!(matches!(
+        MatchConfig::from_beets(&beets),
+        Err(Error::InvalidConfig("match.max_rec"))
+    ));
 }

@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
+use strum_macros::EnumString;
 
 use crate::distance::{
-    album_distance, track_distance, Distance, Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack,
+    album_distance, track_distance, AlbumField, Distance, Error, MatchAlbum, MatchConfig,
+    MatchItem, MatchTrack,
 };
 
 /// Track mapping and items left after minimum-cost assignment.
@@ -62,8 +64,11 @@ pub fn assign_items(
     })
 }
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Deserialize, Serialize, EnumString,
+)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
 pub enum Recommendation {
     None,
     Low,
@@ -85,22 +90,22 @@ pub struct Ranking {
     pub recommendation: Recommendation,
 }
 
-fn required_field_present(album: &MatchAlbum, field: &str) -> bool {
+fn required_field_present(album: &MatchAlbum, field: &AlbumField) -> bool {
     match field {
-        "album" => !album.title.is_empty(),
-        "artist" => !album.artist.is_empty(),
-        "album_id" => album.album_id.is_some(),
-        "media" => album.media.is_some(),
-        "mediums" => album.mediums.is_some(),
-        "year" => album.year.is_some(),
-        "original_year" => album.original_year.is_some(),
-        "country" => album.country.is_some(),
-        "label" => album.label.is_some(),
-        "catalognum" => album.catalog_number.is_some(),
-        "albumdisambig" => album.disambiguation.is_some(),
-        "data_source" => album.data_source.is_some(),
-        "tracks" => true,
-        _ => false,
+        AlbumField::Album => !album.title.is_empty(),
+        AlbumField::Artist => !album.artist.is_empty(),
+        AlbumField::AlbumId => album.album_id.is_some(),
+        AlbumField::Media => album.media.is_some(),
+        AlbumField::Mediums => album.mediums.is_some(),
+        AlbumField::Year => album.year.is_some(),
+        AlbumField::OriginalYear => album.original_year.is_some(),
+        AlbumField::Country => album.country.is_some(),
+        AlbumField::Label => album.label.is_some(),
+        AlbumField::CatalogNumber => album.catalog_number.is_some(),
+        AlbumField::Disambiguation => album.disambiguation.is_some(),
+        AlbumField::DataSource => album.data_source.is_some(),
+        AlbumField::Tracks => true,
+        AlbumField::Other(_) => false,
     }
 }
 
@@ -128,14 +133,7 @@ fn recommendation(
         keys.extend(track.active_keys(config)?);
     }
     for key in keys {
-        if let Some(limit) = config.max_rec.get(&key) {
-            let limit = match limit.as_str() {
-                "strong" => Recommendation::Strong,
-                "medium" => Recommendation::Medium,
-                "low" => Recommendation::Low,
-                "none" => Recommendation::None,
-                _ => return Err(Error::InvalidConfig("match.max_rec")),
-            };
+        if let Some(&limit) = config.max_rec.get(&key) {
             recommendation = recommendation.min(limit);
         }
     }
