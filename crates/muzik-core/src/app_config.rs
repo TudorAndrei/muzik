@@ -130,6 +130,23 @@ pub fn save_section_value(
         .as_object_mut()
         .ok_or("config section is not a mapping")?
         .insert(key.to_owned(), value);
+    write(path, &config)
+}
+
+pub fn remove_section_key(path: &Path, section: &str, key: &str) -> Result<(), String> {
+    let mut config = load(path)?;
+    let removed = config
+        .get_mut(section)
+        .and_then(Value::as_object_mut)
+        .and_then(|entries| entries.remove(key))
+        .is_some();
+    if removed {
+        write(path, &config)?;
+    }
+    Ok(())
+}
+
+fn write(path: &Path, config: &Value) -> Result<(), String> {
     let parent = path.parent().ok_or("config path has no parent")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let yaml = serde_saphyr::to_string(&config).map_err(|error| error.to_string())?;

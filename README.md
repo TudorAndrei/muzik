@@ -56,8 +56,11 @@ export MUZIK_SOULSEEK_USERNAME="your-soulseek-username"
 export MUZIK_SOULSEEK_PASSWORD="your-soulseek-password"
 ```
 
-Or write them to `muzik`'s own config file (see `muzik config set-soulseek
---help`). `MUZIK_SOULSEEK_DOWNLOAD_DIR` controls where completed downloads
+Or save them with `muzik config set-soulseek` or in the app settings. Muzik
+keeps the username in its config file and the password in the system keychain
+(macOS Keychain, Windows Credential Manager, or the Secret Service on Linux).
+When no keychain is available, the password stays in the config file.
+`MUZIK_SOULSEEK_DOWNLOAD_DIR` controls where completed downloads
 are written (defaults to the platform data directory).
 
 Then run `muzik soulseek check`; it should report `Soulseek reachable`.

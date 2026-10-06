@@ -2490,6 +2490,13 @@ fn main() {
             .with_ansi(false)
             .init();
     }
+    if keyring::Entry::store_status().is_ok() {
+        if let Err(error) = muzik_runner::setup::move_soulseek_password(
+            &muzik_core::paths::Paths::user().config_file(),
+        ) {
+            tracing::warn!(%error, "the Soulseek password did not move to the keychain");
+        }
+    }
     let app = gpui_kit::application().with_assets(style::AppAssets);
     app.run(|cx| {
         gpui_kit::init(cx);

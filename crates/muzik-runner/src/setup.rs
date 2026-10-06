@@ -1,6 +1,8 @@
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
-use muzik_soulseek::session::{Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use muzik_soulseek::session::{
+    self, Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -26,7 +28,7 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value, String> {
         .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
     Ok(json!({
         "username": text("username"),
-        "has_password": !text("password").is_empty(),
+        "has_password": !text("password").is_empty() || session::saved_password().is_some(),
         "server_host": host,
         "server_port": port,
     }))
@@ -57,7 +59,10 @@ pub fn save_soulseek_account(
         return Err("Enter a server port from 1 to 65535.".into());
     }
     let password = account.password.unwrap_or("");
-    if password.trim().is_empty() && saved("password").is_empty() {
+    if password.trim().is_empty()
+        && saved("password").is_empty()
+        && session::saved_password().is_none()
+    {
         return Err("Enter the Soulseek password.".into());
     }
     app_config::save_section_string(config_file, "soulseek", "username", &username)?;
@@ -65,7 +70,17 @@ pub fn save_soulseek_account(
         app_config::save_section_string(config_file, "soulseek", "password", password)?;
     }
     app_config::save_section_string(config_file, "soulseek", "server_host", host)?;
-    app_config::save_section_string(config_file, "soulseek", "server_port", &port.to_string())
+    app_config::save_section_string(config_file, "soulseek", "server_port", &port.to_string())?;
+    move_soulseek_password(config_file)
+}
+
+pub fn move_soulseek_password(config_file: &Path) -> Result<(), String> {
+    let config = app_config::load(config_file)?;
+    let password = config["soulseek"]["password"].as_str().unwrap_or("").trim();
+    if password.is_empty() || session::save_password(password).is_err() {
+        return Ok(());
+    }
+    app_config::remove_section_key(config_file, "soulseek", "password")
 }
 
 #[derive(Debug, Serialize)]

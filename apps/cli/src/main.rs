@@ -746,6 +746,12 @@ fn main() -> std::process::ExitCode {
         )
         .with_writer(std::io::stderr)
         .init();
+    if keyring::Entry::store_status().is_ok()
+        && let Err(error) =
+            muzik_runner::setup::move_soulseek_password(&muzik_core::app_config::path())
+    {
+        tracing::warn!(%error, "the Soulseek password did not move to the keychain");
+    }
     if let Err(error) = run(Muzik::parse().command) {
         eprintln!("error: {error}");
         std::process::ExitCode::FAILURE

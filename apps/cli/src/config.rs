@@ -42,10 +42,8 @@ pub fn show(path: Option<&Path>) -> io::Result<()> {
     );
     println!(
         "  Soulseek password: {}",
-        if soulseek
-            .and_then(|settings| settings.get("password"))
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.is_empty())
+        if setup::soulseek_account(&app_config::path())
+            .is_ok_and(|account| account.get("has_password") == Some(&Value::Bool(true)))
         {
             "set"
         } else {

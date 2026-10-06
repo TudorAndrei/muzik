@@ -37,10 +37,12 @@ bytesize = "2.3"
 ctrlc = "3.5"
 dialoguer = { version = "0.12", default-features = false }
 edit = { version = "0.1.5", features = ["quoted-env"] }
+keyring = "4.2"
 parking_lot = "0.12"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = "1.3"
 tempfile = "3"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 usage = { package = "usage-rs", version = "6.11.1", features = ["completions"] }

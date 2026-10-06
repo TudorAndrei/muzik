@@ -16,6 +16,19 @@ use crate::error::BridgeError;
 
 pub const DEFAULT_SERVER_HOST: &str = "server.slsknet.org";
 pub const DEFAULT_SERVER_PORT: u16 = 2416;
+const KEYCHAIN_SERVICE: &str = "com.tudorandrei.muzik";
+const KEYCHAIN_ACCOUNT: &str = "soulseek";
+
+pub fn saved_password() -> Option<String> {
+    keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+        .and_then(|entry| entry.get_password())
+        .ok()
+        .filter(|password| !password.is_empty())
+}
+
+pub fn save_password(password: &str) -> Result<(), keyring_core::Error> {
+    keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?.set_password(password)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionSettings {
@@ -32,7 +45,11 @@ impl SessionSettings {
     /// Soulseek unconfigured rather than attempting a network connection.
     pub fn configured(config: &Value) -> Option<Self> {
         let username = setting(config, "MUZIK_SOULSEEK_USERNAME", "username")?;
-        let password = setting(config, "MUZIK_SOULSEEK_PASSWORD", "password")?;
+        let password = env::var("MUZIK_SOULSEEK_PASSWORD")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .or_else(saved_password)
+            .or_else(|| setting(config, "MUZIK_SOULSEEK_PASSWORD", "password"))?;
         let host = setting(config, "MUZIK_SOULSEEK_SERVER_HOST", "server_host")
             .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
         let port = setting(config, "MUZIK_SOULSEEK_SERVER_PORT", "server_port")
