@@ -10,7 +10,7 @@ use muzik_core::PreferredAudio;
 use serde_json::Value;
 use soulseek_rs::DownloadStatus;
 
-use crate::error::BridgeError;
+use crate::error::{BridgeError, Result};
 use crate::ranking::{format, rank, search_query, RankedCandidate};
 use crate::session::{setting, Session};
 use crate::types::Candidate;
@@ -73,7 +73,7 @@ impl Candidate {
     }
 }
 
-pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>> {
     if candidate.username.trim().is_empty() || candidate.username.chars().any(char::is_control) {
         return Err("Soulseek result has an invalid username.".into());
     }
@@ -102,7 +102,7 @@ impl Session {
         limit: usize,
         timeout: f64,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<RankedCandidate>, String> {
+    ) -> Result<Vec<RankedCandidate>> {
         if query.trim().is_empty() || query.chars().any(char::is_control) {
             return Err("Enter a Soulseek search without control characters.".into());
         }
@@ -135,10 +135,7 @@ impl Session {
             )),
             Ok(Err(error)) => {
                 Session::forget_shared();
-                Err(format!(
-                    "Soulseek search failed: {}",
-                    BridgeError::from(error)
-                ))
+                Err(format!("Soulseek search failed: {}", BridgeError::from(error)).into())
             }
             Err(_) => Err("Soulseek search failed: the search thread stopped".into()),
         }
@@ -150,9 +147,9 @@ impl Session {
         destination: &Path,
         timeout: f64,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>> {
         let files = local_files(candidate, destination)?;
-        std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(destination)?;
         for (remote, local) in candidate.files.iter().zip(&files) {
             let (download, receiver) = self
                 .client
@@ -176,7 +173,8 @@ impl Session {
                 return Err(format!(
                     "Soulseek reported a completed transfer, but {} is missing.",
                     local.display()
-                ));
+                )
+                .into());
             }
         }
         Ok(files)
@@ -191,7 +189,7 @@ fn finish(
     receiver: &Receiver<DownloadStatus>,
     deadline: Instant,
     cancelled: &AtomicBool,
-) -> Result<(), String> {
+) -> Result<()> {
     loop {
         if cancelled.load(Ordering::SeqCst) {
             return Err("Soulseek download cancelled".into());
@@ -206,7 +204,8 @@ fn finish(
                 return Err(format!(
                     "Soulseek download failed: {}",
                     reason.unwrap_or_else(|| "download failed".into())
-                ));
+                )
+                .into());
             }
             Ok(DownloadStatus::TimedOut) => {
                 return Err("Soulseek download failed: download timed out".into());
@@ -297,14 +296,14 @@ mod tests {
             .send(DownloadStatus::Failed(Some("peer went offline".into())))
             .map_err(|e| e.to_string())?;
         assert_eq!(
-            finish(&receiver, deadline, &running),
+            finish(&receiver, deadline, &running).map_err(String::from),
             Err("Soulseek download failed: peer went offline".into())
         );
 
         let (_sender, receiver) = mpsc::channel();
         let started = Instant::now();
         assert_eq!(
-            finish(&receiver, deadline, &AtomicBool::new(true)),
+            finish(&receiver, deadline, &AtomicBool::new(true)).map_err(String::from),
             Err("Soulseek download cancelled".into())
         );
         assert!(started.elapsed() < Duration::from_secs(1));

@@ -188,13 +188,13 @@ fn ranked_search(
     if !(1..=100).contains(&limit) {
         return Err("limit must be from 1 to 100".into());
     }
-    session.search(
+    Ok(session.search(
         query,
         prefer,
         limit,
         Timeouts::configured(config).search,
         &AtomicBool::new(false),
-    )
+    )?)
 }
 
 fn show_candidates(
