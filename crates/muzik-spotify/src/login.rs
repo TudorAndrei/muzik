@@ -1,10 +1,7 @@
 //! Spotify browser login with PKCE and one loopback callback.
 
-use super::{
-    account_name, save_tokens, settings, tokens_from_payload, Settings, Tokens, TOKEN_URL,
-};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use sha2::{Digest, Sha256};
+use super::{account_name, client, failed, settings};
+use rspotify::clients::OAuthClient;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
@@ -12,9 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use url::Url;
 
-const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const SUCCESS_PAGE: &str = "<html><body><h3>muzik is connected to Spotify.</h3><p>You can close this tab.</p></body></html>";
-const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
 
 pub fn login(
     config_path: &Path,
@@ -40,65 +35,21 @@ pub fn login(
     listener
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
-    let verifier = random_url_token(64)?;
-    let state = random_url_token(16)?;
-    let url = authorize_url(&settings, &verifier, &state)?;
+    let mut spotify = client(&settings, token_path);
+    let url = spotify.get_authorize_url(Some(64)).map_err(failed)?;
     open::that(url.as_str())
         .map_err(|error| format!("Unable to open Spotify login in the browser: {error}"))?;
-    let code = wait_for_code(&listener, &state, cancel, Duration::from_secs(300))?;
+    let code = wait_for_code(
+        &listener,
+        &spotify.oauth.state,
+        cancel,
+        Duration::from_secs(300),
+    )?;
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    let mut response = ureq::post(TOKEN_URL)
-        .config()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .build()
-        .send_form([
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", settings.redirect_uri().as_str()),
-            ("client_id", settings.client_id.as_str()),
-            ("code_verifier", verifier.as_str()),
-        ])
-        .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Spotify rejected the login ({})",
-            response.status()
-        ));
-    }
-    let payload: serde_json::Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|error| format!("Spotify returned an invalid token response: {error}"))?;
-    let tokens: Tokens = tokens_from_payload(&payload, "")?;
-    if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
-    }
-    save_tokens(token_path, &tokens)?;
-    account_name(&settings, token_path, tokens)
-}
-
-fn random_url_token(length: usize) -> Result<String, String> {
-    let mut bytes = vec![0_u8; length];
-    getrandom::fill(&mut bytes)
-        .map_err(|error| format!("Cannot create Spotify login secret: {error}"))?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
-}
-
-fn authorize_url(settings: &Settings, verifier: &str, state: &str) -> Result<Url, String> {
-    let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    let mut url = Url::parse(AUTHORIZE_URL).map_err(|error| error.to_string())?;
-    url.query_pairs_mut()
-        .append_pair("client_id", &settings.client_id)
-        .append_pair("response_type", "code")
-        .append_pair("redirect_uri", &settings.redirect_uri())
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("code_challenge", &challenge)
-        .append_pair("state", state)
-        .append_pair("scope", SCOPES);
-    Ok(url)
+    spotify.request_token(&code).map_err(failed)?;
+    account_name(&spotify)
 }
 
 fn wait_for_code(
@@ -186,9 +137,11 @@ fn answer(stream: &mut TcpStream, status: &str, body: &str) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_url, callback_result, wait_for_code, Settings};
+    use super::{callback_result, client, wait_for_code};
+    use crate::Settings;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
+    use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use url::Url;
@@ -199,42 +152,22 @@ mod tests {
             client_id: "my-client".into(),
             redirect_port: 8888,
         };
-        let url = authorize_url(&settings, "verifier", "state")?;
+        let mut spotify = client(&settings, Path::new("token.json"));
+        let url = Url::parse(&spotify.get_authorize_url(Some(64))?)?;
         let params = url
             .query_pairs()
             .collect::<std::collections::HashMap<_, _>>();
+        let param = |key: &str| params.get(key).map(|value| value.to_string());
+        assert_eq!(param("response_type").as_deref(), Some("code"));
+        assert_eq!(param("code_challenge_method").as_deref(), Some("S256"));
         assert_eq!(
-            params.get("response_type").map(|value| value.as_ref()),
-            Some("code")
-        );
-        assert_eq!(
-            params
-                .get("code_challenge_method")
-                .map(|value| value.as_ref()),
-            Some("S256")
-        );
-        assert_eq!(
-            params.get("redirect_uri").map(|value| value.as_ref()),
+            param("redirect_uri").as_deref(),
             Some("http://127.0.0.1:8888/callback")
         );
-        assert_eq!(
-            params.get("state").map(|value| value.as_ref()),
-            Some("state")
-        );
-        let standard = authorize_url(
-            &settings,
-            "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
-            "state",
-        )?;
-        let standard_params = standard
-            .query_pairs()
-            .collect::<std::collections::HashMap<_, _>>();
-        assert_eq!(
-            standard_params
-                .get("code_challenge")
-                .map(|value| value.as_ref()),
-            Some("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
-        );
+        assert_eq!(param("state"), Some(spotify.oauth.state.clone()));
+        let scopes = param("scope").unwrap_or_default();
+        assert!(scopes.contains("user-library-read"));
+        assert!(scopes.contains("playlist-read-private"));
         Ok(())
     }
 

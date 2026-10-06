@@ -1,14 +1,18 @@
-//! Spotify settings and saved token path shared by the two apps.
+//! Spotify settings, saved token, and API client shared by the two apps.
 
+use chrono::{DateTime, TimeDelta, Utc};
 use muzik_core::app_config;
-use serde::{Deserialize, Serialize};
+use rspotify::clients::OAuthClient;
+use rspotify::prelude::Id;
+use rspotify::{
+    AuthCodePkceSpotify, CallbackError, ClientError, Config, Credentials, OAuth, Token,
+    TokenCallback,
+};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
-const PROFILE_URL: &str = "https://api.spotify.com/v1/me";
+use std::sync::Arc;
 
 mod login;
 pub use login::login;
@@ -17,14 +21,11 @@ pub use api::{list_playlists, PlaylistRef};
 mod reader;
 pub use reader::load_playlist_document;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Tokens {
-    pub access_token: String,
-    pub refresh_token: String,
-    pub expires_at: f64,
-    #[serde(default)]
-    pub scope: String,
-}
+const SCOPES: [&str; 3] = [
+    "playlist-read-private",
+    "playlist-read-collaborative",
+    "user-library-read",
+];
 
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -82,20 +83,59 @@ pub fn settings(path: &Path) -> Result<Settings, String> {
     })
 }
 
-pub fn load_tokens(path: &Path) -> Option<Tokens> {
-    let bytes = fs::read(path).ok()?;
-    let tokens: Tokens = serde_json::from_slice(&bytes).ok()?;
-    (!tokens.access_token.is_empty() && !tokens.refresh_token.is_empty()).then_some(tokens)
+#[derive(Deserialize)]
+struct LegacyToken {
+    access_token: String,
+    refresh_token: String,
+    expires_at: f64,
+    #[serde(default)]
+    scope: String,
 }
 
-pub fn save_tokens(path: &Path, tokens: &Tokens) -> Result<(), String> {
+impl LegacyToken {
+    fn upgrade(self) -> Option<Token> {
+        let since_epoch = std::time::Duration::try_from_secs_f64(self.expires_at).ok()?;
+        Some(Token {
+            access_token: self.access_token,
+            expires_at: DateTime::UNIX_EPOCH
+                .checked_add_signed(TimeDelta::from_std(since_epoch).ok()?),
+            refresh_token: Some(self.refresh_token),
+            scopes: self.scope.split_whitespace().map(str::to_owned).collect(),
+            ..Token::default()
+        })
+    }
+}
+
+fn load_token(path: &Path) -> Option<Token> {
+    let bytes = fs::read(path).ok()?;
+    serde_json::from_slice::<Token>(&bytes)
+        .ok()
+        .or_else(|| {
+            serde_json::from_slice::<LegacyToken>(&bytes)
+                .ok()?
+                .upgrade()
+        })
+        .filter(|token| {
+            !token.access_token.is_empty()
+                && token
+                    .refresh_token
+                    .as_deref()
+                    .is_some_and(|refresh| !refresh.is_empty())
+        })
+}
+
+fn save_token(path: &Path, token: &Token) -> Result<(), String> {
+    let mut token = token.clone();
+    if token.refresh_token.is_none() {
+        token.refresh_token = load_token(path).and_then(|saved| saved.refresh_token);
+    }
     let parent = path.parent().ok_or("token path has no parent")?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let mut file = tempfile::Builder::new()
         .prefix(".spotify-token.json.")
         .tempfile_in(parent)
         .map_err(|error| error.to_string())?;
-    serde_json::to_writer_pretty(&mut file, tokens).map_err(|error| error.to_string())?;
+    serde_json::to_writer_pretty(&mut file, &token).map_err(|error| error.to_string())?;
     use std::io::Write;
     file.write_all(b"\n").map_err(|error| error.to_string())?;
     file.flush().map_err(|error| error.to_string())?;
@@ -106,6 +146,40 @@ pub fn save_tokens(path: &Path, tokens: &Tokens) -> Result<(), String> {
     Ok(())
 }
 
+fn client(settings: &Settings, token_path: &Path) -> AuthCodePkceSpotify {
+    let path = token_path.to_path_buf();
+    let save =
+        move |token: Token| save_token(&path, &token).map_err(CallbackError::CustomizedError);
+    AuthCodePkceSpotify::with_config(
+        Credentials::new_pkce(&settings.client_id),
+        OAuth {
+            redirect_uri: settings.redirect_uri(),
+            scopes: SCOPES.iter().map(|scope| (*scope).to_owned()).collect(),
+            ..OAuth::default()
+        },
+        Config {
+            token_refreshing: true,
+            token_callback_fn: Arc::new(Some(TokenCallback(Box::new(save)))),
+            ..Config::default()
+        },
+    )
+}
+
+fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotify, String> {
+    let token = load_token(token_path)
+        .ok_or("muzik is not connected to Spotify. Run 'muzik spotify login'.")?;
+    let client = client(&settings(config_path)?, token_path);
+    *client
+        .token
+        .lock()
+        .map_err(|_| "the Spotify token is not available")? = Some(token);
+    Ok(client)
+}
+
+fn failed(error: ClientError) -> String {
+    format!("Spotify request failed: {error}")
+}
+
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
     let settings = settings(config_path)?;
     let mut result = json!({
@@ -113,8 +187,8 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
         "redirect_uri": settings.redirect_uri(),
         "connected": false,
     });
-    if let Some(tokens) = load_tokens(token_path) {
-        match account_name(&settings, token_path, tokens) {
+    if load_token(token_path).is_some() {
+        match connected(config_path, token_path).and_then(|client| account_name(&client)) {
             Ok(name) => {
                 result["connected"] = json!(true);
                 result["account_name"] = json!(name);
@@ -125,146 +199,21 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
     Ok(result)
 }
 
-fn account_name(settings: &Settings, path: &Path, mut tokens: Tokens) -> Result<String, String> {
-    let profile = get_json(settings, path, &mut tokens, PROFILE_URL)?;
-    Ok(profile["display_name"]
-        .as_str()
-        .or_else(|| profile["id"].as_str())
-        .unwrap_or("")
-        .to_owned())
+fn account_name(client: &AuthCodePkceSpotify) -> Result<String, String> {
+    let user = client.current_user().map_err(failed)?;
+    Ok(user
+        .display_name
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| user.id.id().to_owned()))
 }
 
-fn get_json(
-    settings: &Settings,
-    path: &Path,
-    tokens: &mut Tokens,
-    url: &str,
-) -> Result<Value, String> {
-    get_json_optional(settings, path, tokens, url)?.ok_or("Spotify resource was not found".into())
-}
-
-fn get_json_optional(
-    settings: &Settings,
-    path: &Path,
-    tokens: &mut Tokens,
-    url: &str,
-) -> Result<Option<Value>, String> {
-    if expired(tokens) {
-        *tokens = refresh_tokens(settings, path, tokens)?;
-    }
-    let mut refreshed = false;
-    for attempt in 0..3 {
-        let mut response = ureq::get(url)
-            .header("Authorization", format!("Bearer {}", tokens.access_token))
-            .config()
-            .timeout_global(Some(Duration::from_secs(30)))
-            .http_status_as_error(false)
-            .build()
-            .call()
-            .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
-        if response.status().as_u16() == 401 && !refreshed {
-            *tokens = refresh_tokens(settings, path, tokens)?;
-            refreshed = true;
-            continue;
-        }
-        if response.status().as_u16() == 429 && attempt < 2 {
-            let seconds = response
-                .headers()
-                .get("retry-after")
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(1)
-                .min(30);
-            std::thread::sleep(Duration::from_secs(seconds));
-            continue;
-        }
-        if response.status().as_u16() == 404 {
-            return Ok(None);
-        }
-        if !response.status().is_success() {
-            return Err(format!(
-                "Spotify rejected the request ({})",
-                response.status()
-            ));
-        }
-        let document: Value = response
-            .body_mut()
-            .read_json()
-            .map_err(|error| format!("Spotify returned an invalid response: {error}"))?;
-        if !document.is_object() {
-            return Err("Spotify returned an invalid response".into());
-        }
-        return Ok(Some(document));
-    }
-    Err("Spotify did not accept the refreshed token".into())
-}
-
-fn refresh_tokens(settings: &Settings, path: &Path, old: &Tokens) -> Result<Tokens, String> {
-    if settings.client_id.is_empty() {
-        return Err("No Spotify client ID is configured".into());
-    }
-    let mut response = ureq::post(TOKEN_URL)
-        .config()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .build()
-        .send_form([
-            ("grant_type", "refresh_token"),
-            ("refresh_token", old.refresh_token.as_str()),
-            ("client_id", settings.client_id.as_str()),
-        ])
-        .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Spotify rejected the token refresh ({})",
-            response.status()
-        ));
-    }
-    let payload: Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|error| format!("Spotify returned an invalid token response: {error}"))?;
-    let tokens = tokens_from_payload(&payload, &old.refresh_token)?;
-    save_tokens(path, &tokens)?;
-    Ok(tokens)
-}
-
-fn tokens_from_payload(payload: &Value, fallback_refresh: &str) -> Result<Tokens, String> {
-    let access_token = payload["access_token"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or("Spotify returned no access token")?;
-    let refresh_token = payload["refresh_token"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .unwrap_or(fallback_refresh);
-    if refresh_token.is_empty() {
-        return Err("Spotify returned no refresh token".into());
-    }
-    let lifetime = payload["expires_in"].as_f64().unwrap_or(3600.0);
-    Ok(Tokens {
-        access_token: access_token.to_owned(),
-        refresh_token: refresh_token.to_owned(),
-        expires_at: now() + lifetime,
-        scope: payload["scope"].as_str().unwrap_or("").to_owned(),
-    })
-}
-
-fn expired(tokens: &Tokens) -> bool {
-    now() >= tokens.expires_at - 60.0
-}
-
-fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64())
-        .unwrap_or(0.0)
+fn utc(time: DateTime<Utc>) -> String {
+    time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_tokens, load_tokens, save_tokens, status, tokens_from_payload};
-    use serde_json::json;
+    use super::{clear_tokens, load_token, save_token, status};
     use std::fs;
 
     #[test]
@@ -278,30 +227,31 @@ mod tests {
     }
 
     #[test]
-    fn reads_and_writes_existing_spotify_token_data() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_saved_token_of_the_earlier_format_still_loads() -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("spotify-token.json");
         fs::write(
             &path,
             r#"{"access_token":"access","refresh_token":"refresh","expires_at":1800000000.0,"scope":"user-library-read"}"#,
         )?;
-        let tokens = load_tokens(&path).ok_or("saved tokens were not read")?;
-        assert_eq!(tokens.access_token, "access");
-        assert_eq!(tokens.refresh_token, "refresh");
-        save_tokens(&path, &tokens).map_err(std::io::Error::other)?;
+        let token = load_token(&path).ok_or("saved token was not read")?;
+        assert_eq!(token.access_token, "access");
+        assert_eq!(token.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(
-            load_tokens(&path)
-                .ok_or("saved tokens were not read")?
-                .scope,
-            "user-library-read"
+            token.expires_at.map(|time| time.timestamp()),
+            Some(1_800_000_000)
         );
+        assert!(token.scopes.contains("user-library-read"));
 
-        let refreshed = tokens_from_payload(
-            &json!({"access_token":"new","expires_in":3600}),
-            &tokens.refresh_token,
-        )
-        .map_err(std::io::Error::other)?;
-        assert_eq!(refreshed.refresh_token, "refresh");
+        let refreshed = rspotify::Token {
+            access_token: "new".into(),
+            refresh_token: None,
+            ..token
+        };
+        save_token(&path, &refreshed).map_err(std::io::Error::other)?;
+        let saved = load_token(&path).ok_or("saved token was not read")?;
+        assert_eq!(saved.access_token, "new");
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh"));
         Ok(())
     }
 

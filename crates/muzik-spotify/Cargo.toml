@@ -7,13 +7,11 @@ publish = false
 description = "Spotify login, playlists, and playlist pages for muzik"
 
 [dependencies]
-base64 = "0.22"
-getrandom = "0.4"
+chrono = "0.4"
 muzik-core = { path = "../muzik-core" }
 open = "5.4.4"
+rspotify = { version = "0.16.1", default-features = false, features = ["client-ureq", "ureq-rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
 tempfile = "3"
-ureq = { version = "3.4.2", features = ["json"] }
 url = "2.5.8"
