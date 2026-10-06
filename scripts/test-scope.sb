@@ -13,6 +13,8 @@
 (deny file-read* file-write*
   (subpath (string-append (param "HOME") "/Library/Application Support/muzik"))
   (subpath (string-append (param "HOME") "/Library/Caches/muzik"))
+  (subpath (string-append (param "HOME") "/Library/Application Support/com.tudorandrei.muzik"))
+  (subpath (string-append (param "HOME") "/Library/Caches/com.tudorandrei.muzik"))
   (subpath (string-append (param "HOME") "/Library/Application Support/beets"))
   (subpath (string-append (param "HOME") "/.config/beets"))
   (subpath (string-append (param "HOME") "/.config/muzik"))
