@@ -27,7 +27,7 @@ fn entries(value: &Value, key: &str) -> Vec<Value> {
 }
 
 pub fn open() -> Result<Arc<Jobs>, String> {
-    Jobs::open(&Paths::user()).map(Arc::new)
+    Ok(Arc::new(Jobs::open(&Paths::user())?))
 }
 
 pub fn list() -> Result<(), String> {

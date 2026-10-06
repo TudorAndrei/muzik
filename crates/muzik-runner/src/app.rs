@@ -40,7 +40,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn start(options: AppOptions) -> Result<Self, String> {
+    pub fn start(options: AppOptions) -> crate::Result<Self> {
         let jobs = Arc::new(if options.in_memory {
             Jobs::in_memory(&options.paths)?
         } else {
@@ -122,13 +122,13 @@ impl App {
         self.queued(self.jobs.item(&params))
     }
 
-    pub fn answer(&self, id: i64, value: &Value) -> Result<bool, String> {
+    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
         let answered = self.jobs.answer(id, value)?;
         self.changed();
         Ok(answered)
     }
 
-    pub fn cancel(&self, job: &str) -> Result<bool, String> {
+    pub fn cancel(&self, job: &str) -> crate::Result<bool> {
         if self
             .runner
             .as_ref()
@@ -160,26 +160,26 @@ impl App {
             .is_some_and(|reply| reply.send(value).is_ok())
     }
 
-    pub fn add_source(&self, url: &str) -> Result<Playlist, String> {
+    pub fn add_source(&self, url: &str) -> crate::Result<Playlist> {
         self.edit(|repository| Ok(repository.add(url)?))
     }
 
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
         self.edit(|repository| Ok(repository.rename(playlist_id, title)?))
     }
 
-    pub fn remove_source(&self, playlist_id: &str) -> Result<bool, String> {
+    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
         self.edit(|repository| Ok(repository.remove(playlist_id)?))
     }
 
-    pub fn load_watchlist(&self, busy: Busy) -> Result<(Value, WatchlistCheck), String> {
+    pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
         let generation = {
             let _gate = self.gate.lock();
             self.generation.fetch_add(1, Ordering::SeqCst) + 1
         };
         let repository = self.repository();
-        if let Err(message) = watchlist::ensure_sources(&self.paths) {
-            (self.sink)(AppEvent::WatchlistError(message));
+        if let Err(error) = watchlist::ensure_sources(&self.paths) {
+            (self.sink)(AppEvent::WatchlistError(error.to_string()));
         }
         let settings = Settings::resolve(&self.paths, &json!({}))?;
         let saved = saved::view(
@@ -200,7 +200,7 @@ impl App {
         Ok((saved, check))
     }
 
-    fn edit<T>(&self, change: impl FnOnce(&Repository) -> Result<T, String>) -> Result<T, String> {
+    fn edit<T>(&self, change: impl FnOnce(&Repository) -> crate::Result<T>) -> crate::Result<T> {
         let _gate = self.gate.lock();
         let result = change(&self.repository())?;
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -237,9 +237,9 @@ pub struct WatchlistCheck {
 
 impl WatchlistCheck {
     pub fn run(self) {
-        if let Err(message) = self.check() {
+        if let Err(error) = self.check() {
             if self.current() {
-                (self.sink)(AppEvent::WatchlistError(message));
+                (self.sink)(AppEvent::WatchlistError(error.to_string()));
             }
         }
     }
@@ -252,7 +252,7 @@ impl WatchlistCheck {
         (self.busy)() || self.jobs.has_running() || !self.current()
     }
 
-    fn check(&self) -> Result<(), String> {
+    fn check(&self) -> crate::Result<()> {
         let options = self.settings.reconcile();
         saved::import_cache(&self.repository, options)?;
         for _ in 0..3 {
@@ -262,7 +262,7 @@ impl WatchlistCheck {
             let revision = self.repository.revision()?;
             let mut checked = self.repository.load()?;
             saved::reconcile(&mut checked, options)?;
-            let written = self.repository.locked(|| -> Result<bool, String> {
+            let written = self.repository.locked(|| -> crate::Result<bool> {
                 if self.busy() {
                     return Ok(true);
                 }

@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod app;
 pub mod choices;
+mod error;
 mod events;
 pub mod gates;
 mod local_workflow;
@@ -15,6 +16,7 @@ mod sources;
 pub mod watchlist;
 
 pub use app::{App, AppOptions};
+pub use error::{Error, Result};
 pub use events::AppEvent;
 pub use queue::{job_id, parse_job_id, EnqueueError, Jobs};
 pub use runner::{Ask, Options, Prompt, Runner, Running, Sink};

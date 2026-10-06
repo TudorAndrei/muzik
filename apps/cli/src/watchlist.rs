@@ -10,7 +10,7 @@ fn repository() -> Repository {
 }
 
 fn settings() -> Result<Settings, String> {
-    Settings::resolve(&Paths::user(), &json!({}))
+    Ok(Settings::resolve(&Paths::user(), &json!({}))?)
 }
 
 fn list_of(value: &Value, key: &str) -> Vec<Value> {

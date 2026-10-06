@@ -1,3 +1,4 @@
+use crate::Result;
 use muzik_core::paths::{expand_home, Paths};
 use muzik_core::{app_config, ChoiceError};
 use muzik_store::watchlist::ReconcileOptions;
@@ -14,9 +15,8 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn resolve(paths: &Paths, params: &Value) -> Result<Self, String> {
-        let mut merged = serde_json::to_value(app_config::load_gui_defaults(paths))
-            .map_err(|error| error.to_string())?;
+    pub fn resolve(paths: &Paths, params: &Value) -> Result<Self> {
+        let mut merged = serde_json::to_value(app_config::load_gui_defaults(paths))?;
         merged
             .as_object_mut()
             .ok_or("GUI defaults are not a mapping")?
@@ -29,7 +29,7 @@ impl Settings {
         Self::parse(paths, &merged)
     }
 
-    pub fn parse(paths: &Paths, values: &Value) -> Result<Self, String> {
+    pub fn parse(paths: &Paths, values: &Value) -> Result<Self> {
         let mut options = WorkflowOptions::default();
         for (key, target) in [
             ("review", &mut options.review),
@@ -121,20 +121,19 @@ impl Settings {
     }
 }
 
-fn choice<T: std::str::FromStr<Err = ChoiceError>>(value: &Value, name: &str) -> Result<T, String> {
-    value
+fn choice<T: std::str::FromStr<Err = ChoiceError>>(value: &Value, name: &str) -> Result<T> {
+    Ok(value
         .as_str()
         .ok_or_else(|| format!("{name} must be a string"))?
-        .parse()
-        .map_err(|error: ChoiceError| error.to_string())
+        .parse()?)
 }
 
-fn path(values: &Value, key: &str) -> Result<Option<PathBuf>, String> {
+fn path(values: &Value, key: &str) -> Result<Option<PathBuf>> {
     match values.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) if text.trim().is_empty() => Ok(None),
         Some(Value::String(text)) => Ok(Some(expand_home(Path::new(text)))),
-        Some(_) => Err(format!("{key} must be a string")),
+        Some(_) => Err(format!("{key} must be a string").into()),
     }
 }
 

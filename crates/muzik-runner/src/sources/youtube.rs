@@ -155,7 +155,7 @@ pub(super) fn local_stage(
             &mut |event| (events.borrow_mut())(event),
             adapter.decide,
         )
-        .map_err(|error| cancel_or(cancelled, error.into()))?;
+        .map_err(|error| cancel_or(cancelled, error))?;
         apply_quality_result(&mut updated, &result);
         return Ok(updated);
     }
@@ -312,15 +312,12 @@ fn refresh_chapters_with(
     Ok(path)
 }
 
-fn atomic_write(path: &Path, text: &str) -> Result<(), JobError> {
+fn atomic_write(path: &Path, text: &str) -> crate::Result<()> {
     use std::io::Write;
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut file = tempfile::NamedTempFile::new_in(parent)
-        .map_err(|error| JobError::Operation(error.to_string()))?;
-    file.write_all(text.as_bytes())
-        .map_err(|error| JobError::Operation(error.to_string()))?;
-    file.persist(path)
-        .map_err(|error| JobError::Operation(error.to_string()))?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(text.as_bytes())?;
+    file.persist(path)?;
     Ok(())
 }
 

@@ -176,29 +176,31 @@ impl Backend {
     }
 
     pub fn answer(&self, id: i64, value: &Value) -> Result<bool, String> {
-        self.app.answer(id, value)
+        Ok(self.app.answer(id, value)?)
     }
 
     pub fn load_watchlist(&self) -> Result<(Value, WatchlistCheck), String> {
         let login = Arc::clone(&self.login);
-        self.app
-            .load_watchlist(Arc::new(move || login.lock().is_some()))
+        Ok(self
+            .app
+            .load_watchlist(Arc::new(move || login.lock().is_some()))?)
     }
 
     pub fn add_source(&self, url: &str) -> Result<Playlist, String> {
-        self.app.add_source(required("url", url)?)
+        Ok(self.app.add_source(required("url", url)?)?)
     }
 
     pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
-        self.app.rename_source(
+        Ok(self.app.rename_source(
             required("playlist_id", playlist_id)?,
             required("title", title)?,
-        )
+        )?)
     }
 
     pub fn remove_source(&self, playlist_id: &str) -> Result<bool, String> {
-        self.app
-            .remove_source(required("playlist_id", playlist_id)?)
+        Ok(self
+            .app
+            .remove_source(required("playlist_id", playlist_id)?)?)
     }
 
     pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Value> {
@@ -228,7 +230,7 @@ impl Backend {
     }
 
     pub fn soulseek_account(&self) -> Result<Value, String> {
-        setup::soulseek_account(&self.paths().config_file())
+        Ok(setup::soulseek_account(&self.paths().config_file())?)
     }
 
     pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<Value, String> {
@@ -249,7 +251,7 @@ impl Backend {
                 server_port: Some(server_port),
             },
         )?;
-        setup::soulseek_account(&path)
+        Ok(setup::soulseek_account(&path)?)
     }
 
     pub fn bandcamp(&self) -> Value {

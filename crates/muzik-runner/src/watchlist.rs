@@ -53,7 +53,7 @@ pub fn sync(
     Ok(synced.pending)
 }
 
-pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> Result<bool, String> {
+pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> crate::Result<bool> {
     sources::ensure(&Repository::open(paths), paths)
 }
 

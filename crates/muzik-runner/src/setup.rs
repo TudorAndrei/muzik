@@ -1,3 +1,4 @@
+use crate::Result;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
 use muzik_soulseek::session::{
@@ -15,7 +16,7 @@ pub struct SoulseekAccount<'a> {
     pub server_port: Option<u64>,
 }
 
-pub fn soulseek_account(config_file: &Path) -> Result<Value, String> {
+pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     let config = app_config::load(config_file)?;
     let section = &config["soulseek"];
     let text = |key: &str| section[key].as_str().unwrap_or("").to_owned();
@@ -34,10 +35,7 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value, String> {
     }))
 }
 
-pub fn save_soulseek_account(
-    config_file: &Path,
-    account: &SoulseekAccount<'_>,
-) -> Result<(), String> {
+pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) -> Result<()> {
     let config = app_config::load(config_file)?;
     let saved = |key: &str| config["soulseek"][key].as_str().unwrap_or("").to_owned();
     let username = account
@@ -74,7 +72,7 @@ pub fn save_soulseek_account(
     move_soulseek_password(config_file)
 }
 
-pub fn move_soulseek_password(config_file: &Path) -> Result<(), String> {
+pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
     let config = app_config::load(config_file)?;
     let password = config["soulseek"]["password"].as_str().unwrap_or("").trim();
     if password.is_empty() || session::save_password(password).is_err() {
@@ -274,7 +272,7 @@ mod tests {
         let error = save_soulseek_account(&path, &account(None, Some("b"), None))
             .err()
             .ok_or("expected an error")?;
-        assert!(error.contains("username"));
+        assert!(error.to_string().contains("username"));
         Ok(())
     }
 
@@ -285,7 +283,7 @@ mod tests {
         let error = save_soulseek_account(&path, &account(Some("a"), Some("b"), Some(70000)))
             .err()
             .ok_or("expected an error")?;
-        assert_eq!(error, "Enter a server port from 1 to 65535.");
+        assert_eq!(error.to_string(), "Enter a server port from 1 to 65535.");
         Ok(())
     }
 }

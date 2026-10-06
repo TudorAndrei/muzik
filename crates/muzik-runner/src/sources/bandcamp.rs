@@ -15,7 +15,7 @@ const MEGABYTE: u64 = 1024 * 1024;
 
 pub(super) struct Bandcamp;
 
-pub(super) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
+pub(super) fn ensure(repository: &Repository, paths: &Paths) -> crate::Result<bool> {
     match bandcamp::Login::load(paths) {
         Some(login) => Ok(repository.ensure(&bandcamp_source(&login.user))?),
         None => Ok(false),

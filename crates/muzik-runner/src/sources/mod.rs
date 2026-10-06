@@ -41,7 +41,7 @@ pub(crate) fn of(kind: SourceKind) -> &'static dyn Source {
     }
 }
 
-pub(crate) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
+pub(crate) fn ensure(repository: &Repository, paths: &Paths) -> crate::Result<bool> {
     bandcamp::ensure(repository, paths)
 }
 
@@ -120,11 +120,11 @@ fn workflow_error(error: muzik_workflow::Error) -> JobError {
     }
 }
 
-fn cancel_or(cancelled: &AtomicBool, error: String) -> JobError {
+fn cancel_or(cancelled: &AtomicBool, error: impl std::fmt::Display) -> JobError {
     if cancelled.load(Ordering::SeqCst) {
         JobError::Cancelled
     } else {
-        JobError::Operation(error)
+        JobError::Operation(error.to_string())
     }
 }
 

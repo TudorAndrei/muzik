@@ -104,7 +104,7 @@ impl Drop for Runner {
 }
 
 impl Runner {
-    pub fn start(jobs: Arc<Jobs>, options: Options) -> Result<Option<Self>, String> {
+    pub fn start(jobs: Arc<Jobs>, options: Options) -> crate::Result<Option<Self>> {
         let Some(lock) = jobs.runner_lock()? else {
             return Ok(None);
         };
@@ -259,7 +259,7 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
 }
 
 fn settings(shared: &Shared, job: &Job) -> Result<Settings, (bool, String)> {
-    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|message| (false, message))
+    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|error| (false, error.to_string()))
 }
 
 fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
@@ -441,7 +441,7 @@ fn ask_agent(
             None
         }
         Err(error) => {
-            payload["agent"] = json!({"model":model,"error":error});
+            payload["agent"] = json!({"model":model,"error":error.to_string()});
             None
         }
     }

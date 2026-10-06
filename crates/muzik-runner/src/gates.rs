@@ -1,3 +1,4 @@
+use crate::{Error, Result};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -97,7 +98,7 @@ pub fn set_label(label: &str) {
     LABEL.with(|current| label.clone_into(&mut current.borrow_mut()));
 }
 
-pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit, String> {
+pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit> {
     if HELD.with(|held| held.borrow().iter().any(|entry| entry.0 == gate)) {
         return Ok(Permit { held: None });
     }
@@ -152,14 +153,14 @@ fn admit(
     gate: Gate,
     ticket: u64,
     cancelled: &AtomicBool,
-) -> Result<MutexGuard<'static, State>, String> {
+) -> Result<MutexGuard<'static, State>> {
     loop {
         let lane = &mut state.lanes[gate.index()];
         if cancelled.load(Ordering::SeqCst) {
             lane.waiting.retain(|entry| entry.0 != ticket);
             CHANGED.notify_all();
             publish(&state);
-            return Err(format!("{gate} queue wait cancelled"));
+            return Err(Error::GateCancelled(gate));
         }
         if lane.active.len() < gate.limit()
             && lane.waiting.first().map(|entry| entry.0) == Some(ticket)
