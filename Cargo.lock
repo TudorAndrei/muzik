@@ -4557,10 +4557,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "muzik-release"
-version = "2.12.0"
-
-[[package]]
 name = "muzik-runner"
 version = "2.12.0"
 dependencies = [

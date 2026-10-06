@@ -1,6 +1,6 @@
 [package]
 name = "muzik-agent"
-version = "2.12.0"
+version.workspace = true
 edition = "2024"
 publish = false
 license-file = "../../LICENSE"

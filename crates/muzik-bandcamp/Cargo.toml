@@ -1,6 +1,6 @@
 [package]
 name = "muzik-bandcamp"
-version = "2.12.0"
+version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 publish = false
