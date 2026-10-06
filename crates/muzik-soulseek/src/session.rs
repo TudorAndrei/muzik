@@ -4,8 +4,9 @@
 //! `&self` and is safe to call from multiple threads. So a session connects
 //! once and the app shares it behind an `Arc`.
 
+use parking_lot::Mutex;
 use std::env;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -78,9 +79,7 @@ static SHARED: Mutex<Shared> = Mutex::new(None);
 
 impl Session {
     pub fn shared(settings: SessionSettings) -> Result<Arc<Self>, BridgeError> {
-        let mut shared = SHARED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut shared = SHARED.lock();
         if let Some((current, session)) = shared.as_ref() {
             if *current == settings {
                 return Ok(Arc::clone(session));
@@ -92,10 +91,7 @@ impl Session {
     }
 
     pub fn forget_shared() {
-        SHARED
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        SHARED.lock().take();
     }
 
     pub fn connect(settings: SessionSettings) -> Result<Self, BridgeError> {

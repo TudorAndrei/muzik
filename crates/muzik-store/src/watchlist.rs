@@ -2,13 +2,13 @@
 
 use crate::db;
 use muzik_core::paths::Paths;
+use parking_lot::Mutex;
 use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 mod item;
@@ -243,7 +243,7 @@ impl Repository {
     }
 
     pub fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
-        let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
+        let _writer = WRITER.lock();
         work()
     }
 

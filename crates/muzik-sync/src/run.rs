@@ -5,11 +5,11 @@ use crate::{
 use muzik_library::{path_from_sql, Item, Library};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;
+use parking_lot::Mutex;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 
 pub struct Selection {
     pub tracks: Vec<PathBuf>,
@@ -160,11 +160,7 @@ pub fn apply(
     let finished = |transfer: &Transfer, result: &Result<(), String>| {
         let index = count.fetch_add(1, Ordering::Relaxed) + 1;
         let record_error = match result {
-            Ok(()) => record(
-                &connection.lock().unwrap_or_else(PoisonError::into_inner),
-                transfer,
-            )
-            .err(),
+            Ok(()) => record(&connection.lock(), transfer).err(),
             Err(_) => None,
         };
         if record_error.is_some() {

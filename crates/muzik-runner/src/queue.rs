@@ -4,10 +4,10 @@ use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_store::db;
 use muzik_store::jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
+use parking_lot::{Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +77,7 @@ impl Jobs {
     }
 
     pub fn store(&self) -> MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(PoisonError::into_inner)
+        self.store.lock()
     }
 
     pub fn refresh(&self, params: &Value) -> Result<i64, EnqueueError> {

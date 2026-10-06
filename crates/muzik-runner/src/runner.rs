@@ -8,12 +8,13 @@ use muzik_store::jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
 use muzik_store::watchlist::jobs::JobError;
 use muzik_store::watchlist::{ItemAction, Stage};
 use muzik_workflow::{classify_input, WorkflowInput};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use strum_macros::AsRefStr;
@@ -86,7 +87,7 @@ impl Shared {
     }
 
     fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
-        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+        self.running.lock()
     }
 }
 
@@ -182,8 +183,8 @@ fn work(shared: &Arc<Shared>) {
     while !shared.stop.load(Ordering::SeqCst) {
         let claimed = shared.store().claim_any(&QUEUES).ok().flatten();
         let Some(job) = claimed else {
-            let idle = shared.idle.lock().unwrap_or_else(PoisonError::into_inner);
-            let _ = shared.wake.wait_timeout(idle, Duration::from_secs(1));
+            let mut idle = shared.idle.lock();
+            shared.wake.wait_for(&mut idle, Duration::from_secs(1));
             continue;
         };
         run_job(shared, job);
@@ -453,20 +454,17 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
-        let sender = Mutex::new(sender);
         let runner = Runner::start(
             Arc::clone(jobs),
             Options {
                 workers: 2,
                 sink: Arc::new(move |message| {
-                    if let Ok(sender) = sender.lock() {
-                        let _ = sender.send(message);
-                    }
+                    let _ = sender.send(message);
                 }),
                 ask: Arc::new(|_| Err("no answer in tests".into())),
                 chooser: None,

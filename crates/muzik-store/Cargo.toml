@@ -15,6 +15,7 @@ panic = "deny"
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+parking_lot = "0.12"
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
 serde = { version = "1", features = ["derive"] }

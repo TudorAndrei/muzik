@@ -5,11 +5,12 @@ use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
 use muzik_runner::{AppEvent, Jobs, Options, Prompt, Runner, job_id, parse_job_id};
 use muzik_store::jobs::CancelRequest;
+use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Write};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 const WORKERS: usize = 5;
 
@@ -153,9 +154,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
 }
 
 fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
-    let Ok(mut titles) = titles.lock() else {
-        return;
-    };
+    let mut titles = titles.lock();
     match event {
         AppEvent::JobStarted {
             job_id: id, title, ..
@@ -211,7 +210,7 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err("This job needs an answer. Run it in a terminal or in the app.".into());
     }
-    let _prompt = PROMPT.lock().map_err(|_| "The prompt is not available.")?;
+    let _prompt = PROMPT.lock();
     if prompt.kind == DecisionKind::ChapterEdit {
         return edit_chapters(&prompt.payload);
     }
