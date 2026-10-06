@@ -187,11 +187,7 @@ struct ActivitySection {
 const CHOICES: &[(&str, &str, &[&str])] = &[
     ("audio_source", "Audio source", AudioSource::CHOICES),
     ("metadata_source", "Metadata", MetadataSource::CHOICES),
-    (
-        "prefer",
-        "Prefer",
-        muzik_core::config_choices::PREFERRED_AUDIO_CHOICES,
-    ),
+    ("prefer", "Prefer", muzik_core::PreferredAudio::CHOICES),
     ("fallback", "Fallback", AudioFallback::CHOICES),
     ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
     (

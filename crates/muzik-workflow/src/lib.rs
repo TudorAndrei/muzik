@@ -4,8 +4,9 @@
 //! audio discovery, the split/organize order, and safe cancellation points.
 
 use muzik_core::chapters::{self, Chapter};
-use muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE;
-pub use muzik_core::{AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy};
+pub use muzik_core::{
+    AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
+};
 pub use muzik_media::splitter::SplitProgress;
 use std::collections::HashSet;
 use std::fs;
@@ -42,7 +43,7 @@ pub struct WorkflowOptions {
     pub config: Option<PathBuf>,
     pub metadata_source: MetadataSource,
     pub audio_source: AudioSource,
-    pub prefer: String,
+    pub prefer: PreferredAudio,
     pub fallback: AudioFallback,
     pub interactive: bool,
     pub quality_policy: QualityPolicy,
@@ -66,7 +67,7 @@ impl Default for WorkflowOptions {
             config: None,
             metadata_source: MetadataSource::default(),
             audio_source: AudioSource::default(),
-            prefer: DEFAULT_AUDIO_PREFERENCE.into(),
+            prefer: PreferredAudio::default(),
             fallback: AudioFallback::default(),
             interactive: true,
             quality_policy: QualityPolicy::default(),

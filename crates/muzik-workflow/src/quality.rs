@@ -3,7 +3,7 @@
 use muzik_core::audio::AudioFormat;
 use muzik_core::chapters::sidecar_path;
 use muzik_core::paths::Paths;
-use muzik_core::{DecisionKind, QualityPolicy, app_config};
+use muzik_core::{DecisionKind, PreferredAudio, QualityPolicy, app_config};
 use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::ranking::{format as file_format, rank};
@@ -45,7 +45,7 @@ trait Backend {
     fn search(
         &mut self,
         query: &str,
-        prefer: &str,
+        prefer: PreferredAudio,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Candidate>, String>;
     fn download(
@@ -65,7 +65,7 @@ pub fn check_youtube_quality(
     audio_files: Vec<PathBuf>,
     policy: QualityPolicy,
     min_bitrate: u32,
-    prefer: &str,
+    prefer: PreferredAudio,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -92,7 +92,7 @@ fn check_with_backend(
     audio_files: Vec<PathBuf>,
     policy: QualityPolicy,
     min_bitrate: u32,
-    prefer: &str,
+    prefer: PreferredAudio,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -450,7 +450,7 @@ impl Backend for SoulseekBackend {
     fn search(
         &mut self,
         query: &str,
-        prefer: &str,
+        prefer: PreferredAudio,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Candidate>, String> {
         let (session, timeouts) = self.session()?;
@@ -546,7 +546,7 @@ mod tests {
         fn search(
             &mut self,
             _query: &str,
-            _prefer: &str,
+            _prefer: PreferredAudio,
             _cancelled: &AtomicBool,
         ) -> Result<Vec<Candidate>, String> {
             Ok(self.candidates.clone())
@@ -603,7 +603,7 @@ mod tests {
             vec![original],
             policy,
             320,
-            "lossless",
+            PreferredAudio::Lossless,
             &AtomicBool::new(false),
             &mut |_| {},
             &mut |kind, _| {
@@ -654,7 +654,7 @@ mod tests {
             vec![original],
             QualityPolicy::Auto,
             320,
-            "lossless",
+            PreferredAudio::Lossless,
             &AtomicBool::new(true),
             &mut |_| {},
             &mut |_, _| Ok(json!(true)),

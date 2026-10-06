@@ -2,6 +2,7 @@
 
 use crate::types::{Candidate, FileEntry};
 use muzik_core::audio::AudioFormat;
+use muzik_core::PreferredAudio;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -10,26 +11,21 @@ pub struct RankedCandidate {
     pub score: f64,
 }
 
-pub fn search_query(query: &str, prefer: &str) -> String {
+pub fn search_query(query: &str, prefer: PreferredAudio) -> String {
     let query = query.trim();
     let tokens: HashSet<_> = query
         .split_whitespace()
         .map(str::to_ascii_lowercase)
         .collect();
-    let suffix = if prefer == "lossless" {
-        (!tokens.contains("flac") && !tokens.contains("lossless")).then_some("flac")
-    } else if prefer != "any" && !prefer.is_empty() {
-        (!tokens.contains(prefer)).then_some(prefer)
-    } else {
-        None
-    };
-    suffix.map_or_else(|| query.to_owned(), |suffix| format!("{query} {suffix}"))
+    prefer
+        .search_suffix(&tokens)
+        .map_or_else(|| query.to_owned(), |suffix| format!("{query} {suffix}"))
 }
 
 pub fn rank(
     candidates: Vec<Candidate>,
     query: &str,
-    prefer: &str,
+    prefer: PreferredAudio,
     limit: usize,
 ) -> Vec<RankedCandidate> {
     let mut ranked = candidates
@@ -58,7 +54,7 @@ pub fn format(file: &FileEntry) -> Option<AudioFormat> {
     })
 }
 
-fn quality(file: &FileEntry, prefer: &str) -> f64 {
+fn quality(file: &FileEntry, prefer: PreferredAudio) -> f64 {
     let fmt = format(file);
     let lossless = fmt.is_some_and(AudioFormat::is_lossless);
     let mut score = if lossless {
@@ -70,10 +66,7 @@ fn quality(file: &FileEntry, prefer: &str) -> f64 {
     } else {
         0.0
     };
-    if (prefer == "lossless" && lossless)
-        || (prefer == "mp3-320" && fmt == Some(AudioFormat::Mp3) && file.bitrate_kbps == Some(320))
-        || fmt.is_some_and(|format| format.as_ref() == prefer)
-    {
+    if prefer.bonus(fmt, lossless, file.bitrate_kbps) {
         score += 30.0;
     }
     if let Some(bitrate) = file.bitrate_kbps {
@@ -88,7 +81,7 @@ fn quality(file: &FileEntry, prefer: &str) -> f64 {
     score
 }
 
-fn score(candidate: &Candidate, query: &str, prefer: &str) -> f64 {
+fn score(candidate: &Candidate, query: &str, prefer: PreferredAudio) -> f64 {
     let audio: Vec<_> = candidate
         .files
         .iter()
@@ -193,6 +186,7 @@ fn numbered(value: &str) -> bool {
 mod tests {
     use super::{rank, search_query};
     use crate::types::{Candidate, FileEntry};
+    use muzik_core::PreferredAudio;
 
     fn candidate(name: &str) -> Candidate {
         Candidate {
@@ -219,7 +213,7 @@ mod tests {
                 candidate("Album\\01 Song.flac"),
             ],
             "Song",
-            "lossless",
+            PreferredAudio::Lossless,
             2,
         );
         assert_eq!(
@@ -233,9 +227,12 @@ mod tests {
 
     #[test]
     fn query_adds_quality_term_once() {
-        assert_eq!(search_query("Artist Song", "lossless"), "Artist Song flac");
         assert_eq!(
-            search_query("Artist Song flac", "lossless"),
+            search_query("Artist Song", PreferredAudio::Lossless),
+            "Artist Song flac"
+        );
+        assert_eq!(
+            search_query("Artist Song flac", PreferredAudio::Lossless),
             "Artist Song flac"
         );
     }

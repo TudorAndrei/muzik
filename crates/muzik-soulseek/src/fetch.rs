@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use muzik_core::PreferredAudio;
 use serde_json::Value;
 
 use crate::job::{JobHandle, JobOutcome, JobState};
@@ -92,7 +93,7 @@ impl Session {
     pub fn search(
         &self,
         query: &str,
-        prefer: &str,
+        prefer: PreferredAudio,
         limit: usize,
         timeout: f64,
         cancelled: &AtomicBool,

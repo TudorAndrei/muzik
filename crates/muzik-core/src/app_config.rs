@@ -1,8 +1,8 @@
 //! Read and update the existing muzik config file.
 
 use crate::config_choices::{
-    choices_for_field, AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy,
-    DEFAULT_AUDIO_PREFERENCE,
+    choices_for_field, AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio,
+    QualityPolicy,
 };
 use crate::paths::{self, Paths};
 use serde_json::{json, Map, Value};
@@ -29,7 +29,7 @@ pub fn gui_defaults(paths: &Paths) -> Value {
         "force": false,
         "metadata_source": MetadataSource::default(),
         "audio_source": AudioSource::default(),
-        "prefer": DEFAULT_AUDIO_PREFERENCE,
+        "prefer": PreferredAudio::default().to_string(),
         "fallback": AudioFallback::default(),
         "interactive": true,
         "quality_policy": QualityPolicy::default(),
@@ -178,6 +178,10 @@ fn validate(value: Value, standard: &Value) -> Result<Value, String> {
             }
             if matches!(key.as_str(), "output" | "splits" | "prefer") && text.trim().is_empty() {
                 return Err(format!("{key} must not be empty"));
+            }
+            if key == "prefer" {
+                text.parse::<PreferredAudio>()
+                    .map_err(|error| error.to_string())?;
             }
             if choices_for_field(key).is_some_and(|choices| !choices.contains(&text)) {
                 return Err(format!("invalid {key}: {text}"));

@@ -1,5 +1,5 @@
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, paths};
+use muzik_core::{ChoiceError, PreferredAudio, app_config, paths};
 use muzik_import::beets;
 use muzik_library::Library;
 use muzik_media::quality::{self, MeasuredQuality};
@@ -43,7 +43,16 @@ pub fn check() -> Result<(), String> {
     Ok(())
 }
 
-pub fn search(query: &str, prefer: &str, limit: usize, json_output: bool) -> Result<(), String> {
+pub fn parse_prefer(text: &str) -> Result<PreferredAudio, String> {
+    text.parse().map_err(|error: ChoiceError| error.to_string())
+}
+
+pub fn search(
+    query: &str,
+    prefer: PreferredAudio,
+    limit: usize,
+    json_output: bool,
+) -> Result<(), String> {
     let config = app_config::load(&app_config::path())?;
     let session = connect(&config)?;
     let ranked = ranked_search(&session, &config, query, prefer, limit)?;
@@ -52,6 +61,7 @@ pub fn search(query: &str, prefer: &str, limit: usize, json_output: bool) -> Res
 }
 
 pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
+    let prefer = parse_prefer(&args.prefer)?;
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
     let library = Library::open_read_only(&paths.library)
         .map_err(|error| format!("Could not open the music library: {error}"))?;
@@ -90,7 +100,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
         let Some(session) = session.as_ref() else {
             break;
         };
-        match ranked_search(session, &config, &query, &args.prefer, 10) {
+        match ranked_search(session, &config, &query, prefer, 10) {
             Err(error) => println!(
                 "{}\t{}\t{}\tsearch failed\t{}\t",
                 safe_display(&track.artist),
@@ -98,7 +108,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
                 current,
                 safe_display(&error)
             ),
-            Ok(ranked) => match select_upgrade(track, &ranked, &args.prefer) {
+            Ok(ranked) => match select_upgrade(track, &ranked, prefer) {
                 None => println!(
                     "{}\t{}\t{}\tno safe match\t\t",
                     safe_display(&track.artist),
@@ -177,7 +187,7 @@ fn ranked_search(
     session: &Session,
     config: &Value,
     query: &str,
-    prefer: &str,
+    prefer: PreferredAudio,
     limit: usize,
 ) -> Result<Vec<RankedCandidate>, String> {
     if !(1..=100).contains(&limit) {
@@ -266,7 +276,8 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
     } else {
         let query = args.query.as_deref().ok_or("give a query or --candidate")?;
         let connected = connect(&config)?;
-        let ranked = ranked_search(&connected, &config, query, &args.prefer, args.limit)?;
+        let prefer = parse_prefer(&args.prefer)?;
+        let ranked = ranked_search(&connected, &config, query, prefer, args.limit)?;
         if ranked.is_empty() {
             println!("No candidates found.");
             return Ok(());

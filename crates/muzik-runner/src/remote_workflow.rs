@@ -4,7 +4,7 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, chapters::Chapter, DecisionKind};
+use muzik_core::{app_config, chapters::Chapter, DecisionKind, PreferredAudio};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::session::{setting, Session, SessionSettings};
 use muzik_soulseek::types::Candidate;
@@ -41,7 +41,7 @@ pub fn run(
             stage,
         },
         paths: settings.paths.clone(),
-        prefer: settings.options.prefer.clone(),
+        prefer: settings.options.prefer,
         interactive: settings.options.interactive,
         audio_source: settings.options.audio_source,
         fallback: settings.options.fallback,
@@ -109,7 +109,7 @@ pub fn run(
 struct RemoteOperations<'a> {
     local: local_workflow::LocalOperations<'a>,
     paths: Paths,
-    prefer: String,
+    prefer: PreferredAudio,
     interactive: bool,
     audio_source: AudioSource,
     fallback: AudioFallback,
@@ -147,7 +147,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         soulseek_download(
             &self.paths,
             &query,
-            &self.prefer,
+            self.prefer,
             self.interactive,
             self.local.cancelled,
             self.local.decide,
@@ -167,7 +167,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         let fallback = self.fallback;
         let output = self.output.clone();
         let cancelled = self.local.cancelled;
-        let prefer = self.prefer.clone();
+        let prefer = self.prefer;
         let interactive = self.interactive;
         let paths = &self.paths;
         let decide = &mut *self.local.decide;
@@ -179,7 +179,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
                 soulseek_download(
                     paths,
                     &query,
-                    &prefer,
+                    prefer,
                     interactive,
                     cancelled,
                     decide,
@@ -220,7 +220,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
             audio_files.to_vec(),
             options.quality_policy,
             options.min_bitrate,
-            &self.prefer,
+            self.prefer,
             cancelled,
             self.local.on_import_event,
             self.local.decide,
@@ -318,7 +318,7 @@ fn event_record(event: WorkflowEvent) -> Value {
 pub(crate) fn soulseek_download(
     paths: &Paths,
     query: &str,
-    prefer: &str,
+    prefer: PreferredAudio,
     interactive: bool,
     cancelled: &AtomicBool,
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,

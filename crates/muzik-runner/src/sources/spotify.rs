@@ -88,7 +88,7 @@ impl Source for Spotify {
         let files = remote_workflow::soulseek_download(
             &settings.paths,
             &query,
-            &settings.options.prefer,
+            settings.options.prefer,
             false,
             cancelled,
             adapter.decide,

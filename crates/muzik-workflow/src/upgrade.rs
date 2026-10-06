@@ -1,3 +1,4 @@
+use muzik_core::PreferredAudio;
 use muzik_core::audio::AudioFormat;
 use muzik_library::{Item, SqlValue, path_from_sql, scalar_text};
 use muzik_media::quality::MeasuredQuality;
@@ -104,7 +105,7 @@ fn scalar_number(value: &SqlValue) -> Option<f64> {
 pub fn select_upgrade(
     track: &FlaggedTrack,
     ranked: &[RankedCandidate],
-    prefer: &str,
+    prefer: PreferredAudio,
 ) -> Option<(Candidate, f64)> {
     let current = quality_score(
         track.quality.format.audio_format(),
@@ -266,7 +267,7 @@ fn quality_score(
     bitrate: Option<u32>,
     sample_rate: Option<u32>,
     bit_depth: Option<u32>,
-    prefer: &str,
+    prefer: PreferredAudio,
 ) -> f64 {
     let mut score = if lossless {
         100.0
@@ -277,10 +278,7 @@ fn quality_score(
     } else {
         0.0
     };
-    if (prefer == "lossless" && lossless)
-        || (prefer == "mp3-320" && format == Some(AudioFormat::Mp3) && bitrate == Some(320))
-        || format.is_some_and(|format| format.as_ref() == prefer)
-    {
+    if prefer.bonus(format, lossless, bitrate) {
         score += 30.0;
     }
     if let Some(rate) = bitrate {
@@ -334,6 +332,7 @@ mod tests {
         CachedCandidate, FlaggedTrack, Wanted, candidate_id, load_candidate, safe_match,
         save_candidate, scan_library, select_upgrade,
     };
+    use muzik_core::PreferredAudio;
     use muzik_core::audio::Codec;
     use muzik_library::{Fields, Library, SqlValue};
     use muzik_media::quality::MeasuredQuality;
@@ -588,7 +587,7 @@ mod tests {
             },
             score: 123.0,
         }];
-        let (chosen, _) = select_upgrade(&low_quality_track(), &ranked, "lossless")
+        let (chosen, _) = select_upgrade(&low_quality_track(), &ranked, PreferredAudio::Lossless)
             .expect("a safe candidate exists");
         assert_eq!(chosen.files.len(), 1);
         assert_eq!(chosen.files[0].name, "Mara Vale/Moon River.flac");
@@ -608,7 +607,7 @@ mod tests {
             },
             score: 80.0,
         }];
-        assert!(select_upgrade(&low_quality_track(), &ranked, "lossless").is_none());
+        assert!(select_upgrade(&low_quality_track(), &ranked, PreferredAudio::Lossless).is_none());
     }
 
     #[test]

@@ -150,7 +150,7 @@ pub(super) fn local_stage(
             vec![audio],
             options.quality_policy,
             options.min_bitrate,
-            &options.prefer,
+            options.prefer,
             cancelled,
             &mut |event| (events.borrow_mut())(event),
             adapter.decide,

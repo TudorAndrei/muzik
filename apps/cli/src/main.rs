@@ -726,7 +726,8 @@ fn run(command: Command) -> Result<(), String> {
             SoulseekCommand::Check => soulseek::check(),
             SoulseekCommand::CheckLibrary(args) => soulseek::check_library(&args),
             SoulseekCommand::Search(args) => {
-                soulseek::search(&args.query, &args.prefer, args.limit, args.json)
+                let prefer = soulseek::parse_prefer(&args.prefer)?;
+                soulseek::search(&args.query, prefer, args.limit, args.json)
             }
             SoulseekCommand::Download(args) => soulseek::download(&args),
         },
