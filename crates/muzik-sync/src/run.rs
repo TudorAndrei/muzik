@@ -23,13 +23,20 @@ pub struct Options {
 }
 
 pub struct Prepared {
-    pub plan: Plan,
-    pub delete: bool,
-    pub delete_blocked: bool,
-    pub stale: Vec<PathBuf>,
-    pub freed: u64,
+    plan: Plan,
+    target: Target,
+    options: Options,
+    delete_blocked: bool,
+    stale: Vec<PathBuf>,
+    freed: u64,
+    needed: u64,
+    available: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shortfall {
     pub needed: u64,
-    pub available: Option<u64>,
+    pub space: u64,
 }
 
 pub struct Done<'a> {
@@ -47,14 +54,50 @@ pub struct Report {
 }
 
 impl Prepared {
-    pub fn space(&self) -> Option<u64> {
-        self.available
-            .map(|available| available.saturating_add(self.freed))
+    pub fn plan(&self) -> &Plan {
+        &self.plan
     }
 
-    pub fn fits(&self) -> bool {
-        self.space().is_none_or(|space| self.needed <= space)
+    pub fn target(&self) -> &Target {
+        &self.target
     }
+
+    pub fn delete(&self) -> bool {
+        self.options.delete
+    }
+
+    pub fn delete_blocked(&self) -> bool {
+        self.delete_blocked
+    }
+
+    pub fn stale(&self) -> &[PathBuf] {
+        &self.stale
+    }
+
+    pub fn freed(&self) -> u64 {
+        self.freed
+    }
+
+    pub fn needed(&self) -> u64 {
+        self.needed
+    }
+
+    pub fn shortfall(&self) -> Option<Shortfall> {
+        shortfall(self.needed, self.freed, self.available)
+    }
+}
+
+fn shortfall(needed: u64, freed: u64, available: Option<u64>) -> Option<Shortfall> {
+    let space = available?.saturating_add(freed);
+    (needed > space).then_some(Shortfall { needed, space })
+}
+
+fn size(paths: &[PathBuf]) -> u64 {
+    paths
+        .iter()
+        .filter_map(|path| fs::metadata(path).ok())
+        .map(|meta| meta.len())
+        .sum()
 }
 
 pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) -> Result<Selection> {
@@ -112,15 +155,15 @@ pub fn prepare(
     } else {
         Vec::new()
     };
-    let freed: u64 = stale
-        .iter()
-        .filter_map(|path| fs::metadata(path).ok())
-        .map(|meta| meta.len())
-        .sum();
+    let freed = size(&stale);
     let needed = plan.bytes_needed();
     Ok(Prepared {
         plan,
-        delete,
+        target: target.clone(),
+        options: Options {
+            delete,
+            jobs: options.jobs,
+        },
         delete_blocked: options.delete && !delete,
         stale,
         freed,
@@ -130,23 +173,39 @@ pub fn prepare(
 }
 
 pub fn apply(
-    prepared: &Prepared,
-    target: &Target,
+    prepared: Prepared,
     connection: Connection,
-    jobs: usize,
     done: &(dyn Fn(Done<'_>) + Sync),
 ) -> Result<Report> {
-    for path in &prepared.stale {
+    let Prepared {
+        plan,
+        target,
+        options,
+        stale,
+        ..
+    } = prepared;
+    if !target.path.is_dir() {
+        return Err(Error::TargetMissing(target.path));
+    }
+    let stale: Vec<PathBuf> = stale.into_iter().filter(|path| path.exists()).collect();
+    if let Some(shortfall) = shortfall(
+        plan.bytes_needed(),
+        size(&stale),
+        available_bytes(&target.path),
+    ) {
+        return Err(Error::NoSpace(shortfall));
+    }
+    for path in &stale {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(Error::Message(format!("{}: {error}", path.display()))),
         }
     }
-    if prepared.delete {
+    if options.delete {
         remove_empty_folders(&target.path)?;
     }
-    let total = prepared.plan.pending.len();
+    let total = plan.pending.len();
     let count = AtomicUsize::new(0);
     let unrecorded = AtomicUsize::new(0);
     let connection = Mutex::new(connection);
@@ -167,7 +226,7 @@ pub fn apply(
             record_error,
         });
     };
-    let failed = transfer_all(&prepared.plan.pending, jobs, &finished);
+    let failed = transfer_all(&plan.pending, options.jobs, &finished);
     Ok(Report {
         written: total,
         failed,
@@ -180,5 +239,28 @@ fn absolute(directory: &Path, path: PathBuf) -> PathBuf {
         path
     } else {
         directory.join(path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{shortfall, Shortfall};
+
+    #[test]
+    fn freed_space_counts_toward_the_available_space() {
+        assert_eq!(shortfall(10, 5, Some(5)), None);
+        assert_eq!(
+            shortfall(10, 4, Some(5)),
+            Some(Shortfall {
+                needed: 10,
+                space: 9
+            })
+        );
+    }
+
+    #[test]
+    fn unknown_space_does_not_stop_a_sync() {
+        assert_eq!(shortfall(10, 0, None), None);
+        assert_eq!(shortfall(u64::MAX, 0, None), None);
     }
 }

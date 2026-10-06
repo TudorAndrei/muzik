@@ -16,6 +16,10 @@ pub enum Error {
     Store(#[from] muzik_store::Error),
     #[error(transparent)]
     Config(#[from] muzik_core::Error),
+    #[error("{} does not exist", .0.display())]
+    TargetMissing(std::path::PathBuf),
+    #[error("not enough space: {} bytes needed, {} bytes available", .0.needed, .0.space)]
+    NoSpace(crate::Shortfall),
     #[error("{0}")]
     Message(String),
 }

@@ -31,21 +31,21 @@
 - [x] Preserve the combined waiting-stage and question transaction in `watchlist_jobs.rs`.
 - [x] Reproduce a stale overwrite against the baseline and verify that committed edits survive.
 - [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
-- [ ] Commit: `fix(watchlist): make checked writes atomic across processes`
+- [x] Commit: `fix(watchlist): make checked writes atomic across processes`
 
 ## Phase 3: Device sync owns its execution conditions
 
-- [ ] Keep the plan, target, and execution options private in `Prepared`.
-- [ ] Give the CLI read-only preview access and consume the prepared state during apply; `apply` takes no second target or `jobs` value.
-- [ ] Centralize the capacity decision for preview and execution in a private function that receives available space.
-- [ ] Refresh target existence, needed bytes, remaining stale bytes, and available space before file changes.
-- [ ] Preserve the current policy when available space cannot be measured.
-- [ ] Adapt `apps/cli/src/sync.rs` and all existing sync test callers.
-- [ ] Test missing-target refusal before file changes in `tests/run.rs`.
-- [ ] Test insufficient and unknown space in a `#[cfg(test)]` module in `src/run.rs`; move the `fits` test from `tests/run.rs` there.
-- [ ] Test a stale file removed between preview and apply.
-- [ ] Preserve collision, encoding-change, unreadable-track, copy, and record-error coverage.
-- [ ] Pass `cargo test --locked -p muzik-sync -p muzik-cli` and `mise run check`.
+- [x] Keep the plan, target, and execution options private in `Prepared`.
+- [x] Give the CLI read-only preview access and consume the prepared state during apply; `apply` takes no second target or `jobs` value.
+- [x] Centralize the capacity decision for preview and execution in a private function that receives available space.
+- [x] Refresh target existence, needed bytes, remaining stale bytes, and available space before file changes.
+- [x] Preserve the current policy when available space cannot be measured.
+- [x] Adapt `apps/cli/src/sync.rs` and all existing sync test callers.
+- [x] Test missing-target refusal before file changes in `tests/run.rs`.
+- [x] Test insufficient and unknown space in a `#[cfg(test)]` module in `src/run.rs`; move the `fits` test from `tests/run.rs` there.
+- [x] Test a stale file removed between preview and apply.
+- [x] Preserve collision, encoding-change, unreadable-track, copy, and record-error coverage.
+- [x] Pass `cargo test --locked -p muzik-sync -p muzik-cli` and `mise run check`.
 - [ ] Commit: `refactor(sync): own execution checks in the prepared sync`
 
 ## Verification

@@ -17,7 +17,7 @@ mod run;
 
 pub use error::{Error, Result};
 pub use muzik_media::ffmpeg::Encoding;
-pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection};
+pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection, Shortfall};
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";

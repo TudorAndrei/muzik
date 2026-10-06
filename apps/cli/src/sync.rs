@@ -1,4 +1,4 @@
-use anyhow::{Context, bail};
+use anyhow::{Context, anyhow, bail};
 use bytesize::ByteSize;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
@@ -6,8 +6,9 @@ use muzik_import::beets;
 use muzik_library::Library;
 use muzik_media::quality;
 use muzik_store::db;
-use muzik_sync::{self as sync, Action, Encoding, Options, Target};
+use muzik_sync::{self as sync, Action, Encoding, Options, Shortfall, Target};
 use serde_json::json;
+use std::path::Path;
 
 use crate::{SetSyncTarget, Sync};
 
@@ -32,10 +33,7 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
     let config = app_config::load(&app_config::path())?;
     let target = Target::load(&config, &args.target)?;
     if !target.path.is_dir() {
-        bail!(
-            "{} does not exist; connect the device or create the folder first",
-            target.path.display()
-        );
+        return Err(missing(&target.path));
     }
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
     let library =
@@ -65,7 +63,7 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
         },
         &quality::measure,
     )?;
-    let plan = &prepared.plan;
+    let plan = prepared.plan();
     for source in &plan.outside {
         eprintln!("skip (outside the library folder): {}", source.display());
     }
@@ -88,35 +86,26 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
         plan.fresh,
         plan.pending.len() - converts,
         converts,
-        ByteSize(prepared.needed)
+        ByteSize(prepared.needed())
     );
-    if prepared.delete_blocked {
+    if prepared.delete_blocked() {
         eprintln!(
             "not deleting old files: {} tracks could not be read, so muzik cannot tell which device files are old",
             plan.unreadable.len()
         );
     }
-    if prepared.delete {
+    if prepared.delete() {
         println!(
             "{} files to delete ({})",
-            prepared.stale.len(),
-            ByteSize(prepared.freed)
+            prepared.stale().len(),
+            ByteSize(prepared.freed())
         );
     }
-    if let (false, Some(space)) = (prepared.fits(), prepared.space()) {
-        bail!(
-            "not enough space: {} needed, {} available; select fewer tracks with --query{}",
-            ByteSize(prepared.needed),
-            ByteSize(space),
-            if args.delete {
-                ""
-            } else {
-                " or remove old files with --delete"
-            }
-        );
+    if let Some(shortfall) = prepared.shortfall() {
+        return Err(no_space(shortfall, args.delete));
     }
     if args.dry_run {
-        for path in &prepared.stale {
+        for path in prepared.stale() {
             println!("delete\t{}", path.display());
         }
         for transfer in &plan.pending {
@@ -128,7 +117,7 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    let report = sync::apply(&prepared, &target, connection, args.jobs, &|done| {
+    let report = sync::apply(prepared, connection, &|done| {
         let name = done
             .transfer
             .destination
@@ -145,6 +134,11 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
             }
             Err(error) => eprintln!("[{index}/{total}] failed\t{name}: {error}"),
         }
+    })
+    .map_err(|error| match error {
+        sync::Error::TargetMissing(path) => missing(&path),
+        sync::Error::NoSpace(shortfall) => no_space(shortfall, args.delete),
+        error => error.into(),
     })?;
     if report.failed > 0 {
         bail!("{} of {} files failed", report.failed, report.written);
@@ -158,6 +152,26 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
     }
     println!("Sync complete: {} files written", report.written);
     Ok(())
+}
+
+fn missing(path: &Path) -> anyhow::Error {
+    anyhow!(
+        "{} does not exist; connect the device or create the folder first",
+        path.display()
+    )
+}
+
+fn no_space(shortfall: Shortfall, delete: bool) -> anyhow::Error {
+    anyhow!(
+        "not enough space: {} needed, {} available; select fewer tracks with --query{}",
+        ByteSize(shortfall.needed),
+        ByteSize(shortfall.space),
+        if delete {
+            ""
+        } else {
+            " or remove old files with --delete"
+        }
+    )
 }
 
 fn label(action: &Action) -> String {
