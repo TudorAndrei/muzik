@@ -1,6 +1,6 @@
 //! Bandcamp collection access with cookies exported from a browser.
 
-use crate::paths::Paths;
+use muzik_core::paths::Paths;
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{Read, Write};
@@ -702,7 +702,7 @@ pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
         for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
             if path.is_dir() {
                 pending.push(path);
-            } else if crate::audio::is_audio(&path) {
+            } else if muzik_core::audio::is_audio(&path) {
                 files.push(path);
             }
         }

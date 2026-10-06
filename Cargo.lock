@@ -4390,9 +4390,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "muzik-bandcamp"
+version = "2.12.0"
+dependencies = [
+ "muzik-core",
+ "serde_json",
+ "tempfile",
+ "ureq",
+ "zip",
+]
+
+[[package]]
 name = "muzik-cli"
 version = "2.12.0"
 dependencies = [
+ "muzik-bandcamp",
  "muzik-core",
  "muzik-import",
  "muzik-jobs",
@@ -4443,6 +4455,7 @@ version = "2.12.0"
 dependencies = [
  "chrono",
  "gpui-kit",
+ "muzik-bandcamp",
  "muzik-core",
  "muzik-jobs",
  "muzik-runner",
@@ -4560,6 +4573,7 @@ name = "muzik-runner"
 version = "2.12.0"
 dependencies = [
  "muzik-agent",
+ "muzik-bandcamp",
  "muzik-core",
  "muzik-import",
  "muzik-jobs",

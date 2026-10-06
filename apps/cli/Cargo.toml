@@ -21,6 +21,7 @@ name = "muzik"
 path = "src/main.rs"
 
 [dependencies]
+muzik-bandcamp = { path = "../../crates/muzik-bandcamp" }
 muzik-core = { path = "../../crates/muzik-core" }
 muzik-jobs = { path = "../../crates/muzik-jobs" }
 muzik-runner = { path = "../../crates/muzik-runner" }

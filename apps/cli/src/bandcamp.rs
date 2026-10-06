@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::atomic::AtomicBool;
 
-use muzik_core::bandcamp;
+use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
 
 use crate::{Bandcamp, paths};

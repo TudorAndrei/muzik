@@ -1,7 +1,7 @@
 use super::{check_cancelled, mark_full, organize, required, safe_name, Source};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
-use muzik_core::bandcamp;
+use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
 use muzik_core::watchlist::jobs::{JobError, LoadedSource};
 use muzik_core::watchlist::{
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn purchases_become_items_with_their_download_page() {
-        let loaded = items(&[muzik_core::bandcamp::Purchase {
+        let loaded = items(&[muzik_bandcamp::Purchase {
             key: "p12".into(),
             artist: "Band".into(),
             title: "Album".into(),

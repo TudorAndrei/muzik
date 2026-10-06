@@ -1,7 +1,7 @@
 use crate::services;
 use chrono::{DateTime, Local};
+use muzik_bandcamp as bandcamp;
 use muzik_core::app_config;
-use muzik_core::bandcamp;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
 use muzik_core::spotify;

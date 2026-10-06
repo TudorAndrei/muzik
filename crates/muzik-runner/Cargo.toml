@@ -7,6 +7,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 muzik-agent = { path = "../muzik-agent" }
+muzik-bandcamp = { path = "../muzik-bandcamp" }
 muzik-core = { path = "../muzik-core" }
 muzik-import = { path = "../muzik-import" }
 muzik-jobs = { path = "../muzik-jobs" }

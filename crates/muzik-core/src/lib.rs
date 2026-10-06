@@ -2,7 +2,6 @@
 
 pub mod app_config;
 pub mod audio;
-pub mod bandcamp;
 pub mod chapters;
 mod config;
 pub mod config_choices;
