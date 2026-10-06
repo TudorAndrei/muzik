@@ -1,5 +1,5 @@
 use crate::agent::Chooser;
-use crate::events::AppEvent;
+use crate::events::{AppEvent, Source};
 use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
@@ -17,7 +17,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-use strum_macros::AsRefStr;
 
 const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
 
@@ -39,14 +38,6 @@ pub struct Options {
     pub ask: Ask,
     pub chooser: Option<Arc<dyn Chooser>>,
     pub generation: Arc<AtomicU64>,
-}
-
-#[derive(Clone, Copy, AsRefStr)]
-#[strum(serialize_all = "snake_case")]
-enum Source {
-    Workflow,
-    Native,
-    Agent,
 }
 
 type Outcome = Result<Value, (bool, String)>;
@@ -75,7 +66,7 @@ impl Shared {
         } else {
             AppEvent::JobEvent {
                 job_id: job_id.to_owned(),
-                source: source.as_ref().to_owned(),
+                source,
                 name: name.to_owned(),
                 data: event["data"].clone(),
             }
@@ -228,7 +219,7 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
     (shared.sink)(AppEvent::JobStarted {
         job_id: id.clone(),
         title: job.title.clone(),
-        kind: job.kind.as_ref().to_owned(),
+        kind: job.kind,
     });
     shared.publish();
     let result = match job.kind {

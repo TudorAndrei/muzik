@@ -29,7 +29,7 @@ use muzik_core::{
 };
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
-use muzik_store::jobs::Status as JobStatus;
+use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use requests::{Command, PendingAction, Read};
 use serde_json::{json, Value};
@@ -101,6 +101,16 @@ enum RunKind {
     #[default]
     #[strum(disabled)]
     Unknown,
+}
+
+impl From<JobKind> for RunKind {
+    fn from(kind: JobKind) -> Self {
+        match kind {
+            JobKind::Workflow => Self::Workflow,
+            JobKind::Refresh => Self::Refresh,
+            JobKind::Item => Self::Item,
+        }
+    }
 }
 
 impl RunKind {
@@ -669,7 +679,7 @@ impl Muzik {
                         kind,
                     } => {
                         let run = self.run_mut(&job_id);
-                        run.kind = RunKind::parse(&json!(kind));
+                        run.kind = kind.into();
                         run.title = title;
                         run.status = "Starting".into();
                     }
