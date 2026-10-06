@@ -70,6 +70,7 @@ pub enum DownloadProgress {
         total_bytes: u64,
     },
     Completed,
+    Cancelled,
     Failed(Option<String>),
     TimedOut,
 }
@@ -95,6 +96,7 @@ impl From<&WireDownloadStatus> for DownloadProgress {
                 total_bytes: *total_bytes,
             },
             WireDownloadStatus::Completed => Self::Completed,
+            WireDownloadStatus::Cancelled => Self::Cancelled,
             WireDownloadStatus::Failed(reason) => Self::Failed(reason.clone()),
             WireDownloadStatus::TimedOut => Self::TimedOut,
         }
@@ -104,12 +106,15 @@ impl From<&WireDownloadStatus> for DownloadProgress {
 impl DownloadProgress {
     #[must_use]
     pub const fn is_finished(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed(_) | Self::TimedOut)
+        matches!(
+            self,
+            Self::Completed | Self::Cancelled | Self::Failed(_) | Self::TimedOut
+        )
     }
 }
 
 /// Identity of an in-flight or queued download, used to target
-/// `Client::remove_download` on cancellation.
+/// `Client::cancel_download` on cancellation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DownloadTarget {
     pub username: String,

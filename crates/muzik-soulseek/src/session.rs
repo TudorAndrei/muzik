@@ -196,7 +196,7 @@ impl Session {
                     }
                     Err(RecvTimeoutError::Timeout) => {
                         if worker.is_cancelled() {
-                            let _ = client.remove_download(&target.username, &target.filename);
+                            let _ = client.cancel_download(&target.username, &target.filename);
                             worker.finish(JobState::Cancelled);
                             return;
                         }
@@ -227,6 +227,7 @@ fn finish_from_progress(worker: &JobHandle, progress: DownloadProgress) {
         DownloadProgress::TimedOut => {
             worker.finish(JobState::Failed("download timed out".to_string()));
         }
+        DownloadProgress::Cancelled => worker.finish(JobState::Cancelled),
         DownloadProgress::Queued
         | DownloadProgress::InProgress { .. }
         | DownloadProgress::Paused { .. } => {

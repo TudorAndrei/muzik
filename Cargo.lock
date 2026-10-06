@@ -7079,8 +7079,9 @@ dependencies = [
 
 [[package]]
 name = "soulseek-rs-lib"
-version = "14.2.1"
-source = "git+https://github.com/michel/soulseek-rs?rev=a62bab1e6a505362109b8303aa528af03403eeae#a62bab1e6a505362109b8303aa528af03403eeae"
+version = "19.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe616956fd53a0e707357af3995902df20fda5af97ea7fba6aec0918a694120d"
 dependencies = [
  "libc",
 ]
