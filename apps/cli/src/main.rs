@@ -518,22 +518,8 @@ struct Bandcamp {
     #[usage(long, short = 'o')]
     output: Option<PathBuf>,
     /// Audio format.
-    #[usage(
-        long,
-        short = 'f',
-        default = "flac",
-        choices(
-            "flac",
-            "wav",
-            "aac-hi",
-            "mp3-320",
-            "aiff-lossless",
-            "vorbis",
-            "mp3-v0",
-            "alac"
-        )
-    )]
-    format: String,
+    #[usage(long, short = 'f', value_enum, default = "flac")]
+    format: muzik_bandcamp::BandcampFormat,
     /// Path to a Bandcamp cookie file. Muzik saves the login for later runs.
     #[usage(long, short = 'c')]
     cookies: Option<PathBuf>,

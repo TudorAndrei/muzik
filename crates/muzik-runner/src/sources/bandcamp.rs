@@ -81,7 +81,7 @@ impl Source for Bandcamp {
             bandcamp::download(
                 &login,
                 page,
-                bandcamp::DEFAULT_FORMAT,
+                bandcamp::BandcampFormat::default(),
                 &directory,
                 cancelled,
                 &mut |received, total| {

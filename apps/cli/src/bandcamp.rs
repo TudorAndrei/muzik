@@ -43,7 +43,7 @@ pub fn download(args: &Bandcamp) -> Result<(), String> {
         let files = bandcamp::download(
             &login,
             &purchase.download_page,
-            &args.format,
+            args.format,
             &folder,
             &cancelled,
             &mut |_, _| {},

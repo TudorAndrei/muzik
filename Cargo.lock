@@ -4394,9 +4394,13 @@ name = "muzik-bandcamp"
 version = "2.12.0"
 dependencies = [
  "muzik-core",
+ "serde",
  "serde_json",
+ "strum",
+ "strum_macros",
  "tempfile",
  "ureq",
+ "usage-rs",
  "zip",
 ]
 

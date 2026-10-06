@@ -1,12 +1,14 @@
 //! Bandcamp collection access with cookies exported from a browser.
 
 use muzik_core::paths::Paths;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
+use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantNames};
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0";
@@ -14,17 +16,59 @@ const PAGE_LIMIT: u64 = 64 * 1024 * 1024;
 const REQUEST_BUDGET: Duration = Duration::from_secs(120);
 const DOWNLOAD_ATTEMPTS: u32 = 5;
 
-pub const FORMATS: &[&str] = &[
-    "flac",
-    "wav",
-    "aac-hi",
-    "mp3-320",
-    "aiff-lossless",
-    "vorbis",
-    "mp3-v0",
-    "alac",
-];
-pub const DEFAULT_FORMAT: &str = "flac";
+/// Download formats that Bandcamp offers for a purchase.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+pub enum BandcampFormat {
+    #[default]
+    #[serde(rename = "flac")]
+    #[strum(to_string = "flac")]
+    #[usage(name = "flac")]
+    Flac,
+    #[serde(rename = "wav")]
+    #[strum(to_string = "wav")]
+    #[usage(name = "wav")]
+    Wav,
+    #[serde(rename = "aac-hi")]
+    #[strum(to_string = "aac-hi")]
+    #[usage(name = "aac-hi")]
+    AacHi,
+    #[serde(rename = "mp3-320")]
+    #[strum(to_string = "mp3-320")]
+    #[usage(name = "mp3-320")]
+    Mp3_320,
+    #[serde(rename = "aiff-lossless")]
+    #[strum(to_string = "aiff-lossless")]
+    #[usage(name = "aiff-lossless")]
+    AiffLossless,
+    #[serde(rename = "vorbis")]
+    #[strum(to_string = "vorbis")]
+    #[usage(name = "vorbis")]
+    Vorbis,
+    #[serde(rename = "mp3-v0")]
+    #[strum(to_string = "mp3-v0")]
+    #[usage(name = "mp3-v0")]
+    Mp3V0,
+    #[serde(rename = "alac")]
+    #[strum(to_string = "alac")]
+    #[usage(name = "alac")]
+    Alac,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cookie {
@@ -439,7 +483,7 @@ fn purchases(details: &[Value], urls: &serde_json::Map<String, Value>) -> Vec<Pu
 pub fn download(
     login: &Login,
     download_page: &str,
-    format: &str,
+    format: BandcampFormat,
     destination: &Path,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
@@ -448,6 +492,7 @@ pub fn download(
         .file_name()
         .ok_or("The Bandcamp download folder has no name.")?
         .to_string_lossy();
+    let format = format.as_ref();
     let partial = destination.with_file_name(format!(".{folder}.{format}.part"));
     let mut locate = || {
         let blob = login.page_blob(download_page)?;
@@ -714,6 +759,32 @@ pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::VariantNames;
+
+    #[test]
+    fn formats_round_trip_through_their_bandcamp_names() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(
+            BandcampFormat::VARIANTS,
+            [
+                "flac",
+                "wav",
+                "aac-hi",
+                "mp3-320",
+                "aiff-lossless",
+                "vorbis",
+                "mp3-v0",
+                "alac"
+            ]
+        );
+        for &name in BandcampFormat::VARIANTS {
+            let format: BandcampFormat = name.parse()?;
+            assert_eq!(format.as_ref(), name);
+            assert_eq!(format.to_string(), name);
+            assert_eq!(serde_json::to_value(format)?, name);
+        }
+        assert_eq!(BandcampFormat::default(), BandcampFormat::Flac);
+        Ok(())
+    }
 
     #[test]
     fn cookies_parse_from_a_header_a_cookie_file_and_json() -> Result<(), String> {
