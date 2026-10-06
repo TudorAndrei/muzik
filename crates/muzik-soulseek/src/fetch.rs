@@ -1,16 +1,21 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 
 use muzik_core::PreferredAudio;
 use serde_json::Value;
+use soulseek_rs::DownloadStatus;
 
-use crate::job::{JobHandle, JobOutcome, JobState};
+use crate::error::BridgeError;
 use crate::ranking::{format, rank, search_query, RankedCandidate};
 use crate::session::{setting, Session};
-use crate::types::{Candidate, DownloadProgress};
+use crate::types::Candidate;
+
+const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timeouts {
@@ -101,16 +106,41 @@ impl Session {
         if query.trim().is_empty() || query.chars().any(char::is_control) {
             return Err("Enter a Soulseek search without control characters.".into());
         }
-        let job = self.start_track_search(search_query(query, prefer), timeout);
-        match wait(&job, timeout, cancelled, "search") {
-            Ok(JobOutcome::Search(candidates)) => Ok(rank(candidates, query, prefer, limit)),
-            Ok(JobOutcome::Download(_)) => Err("Soulseek returned a download for a search.".into()),
-            Err(error) => {
-                if !cancelled.load(Ordering::SeqCst) {
-                    Session::forget_shared();
+        let stop = Arc::new(AtomicBool::new(false));
+        let found = thread::scope(|scope| {
+            let search = scope.spawn(|| {
+                self.client.search_with_cancel(
+                    &search_query(query, prefer),
+                    seconds(timeout),
+                    Some(Arc::clone(&stop)),
+                )
+            });
+            while !search.is_finished() {
+                if cancelled.load(Ordering::SeqCst) {
+                    stop.store(true, Ordering::SeqCst);
                 }
-                Err(error)
+                thread::sleep(POLL);
             }
+            search.join()
+        });
+        if cancelled.load(Ordering::SeqCst) {
+            return Err("Soulseek search cancelled".into());
+        }
+        match found {
+            Ok(Ok(results)) => Ok(rank(
+                results.into_iter().map(Candidate::from).collect(),
+                query,
+                prefer,
+                limit,
+            )),
+            Ok(Err(error)) => {
+                Session::forget_shared();
+                Err(format!(
+                    "Soulseek search failed: {}",
+                    BridgeError::from(error)
+                ))
+            }
+            Err(_) => Err("Soulseek search failed: the search thread stopped".into()),
         }
     }
 
@@ -124,68 +154,87 @@ impl Session {
         let files = local_files(candidate, destination)?;
         std::fs::create_dir_all(destination).map_err(|error| error.to_string())?;
         for (remote, local) in candidate.files.iter().zip(&files) {
-            let job = self
-                .start_download(
-                    candidate.username.clone(),
+            let (download, receiver) = self
+                .client
+                .download(
                     remote.name.clone(),
+                    candidate.username.clone(),
                     remote.size,
                     destination.to_string_lossy().into_owned(),
                 )
-                .map_err(|error| format!("Soulseek download failed: {error}"))?;
-            match wait(&job, timeout, cancelled, "download")? {
-                JobOutcome::Download(DownloadProgress::Completed) if local.is_file() => {}
-                JobOutcome::Download(DownloadProgress::Completed) => {
-                    return Err(format!(
-                        "Soulseek reported a completed transfer, but {} is missing.",
-                        local.display()
-                    ));
-                }
-                JobOutcome::Download(_) => {
-                    return Err("Soulseek download did not complete.".into());
-                }
-                JobOutcome::Search(_) => {
-                    return Err("Soulseek returned a search for a download.".into());
-                }
+                .map_err(|error| {
+                    format!("Soulseek download failed: {}", BridgeError::from(error))
+                })?;
+            let deadline = Instant::now() + seconds(timeout) + Duration::from_secs(5);
+            if let Err(error) = finish(&receiver, deadline, cancelled) {
+                let _ = self
+                    .client
+                    .cancel_download(&download.username, &download.filename);
+                return Err(error);
+            }
+            if !local.is_file() {
+                return Err(format!(
+                    "Soulseek reported a completed transfer, but {} is missing.",
+                    local.display()
+                ));
             }
         }
         Ok(files)
     }
 }
 
-fn wait(
-    job: &Arc<JobHandle>,
-    timeout: f64,
+fn seconds(timeout: f64) -> Duration {
+    Duration::try_from_secs_f64(timeout.clamp(1.0, 3_600.0)).unwrap_or(Duration::from_secs(15))
+}
+
+fn finish(
+    receiver: &Receiver<DownloadStatus>,
+    deadline: Instant,
     cancelled: &AtomicBool,
-    name: &str,
-) -> Result<JobOutcome, String> {
-    let deadline = Instant::now() + Duration::from_secs_f64(timeout.clamp(1.0, 3_600.0) + 5.0);
+) -> Result<(), String> {
     loop {
         if cancelled.load(Ordering::SeqCst) {
-            job.cancel();
-            return Err(format!("Soulseek {name} cancelled"));
+            return Err("Soulseek download cancelled".into());
         }
-        match job.snapshot() {
-            JobState::Running if Instant::now() >= deadline => {
-                job.cancel();
-                return Err(format!("Soulseek {name} timed out"));
+        if Instant::now() >= deadline {
+            return Err("Soulseek download timed out".into());
+        }
+        match receiver.recv_timeout(POLL) {
+            Ok(DownloadStatus::Completed) => return Ok(()),
+            Ok(DownloadStatus::Cancelled) => return Err("Soulseek download cancelled".into()),
+            Ok(DownloadStatus::Failed(reason)) => {
+                return Err(format!(
+                    "Soulseek download failed: {}",
+                    reason.unwrap_or_else(|| "download failed".into())
+                ));
             }
-            JobState::Running => std::thread::sleep(Duration::from_millis(100)),
-            JobState::Completed(outcome) => return Ok(outcome),
-            JobState::Failed(reason) => return Err(format!("Soulseek {name} failed: {reason}")),
-            JobState::Cancelled => return Err(format!("Soulseek {name} cancelled")),
+            Ok(DownloadStatus::TimedOut) => {
+                return Err("Soulseek download failed: download timed out".into());
+            }
+            Ok(
+                DownloadStatus::Queued
+                | DownloadStatus::InProgress { .. }
+                | DownloadStatus::Paused { .. },
+            )
+            | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(
+                    "Soulseek download failed: download channel closed unexpectedly".into(),
+                );
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{local_files, wait, Timeouts};
-    use crate::job::{JobHandle, JobOutcome, JobState};
+    use super::{finish, local_files, Timeouts};
     use crate::types::{Candidate, FileEntry};
     use serde_json::json;
+    use soulseek_rs::DownloadStatus;
     use std::path::Path;
     use std::sync::atomic::AtomicBool;
-    use std::sync::Arc;
+    use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
     fn candidate(names: &[&str]) -> Candidate {
@@ -231,25 +280,38 @@ mod tests {
     }
 
     #[test]
-    fn wait_returns_the_outcome_or_stops_on_cancel() -> Result<(), String> {
-        let job = JobHandle::new();
-        let worker = Arc::clone(&job);
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            worker.finish(JobState::Completed(JobOutcome::Search(Vec::new())));
-        });
+    fn finish_waits_for_a_final_status_or_stops_on_cancel() -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let running = AtomicBool::new(false);
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(DownloadStatus::Queued)
+            .map_err(|e| e.to_string())?;
+        sender
+            .send(DownloadStatus::Completed)
+            .map_err(|e| e.to_string())?;
+        finish(&receiver, deadline, &running)?;
+
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(DownloadStatus::Failed(Some("peer went offline".into())))
+            .map_err(|e| e.to_string())?;
         assert_eq!(
-            wait(&job, 5.0, &AtomicBool::new(false), "search")?,
-            JobOutcome::Search(Vec::new())
+            finish(&receiver, deadline, &running),
+            Err("Soulseek download failed: peer went offline".into())
         );
-        let running = JobHandle::new();
+
+        let (_sender, receiver) = mpsc::channel();
         let started = Instant::now();
-        let error = wait(&running, 5.0, &AtomicBool::new(true), "download")
-            .err()
-            .ok_or("a cancelled wait must fail")?;
-        assert_eq!(error, "Soulseek download cancelled");
-        assert!(running.is_cancelled());
+        assert_eq!(
+            finish(&receiver, deadline, &AtomicBool::new(true)),
+            Err("Soulseek download cancelled".into())
+        );
         assert!(started.elapsed() < Duration::from_secs(1));
+
+        let (sender, receiver) = mpsc::channel::<DownloadStatus>();
+        drop(sender);
+        assert!(finish(&receiver, deadline, &running).is_err());
         Ok(())
     }
 

@@ -14,12 +14,6 @@ pub enum BridgeError {
     ConnectionClosed,
     #[error("protocol error: {0}")]
     Protocol(String),
-    #[error("job has not finished yet")]
-    JobNotFinished,
-    #[error("job failed: {0}")]
-    JobFailed(String),
-    #[error("job was cancelled")]
-    JobCancelled,
 }
 
 impl From<soulseek_rs::SoulseekRs> for BridgeError {
@@ -53,9 +47,6 @@ mod tests {
             BridgeError::Timeout,
             BridgeError::ConnectionClosed,
             BridgeError::Protocol("bad frame".to_string()),
-            BridgeError::JobNotFinished,
-            BridgeError::JobFailed("peer went offline".to_string()),
-            BridgeError::JobCancelled,
         ];
         for case in cases {
             assert!(!case.to_string().is_empty());
