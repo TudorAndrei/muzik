@@ -26,7 +26,7 @@ impl Source for Bandcamp {
     fn load(&self, adapter: &mut Adapter<'_, '_>, _: &Playlist) -> Result<LoadedSource, JobError> {
         let login = bandcamp::Login::load(&adapter.prepared.settings.paths)
             .ok_or_else(|| JobError::Operation(LOGIN.into()))?;
-        let purchases = bandcamp::collection(&login)?;
+        let purchases = bandcamp::collection(&login).map_err(String::from)?;
         check_cancelled(adapter.cancelled)?;
         Ok(items(&purchases))
     }
@@ -102,7 +102,7 @@ impl Source for Bandcamp {
                 } else {
                     JobError::Failed {
                         stage: Stage::Download,
-                        message: error,
+                        message: error.to_string(),
                     }
                 }
             })?;
