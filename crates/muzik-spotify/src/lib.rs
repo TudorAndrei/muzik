@@ -41,6 +41,8 @@ pub enum Error {
     Client(#[from] ClientError),
     #[error(transparent)]
     Id(#[from] rspotify::model::IdError),
+    #[error("cancelled")]
+    Cancelled,
     #[error("{0}")]
     Message(String),
 }
@@ -212,7 +214,7 @@ fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotif
     Ok(client)
 }
 
-pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
+pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
     let settings = settings(config_path)?;
     let mut result = json!({
         "client_id": settings.client_id,
@@ -296,8 +298,7 @@ mod tests {
             &config,
             "spotify:\n  client_id: saved\n  redirect_port: '9123'\n",
         )?;
-        let result = status(&config, &dir.path().join("spotify-token.json"))
-            .map_err(std::io::Error::other)?;
+        let result = status(&config, &dir.path().join("spotify-token.json"))?;
         assert_eq!(result["connected"], false);
         assert!(result["redirect_uri"]
             .as_str()

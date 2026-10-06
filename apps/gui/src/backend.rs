@@ -61,8 +61,11 @@ impl SpotifyLogin {
                 job_id,
                 result: json!({"account_name": name}),
             },
-            Err(message) if message == "cancelled" => AppEvent::JobCancelled { job_id },
-            Err(message) => AppEvent::JobFailed { job_id, message },
+            Err(spotify::Error::Cancelled) => AppEvent::JobCancelled { job_id },
+            Err(error) => AppEvent::JobFailed {
+                job_id,
+                message: error.to_string(),
+            },
         };
         *self.slot.lock() = None;
         event
@@ -267,7 +270,10 @@ impl Backend {
     }
 
     pub fn spotify_status(&self) -> Result<Value, String> {
-        spotify::status(&self.paths().config_file(), &self.paths().spotify_token())
+        Ok(spotify::status(
+            &self.paths().config_file(),
+            &self.paths().spotify_token(),
+        )?)
     }
 
     pub fn spotify_playlists(&self) -> Result<Value, String> {

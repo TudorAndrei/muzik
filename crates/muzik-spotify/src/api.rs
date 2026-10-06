@@ -1,6 +1,6 @@
 //! Spotify playlist references shared by the CLI and desktop app.
 
-use super::{connected, Error};
+use super::{connected, Result};
 use rspotify::clients::OAuthClient;
 use rspotify::model::SimplifiedPlaylist;
 use rspotify::prelude::Id;
@@ -16,7 +16,7 @@ pub struct PlaylistRef {
     pub image_url: Option<String>,
 }
 
-pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<PlaylistRef>, String> {
+pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<PlaylistRef>> {
     let spotify = connected(config_path, token_path)?;
     let mut playlists = vec![PlaylistRef {
         uri: "spotify:liked".into(),
@@ -26,7 +26,7 @@ pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<Playl
         image_url: None,
     }];
     for playlist in spotify.current_user_playlists() {
-        playlists.push(PlaylistRef::from(playlist.map_err(Error::from)?));
+        playlists.push(PlaylistRef::from(playlist?));
     }
     Ok(playlists)
 }

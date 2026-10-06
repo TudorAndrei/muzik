@@ -16,7 +16,7 @@ pub fn login(
     token_path: &Path,
     port_override: Option<u16>,
     cancel: &AtomicBool,
-) -> Result<String, String> {
+) -> Result<String> {
     let mut settings = settings(config_path)?;
     if let Some(port) = port_override {
         settings.redirect_port = port;
@@ -32,11 +32,9 @@ pub fn login(
             settings.redirect_port
         )
     })?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
+    listener.set_nonblocking(true)?;
     let mut spotify = client(&settings, token_path);
-    let url = spotify.get_authorize_url(Some(64)).map_err(Error::from)?;
+    let url = spotify.get_authorize_url(Some(64))?;
     open::that(url.as_str())
         .map_err(|error| format!("Unable to open Spotify login in the browser: {error}"))?;
     let code = wait_for_code(
@@ -46,10 +44,10 @@ pub fn login(
         Duration::from_secs(300),
     )?;
     if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
+        return Err(Error::Cancelled);
     }
-    spotify.request_token(&code).map_err(Error::from)?;
-    Ok(account_name(&spotify)?)
+    spotify.request_token(&code)?;
+    account_name(&spotify)
 }
 
 fn wait_for_code(
@@ -61,7 +59,7 @@ fn wait_for_code(
     let start = Instant::now();
     while start.elapsed() < timeout {
         if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
+            return Err(Error::Cancelled);
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
