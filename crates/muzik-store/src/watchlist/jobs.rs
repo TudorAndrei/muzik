@@ -5,6 +5,7 @@ use super::{
     now, reconcile, view, AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository,
     Stage, StageStatus, WatchItem, Watchlist,
 };
+use crate::Result;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -25,6 +26,12 @@ pub enum JobError {
 impl From<String> for JobError {
     fn from(value: String) -> Self {
         Self::Operation(value)
+    }
+}
+
+impl From<crate::Error> for JobError {
+    fn from(error: crate::Error) -> Self {
+        Self::Operation(error.to_string())
     }
 }
 
@@ -71,7 +78,7 @@ pub trait Operations {
         _title: &str,
         _stage: Stage,
         _question: &Value,
-    ) -> Result<(), String> {
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -349,7 +356,7 @@ pub fn run_item(
     }
 }
 
-fn find_item(document: &Watchlist, id: &ItemId) -> Result<(usize, usize), String> {
+fn find_item(document: &Watchlist, id: &ItemId) -> Result<(usize, usize)> {
     let playlist = document
         .playlists
         .iter()
@@ -361,15 +368,13 @@ fn find_item(document: &Watchlist, id: &ItemId) -> Result<(usize, usize), String
     Ok((playlist, item))
 }
 
-fn check_available(item: &WatchItem, action: ItemAction, output: &Path) -> Result<(), String> {
+fn check_available(item: &WatchItem, action: ItemAction, output: &Path) -> Result<()> {
     let audio = item.downloaded_audio(&AudioIndex::scan(output));
     let (enabled, reason) = availability(item, action, audio.as_deref());
     if enabled {
         Ok(())
     } else {
-        Err(reason
-            .unwrap_or("This command is not available.")
-            .to_owned())
+        Err(reason.unwrap_or("This command is not available.").into())
     }
 }
 
@@ -377,7 +382,7 @@ fn write<T>(
     repository: &Repository,
     dry_run: bool,
     draft: &mut Watchlist,
-    change: impl FnOnce(&mut Watchlist) -> Result<T, String>,
+    change: impl FnOnce(&mut Watchlist) -> Result<T>,
 ) -> Result<T, JobError> {
     if dry_run {
         return Ok(change(draft)?);
@@ -393,7 +398,7 @@ fn write<T>(
 fn reconcile_keeping_running(
     document: &mut Watchlist,
     options: ReconcileOptions<'_>,
-) -> Result<(), String> {
+) -> Result<()> {
     let mut running = Vec::new();
     for (playlist_index, playlist) in document.playlists.iter().enumerate() {
         for (item_index, item) in playlist.items.iter().enumerate() {

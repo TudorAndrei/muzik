@@ -1,43 +1,44 @@
-mod bridge;
-mod native;
+mod backend;
 mod pages;
+mod requests;
+mod settings;
 mod style;
 mod thumbnails;
 mod watch_table;
 mod watchlist_view;
 
-use bridge::{Bridge, Message};
+use async_channel::Receiver;
+use backend::{Backend, ItemRequest};
 use gpui_kit::component::button::*;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState, NumberInput, Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::status_bar::StatusBar;
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
-use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 use muzik_store::jobs::Status as JobStatus;
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
-use serde_json::{json, Map, Value};
+use requests::{Command, PendingAction, Read};
+use serde_json::{json, Value};
+use settings::ConfigView;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
 use strum_macros::{Display, EnumString};
 
 actions!(muzik, [Quit]);
@@ -59,39 +60,11 @@ const PAGES: [(Page, &str); 5] = [
     (Page::Spotify, "Spotify"),
 ];
 
-struct Field {
-    key: &'static str,
-    label: &'static str,
-    state: Entity<InputState>,
-}
-struct Choice {
-    key: &'static str,
-    label: &'static str,
-    values: &'static [&'static str],
-    selected: usize,
-    state: Entity<SelectState<Vec<&'static str>>>,
-}
-struct ConfigSwitch {
-    key: &'static str,
-    label: &'static str,
-    enabled: bool,
-}
-
 struct ChapterRow {
     index: Entity<InputState>,
     start: Entity<InputState>,
     end: Entity<InputState>,
     title: Entity<InputState>,
-}
-
-#[derive(Clone)]
-struct PendingAction {
-    title: String,
-    description: &'static str,
-    confirm: String,
-    destructive: bool,
-    command: &'static str,
-    params: Value,
 }
 
 #[derive(Default)]
@@ -184,30 +157,6 @@ struct ActivitySection {
     rows: Vec<String>,
 }
 
-const CHOICES: &[(&str, &str, &[&str])] = &[
-    ("audio_source", "Audio source", AudioSource::CHOICES),
-    ("metadata_source", "Metadata", MetadataSource::CHOICES),
-    ("prefer", "Prefer", muzik_core::PreferredAudio::CHOICES),
-    ("fallback", "Fallback", AudioFallback::CHOICES),
-    ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
-    (
-        "duplicates",
-        "Album already in library",
-        DuplicatePolicy::CHOICES,
-    ),
-];
-const SWITCHES: &[(&str, &str, bool)] = &[
-    ("review", "Review chapters", false),
-    ("no_split", "No split", false),
-    ("no_organize", "No organize", false),
-    ("import_", "Import", false),
-    ("tag_only", "Tag only", false),
-    ("dry_run", "Dry run", false),
-    ("keep_source", "Keep source", false),
-    ("force", "Force", false),
-    ("interactive", "Interactive", true),
-    ("auto_decide", "Choose automatically", true),
-];
 const REPLACE_WARNING: &str =
     "This replaces the files from this stage. Later stages can become stale.";
 
@@ -243,9 +192,11 @@ struct Muzik {
     spotify_client_id: Entity<InputState>,
     chapter_rows: Vec<ChapterRow>,
     logo: Arc<Image>,
-    bridge: Option<Bridge>,
-    pending: HashMap<String, String>,
-    latest_reads: HashMap<String, String>,
+    window: AnyWindowHandle,
+    backend: Option<Arc<Backend>>,
+    events: Option<Task<()>>,
+    reads: HashMap<Read, u64>,
+    read_serial: u64,
     status: String,
     error: Option<String>,
     runs: Vec<Run>,
@@ -267,16 +218,16 @@ struct Muzik {
     library: Value,
     services: Value,
     spotify: Value,
-    defaults: Value,
+    defaults: Option<GuiDefaults>,
     config_status: Rc<RefCell<String>>,
 }
 
 impl Muzik {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        Self::new_with_bridge(window, cx, true)
+        Self::new_with_backend(window, cx, true)
     }
 
-    fn new_with_bridge(window: &mut Window, cx: &mut Context<Self>, start_bridge: bool) -> Self {
+    fn new_with_backend(window: &mut Window, cx: &mut Context<Self>, start_backend: bool) -> Self {
         let view = cx.entity().downgrade();
         let watch_table = cx.new(|cx| {
             TableState::new(watch_table::WatchTable::new(view), window, cx)
@@ -301,9 +252,11 @@ impl Muzik {
                 .new(|cx| InputState::new(window, cx).placeholder("Spotify client ID")),
             chapter_rows: Vec::new(),
             logo: style::logo(),
-            bridge: None,
-            pending: HashMap::new(),
-            latest_reads: HashMap::new(),
+            window: window.window_handle(),
+            backend: None,
+            events: None,
+            reads: HashMap::new(),
+            read_serial: 0,
             status: String::new(),
             error: None,
             runs: Vec::new(),
@@ -325,104 +278,74 @@ impl Muzik {
             library: Value::Null,
             services: Value::Null,
             spotify: Value::Null,
-            defaults: Value::Null,
+            defaults: None,
             config_status: Rc::new(RefCell::new(String::new())),
         };
-        if start_bridge {
-            match Bridge::start() {
-                Ok(bridge) => {
-                    this.bridge = Some(bridge);
-                    this.send("hello", json!({}));
-                    this.send("jobs.list", json!({}));
+        if start_backend {
+            match Backend::start() {
+                Ok((backend, events)) => {
+                    this.backend = Some(Arc::new(backend));
+                    this.events = Some(Self::listen(events, window, cx));
+                    this.hello(cx);
+                    this.load_jobs(cx);
                 }
-                Err(error) => this.status = error,
+                Err(error) => this.status = error.to_string(),
             }
         }
         cx.observe_window_appearance(window, |_, window, cx| {
             Theme::sync_system_appearance(Some(window), cx);
         })
         .detach();
-        cx.spawn_in(window, async move |weak, cx| loop {
-            cx.background_executor()
-                .timer(Duration::from_millis(80))
-                .await;
-            if weak
-                .update_in(cx, |view, window, cx| view.drain(window, cx))
-                .is_err()
-            {
-                break;
-            }
-        })
-        .detach();
         this
     }
 
-    fn send(&mut self, command: &str, params: Value) {
-        if matches!(
-            command,
-            "spotify.set_client_id" | "spotify.logout" | "spotify.login"
-        ) {
-            self.latest_reads.remove("spotify.status");
-            self.latest_reads.remove("spotify.playlists");
-            if let Some(spotify) = self.spotify.as_object_mut() {
-                spotify.remove("playlists");
-            }
-        } else if command == "spotify.status" {
-            self.latest_reads.remove("spotify.playlists");
-        }
-        match self
-            .bridge
-            .as_mut()
-            .map(|bridge| bridge.send(command, params))
-        {
-            Some(Ok(id)) => {
-                if matches!(
-                    command,
-                    "library.scan"
-                        | "services.check"
-                        | "spotify.status"
-                        | "spotify.playlists"
-                        | "watchlist.load"
-                ) {
-                    self.latest_reads.insert(command.into(), id.clone());
+    fn listen(events: Receiver<AppEvent>, window: &Window, cx: &Context<Self>) -> Task<()> {
+        cx.spawn_in(window, async move |view, cx| {
+            while let Ok(event) = events.recv().await {
+                let mut batch = vec![event];
+                while let Ok(event) = events.try_recv() {
+                    batch.push(event);
                 }
-                self.pending.insert(id, command.into());
-                self.status = format!("{command} requested");
+                if view
+                    .update_in(cx, |view, window, cx| view.app_events(batch, window, cx))
+                    .is_err()
+                {
+                    break;
+                }
             }
-            Some(Err(error)) => self.status = error,
-            None => self.status = "Backend is not available".into(),
-        }
+        })
     }
 
     fn launcher_params(&self, cx: &App) -> Value {
-        let mut params = self.defaults.as_object().cloned().unwrap_or_default();
-        params.insert("raw".into(), json!(self.raw.read(cx).value().to_string()));
-        Value::Object(params)
+        let mut params = serde_json::to_value(&self.defaults)
+            .ok()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
+        params["raw"] = json!(self.raw.read(cx).value().to_string());
+        params
     }
 
-    fn apply_defaults(&mut self, defaults: Value, cx: &mut Context<Self>) {
-        self.defaults = defaults;
+    fn apply_defaults(&mut self, defaults: GuiDefaults, cx: &mut Context<Self>) {
+        self.defaults = Some(defaults);
         cx.notify();
     }
 
     fn open_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.defaults.is_object() {
+        let Some(defaults) = self.defaults.clone() else {
             self.status = "Config is loading".into();
             cx.notify();
             return;
-        }
+        };
         if self.config_view.is_none() {
             let main = cx.entity();
-            let defaults = self.defaults.clone();
             let status = self.config_status.clone();
             self.config_view =
                 Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
-            self.send("soulseek.get", json!({}));
-            self.send("bandcamp.get", json!({}));
+            self.load_accounts(cx);
         }
         self.page = Page::Settings;
         self.error = None;
-        self.send("services.check", json!({}));
+        self.check_services(cx);
         cx.notify();
     }
 
@@ -434,25 +357,14 @@ impl Muzik {
         self.page = page;
         self.error = None;
         match page {
-            Page::Watchlist => self.send("watchlist.load", json!({})),
+            Page::Watchlist => self.load_watchlist(cx),
             Page::Library => self.scan_library(cx),
             Page::Spotify => {
-                self.send("watchlist.load", json!({}));
-                self.send("spotify.status", json!({}));
+                self.load_watchlist(cx);
+                self.spotify_status(cx);
             }
             Page::Workflow | Page::Settings => {}
         }
-        cx.notify();
-    }
-
-    fn scan_library(&mut self, _cx: &App) {
-        let output = self.defaults["output"].as_str().unwrap_or("").to_string();
-        self.send("library.scan", json!({"output":output}));
-    }
-
-    fn start_job(&mut self, command: &str, params: Value, cx: &mut Context<Self>) {
-        self.error = None;
-        self.send(command, params);
         cx.notify();
     }
 
@@ -702,15 +614,6 @@ impl Muzik {
         });
     }
 
-    fn run_action(&mut self, action: PendingAction, cx: &mut Context<Self>) {
-        if action.command == "watchlist.action" {
-            self.start_job(action.command, action.params, cx);
-        } else {
-            self.send(action.command, action.params);
-            cx.notify();
-        }
-    }
-
     fn pick_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -733,163 +636,14 @@ impl Muzik {
         .detach();
     }
 
-    fn drain(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let messages = self.bridge.as_ref().map(Bridge::drain).unwrap_or_default();
-        if messages.is_empty() {
-            return;
-        }
-        for message in messages {
-            self.message(message, window, cx);
+    fn app_events(&mut self, events: Vec<AppEvent>, window: &mut Window, cx: &mut Context<Self>) {
+        for event in events {
+            self.app_event(event, window, cx);
         }
         if std::mem::take(&mut self.reload_watchlist) {
-            self.send("watchlist.load", json!({}));
+            self.load_watchlist(cx);
         }
         cx.notify();
-    }
-
-    fn message(&mut self, message: Message, window: &mut Window, cx: &mut Context<Self>) {
-        match message {
-            Message::Response(response) => self.response(response, window, cx),
-            Message::App(event) => self.app_event(event, window, cx),
-            Message::Thumbnails(data) => self.merge_thumbnail_results(&data),
-        }
-    }
-
-    fn response(&mut self, message: Value, window: &mut Window, _cx: &mut Context<Self>) {
-        {
-            {
-                let id = message["id"].as_str().unwrap_or_default();
-                let command = self.pending.remove(id).unwrap_or_default();
-                if matches!(
-                    command.as_str(),
-                    "library.scan"
-                        | "services.check"
-                        | "spotify.status"
-                        | "spotify.playlists"
-                        | "watchlist.load"
-                ) {
-                    if self.latest_reads.get(&command).map(String::as_str) != Some(id) {
-                        return;
-                    }
-                    self.latest_reads.remove(&command);
-                }
-                if !message["ok"].as_bool().unwrap_or(false) {
-                    self.status = message["error"]["message"]
-                        .as_str()
-                        .unwrap_or("Request failed")
-                        .into();
-                    self.error = Some(self.status.clone());
-                    if matches!(
-                        command.as_str(),
-                        "config.save" | "soulseek.save" | "bandcamp.save" | "bandcamp.logout"
-                    ) {
-                        *self.config_status.borrow_mut() = self.status.clone();
-                    }
-                    return;
-                }
-                let result = &message["result"];
-                match command.as_str() {
-                    "hello" | "config.get" | "config.save" => {
-                        self.status = "Backend ready".into();
-                        if command == "config.save" {
-                            self.status = "Config saved".into();
-                            self.error = None;
-                            *self.config_status.borrow_mut() = self.status.clone();
-                        }
-                        self.apply_defaults(result["defaults"].clone(), _cx);
-                    }
-                    "watchlist.load" => {
-                        self.replace_watchlist(result["watchlist"].clone(), window, _cx);
-                        self.cache_visible_thumbnails(_cx);
-                        self.status = "Watchlist ready".into();
-                    }
-                    "watchlist.add" | "watchlist.remove" | "watchlist.rename" => {
-                        if command == "watchlist.add" {
-                            self.watch_url
-                                .update(_cx, |state, cx| state.set_value("", window, cx));
-                        }
-                        self.send("watchlist.load", json!({}));
-                    }
-                    "library.scan" => {
-                        self.library = result.clone();
-                        self.status = "Library ready".into();
-                    }
-                    "services.check" => {
-                        self.services = result.clone();
-                        self.status = "Services checked".into();
-                    }
-                    "soulseek.get" | "soulseek.save" => {
-                        if let Some(view) = self.config_view.clone() {
-                            view.update(_cx, |view, cx| view.set_soulseek(result, window, cx));
-                        }
-                        if command == "soulseek.save" {
-                            *self.config_status.borrow_mut() =
-                                "Config and Soulseek account saved".into();
-                            self.send("services.check", json!({}));
-                        }
-                    }
-                    "bandcamp.get" | "bandcamp.save" | "bandcamp.logout" => {
-                        if let Some(view) = self.config_view.clone() {
-                            view.update(_cx, |view, cx| view.set_bandcamp(result, window, cx));
-                        }
-                        if command == "bandcamp.save" {
-                            *self.config_status.borrow_mut() = "Bandcamp login saved".into();
-                            self.send("watchlist.load", json!({}));
-                        } else if command == "bandcamp.logout" {
-                            *self.config_status.borrow_mut() = "Bandcamp login removed".into();
-                        }
-                    }
-                    "spotify.status"
-                    | "spotify.set_client_id"
-                    | "spotify.logout"
-                    | "spotify.playlists" => {
-                        if command == "spotify.status" {
-                            self.spotify = result.clone();
-                            if self.spotify_client_id.read(_cx).value().is_empty() {
-                                if let Some(client_id) = result["client_id"].as_str() {
-                                    self.spotify_client_id.update(_cx, |state, cx| {
-                                        state.set_value(client_id.to_string(), window, cx)
-                                    });
-                                }
-                            }
-                            if self.spotify["connected"] == true {
-                                self.send("spotify.playlists", json!({}));
-                            }
-                        } else if command == "spotify.playlists" {
-                            if self.spotify["connected"] == true {
-                                self.spotify["playlists"] = result["playlists"].clone();
-                            }
-                        } else {
-                            self.send("spotify.status", json!({}));
-                        }
-                        self.status = "Spotify ready".into();
-                    }
-                    "jobs.list" => {
-                        self.apply_jobs(result);
-                        self.sync_watch_table(_cx);
-                        self.gates = result["gates"].clone();
-                    }
-                    "jobs.answer" => self.status = "Answer saved; the item is queued".into(),
-                    "spotify.login" => {
-                        if let Some(id) = result["job_id"].as_str() {
-                            if !self.finished_runs.contains(id) {
-                                let mut run =
-                                    Run::new(id, RunKind::SpotifyLogin, "Spotify connection");
-                                run.queued = false;
-                                run.status = "Waiting for the browser".into();
-                                self.runs.push(run);
-                            }
-                        }
-                    }
-                    "workflow.start" | "watchlist.refresh" | "watchlist.action" => {
-                        self.status = "Added to the queue".into();
-                    }
-                    _ => {
-                        self.status = format!("{command} complete");
-                    }
-                }
-            }
-        }
     }
 
     fn app_event(&mut self, event: AppEvent, window: &mut Window, _cx: &mut Context<Self>) {
@@ -1002,9 +756,9 @@ impl Muzik {
             window.push_notification(note, _cx);
         }
         if kind == RunKind::SpotifyLogin {
-            self.send("spotify.status", json!({}));
+            self.spotify_status(_cx);
             if ending == Ending::Completed {
-                self.send("spotify.playlists", json!({}));
+                self.spotify_playlists(_cx);
             }
         } else {
             self.reload_watchlist = true;
@@ -1087,7 +841,7 @@ impl Muzik {
             return;
         }
         self.thumbnail_attempted.extend(video_ids.iter().cloned());
-        self.send("thumbnails.cache", json!({"video_ids":video_ids}));
+        self.cache_thumbnails(video_ids, cx);
         cx.notify();
     }
 
@@ -1138,20 +892,14 @@ impl Muzik {
         if decision["queue_job"].is_null() {
             self.requests
                 .retain(|request| request["decision_id"] != decision["decision_id"]);
-            self.send(
-                "decision.reply",
-                json!({"decision_id":decision["decision_id"],"value":value}),
-            );
+            self.send_reply(describe(&decision["decision_id"]), value, cx);
             if let Some(job_id) = decision["job_id"].as_str() {
                 self.set_status(job_id, "Working");
             }
         } else {
             self.waiting
                 .retain(|job| job["id"] != decision["queue_job"]);
-            self.send(
-                "jobs.answer",
-                json!({"id":decision["queue_job"],"value":value}),
-            );
+            self.send_answer(decision["queue_job"].as_i64(), value, cx);
         }
         if let Some(next) = self.requests.first().cloned() {
             self.open_decision(next, window, cx);
@@ -1234,7 +982,11 @@ impl Muzik {
             None if self.status.is_empty() => ("Ready".to_string(), cx.theme().muted_foreground),
             None => (self.status.clone(), cx.theme().muted_foreground),
         };
-        let output = self.defaults["output"].as_str().unwrap_or("").to_string();
+        let output = self
+            .defaults
+            .as_ref()
+            .map(|defaults| defaults.output.display().to_string())
+            .unwrap_or_default();
         StatusBar::new()
             .left(
                 div()
@@ -1273,7 +1025,7 @@ impl Muzik {
                     cx.notify();
                     return;
                 }
-                view.start_job("workflow.start", params, cx);
+                view.start_workflow(params, cx);
             }));
         let form = div()
             .v_flex()
@@ -1392,7 +1144,7 @@ impl Muzik {
                             .label(if queued { "Remove" } else { "Cancel" })
                             .on_click(cx.listener(move |view, _, window, cx| {
                                 if queued {
-                                    view.send("job.cancel", json!({"job_id":id}));
+                                    view.cancel_job(id.clone(), cx);
                                     cx.notify();
                                     return;
                                 }
@@ -1402,8 +1154,7 @@ impl Muzik {
                                         description: "The job stops at a safe point. Finished files and saved state stay.",
                                         confirm: "Cancel job".into(),
                                         destructive: true,
-                                        command: "job.cancel",
-                                        params: json!({"job_id":id}),
+                                        command: Command::Cancel(id.clone()),
                                     },
                                     window,
                                     cx,
@@ -1710,506 +1461,6 @@ impl Muzik {
     }
 }
 
-struct ConfigView {
-    main: WeakEntity<Muzik>,
-    fields: Vec<Field>,
-    choices: Vec<Choice>,
-    switches: Vec<ConfigSwitch>,
-    soulseek: SoulseekFields,
-    bandcamp: BandcampFields,
-    status: Rc<RefCell<String>>,
-}
-
-struct BandcampFields {
-    user: Entity<InputState>,
-    cookies: Entity<TextareaState>,
-    logged_in: bool,
-}
-
-const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the login cookie:
-1. In your browser, log in to bandcamp.com.
-2. Open the developer tools (Option-Command-I), then open Storage (Firefox, Zen) or Application (Chrome).
-3. Select Cookies, then https://bandcamp.com.
-4. Double-click the Value of the identity row and copy it.
-5. Paste it below and select Save Bandcamp login. Muzik finds your user name.
-A full Cookie header or a cookies.txt file also works. The cookie stays on this computer. Do not share it.";
-
-struct SoulseekFields {
-    username: Entity<InputState>,
-    password: Entity<InputState>,
-    host: Entity<InputState>,
-    port: Entity<InputState>,
-    has_password: bool,
-}
-
-impl ConfigView {
-    fn new(
-        main: Entity<Muzik>,
-        defaults: Value,
-        status: Rc<RefCell<String>>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        cx.observe(&main, |_, _, cx| cx.notify()).detach();
-        let fields = [
-            ("output", "Downloads"),
-            ("splits", "Splits"),
-            ("config", "Beets config"),
-            ("jobs", "Jobs"),
-            ("min_bitrate", "Min bitrate"),
-            ("agent_model", "Model"),
-        ]
-        .into_iter()
-        .map(|(key, label)| {
-            let value = match &defaults[key] {
-                Value::String(value) => value.clone(),
-                Value::Number(value) => value.to_string(),
-                _ => String::new(),
-            };
-            Field {
-                key,
-                label,
-                state: cx.new(|cx| {
-                    let state = InputState::new(window, cx)
-                        .placeholder(label)
-                        .default_value(value);
-                    match key {
-                        "jobs" => state.step(1.).min(0.),
-                        "min_bitrate" => state.step(32.).min(0.),
-                        _ => state,
-                    }
-                }),
-            }
-        })
-        .collect();
-        let choices: Vec<Choice> = CHOICES
-            .iter()
-            .map(|(key, label, values)| {
-                let selected = values
-                    .iter()
-                    .position(|value| Some(*value) == defaults[*key].as_str())
-                    .unwrap_or(0);
-                Choice {
-                    key,
-                    label,
-                    values,
-                    selected,
-                    state: cx.new(|cx| {
-                        SelectState::new(
-                            values.to_vec(),
-                            Some(IndexPath::new(selected)),
-                            window,
-                            cx,
-                        )
-                    }),
-                }
-            })
-            .collect();
-        for (index, choice) in choices.iter().enumerate() {
-            cx.subscribe_in(&choice.state, window, move |view, _, event, _, cx| {
-                let SelectEvent::Confirm(value) = event;
-                if let Some(value) = value {
-                    if let Some(selected) = view.choices[index]
-                        .values
-                        .iter()
-                        .position(|item| item == value)
-                    {
-                        view.choices[index].selected = selected;
-                        cx.notify();
-                    }
-                }
-            })
-            .detach();
-        }
-        let switches = SWITCHES
-            .iter()
-            .map(|(key, label, initial)| ConfigSwitch {
-                key,
-                label,
-                enabled: defaults[*key].as_bool().unwrap_or(*initial),
-            })
-            .collect();
-        let soulseek = SoulseekFields {
-            username: cx.new(|cx| InputState::new(window, cx).placeholder("Username")),
-            password: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder("Password")
-                    .masked(true)
-            }),
-            host: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(DEFAULT_SERVER_HOST)
-                    .default_value(DEFAULT_SERVER_HOST)
-            }),
-            port: cx.new(|cx| {
-                InputState::new(window, cx)
-                    .placeholder(DEFAULT_SERVER_PORT.to_string())
-                    .default_value(DEFAULT_SERVER_PORT.to_string())
-                    .step(1.)
-                    .min(1.)
-                    .max(65535.)
-            }),
-            has_password: false,
-        };
-        let bandcamp = BandcampFields {
-            user: cx.new(|cx| InputState::new(window, cx).placeholder("Found automatically")),
-            cookies: cx.new(|cx| {
-                TextareaState::new(window, cx)
-                    .placeholder("Paste the identity cookie value")
-                    .rows(4)
-            }),
-            logged_in: false,
-        };
-        Self {
-            main: main.downgrade(),
-            fields,
-            choices,
-            switches,
-            soulseek,
-            bandcamp,
-            status,
-        }
-    }
-
-    fn set_bandcamp(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.bandcamp.logged_in = settings["logged_in"] == true;
-        if let Some(user) = settings["user"].as_str().filter(|user| !user.is_empty()) {
-            let user = user.to_string();
-            self.bandcamp
-                .user
-                .update(cx, |state, cx| state.set_value(user, window, cx));
-        }
-        let placeholder = if self.bandcamp.logged_in {
-            "Saved. Paste new cookies to change them."
-        } else {
-            "Paste the identity cookie value"
-        };
-        self.bandcamp.cookies.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-            state.set_placeholder(placeholder, window, cx);
-        });
-        cx.notify();
-    }
-
-    fn send_bandcamp(&mut self, command: &str, cx: &mut Context<Self>) {
-        let params = json!({
-            "user": self.bandcamp.user.read(cx).value().trim().to_string(),
-            "cookies": self.bandcamp.cookies.read(cx).value().to_string(),
-        });
-        if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send(command, params);
-                cx.notify();
-            });
-        }
-    }
-
-    fn set_soulseek(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        let text = |key: &str| describe(&settings[key]);
-        for (state, value) in [
-            (&self.soulseek.username, text("username")),
-            (&self.soulseek.host, text("server_host")),
-            (&self.soulseek.port, text("server_port")),
-        ] {
-            if !value.is_empty() {
-                state.update(cx, |state, cx| state.set_value(value, window, cx));
-            }
-        }
-        self.soulseek.has_password = settings["has_password"] == true;
-        let placeholder = if self.soulseek.has_password {
-            "Saved. Type a new one to change it."
-        } else {
-            "Password"
-        };
-        self.soulseek.password.update(cx, |state, cx| {
-            state.set_value("", window, cx);
-            state.set_placeholder(placeholder, window, cx);
-        });
-        cx.notify();
-    }
-
-    fn soulseek_params(&self, cx: &App) -> Option<Value> {
-        let username = self.soulseek.username.read(cx).value().trim().to_string();
-        if username.is_empty() {
-            return None;
-        }
-        Some(json!({
-            "username": username,
-            "password": self.soulseek.password.read(cx).value().to_string(),
-            "server_host": self.soulseek.host.read(cx).value().trim().to_string(),
-            "server_port": self.soulseek.port.read(cx).value().trim().to_string(),
-        }))
-    }
-
-    fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let directories = matches!(self.fields[index].key, "output" | "splits");
-        let receiver = cx.prompt_for_paths(PathPromptOptions {
-            files: !directories,
-            directories,
-            multiple: false,
-            prompt: Some("Select".into()),
-        });
-        cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let value = path.to_string_lossy().into_owned();
-                    let _ = view.update_in(cx, |view, window, cx| {
-                        view.fields[index]
-                            .state
-                            .update(cx, |state, cx| state.set_value(value, window, cx));
-                        cx.notify();
-                    });
-                }
-            }
-        })
-        .detach();
-    }
-
-    fn save(&mut self, cx: &mut Context<Self>) {
-        let mut params = Map::new();
-        for field in &self.fields {
-            let value = field.state.read(cx).value().to_string();
-            if matches!(field.key, "jobs" | "min_bitrate") {
-                let Ok(number) = value.parse::<u64>() else {
-                    *self.status.borrow_mut() = format!("Enter a number for {}", field.label);
-                    cx.notify();
-                    return;
-                };
-                params.insert(field.key.into(), json!(number));
-            } else {
-                params.insert(field.key.into(), json!(value));
-            }
-        }
-        for choice in &self.choices {
-            params.insert(choice.key.into(), json!(choice.values[choice.selected]));
-        }
-        for switch in &self.switches {
-            params.insert(switch.key.into(), json!(switch.enabled));
-        }
-        let soulseek = self.soulseek_params(cx);
-        if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| {
-                main.error = None;
-                main.send("config.save", Value::Object(params));
-                if let Some(soulseek) = soulseek {
-                    main.send("soulseek.save", soulseek);
-                }
-                cx.notify();
-            });
-        }
-        *self.status.borrow_mut() = "Saving config".into();
-        cx.notify();
-    }
-}
-
-impl Render for ConfigView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut destinations = div().v_flex().gap_3();
-        let mut tuning = div().flex().flex_wrap().gap_4();
-        let mut agent = div().v_flex().gap_3().child(style::meta(
-            "Muzik asks this Codex model to pick album matches and Soulseek downloads. It asks you when the model is not sure.",
-            cx,
-        ));
-        for (index, field) in self.fields.iter().enumerate() {
-            let numeric = matches!(field.key, "jobs" | "min_bitrate");
-            let control = if numeric {
-                NumberInput::new(&field.state).into_any_element()
-            } else {
-                Input::new(&field.state).into_any_element()
-            };
-            let mut row = div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(div().flex_1().child(control));
-            if matches!(field.key, "output" | "splits" | "config") {
-                row = row.child(
-                    Button::new(("config-pick", index))
-                        .icon(IconName::FolderOpen)
-                        .label("Choose…")
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.pick_path(index, window, cx)
-                        })),
-                );
-            }
-            let field_view = div()
-                .v_flex()
-                .gap_1()
-                .child(div().text_sm().font_semibold().child(field.label))
-                .child(row);
-            if numeric {
-                tuning = tuning.child(div().w(px(180.)).child(field_view));
-            } else if field.key == "agent_model" {
-                agent = agent.child(div().w(px(240.)).child(field_view));
-            } else {
-                destinations = destinations.child(field_view);
-            }
-        }
-        let mut choices = div().flex().flex_wrap().gap_4();
-        for choice in &self.choices {
-            choices = choices.child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .w(px(240.))
-                    .child(div().text_sm().font_semibold().child(choice.label))
-                    .child(Select::new(&choice.state).w_full()),
-            );
-        }
-        let mut switches = div().flex().flex_wrap().gap_x_6().gap_y_3();
-        for (index, switch) in self.switches.iter().enumerate() {
-            let control = Switch::new(("config-switch", index))
-                .label(switch.label)
-                .checked(switch.enabled)
-                .on_click(cx.listener(move |view, checked: &bool, _, cx| {
-                    view.switches[index].enabled = *checked;
-                    cx.notify();
-                }));
-            if switch.key == "auto_decide" {
-                agent = agent.child(control);
-            } else {
-                switches = switches.child(div().w(px(200.)).child(control));
-            }
-        }
-        let status = self.status.borrow().clone();
-        div()
-            .v_flex()
-            .size_full()
-            .bg(cx.theme().muted)
-            .child(
-                div()
-                    .v_flex()
-                    .gap_1()
-                    .p_6()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(style::page_title("Settings"))
-                    .child(style::meta(
-                        "Workflow uses these settings for each run. Services shows the tools muzik can use.",
-                        cx,
-                    )),
-            )
-            .child(
-                div().flex_1().overflow_y_scrollbar().child(
-                    div()
-                        .v_flex()
-                        .gap_6()
-                        .p_6()
-                        .max_w(px(720.))
-                        .child(
-                            GroupBox::new()
-                                .id("config-destinations")
-                                .title("DESTINATIONS")
-                                .outline()
-                                .child(destinations),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-quality")
-                                .title("SOURCES AND QUALITY")
-                                .outline()
-                                .child(choices),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-agent")
-                                .title("AI DECISIONS")
-                                .outline()
-                                .child(agent),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-soulseek")
-                                .title("SOULSEEK")
-                                .outline()
-                                .child(style::meta(
-                                    "Your Soulseek account. Workflow uses it when Audio source is soulseek or as a fallback.",
-                                    cx,
-                                ))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .gap_4()
-                                        .child(labeled("Username", 240., Input::new(&self.soulseek.username)))
-                                        .child(labeled("Password", 240., Input::new(&self.soulseek.password))),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .gap_4()
-                                        .child(labeled("Server", 240., Input::new(&self.soulseek.host)))
-                                        .child(labeled("Port", 140., NumberInput::new(&self.soulseek.port))),
-                                ),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-bandcamp")
-                                .title("BANDCAMP")
-                                .outline()
-                                .child(style::meta(BANDCAMP_HELP, cx))
-                                .child(labeled("User name", 240., Input::new(&self.bandcamp.user)))
-                                .child(Textarea::new(&self.bandcamp.cookies).h(px(96.)))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .child(
-                                            Button::new("save-bandcamp")
-                                                .label("Save Bandcamp login")
-                                                .on_click(cx.listener(|view, _, _, cx| {
-                                                    view.send_bandcamp("bandcamp.save", cx)
-                                                })),
-                                        )
-                                        .when(self.bandcamp.logged_in, |row| {
-                                            row.child(
-                                                Button::new("logout-bandcamp")
-                                                    .ghost()
-                                                    .label("Log out")
-                                                    .on_click(cx.listener(|view, _, _, cx| {
-                                                        view.send_bandcamp("bandcamp.logout", cx)
-                                                    })),
-                                            )
-                                            .child(style::meta("Logged in", cx))
-                                        }),
-                                ),
-                        )
-                        .child(
-                            GroupBox::new()
-                                .id("config-processing")
-                                .title("PROCESSING")
-                                .outline()
-                                .child(tuning)
-                                .child(switches),
-                        )
-                        .child(Muzik::services_section(self.main.clone(), cx)),
-                ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_4()
-                    .p_4()
-                    .border_t_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().background)
-                    .child(div().text_sm().child(status))
-                    .child(
-                        Button::new("save-config")
-                            .primary()
-                            .label("Save config")
-                            .on_click(cx.listener(|view, _, _, cx| view.save(cx))),
-                    ),
-            )
-    }
-}
-
 impl Render for Muzik {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
@@ -2329,15 +1580,6 @@ fn import_match_summary(candidate: &Value) -> String {
         Some(distance) => format!("{artist} — {album} · difference {distance:.3}"),
         None => format!("{artist} — {album}"),
     }
-}
-
-fn labeled(label: &'static str, width: f32, control: impl IntoElement) -> Div {
-    div()
-        .v_flex()
-        .gap_1()
-        .w(px(width))
-        .child(div().text_sm().font_semibold().child(label))
-        .child(control)
 }
 
 fn job_label(kind: RunKind, title: &str) -> String {
@@ -2474,6 +1716,29 @@ fn main() {
         }
         _ => {}
     }
+    if let Ok(appender) = tracing_appender::rolling::Builder::new()
+        .rotation(tracing_appender::rolling::Rotation::DAILY)
+        .filename_prefix("muzik")
+        .filename_suffix("log")
+        .max_log_files(7)
+        .build(muzik_core::paths::Paths::user().logs())
+    {
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_env("MUZIK_LOG")
+                    .unwrap_or_else(|_| "info".into()),
+            )
+            .with_writer(appender)
+            .with_ansi(false)
+            .init();
+    }
+    if keyring::Entry::store_status().is_ok() {
+        if let Err(error) = muzik_runner::setup::move_soulseek_password(
+            &muzik_core::paths::Paths::user().config_file(),
+        ) {
+            tracing::warn!(%error, "the Soulseek password did not move to the keychain");
+        }
+    }
     let app = gpui_kit::application().with_assets(style::AppAssets);
     app.run(|cx| {
         gpui_kit::init(cx);
@@ -2511,29 +1776,10 @@ fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<
     paths
 }
 
-fn check_backend() -> Result<(), String> {
-    let mut bridge = Bridge::start()?;
-    let id = bridge.send("hello", json!({}))?;
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while std::time::Instant::now() < deadline {
-        for message in bridge.drain() {
-            let Message::Response(message) = message else {
-                continue;
-            };
-            if message["id"] == id {
-                if message["ok"] == true && message["result"]["protocol_version"] == 1 {
-                    println!("Rust backend ready (protocol 1)");
-                    return Ok(());
-                }
-                return Err(format!(
-                    "Rust backend rejected hello: {}",
-                    describe(&message)
-                ));
-            }
-        }
-        std::thread::sleep(Duration::from_millis(25));
-    }
-    Err("Rust backend did not answer hello within 5 seconds".into())
+fn check_backend() -> anyhow::Result<()> {
+    Backend::start()?;
+    println!("Rust backend ready");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2544,6 +1790,7 @@ mod tests {
     };
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+    use muzik_core::app_config::GuiDefaults;
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -2552,15 +1799,17 @@ mod tests {
         let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
             gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-                cx.new(|cx| Muzik::new_with_bridge(window, cx, false))
+                cx.new(|cx| Muzik::new_with_backend(window, cx, false))
             })
             .unwrap()
         });
         cx.update(|cx| {
             main.update(cx, |view, cx| {
-                view.defaults = json!({
-                    "output": "/tmp/downloads", "splits": "/tmp/splits", "config": "",
-                    "jobs": 0, "min_bitrate": 256,
+                view.defaults = Some(GuiDefaults {
+                    output: "/tmp/downloads".into(),
+                    splits: "/tmp/splits".into(),
+                    min_bitrate: 256,
+                    ..GuiDefaults::default()
                 });
                 view.status = "Changed".into();
                 cx.notify();
@@ -2569,6 +1818,8 @@ mod tests {
         cx.update_window(handle, |_, window, cx| {
             window.render_frame(cx);
             window.within("pages").click(3usize, cx);
+            window.render_frame(cx);
+            window.within("settings-sidebar").click("0-2", cx);
             window.render_frame(cx);
             assert!(window.try_find("service-refresh").is_some());
             window.click("save-config", cx);
@@ -2587,7 +1838,7 @@ mod tests {
         let main = cx.update(|cx| {
             gpui_kit::init(cx);
             let (_, main) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
-                cx.new(|cx| Muzik::new_with_bridge(window, cx, false))
+                cx.new(|cx| Muzik::new_with_backend(window, cx, false))
             })
             .unwrap();
             main

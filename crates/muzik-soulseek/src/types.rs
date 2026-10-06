@@ -1,7 +1,6 @@
-//! Candidate and progress types converted from `soulseek_rs` wire types.
+//! Candidate types converted from `soulseek_rs` wire types.
 
 use serde::{Deserialize, Serialize};
-use soulseek_rs::types::{Download as WireDownload, DownloadStatus as WireDownloadStatus};
 use soulseek_rs::{File as WireFile, SearchResult as WireSearchResult};
 
 // Soulseek's FileSearchResponse attribute codes, per
@@ -53,74 +52,6 @@ impl From<WireSearchResult> for Candidate {
             slots: result.slots,
             speed: result.speed,
             files: result.files.iter().map(FileEntry::from).collect(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum DownloadProgress {
-    Queued,
-    InProgress {
-        bytes_downloaded: u64,
-        total_bytes: u64,
-        speed_bytes_per_sec: f64,
-    },
-    Paused {
-        bytes_downloaded: u64,
-        total_bytes: u64,
-    },
-    Completed,
-    Failed(Option<String>),
-    TimedOut,
-}
-
-impl From<&WireDownloadStatus> for DownloadProgress {
-    fn from(status: &WireDownloadStatus) -> Self {
-        match status {
-            WireDownloadStatus::Queued => Self::Queued,
-            WireDownloadStatus::InProgress {
-                bytes_downloaded,
-                total_bytes,
-                speed_bytes_per_sec,
-            } => Self::InProgress {
-                bytes_downloaded: *bytes_downloaded,
-                total_bytes: *total_bytes,
-                speed_bytes_per_sec: *speed_bytes_per_sec,
-            },
-            WireDownloadStatus::Paused {
-                bytes_downloaded,
-                total_bytes,
-            } => Self::Paused {
-                bytes_downloaded: *bytes_downloaded,
-                total_bytes: *total_bytes,
-            },
-            WireDownloadStatus::Completed => Self::Completed,
-            WireDownloadStatus::Failed(reason) => Self::Failed(reason.clone()),
-            WireDownloadStatus::TimedOut => Self::TimedOut,
-        }
-    }
-}
-
-impl DownloadProgress {
-    #[must_use]
-    pub const fn is_finished(&self) -> bool {
-        matches!(self, Self::Completed | Self::Failed(_) | Self::TimedOut)
-    }
-}
-
-/// Identity of an in-flight or queued download, used to target
-/// `Client::remove_download` on cancellation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DownloadTarget {
-    pub username: String,
-    pub filename: String,
-}
-
-impl From<&WireDownload> for DownloadTarget {
-    fn from(download: &WireDownload) -> Self {
-        Self {
-            username: download.username.clone(),
-            filename: download.filename.clone(),
         }
     }
 }
@@ -186,52 +117,5 @@ mod tests {
         assert_eq!(entry.vbr, None);
         assert_eq!(entry.sample_rate_hz, None);
         assert_eq!(entry.bit_depth, None);
-    }
-
-    #[test]
-    fn in_progress_and_paused_download_status_carry_their_byte_counts() {
-        let status = WireDownloadStatus::InProgress {
-            bytes_downloaded: 10,
-            total_bytes: 100,
-            speed_bytes_per_sec: 5.0,
-        };
-        assert_eq!(
-            DownloadProgress::from(&status),
-            DownloadProgress::InProgress {
-                bytes_downloaded: 10,
-                total_bytes: 100,
-                speed_bytes_per_sec: 5.0,
-            }
-        );
-        assert!(!DownloadProgress::from(&status).is_finished());
-
-        let paused = WireDownloadStatus::Paused {
-            bytes_downloaded: 10,
-            total_bytes: 100,
-        };
-        assert_eq!(
-            DownloadProgress::from(&paused),
-            DownloadProgress::Paused {
-                bytes_downloaded: 10,
-                total_bytes: 100,
-            }
-        );
-    }
-
-    #[test]
-    fn completed_failed_and_timed_out_are_terminal() {
-        assert!(DownloadProgress::from(&WireDownloadStatus::Completed).is_finished());
-        assert!(DownloadProgress::from(&WireDownloadStatus::Failed(None)).is_finished());
-        assert!(DownloadProgress::from(&WireDownloadStatus::TimedOut).is_finished());
-        assert!(!DownloadProgress::from(&WireDownloadStatus::Queued).is_finished());
-    }
-
-    #[test]
-    fn failed_status_keeps_its_reason() {
-        let status = WireDownloadStatus::Failed(Some("peer went offline".to_string()));
-        assert_eq!(
-            DownloadProgress::from(&status),
-            DownloadProgress::Failed(Some("peer went offline".to_string()))
-        );
     }
 }

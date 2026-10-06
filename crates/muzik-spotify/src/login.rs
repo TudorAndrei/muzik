@@ -1,9 +1,8 @@
 //! Spotify browser login with PKCE and one loopback callback.
 
-use super::{
-    account_name, save_tokens, settings, tokens_from_payload, Settings, Tokens, TOKEN_URL,
-};
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use super::{account_name, request_token, save_token, settings, Client, Error, Result, Settings};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -13,15 +12,15 @@ use std::time::{Duration, Instant};
 use url::Url;
 
 const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
-const SUCCESS_PAGE: &str = "<html><body><h3>muzik is connected to Spotify.</h3><p>You can close this tab.</p></body></html>";
 const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
+const SUCCESS_PAGE: &str = "<html><body><h3>muzik is connected to Spotify.</h3><p>You can close this tab.</p></body></html>";
 
 pub fn login(
     config_path: &Path,
     token_path: &Path,
     port_override: Option<u16>,
     cancel: &AtomicBool,
-) -> Result<String, String> {
+) -> Result<String> {
     let mut settings = settings(config_path)?;
     if let Some(port) = port_override {
         settings.redirect_port = port;
@@ -37,9 +36,7 @@ pub fn login(
             settings.redirect_port
         )
     })?;
-    listener
-        .set_nonblocking(true)
-        .map_err(|error| error.to_string())?;
+    listener.set_nonblocking(true)?;
     let verifier = random_url_token(64)?;
     let state = random_url_token(16)?;
     let url = authorize_url(&settings, &verifier, &state)?;
@@ -47,47 +44,34 @@ pub fn login(
         .map_err(|error| format!("Unable to open Spotify login in the browser: {error}"))?;
     let code = wait_for_code(&listener, &state, cancel, Duration::from_secs(300))?;
     if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
+        return Err(Error::Cancelled);
     }
-    let mut response = ureq::post(TOKEN_URL)
-        .config()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .http_status_as_error(false)
-        .build()
-        .send_form([
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", settings.redirect_uri().as_str()),
-            ("client_id", settings.client_id.as_str()),
-            ("code_verifier", verifier.as_str()),
-        ])
-        .map_err(|error| format!("Unable to reach Spotify: {error}"))?;
-    if !response.status().is_success() {
-        return Err(format!(
-            "Spotify rejected the login ({})",
-            response.status()
-        ));
-    }
-    let payload: serde_json::Value = response
-        .body_mut()
-        .read_json()
-        .map_err(|error| format!("Spotify returned an invalid token response: {error}"))?;
-    let tokens: Tokens = tokens_from_payload(&payload, "")?;
+    let token = request_token(&[
+        ("grant_type", "authorization_code"),
+        ("code", &code),
+        ("redirect_uri", &settings.redirect_uri()),
+        ("client_id", &settings.client_id),
+        ("code_verifier", &verifier),
+    ])?;
     if cancel.load(Ordering::Relaxed) {
-        return Err("cancelled".into());
+        return Err(Error::Cancelled);
     }
-    save_tokens(token_path, &tokens)?;
-    account_name(&settings, token_path, tokens)
+    save_token(token_path, &token)?;
+    account_name(&mut Client {
+        client_id: settings.client_id,
+        token_path: token_path.to_path_buf(),
+        token,
+    })
 }
 
-fn random_url_token(length: usize) -> Result<String, String> {
+fn random_url_token(length: usize) -> Result<String> {
     let mut bytes = vec![0_u8; length];
     getrandom::fill(&mut bytes)
         .map_err(|error| format!("Cannot create Spotify login secret: {error}"))?;
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn authorize_url(settings: &Settings, verifier: &str, state: &str) -> Result<Url, String> {
+fn authorize_url(settings: &Settings, verifier: &str, state: &str) -> Result<Url> {
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let mut url = Url::parse(AUTHORIZE_URL).map_err(|error| error.to_string())?;
     url.query_pairs_mut()
@@ -106,26 +90,18 @@ fn wait_for_code(
     state: &str,
     cancel: &AtomicBool,
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<String> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if cancel.load(Ordering::Relaxed) {
-            return Err("cancelled".into());
+            return Err(Error::Cancelled);
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .map_err(|error| error.to_string())?;
+                stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                 let mut line = String::new();
-                BufReader::new(
-                    stream
-                        .try_clone()
-                        .map_err(|error| error.to_string())?
-                        .take(8192),
-                )
-                .read_line(&mut line)
-                .map_err(|error| error.to_string())?;
+                BufReader::new(stream.try_clone()?.take(8192)).read_line(&mut line)?;
                 let target = line.split_whitespace().nth(1).unwrap_or("");
                 if !line.starts_with("GET ") || !target.starts_with("/callback?") {
                     answer(&mut stream, "404 Not Found", "Not found")?;
@@ -140,7 +116,7 @@ fn wait_for_code(
                         return Ok(code);
                     }
                     Err(error) => {
-                        answer(&mut stream, "400 Bad Request", &error)?;
+                        answer(&mut stream, "400 Bad Request", &error.to_string())?;
                         return Err(error);
                     }
                 }
@@ -148,7 +124,7 @@ fn wait_for_code(
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            Err(error) => return Err(format!("Spotify callback failed: {error}")),
+            Err(error) => return Err(format!("Spotify callback failed: {error}").into()),
         }
     }
     Err(
@@ -157,7 +133,7 @@ fn wait_for_code(
     )
 }
 
-fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
+fn callback_result(url: &Url, expected_state: &str) -> Result<String> {
     let fields = url
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
@@ -165,7 +141,7 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
         return Err("Spotify returned the wrong login state".into());
     }
     if let Some(error) = fields.get("error") {
-        return Err(format!("Spotify refused the login: {error}"));
+        return Err(format!("Spotify refused the login: {error}").into());
     }
     fields
         .get("code")
@@ -174,19 +150,18 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
         .ok_or_else(|| "Spotify sent no authorization code".into())
 }
 
-fn answer(stream: &mut TcpStream, status: &str, body: &str) -> Result<(), String> {
+fn answer(stream: &mut TcpStream, status: &str, body: &str) -> Result<()> {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream
-        .write_all(response.as_bytes())
-        .map_err(|error| error.to_string())
+    Ok(stream.write_all(response.as_bytes())?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{authorize_url, callback_result, wait_for_code, Settings};
+    use super::{authorize_url, callback_result, wait_for_code};
+    use crate::Settings;
     use std::io::{Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::AtomicBool;
@@ -199,42 +174,27 @@ mod tests {
             client_id: "my-client".into(),
             redirect_port: 8888,
         };
-        let url = authorize_url(&settings, "verifier", "state")?;
-        let params = url
-            .query_pairs()
-            .collect::<std::collections::HashMap<_, _>>();
-        assert_eq!(
-            params.get("response_type").map(|value| value.as_ref()),
-            Some("code")
-        );
-        assert_eq!(
-            params
-                .get("code_challenge_method")
-                .map(|value| value.as_ref()),
-            Some("S256")
-        );
-        assert_eq!(
-            params.get("redirect_uri").map(|value| value.as_ref()),
-            Some("http://127.0.0.1:8888/callback")
-        );
-        assert_eq!(
-            params.get("state").map(|value| value.as_ref()),
-            Some("state")
-        );
-        let standard = authorize_url(
+        let url = authorize_url(
             &settings,
             "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             "state",
         )?;
-        let standard_params = standard
+        let params = url
             .query_pairs()
             .collect::<std::collections::HashMap<_, _>>();
+        let param = |key: &str| params.get(key).map(|value| value.to_string());
+        assert_eq!(param("response_type").as_deref(), Some("code"));
+        assert_eq!(param("code_challenge_method").as_deref(), Some("S256"));
         assert_eq!(
-            standard_params
-                .get("code_challenge")
-                .map(|value| value.as_ref()),
+            param("redirect_uri").as_deref(),
+            Some("http://127.0.0.1:8888/callback")
+        );
+        assert_eq!(param("state").as_deref(), Some("state"));
+        assert_eq!(
+            param("code_challenge").as_deref(),
             Some("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
         );
+        assert!(param("scope").is_some_and(|scopes| scopes.contains("user-library-read")));
         Ok(())
     }
 

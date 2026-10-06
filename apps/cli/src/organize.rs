@@ -1,12 +1,13 @@
 //! CLI presentation for the shared Beets organization service.
 
+use anyhow::bail;
 use muzik_import::beets;
 
 use crate::{Import, Organize, import};
 
-pub fn run(args: &Organize) -> Result<(), String> {
+pub fn run(args: &Organize) -> anyhow::Result<()> {
     if !args.directory.exists() {
-        return Err(format!("Directory not found: {}", args.directory.display()));
+        bail!("Directory not found: {}", args.directory.display());
     }
     if args.tag_only {
         let count =

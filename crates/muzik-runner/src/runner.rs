@@ -8,12 +8,13 @@ use muzik_store::jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
 use muzik_store::watchlist::jobs::JobError;
 use muzik_store::watchlist::{ItemAction, Stage};
 use muzik_workflow::{classify_input, WorkflowInput};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use strum_macros::AsRefStr;
@@ -86,7 +87,7 @@ impl Shared {
     }
 
     fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
-        self.running.lock().unwrap_or_else(PoisonError::into_inner)
+        self.running.lock()
     }
 }
 
@@ -103,7 +104,7 @@ impl Drop for Runner {
 }
 
 impl Runner {
-    pub fn start(jobs: Arc<Jobs>, options: Options) -> Result<Option<Self>, String> {
+    pub fn start(jobs: Arc<Jobs>, options: Options) -> crate::Result<Option<Self>> {
         let Some(lock) = jobs.runner_lock()? else {
             return Ok(None);
         };
@@ -167,11 +168,18 @@ impl Runner {
     }
 
     pub fn wait_until_idle(&self, interrupted: &AtomicBool) {
-        while !self.is_idle() {
+        loop {
             if interrupted.load(Ordering::SeqCst) {
-                for cancel in self.shared.running().values() {
+                self.shared.stop.store(true, Ordering::SeqCst);
+                let running = self.shared.running();
+                if running.is_empty() {
+                    return;
+                }
+                for cancel in running.values() {
                     cancel.store(true, Ordering::SeqCst);
                 }
+            } else if self.is_idle() {
+                return;
             }
             thread::sleep(Duration::from_millis(300));
         }
@@ -182,8 +190,8 @@ fn work(shared: &Arc<Shared>) {
     while !shared.stop.load(Ordering::SeqCst) {
         let claimed = shared.store().claim_any(&QUEUES).ok().flatten();
         let Some(job) = claimed else {
-            let idle = shared.idle.lock().unwrap_or_else(PoisonError::into_inner);
-            let _ = shared.wake.wait_timeout(idle, Duration::from_secs(1));
+            let mut idle = shared.idle.lock();
+            shared.wake.wait_for(&mut idle, Duration::from_secs(1));
             continue;
         };
         run_job(shared, job);
@@ -251,7 +259,7 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
 }
 
 fn settings(shared: &Shared, job: &Job) -> Result<Settings, (bool, String)> {
-    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|message| (false, message))
+    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|error| (false, error.to_string()))
 }
 
 fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
@@ -276,7 +284,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
             let key = item.id.to_string();
             if store
                 .find_open(Kind::Item, &key)
-                .map_err(|error| (false, error))?
+                .map_err(|error| (false, error.to_string()))?
                 .is_empty()
             {
                 store
@@ -286,7 +294,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
                         title: &item.title,
                         params: &params,
                     })
-                    .map_err(|error| (false, error))?;
+                    .map_err(|error| (false, error.to_string()))?;
                 queued += 1;
             }
         }
@@ -433,7 +441,7 @@ fn ask_agent(
             None
         }
         Err(error) => {
-            payload["agent"] = json!({"model":model,"error":error});
+            payload["agent"] = json!({"model":model,"error":error.to_string()});
             None
         }
     }
@@ -453,20 +461,17 @@ mod tests {
     use serde_json::json;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
-        let sender = Mutex::new(sender);
         let runner = Runner::start(
             Arc::clone(jobs),
             Options {
                 workers: 2,
                 sink: Arc::new(move |message| {
-                    if let Ok(sender) = sender.lock() {
-                        let _ = sender.send(message);
-                    }
+                    let _ = sender.send(message);
                 }),
                 ask: Arc::new(|_| Err("no answer in tests".into())),
                 chooser: None,
@@ -565,6 +570,26 @@ mod tests {
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
         assert!(runner.is_idle());
+        Ok(())
+    }
+
+    #[test]
+    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let audio = dir.path().join("track.flac");
+        std::fs::write(&audio, b"audio")?;
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path()))?);
+        let (runner, _receiver) = runner(&jobs)?;
+        runner.wait_until_idle(&AtomicBool::new(true));
+        let id =
+            jobs.workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))?;
+        runner.wake();
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(
+            jobs.store().get(id)?.map(|job| job.status),
+            Some(muzik_store::jobs::Status::Queued)
+        );
         Ok(())
     }
 }

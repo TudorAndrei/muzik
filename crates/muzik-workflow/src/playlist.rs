@@ -30,7 +30,7 @@ pub struct SpotifyTags {
     pub date: Option<String>,
 }
 
-pub fn write_spotify_tags(path: &Path, tags: &SpotifyTags) -> Result<(), String> {
+pub fn write_spotify_tags(path: &Path, tags: &SpotifyTags) -> Result<(), Error> {
     let mut data = muzik_tags::TagData::default();
     let mut set = |name: &str, value: Option<String>| {
         if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
@@ -44,7 +44,7 @@ pub fn write_spotify_tags(path: &Path, tags: &SpotifyTags) -> Result<(), String>
     set("track", tags.track.map(|track| track.to_string()));
     set("disc", tags.disc.map(|disc| disc.to_string()));
     set("date", tags.date.clone());
-    muzik_tags::write(path, &data).map_err(|error| error.to_string())
+    Ok(muzik_tags::write(path, &data)?)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,9 +81,7 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
     let ids = if options.dry_run {
         Vec::new()
     } else {
-        operations
-            .youtube_playlist_video_ids(url)
-            .map_err(Error::Operation)?
+        operations.youtube_playlist_video_ids(url)?
     };
     if ids.is_empty() && !options.dry_run {
         return Err(Error::Operation(
@@ -115,17 +113,17 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
                     match operations.acquire_soulseek(&video_url) {
                         Ok(files) if !files.is_empty() => files,
                         Ok(_) | Err(_) if options.fallback == crate::AudioFallback::Youtube => {
-                            operations
-                                .download_youtube(&video_url, &request.output, options.force)
-                                .map_err(Error::Operation)?
+                            operations.download_youtube(
+                                &video_url,
+                                &request.output,
+                                options.force,
+                            )?
                         }
                         Ok(files) => files,
                         Err(error) => return Err(Error::Operation(error)),
                     }
                 } else {
-                    operations
-                        .download_youtube(&video_url, &request.output, options.force)
-                        .map_err(Error::Operation)?
+                    operations.download_youtube(&video_url, &request.output, options.force)?
                 };
                 on_event(WorkflowEvent::AcquisitionCompleted {
                     files: acquired.clone(),
@@ -199,9 +197,7 @@ pub fn run_spotify_export<O: WorkflowOperations>(
         };
         if files.is_empty() {
             on_event(WorkflowEvent::AcquisitionStarted);
-            files = operations
-                .acquire_spotify_track(&track)
-                .map_err(Error::Operation)?;
+            files = operations.acquire_spotify_track(&track)?;
             on_event(WorkflowEvent::AcquisitionCompleted {
                 files: files.clone(),
             });
@@ -221,7 +217,7 @@ pub fn run_spotify_export<O: WorkflowOperations>(
             ..SpotifyTags::default()
         };
         for file in &files {
-            write_spotify_tags(file, &tags).map_err(Error::Operation)?;
+            write_spotify_tags(file, &tags)?;
         }
         let tagged = WorkflowOptions {
             interactive: false,
@@ -383,8 +379,7 @@ impl Checkpoint {
         let temp = self.path.with_extension("json.tmp");
         fs::write(
             &temp,
-            serde_json::to_vec(&json!({"version": 1, "entries": self.entries}))
-                .map_err(|error| Error::Operation(error.to_string()))?,
+            serde_json::to_vec(&json!({"version": 1, "entries": self.entries}))?,
         )?;
         fs::rename(temp, &self.path)?;
         Ok(())
@@ -407,8 +402,7 @@ pub fn load_spotify_export(path: &Path) -> Result<SpotifyPlaylist, Error> {
 }
 
 fn parse_spotify_json(data: &[u8]) -> Result<SpotifyPlaylist, Error> {
-    let value: Value =
-        serde_json::from_slice(data).map_err(|error| Error::Operation(error.to_string()))?;
+    let value: Value = serde_json::from_slice(data)?;
     if value.get("version").and_then(Value::as_u64) != Some(1)
         || value.get("source").and_then(Value::as_str) != Some("spotify")
         || value.get("type").and_then(Value::as_str) != Some("playlist")
@@ -477,11 +471,9 @@ fn parse_spotify_json(data: &[u8]) -> Result<SpotifyPlaylist, Error> {
 }
 
 fn parse_spotify_csv(path: &Path) -> Result<SpotifyPlaylist, Error> {
-    let mut reader =
-        csv::Reader::from_path(path).map_err(|error| Error::Operation(error.to_string()))?;
+    let mut reader = csv::Reader::from_path(path)?;
     let headers = reader
-        .headers()
-        .map_err(|error| Error::Operation(error.to_string()))?
+        .headers()?
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
@@ -494,7 +486,7 @@ fn parse_spotify_csv(path: &Path) -> Result<SpotifyPlaylist, Error> {
     }
     let mut tracks = Vec::new();
     for (index, row) in reader.records().enumerate() {
-        let row = row.map_err(|error| Error::Operation(error.to_string()))?;
+        let row = row?;
         let field = |name: &str| {
             headers
                 .iter()

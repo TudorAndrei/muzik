@@ -125,8 +125,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         force: bool,
     ) -> Result<Vec<PathBuf>, String> {
         self.local.stage.set(Stage::Download);
-        let files = download(url, output, force, self.local.cancelled)
-            .map_err(|error| error.to_string())?;
+        let files = download(url, output, force, self.local.cancelled)?;
         self.youtube_acquired = true;
         Ok(files)
     }
@@ -135,16 +134,14 @@ impl WorkflowOperations for RemoteOperations<'_> {
         self.local.stage.set(Stage::Download);
         self.youtube_acquired = false;
         let query = if matches!(classify_input(query), WorkflowInput::YoutubeVideo { .. }) {
-            YtDlp::default()
-                .field(query, "title", self.local.cancelled)
-                .map_err(|error| error.to_string())?
+            YtDlp::default().field(query, "title", self.local.cancelled)?
         } else {
             query.to_owned()
         };
         if query.is_empty() {
             return Err("YouTube video has no title for Soulseek search".into());
         }
-        soulseek_download(
+        Ok(soulseek_download(
             &self.paths,
             &query,
             self.prefer,
@@ -153,7 +150,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
             self.local.decide,
             false,
             None,
-        )
+        )?)
     }
 
     fn acquire_spotify_track(
@@ -187,7 +184,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
                     None,
                 )
             },
-            || download(&query, &output, false, cancelled).map_err(|error| error.to_string()),
+            || Ok(download(&query, &output, false, cancelled)?),
         )?;
         self.youtube_acquired = from_youtube;
         Ok(files)
@@ -232,9 +229,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 
     fn youtube_playlist_video_ids(&mut self, url: &str) -> Result<Vec<String>, String> {
-        YtDlp::default()
-            .playlist_ids(url, self.local.cancelled)
-            .map_err(|error| error.to_string())
+        Ok(YtDlp::default().playlist_ids(url, self.local.cancelled)?)
     }
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
@@ -278,10 +273,10 @@ pub(crate) fn acquire_spotify_audio<S, Y>(
     soulseek_ready: bool,
     mut soulseek: S,
     mut youtube: Y,
-) -> Result<(Vec<PathBuf>, bool), String>
+) -> crate::Result<(Vec<PathBuf>, bool)>
 where
-    S: FnMut() -> Result<Vec<PathBuf>, String>,
-    Y: FnMut() -> Result<Vec<PathBuf>, String>,
+    S: FnMut() -> crate::Result<Vec<PathBuf>>,
+    Y: FnMut() -> crate::Result<Vec<PathBuf>>,
 {
     if source == AudioSource::Youtube || source == AudioSource::Auto && !soulseek_ready {
         return youtube().map(|files| (files, true));
@@ -324,7 +319,7 @@ pub(crate) fn soulseek_download(
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     single_file: bool,
     output_root: Option<&Path>,
-) -> Result<Vec<PathBuf>, String> {
+) -> crate::Result<Vec<PathBuf>> {
     if cancelled.load(Ordering::SeqCst) {
         return Err("Soulseek search cancelled".into());
     }
@@ -332,11 +327,11 @@ pub(crate) fn soulseek_download(
     let config = app_config::load(&paths.config_file())?;
     let settings = SessionSettings::configured(&config)
         .ok_or("Set Soulseek credentials in configuration first.")?;
-    let session = Session::shared(settings).map_err(|error| error.to_string())?;
+    let session = Session::shared(settings)?;
     let timeouts = Timeouts::configured(&config);
     let ranked = session.search(query, prefer, 10, timeouts.search, cancelled)?;
     if ranked.is_empty() {
-        return Err(format!("No Soulseek audio found for {query}."));
+        return Err(format!("No Soulseek audio found for {query}.").into());
     }
     let selected = if interactive {
         let rows = ranked
@@ -364,11 +359,10 @@ pub(crate) fn soulseek_download(
             setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir").map(PathBuf::from)
         })
         .unwrap_or_else(|| paths.soulseek());
-    std::fs::create_dir_all(&output).map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&output)?;
     let destination = tempfile::Builder::new()
         .prefix("soulseek-")
-        .tempdir_in(&output)
-        .map_err(|error| error.to_string())?;
+        .tempdir_in(&output)?;
     session.fetch(
         &selected
             .candidate
@@ -377,13 +371,12 @@ pub(crate) fn soulseek_download(
         timeouts.download,
         cancelled,
     )?;
-    let files = muzik_workflow::find_audio_inputs(&[destination.path().to_path_buf()])
-        .map_err(|error| error.to_string())?;
+    let files = muzik_workflow::find_audio_inputs(&[destination.path().to_path_buf()])?;
     if files.is_empty() {
         return Err("Soulseek returned no audio files.".into());
     }
     let root = destination.keep();
-    muzik_workflow::find_audio_inputs(&[root]).map_err(|error| error.to_string())
+    Ok(muzik_workflow::find_audio_inputs(&[root])?)
 }
 
 fn candidate_row(candidate: &Candidate, score: f64) -> Value {
@@ -454,7 +447,7 @@ mod tests {
         )
         .err()
         .ok_or("Soulseek failure must be returned")?;
-        assert_eq!(error, "Soulseek is unavailable");
+        assert_eq!(error.to_string(), "Soulseek is unavailable");
         Ok(())
     }
 

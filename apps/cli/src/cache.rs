@@ -1,11 +1,12 @@
+use bytesize::ByteSize;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::paths;
 
-pub fn list() -> io::Result<()> {
+pub fn list() -> anyhow::Result<()> {
     let files = cache_files()?;
     if files.is_empty() {
         println!("Cache is empty. ({})", paths::cache_dir().display());
@@ -15,27 +16,28 @@ pub fn list() -> io::Result<()> {
     for file in &files {
         let metadata = fs::metadata(file)?;
         total += metadata.len();
-        println!("{}\t{} bytes", file.display(), metadata.len());
+        println!("{}\t{}", file.display(), ByteSize(metadata.len()));
     }
-    println!("Total: {} file(s), {total} bytes", files.len());
+    println!("Total: {} file(s), {}", files.len(), ByteSize(total));
     Ok(())
 }
 
-pub fn size() -> io::Result<()> {
+pub fn size() -> anyhow::Result<()> {
     let files = cache_files()?;
     let mut total = 0_u64;
     for file in &files {
         total += fs::metadata(file)?.len();
     }
     println!(
-        "Cache: {}\n  {} file(s), {total} bytes",
+        "Cache: {}\n  {} file(s), {}",
         paths::cache_dir().display(),
-        files.len()
+        files.len(),
+        ByteSize(total)
     );
     Ok(())
 }
 
-pub fn clear(key: Option<&str>) -> io::Result<()> {
+pub fn clear(key: Option<&str>) -> anyhow::Result<()> {
     if let Some(key) = key {
         validate_key(key)?;
         let mut removed = false;
@@ -44,7 +46,7 @@ pub fn clear(key: Option<&str>) -> io::Result<()> {
             match fs::remove_file(&path) {
                 Ok(()) => removed = true,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error),
+                Err(error) => return Err(error.into()),
             }
         }
         if removed {
@@ -69,7 +71,7 @@ pub fn clear(key: Option<&str>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn purge() -> io::Result<()> {
+pub fn purge() -> anyhow::Result<()> {
     let files = cache_files()?;
     let downloads = paths::download_dir();
     let splits = paths::data_dir().join("splits");
@@ -99,7 +101,7 @@ pub fn purge() -> io::Result<()> {
     Ok(())
 }
 
-pub fn clean(max_age_days: u64) -> io::Result<()> {
+pub fn clean(max_age_days: u64) -> anyhow::Result<()> {
     let age = Duration::from_secs(max_age_days.saturating_mul(24 * 60 * 60));
     let cutoff = SystemTime::now()
         .checked_sub(age)
@@ -154,9 +156,9 @@ fn validate_key(key: &str) -> io::Result<()> {
 }
 
 fn confirm(prompt: &str) -> io::Result<bool> {
-    print!("{prompt} [y/N] ");
-    io::stdout().flush()?;
-    let mut answer = String::new();
-    io::stdin().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES"))
+    dialoguer::Confirm::new()
+        .with_prompt(prompt)
+        .default(false)
+        .interact()
+        .map_err(io::Error::other)
 }

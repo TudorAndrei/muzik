@@ -1,4 +1,4 @@
-//! Audio files: ffmpeg and ffprobe calls, and the chapter splitter.
+//! Audio files: ffmpeg calls, audio quality, and the chapter splitter.
 
 pub mod ffmpeg;
 pub mod process;

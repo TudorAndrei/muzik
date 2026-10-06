@@ -20,8 +20,9 @@ both programs against copies of real Beets data before a public release.
 ## Create a release
 
 The `Release` GitHub Actions workflow runs by request. Cocogitto reads
-Conventional Commits and selects the next version. The `muzik-release` hook
-sets each Cargo package version and updates `Cargo.lock`. The workflow builds
+Conventional Commits and selects the next version. The bump hook runs
+`cargo set-version` (cargo-edit) on the workspace version that all packages
+inherit, and updates `Cargo.lock`. The workflow builds
 for macOS arm64 and Linux x86_64 and publishes:
 
 - `muzik-cli-<tag>-<target>.tar.gz`: the command-line program only.

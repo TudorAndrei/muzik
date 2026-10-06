@@ -13,6 +13,7 @@ use muzik_match::{
 };
 use muzik_metadata::{MetadataClient, ReleaseSearch, ReleaseSearchHit};
 use muzik_tags::TagData;
+use walkdir::WalkDir;
 
 pub trait ReleaseProvider {
     fn search_releases(
@@ -292,33 +293,23 @@ fn group_audio_paths(
     paths: &[PathBuf],
     cancelled: &dyn Fn() -> bool,
 ) -> Result<BTreeMap<PathBuf, Vec<PathBuf>>, ImportError> {
-    fn visit(
-        path: &Path,
-        found: &mut BTreeSet<PathBuf>,
-        visited_dirs: &mut BTreeSet<PathBuf>,
-        supplied: bool,
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<(), ImportError> {
+    let mut found = BTreeSet::new();
+    for path in paths {
         check_cancelled(cancelled)?;
-        let metadata = fs::metadata(path)?;
-        if metadata.is_dir() {
-            if !visited_dirs.insert(path.canonicalize()?) {
-                return Ok(());
-            }
-            for entry in fs::read_dir(path)? {
-                visit(&entry?.path(), found, visited_dirs, false, cancelled)?;
-            }
-        } else if metadata.is_file() && muzik_core::audio::is_audio(path) {
-            found.insert(path.canonicalize()?);
-        } else if metadata.is_file() && supplied {
+        if fs::metadata(path)?.is_file() && !muzik_core::audio::is_audio(path) {
             return Err(ImportError::UnsupportedAudio(path.to_owned()));
         }
-        Ok(())
-    }
-    let mut found = BTreeSet::new();
-    let mut visited_dirs = BTreeSet::new();
-    for path in paths {
-        visit(path, &mut found, &mut visited_dirs, true, cancelled)?;
+        for entry in WalkDir::new(path).follow_links(true) {
+            check_cancelled(cancelled)?;
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(error) if error.loop_ancestor().is_some() => continue,
+                Err(error) => return Err(std::io::Error::from(error).into()),
+            };
+            if entry.file_type().is_file() && muzik_core::audio::is_audio(entry.path()) {
+                found.insert(entry.path().canonicalize()?);
+            }
+        }
     }
     let mut groups: BTreeMap<PathBuf, Vec<PathBuf>> = BTreeMap::new();
     for path in found {

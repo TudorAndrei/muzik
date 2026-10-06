@@ -5,16 +5,17 @@ use muzik_core::{app_config, paths, SyncPreset};
 use muzik_media::ffmpeg::{Convert, Ffmpeg};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::{sync_files, Connection};
+use rayon::prelude::*;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 
+mod error;
 mod run;
 
+pub use error::{Error, Result};
 pub use muzik_media::ffmpeg::Encoding;
 pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection};
 
@@ -121,17 +122,17 @@ enum Step {
 }
 
 impl Target {
-    pub fn load(config: &Value, name: &str) -> Result<Self, String> {
+    pub fn load(config: &Value, name: &str) -> Result<Self> {
         let targets = config.get(SECTION).and_then(Value::as_object);
         let Some(entry) = targets.and_then(|targets| targets.get(name)) else {
             let names = targets
                 .map(|targets| targets.keys().cloned().collect::<Vec<_>>().join(", "))
                 .unwrap_or_default();
-            return Err(if names.is_empty() {
+            return Err(Error::Message(if names.is_empty() {
                 format!("no sync target named {name}; add one with `muzik config set-sync-target`")
             } else {
                 format!("no sync target named {name}; configured targets: {names}")
-            });
+            }));
         };
         let path = entry
             .get("path")
@@ -143,8 +144,7 @@ impl Target {
             Some(value) => value
                 .as_str()
                 .ok_or_else(|| format!("sync target {name}: preset must be a string"))?
-                .parse()
-                .map_err(|error: muzik_core::ChoiceError| error.to_string())?,
+                .parse::<SyncPreset>()?,
         };
         let bitrate = match entry.get("bitrate") {
             None | Some(Value::Null) => None,
@@ -171,7 +171,7 @@ impl Target {
         Ok(target)
     }
 
-    pub fn save(&self, config_path: &Path, name: &str) -> Result<(), String> {
+    pub fn save(&self, config_path: &Path, name: &str) -> Result<()> {
         self.validate()?;
         let name = name.trim();
         if name.is_empty() {
@@ -184,21 +184,22 @@ impl Target {
             entry.insert("bitrate".into(), json!(bitrate));
         }
         entry.insert("covers".into(), json!(self.covers));
-        app_config::save_section_value(config_path, SECTION, name, Value::Object(entry))
+        app_config::save_section_value(config_path, SECTION, name, Value::Object(entry))?;
+        Ok(())
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<()> {
         let range = match self.preset {
             SyncPreset::EchoMini | SyncPreset::Mp3 => 32..=320,
             SyncPreset::Opus => 6..=512,
         };
         match self.bitrate {
-            Some(bitrate) if !range.contains(&bitrate) => Err(format!(
+            Some(bitrate) if !range.contains(&bitrate) => Err(Error::Message(format!(
                 "bitrate for {} must be from {} to {} kbps",
                 self.preset,
                 range.start(),
                 range.end()
-            )),
+            ))),
             _ => Ok(()),
         }
     }
@@ -447,7 +448,7 @@ fn sanitize(relative: &Path) -> Option<PathBuf> {
     (!clean.as_os_str().is_empty()).then_some(clean)
 }
 
-pub fn transfer(transfer: &Transfer) -> Result<(), String> {
+pub fn transfer(transfer: &Transfer) -> Result<()> {
     let parent = transfer
         .destination
         .parent()
@@ -473,7 +474,7 @@ pub fn transfer(transfer: &Transfer) -> Result<(), String> {
                 encoding,
                 tags_in_stream: transfer.tags_in_stream,
             })
-            .map_err(|error| error.to_string())
+            .map_err(Error::from)
             .and_then(|()| {
                 if transfer.cover {
                     copy_cover(&transfer.source, &partial)
@@ -482,33 +483,29 @@ pub fn transfer(transfer: &Transfer) -> Result<(), String> {
                 }
             }),
     }
-    .and_then(|()| fs::rename(&partial, &transfer.destination).map_err(|error| error.to_string()));
+    .and_then(|()| Ok(fs::rename(&partial, &transfer.destination)?));
     if result.is_err() {
         fs::remove_file(&partial).ok();
     }
     result
 }
 
-fn copy_cover(source: &Path, destination: &Path) -> Result<(), String> {
-    let cover = muzik_tags::front_cover(source).map_err(|error| error.to_string())?;
-    match cover {
+fn copy_cover(source: &Path, destination: &Path) -> Result<()> {
+    match muzik_tags::front_cover(source)? {
         Some((image, mime)) => muzik_tags::embed_cover(destination, &image, &mime)
-            .map_err(|error| format!("cannot embed the cover: {error}")),
+            .map_err(|error| Error::Message(format!("cannot embed the cover: {error}"))),
         None => Ok(()),
     }
 }
 
-fn copy(source: &Path, destination: &Path) -> Result<(), String> {
-    let mut reader = File::open(source).map_err(|error| error.to_string())?;
-    let mut writer = File::create(destination).map_err(|error| error.to_string())?;
-    io::copy(&mut reader, &mut writer).map_err(|error| error.to_string())?;
+fn copy(source: &Path, destination: &Path) -> Result<()> {
+    let mut reader = File::open(source)?;
+    let mut writer = File::create(destination)?;
+    io::copy(&mut reader, &mut writer)?;
     Ok(())
 }
 
-pub fn encodings(
-    connection: &Connection,
-    root: &Path,
-) -> Result<BTreeMap<PathBuf, Encoding>, String> {
+pub fn encodings(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, Encoding>> {
     Ok(sync_files::load(connection, root)?
         .into_iter()
         .filter_map(|(destination, text)| {
@@ -519,20 +516,19 @@ pub fn encodings(
         .collect())
 }
 
-pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String> {
+pub fn record(connection: &Connection, transfer: &Transfer) -> Result<()> {
     let encoding = match &transfer.action {
         Action::Copy => None,
-        Action::Convert(encoding) => {
-            Some(serde_json::to_string(encoding).map_err(|error| error.to_string())?)
-        }
+        Action::Convert(encoding) => Some(serde_json::to_string(encoding)?),
     };
-    sync_files::save(connection, &transfer.destination, encoding.as_deref())
+    sync_files::save(connection, &transfer.destination, encoding.as_deref())?;
+    Ok(())
 }
 
 pub fn run(
     transfers: &[Transfer],
     jobs: usize,
-    done: &(dyn Fn(&Transfer, &Result<(), String>) + Sync),
+    done: &(dyn Fn(&Transfer, &Result<()>) + Sync),
 ) -> usize {
     parallel(transfers, jobs, |item| {
         let result = transfer(item);
@@ -597,32 +593,15 @@ pub fn available_bytes(_path: &Path) -> Option<u64> {
     None
 }
 
-fn parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let next = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::with_capacity(items.len()));
-    let workers = if jobs == 0 {
-        std::thread::available_parallelism().map_or(4, usize::from)
-    } else {
-        jobs
-    };
-    std::thread::scope(|scope| {
-        for _ in 0..workers.min(items.len()) {
-            scope.spawn(|| loop {
-                let index = next.fetch_add(1, Ordering::Relaxed);
-                let Some(item) = items.get(index) else {
-                    break;
-                };
-                let result = work(item);
-                results
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .push((index, result));
-            });
-        }
-    });
-    let mut results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
-    results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, result)| result).collect()
+fn parallel<T: Sync, R: Send>(
+    items: &[T],
+    jobs: usize,
+    work: impl Fn(&T) -> R + Sync + Send,
+) -> Vec<R> {
+    match rayon::ThreadPoolBuilder::new().num_threads(jobs).build() {
+        Ok(pool) => pool.install(|| items.par_iter().map(work).collect()),
+        Err(_) => items.iter().map(work).collect(),
+    }
 }
 
 #[cfg(test)]

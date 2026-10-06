@@ -7,23 +7,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-pub fn validate_ids(params: &Value) -> Result<Vec<String>, String> {
-    let ids = params
-        .get("video_ids")
-        .and_then(Value::as_array)
-        .ok_or("video_ids must be a list of at most 16 IDs")?;
-    if ids.len() > 16 || ids.iter().any(|id| !id.is_string()) {
-        return Err("video_ids must be a list of at most 16 IDs".into());
-    }
-    Ok(ids
-        .iter()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect())
-}
-
 pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path) -> Value {
     let updates = match repository.load() {
         Ok(watchlist) => {
@@ -43,7 +26,7 @@ pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path
         }
         Err(error) => ids
             .iter()
-            .map(|id| update(id, Err(error.clone())))
+            .map(|id| update(id, Err(error.to_string())))
             .collect(),
     };
     json!({"thumbnails": updates})
@@ -100,12 +83,12 @@ fn fetch_and_save(
         .body_mut()
         .read_to_vec()
         .map_err(|error| error.to_string())?;
-    cache::save(id, &content_type, &bytes, cache_dir)
+    Ok(cache::save(id, &content_type, &bytes, cache_dir)?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_requested, validate_ids, Repository};
+    use super::{cache_requested, Repository};
     use serde_json::json;
     use std::fs;
 
@@ -125,8 +108,7 @@ mod tests {
                 "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk", "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/default.jpg"}]
             }]
         }))?)?;
-        let ids = validate_ids(&json!({"video_ids": ["abcdefghijk", "abcdefghijk"]}))?;
-        let result = cache_requested(&ids, &watchlist, &cache);
+        let result = cache_requested(&["abcdefghijk".into()], &watchlist, &cache);
         assert_eq!(result["thumbnails"].as_array().map(Vec::len), Some(1));
         assert_eq!(
             result["thumbnails"][0]["path"],

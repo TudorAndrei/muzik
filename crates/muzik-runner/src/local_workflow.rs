@@ -247,7 +247,7 @@ fn chapter_record(chapter: &Chapter) -> Value {
     json!({"index":chapter.index,"start":chapter.start,"end":chapter.end,"title":chapter.title})
 }
 
-fn parse_chapter(value: &Value) -> Result<Chapter, String> {
+fn parse_chapter(value: &Value) -> crate::Result<Chapter> {
     let index = value["index"]
         .as_u64()
         .and_then(|number| u32::try_from(number).ok())
@@ -281,11 +281,11 @@ fn parse_chapter(value: &Value) -> Result<Chapter, String> {
     })
 }
 
-fn duplicate_views(album: &AlbumPlan, database: &Path) -> Result<Vec<Value>, String> {
-    let library = Library::open_read_only(database).map_err(|error| error.to_string())?;
+fn duplicate_views(album: &AlbumPlan, database: &Path) -> crate::Result<Vec<Value>> {
+    let library = Library::open_read_only(database)?;
     album.duplicates.iter().map(|duplicate| {
-        let existing = library.album(duplicate.album_id).map_err(|error| error.to_string())?;
-        let items = library.items_for_album(duplicate.album_id).map_err(|error| error.to_string())?;
+        let existing = library.album(duplicate.album_id)?;
+        let items = library.items_for_album(duplicate.album_id)?;
         let first = items.first();
         Ok(json!({
             "path":first.and_then(|item| item.field("path")).and_then(sql_text),
@@ -384,7 +384,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::AtomicBool;
 
-    fn settings(root: &std::path::Path, params: &Value) -> Result<Settings, String> {
+    fn settings(root: &std::path::Path, params: &Value) -> crate::Result<Settings> {
         Settings::parse(&Paths::under(root), params)
     }
 

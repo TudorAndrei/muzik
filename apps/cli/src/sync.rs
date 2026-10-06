@@ -1,3 +1,5 @@
+use anyhow::{Context, bail};
+use bytesize::ByteSize;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
 use muzik_import::beets;
@@ -9,7 +11,7 @@ use serde_json::json;
 
 use crate::{SetSyncTarget, Sync};
 
-pub fn set_target(args: &SetSyncTarget) -> Result<(), String> {
+pub fn set_target(args: &SetSyncTarget) -> anyhow::Result<()> {
     let target = Target {
         path: muzik_core::paths::expand_home(&args.path),
         preset: args.preset,
@@ -26,18 +28,18 @@ pub fn set_target(args: &SetSyncTarget) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run(args: &Sync) -> Result<(), String> {
+pub fn run(args: &Sync) -> anyhow::Result<()> {
     let config = app_config::load(&app_config::path())?;
     let target = Target::load(&config, &args.target)?;
     if !target.path.is_dir() {
-        return Err(format!(
+        bail!(
             "{} does not exist; connect the device or create the folder first",
             target.path.display()
-        ));
+        );
     }
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
-    let library = Library::open_read_only(&paths.library)
-        .map_err(|error| format!("Could not open the music library: {error}"))?;
+    let library =
+        Library::open_read_only(&paths.library).context("Could not open the music library")?;
     let selection = sync::select(
         &library,
         &paths.directory,
@@ -86,7 +88,7 @@ pub fn run(args: &Sync) -> Result<(), String> {
         plan.fresh,
         plan.pending.len() - converts,
         converts,
-        size(prepared.needed)
+        ByteSize(prepared.needed)
     );
     if prepared.delete_blocked {
         eprintln!(
@@ -98,20 +100,20 @@ pub fn run(args: &Sync) -> Result<(), String> {
         println!(
             "{} files to delete ({})",
             prepared.stale.len(),
-            size(prepared.freed)
+            ByteSize(prepared.freed)
         );
     }
     if let (false, Some(space)) = (prepared.fits(), prepared.space()) {
-        return Err(format!(
+        bail!(
             "not enough space: {} needed, {} available; select fewer tracks with --query{}",
-            size(prepared.needed),
-            size(space),
+            ByteSize(prepared.needed),
+            ByteSize(space),
             if args.delete {
                 ""
             } else {
                 " or remove old files with --delete"
             }
-        ));
+        );
     }
     if args.dry_run {
         for path in &prepared.stale {
@@ -145,16 +147,14 @@ pub fn run(args: &Sync) -> Result<(), String> {
         }
     })?;
     if report.failed > 0 {
-        return Err(format!(
-            "{} of {} files failed",
-            report.failed, report.written
-        ));
+        bail!("{} of {} files failed", report.failed, report.written);
     }
     if report.unrecorded > 0 {
-        return Err(format!(
+        bail!(
             "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
-            report.unrecorded, report.written
-        ));
+            report.unrecorded,
+            report.written
+        );
     }
     println!("Sync complete: {} files written", report.written);
     Ok(())
@@ -166,14 +166,5 @@ fn label(action: &Action) -> String {
         Action::Convert(Encoding::Mp3 { kbps }) => format!("mp3 {kbps}k"),
         Action::Convert(Encoding::Opus { kbps }) => format!("opus {kbps}k"),
         Action::Convert(Encoding::Flac { .. }) => "flac".into(),
-    }
-}
-
-fn size(bytes: u64) -> String {
-    let megabytes = bytes / 1_000_000;
-    if megabytes >= 1_000 {
-        format!("{}.{} GB", megabytes / 1_000, megabytes % 1_000 / 100)
-    } else {
-        format!("{megabytes} MB")
     }
 }

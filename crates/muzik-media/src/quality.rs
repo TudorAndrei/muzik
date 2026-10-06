@@ -1,10 +1,9 @@
 //! Measured audio quality for library scans and workflow decisions.
 
-use muzik_core::audio::Codec;
+use muzik_core::audio::{AudioFormat, Codec};
 use muzik_core::QualityPolicy;
-use serde_json::Value;
+use muzik_tags::AudioProperties;
 use std::path::Path;
-use std::process::Command;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MeasuredQuality {
@@ -25,27 +24,61 @@ pub enum QualityDecision {
 }
 
 pub fn measure(path: &Path) -> Result<Option<MeasuredQuality>, String> {
-    let output = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_streams",
-            "-show_format",
-            "-of",
-            "json",
-        ])
-        .arg(path)
-        .output()
-        .map_err(|error| format!("cannot start ffprobe: {error}"))?;
-    if !output.status.success() {
-        return Ok(None);
+    if let Ok(properties) = muzik_tags::probe(path) {
+        return Ok(Some(MeasuredQuality::from(properties)));
     }
-    let document: Value = serde_json::from_slice(&output.stdout)
-        .map_err(|error| format!("invalid ffprobe output: {error}"))?;
-    Ok(from_probe(
-        &document,
-        path.metadata().ok().map(|value| value.len()),
-    ))
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let format = match extension.as_str() {
+        "dsf" => Codec::Dsd("dsd_lsbf_planar".into()),
+        "dff" => Codec::Dsd("dsd_msbf".into()),
+        "wma" => Codec::WmaV2,
+        "tta" => Codec::Tta,
+        _ => return Ok(None),
+    };
+    Ok(Some(MeasuredQuality {
+        lossless: format.is_lossless(),
+        format,
+        bitrate_kbps: None,
+        sample_rate: None,
+        bit_depth: None,
+        channels: None,
+        size: path.metadata().ok().map(|metadata| metadata.len()),
+    }))
+}
+
+impl From<AudioProperties> for MeasuredQuality {
+    fn from(properties: AudioProperties) -> Self {
+        let depth = properties.bit_depth.unwrap_or(16);
+        let format = match properties.format {
+            AudioFormat::Mp3 => Codec::Mp3,
+            AudioFormat::Flac => Codec::Flac,
+            AudioFormat::M4a | AudioFormat::Mp4 | AudioFormat::Alac => properties
+                .codec
+                .unwrap_or_else(|| Codec::Other(properties.format.to_string())),
+            AudioFormat::Opus => Codec::Opus,
+            AudioFormat::Ogg => Codec::Vorbis,
+            AudioFormat::Wav => Codec::Pcm(format!("pcm_s{depth}le")),
+            AudioFormat::Aiff => Codec::Pcm(format!("pcm_s{depth}be")),
+            AudioFormat::Ape => Codec::Ape,
+            AudioFormat::WavPack => Codec::WavPack,
+            AudioFormat::Aac => Codec::Aac,
+            AudioFormat::Mpc => Codec::Other("musepack".into()),
+            AudioFormat::Speex => Codec::Other("speex".into()),
+        };
+        Self {
+            lossless: format.is_lossless(),
+            format,
+            bitrate_kbps: properties.bitrate_kbps,
+            sample_rate: properties.sample_rate_hz,
+            bit_depth: properties.bit_depth.map(u32::from),
+            channels: properties.channels.map(u32::from),
+            size: Some(properties.size_bytes),
+        }
+    }
 }
 
 pub fn decide(
@@ -68,53 +101,29 @@ pub fn decide(
     }
 }
 
-fn from_probe(document: &Value, size: Option<u64>) -> Option<MeasuredQuality> {
-    let audio = document["streams"]
-        .as_array()?
-        .iter()
-        .find(|stream| stream["codec_type"] == "audio")?;
-    let format = Codec::from_ffprobe(
-        &audio["codec_name"]
-            .as_str()
-            .unwrap_or("")
-            .to_ascii_lowercase(),
-    );
-    let bitrate_kbps = number(&audio["bit_rate"])
-        .or_else(|| number(&document["format"]["bit_rate"]))
-        .and_then(|value| u32::try_from(value / 1000).ok());
-    Some(MeasuredQuality {
-        lossless: format.is_lossless(),
-        format,
-        bitrate_kbps,
-        sample_rate: number(&audio["sample_rate"]).and_then(|value| u32::try_from(value).ok()),
-        bit_depth: number(&audio["bits_per_raw_sample"])
-            .or_else(|| number(&audio["bits_per_sample"]))
-            .and_then(|value| u32::try_from(value).ok()),
-        channels: number(&audio["channels"]).and_then(|value| u32::try_from(value).ok()),
-        size,
-    })
-}
-
-fn number(value: &Value) -> Option<u64> {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{decide, from_probe, QualityDecision};
-    use muzik_core::audio::Codec;
+    use super::{decide, measure, MeasuredQuality, QualityDecision};
+    use muzik_core::audio::{AudioFormat, Codec};
     use muzik_core::QualityPolicy;
-    use serde_json::json;
+    use muzik_tags::AudioProperties;
+
+    fn properties(format: AudioFormat, codec: Option<Codec>) -> AudioProperties {
+        AudioProperties {
+            format,
+            codec,
+            duration_seconds: Some(60.0),
+            bitrate_kbps: Some(192),
+            sample_rate_hz: Some(44_100),
+            bit_depth: None,
+            channels: Some(2),
+            size_bytes: 500,
+        }
+    }
 
     #[test]
-    fn probe_uses_audio_stream_and_container_bitrate() {
-        let document = json!({"streams":[
-            {"codec_type":"video","codec_name":"h264"},
-            {"codec_type":"audio","codec_name":"mp3","sample_rate":"44100","channels":2}
-        ],"format":{"bit_rate":"192000"}});
-        let measured = from_probe(&document, Some(500)).unwrap();
+    fn lossy_audio_below_the_minimum_follows_the_policy() {
+        let measured = MeasuredQuality::from(properties(AudioFormat::Mp3, None));
         assert_eq!(measured.format, Codec::Mp3);
         assert_eq!(measured.bitrate_kbps, Some(192));
         assert_eq!(measured.sample_rate, Some(44_100));
@@ -135,25 +144,33 @@ mod tests {
 
     #[test]
     fn lossless_audio_needs_no_replacement() {
-        let measured = from_probe(
-            &json!({"streams":[{"codec_type":"audio","codec_name":"flac"}]}),
-            None,
-        )
-        .unwrap();
+        let measured = MeasuredQuality::from(properties(AudioFormat::M4a, Some(Codec::Alac)));
+        assert!(measured.lossless);
         assert_eq!(
             decide(&measured, QualityPolicy::Auto, 320),
             QualityDecision::Keep
         );
-        assert!(measured.lossless);
     }
 
     #[test]
     fn big_endian_pcm_from_aiff_is_lossless() {
-        let measured = from_probe(
-            &json!({"streams":[{"codec_type":"audio","codec_name":"pcm_s16be"}]}),
-            None,
-        )
-        .unwrap();
+        let measured = MeasuredQuality::from(properties(AudioFormat::Aiff, None));
+        assert_eq!(measured.format, Codec::Pcm("pcm_s16be".into()));
         assert!(measured.lossless);
+    }
+
+    #[test]
+    fn formats_lofty_cannot_read_are_named_from_the_extension() -> Result<(), String> {
+        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let dsd = directory.path().join("track.DSF");
+        std::fs::write(&dsd, b"not audio").map_err(|error| error.to_string())?;
+        let measured = measure(&dsd)?.ok_or("a DSF file must have a quality")?;
+        assert!(measured.lossless);
+        assert_eq!(measured.size, Some(9));
+
+        let broken = directory.path().join("track.mp3");
+        std::fs::write(&broken, b"not audio").map_err(|error| error.to_string())?;
+        assert_eq!(measure(&broken)?, None);
+        Ok(())
     }
 }

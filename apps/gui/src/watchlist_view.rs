@@ -15,10 +15,7 @@ impl Muzik {
             .as_array()
             .or_else(|| self.watchlist.as_array());
         let has_playlists = playlists.is_some_and(|all| !all.is_empty());
-        let loading = self
-            .pending
-            .values()
-            .any(|command| command == "watchlist.load");
+        let loading = self.reading(Read::Watchlist);
         let mut content = div()
             .v_flex()
             .gap_4()
@@ -60,9 +57,7 @@ impl Muzik {
             .icon(IconName::RefreshCw)
             .label("Refresh all")
             .disabled(!has_playlists || self.has_run(RunKind::Refresh))
-            .on_click(cx.listener(move |view, _, _, cx| {
-                view.start_job("watchlist.refresh", json!({}), cx)
-            }));
+            .on_click(cx.listener(move |view, _, _, cx| view.refresh(None, cx)));
         div()
             .flex()
             .items_center()
@@ -78,7 +73,7 @@ impl Muzik {
                             .ghost()
                             .label("Reload")
                             .on_click(cx.listener(|view, _, _, cx| {
-                                view.send("watchlist.load", json!({}));
+                                view.load_watchlist(cx);
                                 cx.notify();
                             })),
                     )
@@ -122,7 +117,7 @@ impl Muzik {
             .on_click(cx.listener(|view, _, _, cx| {
                 let url = view.watch_url.read(cx).value().to_string();
                 if !url.trim().is_empty() {
-                    view.send("watchlist.add", json!({"url":url}));
+                    view.add_source(url, cx);
                     cx.notify();
                 }
             }));
@@ -172,7 +167,7 @@ impl Muzik {
                 .map_or_else(|| "not checked".to_string(), |at| format!("checked {at}"))
         );
         let source_url = playlist["url"].as_str().unwrap_or("").to_string();
-        let refresh_params = json!({"playlist_id": id, "playlist_title": title});
+        let refresh_source = (id.clone(), title.clone());
         let mut tools = div().flex().items_center().gap_1().child(
             Button::new("refresh-source")
                 .ghost()
@@ -181,7 +176,7 @@ impl Muzik {
                 .label("Refresh")
                 .disabled(self.has_run(RunKind::Refresh))
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    view.start_job("watchlist.refresh", refresh_params.clone(), cx)
+                    view.refresh(Some(refresh_source.clone()), cx)
                 })),
         );
         if !source_url.is_empty() {
@@ -201,14 +196,14 @@ impl Muzik {
                         .tooltip("Copy source link"),
                 );
         }
-        let retries: Vec<Value> = items
+        let retries: Vec<ItemRequest> = items
             .into_iter()
             .flatten()
             .filter(|item| {
                 retryable(item) && !self.is_queued(&id, item_position(item), &item_video_id(item))
             })
             .map(|item| {
-                self.item_params(
+                self.item_request(
                     &id,
                     item_position(item),
                     &item_video_id(item),
@@ -224,8 +219,8 @@ impl Muzik {
                     .icon(IconName::Redo)
                     .label(format!("Retry {} failed", retries.len()))
                     .on_click(cx.listener(move |view, _, _, cx| {
-                        for params in &retries {
-                            view.start_job("watchlist.action", params.clone(), cx);
+                        for item in &retries {
+                            view.run_item(item.clone(), cx);
                         }
                     })),
             );
@@ -256,8 +251,7 @@ impl Muzik {
                                 description: "The playlist leaves the watchlist.",
                                 confirm: "Remove playlist".into(),
                                 destructive: true,
-                                command: "watchlist.remove",
-                                params: json!({"playlist_id":remove_id}),
+                                command: Command::RemoveSource(remove_id.clone()),
                             },
                             window,
                             cx,
@@ -349,10 +343,7 @@ impl Muzik {
                     let _ = view.update(cx, |view, cx| {
                         let title = view.playlist_name.read(cx).value().to_string();
                         if !title.trim().is_empty() {
-                            view.send(
-                                "watchlist.rename",
-                                json!({"playlist_id":playlist_id,"title":title}),
-                            );
+                            view.rename_source(playlist_id, title, cx);
                             cx.notify();
                         }
                     });
@@ -366,19 +357,22 @@ impl Muzik {
             .contains(&ItemId::new(playlist_id, position as u64, Some(video_id)).to_string())
     }
 
-    pub(crate) fn item_params(
+    pub(crate) fn item_request(
         &self,
         playlist_id: &str,
         position: usize,
         video_id: &str,
         action: ItemAction,
-    ) -> Value {
+    ) -> ItemRequest {
         let title = self
             .find_item(&(playlist_id.to_owned(), position, video_id.to_owned()))
-            .and_then(|item| item["title"].as_str().map(str::to_owned));
-        let mut params = json!({"action": action, "title": title});
-        ItemId::new(playlist_id, position as u64, Some(video_id)).write(&mut params);
-        params
+            .and_then(|item| item["title"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| video_id.to_owned());
+        ItemRequest {
+            id: ItemId::new(playlist_id, position as u64, Some(video_id)),
+            title,
+            action,
+        }
     }
 
     fn find_item(&self, key: &(String, usize, String)) -> Option<Value> {
@@ -484,7 +478,7 @@ fn item_sheet(
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
         let availability = &item["actions"][action.as_ref()];
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
-        let params = entity.read(cx).item_params(&key.0, key.1, &key.2, action);
+        let request = entity.read(cx).item_request(&key.0, key.1, &key.2, action);
         let label = action_label(action);
         let item_title = title.clone();
         let view = view.clone();
@@ -495,7 +489,7 @@ fn item_sheet(
                 .disabled(!enabled)
                 .on_click(move |_, window, cx| {
                     window.close_sheet(cx);
-                    let params = params.clone();
+                    let request = request.clone();
                     let item_title = item_title.clone();
                     let _ = view.update(cx, |view, cx| {
                         if action.replaces_files() {
@@ -505,14 +499,13 @@ fn item_sheet(
                                     description: REPLACE_WARNING,
                                     confirm: label.into(),
                                     destructive: false,
-                                    command: "watchlist.action",
-                                    params,
+                                    command: Command::RunItem(request),
                                 },
                                 window,
                                 cx,
                             );
                         } else {
-                            view.start_job("watchlist.action", params, cx);
+                            view.run_item(request, cx);
                         }
                     });
                 }),

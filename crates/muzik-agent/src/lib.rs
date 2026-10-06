@@ -1,10 +1,12 @@
 use muzik_core::DecisionKind;
+use muzik_media::process::{self, Stopped};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 use strum_macros::EnumString;
 
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
@@ -14,6 +16,34 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_FILES: usize = 25;
 
 const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["action","index","confidence","reason"],"properties":{"action":{"type":"string","enum":["pick","keep","ask"]},"index":{"type":"integer"},"confidence":{"type":"number"},"reason":{"type":"string"}}}"#;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Message(String),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self::Message(message.to_owned())
+    }
+}
+
+impl From<Error> for String {
+    fn from(error: Error) -> Self {
+        error.to_string()
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
@@ -48,7 +78,7 @@ pub fn supports(kind: DecisionKind) -> bool {
     )
 }
 
-pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcome, String> {
+pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcome> {
     if let Some(choice) = strong_match(kind, payload) {
         return Ok(Outcome::Decided(choice));
     }
@@ -241,14 +271,15 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
     }
 }
 
-fn run_codex(prompt: &str, model: &str) -> Result<Value, String> {
-    let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+fn run_codex(prompt: &str, model: &str) -> Result<Value> {
+    let directory = tempfile::tempdir()?;
     let schema = directory.path().join("schema.json");
     let answer = directory.path().join("answer.json");
-    std::fs::write(&schema, SCHEMA).map_err(|error| error.to_string())?;
+    std::fs::write(&schema, SCHEMA)?;
     let log_path = directory.path().join("codex.log");
-    let log = std::fs::File::create(&log_path).map_err(|error| error.to_string())?;
-    let mut child = Command::new("codex")
+    let log = std::fs::File::create(&log_path)?;
+    let mut command = Command::new("codex");
+    command
         .args([
             "exec",
             "--skip-git-repo-check",
@@ -265,31 +296,25 @@ fn run_codex(prompt: &str, model: &str) -> Result<Value, String> {
         .current_dir(directory.path())
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(log)
-        .spawn()
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "Codex is not installed.".to_owned()
-            } else {
-                format!("Cannot start Codex: {error}")
-            }
-        })?;
-    if let Some(mut stdin) = child.stdin.take() {
+        .stderr(log);
+    let mut child = process::spawn(command).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "Codex is not installed.".to_owned()
+        } else {
+            format!("Cannot start Codex: {error}")
+        }
+    })?;
+    if let Some(mut stdin) = child.stdin().take() {
         stdin
             .write_all(prompt.as_bytes())
             .map_err(|error| format!("Cannot send the question to Codex: {error}"))?;
     }
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
-        }
-        if started.elapsed() > TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+    let status = match process::wait(&mut child, Some(TIMEOUT), &AtomicBool::new(false)) {
+        Ok(status) => status,
+        Err(Stopped::TimedOut | Stopped::Cancelled) => {
             return Err("Codex did not answer within 2 minutes.".into());
         }
-        std::thread::sleep(Duration::from_millis(100));
+        Err(Stopped::Io(error)) => return Err(error.into()),
     };
     if !status.success() {
         let stderr = std::fs::read_to_string(&log_path).unwrap_or_default();
@@ -298,9 +323,9 @@ fn run_codex(prompt: &str, model: &str) -> Result<Value, String> {
             .rev()
             .find(|line| line.contains("ERROR") || line.contains("error"))
             .unwrap_or("Codex failed.");
-        return Err(line.trim().to_owned());
+        return Err(line.trim().into());
     }
-    let text = std::fs::read_to_string(&answer).map_err(|_| "Codex gave no answer.".to_owned())?;
+    let text = std::fs::read_to_string(&answer).map_err(|_| "Codex gave no answer.")?;
     serde_json::from_str(&text).map_err(|_| "Codex gave an answer that is not valid JSON.".into())
 }
 
@@ -353,7 +378,7 @@ mod tests {
 
     #[test]
     #[ignore = "calls the real Codex CLI and uses the account quota"]
-    fn live_codex_picks_the_same_release() -> Result<(), String> {
+    fn live_codex_picks_the_same_release() -> super::Result<()> {
         let outcome = super::decide(DecisionKind::ImportMatch, &album(), super::DEFAULT_MODEL)?;
         assert!(
             matches!(&outcome, Outcome::Decided(choice) if choice.value == json!("m0")),

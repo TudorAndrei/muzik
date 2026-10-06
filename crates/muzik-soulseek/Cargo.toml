@@ -1,14 +1,16 @@
 [package]
 name = "muzik-soulseek"
-version = "2.12.0"
+version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 publish = false
 description = "Blocking Soulseek search and download client for muzik"
 
 [dependencies]
+keyring-core = "1.0"
 muzik-core = { path = "../muzik-core" }
-soulseek_rs = { package = "soulseek-rs-lib", git = "https://github.com/michel/soulseek-rs", rev = "a62bab1e6a505362109b8303aa528af03403eeae" }
+parking_lot = "0.12"
+soulseek_rs = { package = "soulseek-rs-lib", version = "19.1" }
 thiserror = "2"
 tracing = "0.1"
 serde_json = "1"

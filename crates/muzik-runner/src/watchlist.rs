@@ -53,7 +53,7 @@ pub fn sync(
     Ok(synced.pending)
 }
 
-pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> Result<bool, String> {
+pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> crate::Result<bool> {
     sources::ensure(&Repository::open(paths), paths)
 }
 
@@ -184,7 +184,7 @@ impl Operations for Adapter<'_, '_> {
         title: &str,
         stage: Stage,
         question: &Value,
-    ) -> Result<(), String> {
+    ) -> muzik_store::Result<()> {
         let mut params = self.params.clone();
         id.write(&mut params);
         params["action"] = json!(stage.resume_action());

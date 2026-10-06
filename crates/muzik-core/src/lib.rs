@@ -7,6 +7,7 @@ mod config;
 pub mod config_choices;
 mod decision;
 pub mod downloads;
+mod error;
 pub mod paths;
 pub mod thumbnails;
 mod types;
@@ -17,4 +18,5 @@ pub use config_choices::{
     QualityPolicy, SyncPreset,
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
+pub use error::{Error, Result};
 pub use types::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

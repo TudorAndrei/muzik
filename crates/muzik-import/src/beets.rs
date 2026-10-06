@@ -15,6 +15,7 @@ use crate::apply::{self, AlbumDecision, ApplyOptions, ApplyResult};
 use crate::history::IncrementalHistory;
 use crate::plan::{AlbumPlan, ImportMode, ImportPlan, ImportPlanner, PlanOptions};
 use crate::sync::{self, SyncResult};
+use crate::{Error, Result};
 
 const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
@@ -59,11 +60,7 @@ pub enum SyncOutcome {
     Updated(SyncResult),
 }
 
-pub fn configured_path(
-    config: &BeetsConfig,
-    config_path: &Path,
-    key: &str,
-) -> Result<PathBuf, String> {
+pub fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> Result<PathBuf> {
     let raw = config
         .get(&[key])
         .and_then(serde_json::Value::as_str)
@@ -90,7 +87,7 @@ pub fn configured_path(
 pub fn load_paths(
     config_path: Option<&Path>,
     overrides: serde_json::Value,
-) -> Result<(BeetsConfig, BeetsPaths), String> {
+) -> Result<(BeetsConfig, BeetsPaths)> {
     let config_path = config_path
         .map(Path::to_path_buf)
         .unwrap_or_else(muzik_core::default_config_path);
@@ -104,23 +101,23 @@ pub fn load_paths(
     Ok((config, paths))
 }
 
-pub fn plan_import(request: ImportRequest) -> Result<ImportPreview, String> {
+pub fn plan_import(request: ImportRequest) -> Result<ImportPreview> {
     plan_import_with_cancel(request, &|| false)
 }
 
 pub fn plan_import_with_cancel(
     request: ImportRequest,
     cancelled: &dyn Fn() -> bool,
-) -> Result<ImportPreview, String> {
+) -> Result<ImportPreview> {
     check_cancelled(cancelled)?;
     if request.source.as_os_str().is_empty() {
-        return Err("audio path is missing".to_owned());
+        return Err("audio path is missing".into());
     }
     if request.link && !request.nowrite {
-        return Err("--link requires --nowrite".to_owned());
+        return Err("--link requires --nowrite".into());
     }
     if request.link && request.copy {
-        return Err("--link and --copy cannot be used together".to_owned());
+        return Err("--link and --copy cannot be used together".into());
     }
     let overrides = json!({"import": {
         "copy": request.copy,
@@ -133,20 +130,14 @@ pub fn plan_import_with_cancel(
     let (config, paths) = load_paths(request.config_path.as_deref(), overrides)?;
     check_cancelled(cancelled)?;
     if !request.source.exists() {
-        return Err(format!(
-            "audio path does not exist: {}",
-            request.source.display()
-        ));
+        return Err(format!("audio path does not exist: {}", request.source.display()).into());
     }
     let history = if request.force {
         None
     } else {
         let seed = legacy_history(&paths.statefile)?;
         check_cancelled(cancelled)?;
-        Some(
-            IncrementalHistory::open_or_seed(&paths.statefile, &seed)
-                .map_err(|error| error.to_string())?,
-        )
+        Some(IncrementalHistory::open_or_seed(&paths.statefile, &seed)?)
     };
     let library = if paths.library.exists() {
         Library::open_read_only(&paths.library)
@@ -166,24 +157,22 @@ pub fn plan_import_with_cancel(
             .and_then(|value| u8::try_from(value).ok())
             .unwrap_or(5),
     };
-    let plan = planner
-        .plan_with_options_and_cancel(
-            std::slice::from_ref(&request.source),
-            ImportMode::Album,
-            PlanOptions {
-                autotag: config
-                    .get(&["import", "autotag"])
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true),
-                history,
-                incremental_skip_later: config
-                    .get(&["import", "incremental_skip_later"])
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false),
-            },
-            cancelled,
-        )
-        .map_err(|error| error.to_string())?;
+    let plan = planner.plan_with_options_and_cancel(
+        std::slice::from_ref(&request.source),
+        ImportMode::Album,
+        PlanOptions {
+            autotag: config
+                .get(&["import", "autotag"])
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            history,
+            incremental_skip_later: config
+                .get(&["import", "incremental_skip_later"])
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+        },
+        cancelled,
+    )?;
     Ok(ImportPreview {
         plan,
         paths,
@@ -192,10 +181,7 @@ pub fn plan_import_with_cancel(
     })
 }
 
-pub fn apply_import(
-    preview: ImportPreview,
-    decisions: &[AlbumDecision],
-) -> Result<ImportOutcome, String> {
+pub fn apply_import(preview: ImportPreview, decisions: &[AlbumDecision]) -> Result<ImportOutcome> {
     apply_import_with_cancel(preview, decisions, &|| false)
 }
 
@@ -203,10 +189,9 @@ pub fn apply_import_with_cancel(
     preview: ImportPreview,
     decisions: &[AlbumDecision],
     cancelled: &dyn Fn() -> bool,
-) -> Result<ImportOutcome, String> {
+) -> Result<ImportOutcome> {
     check_cancelled(cancelled)?;
-    let mut options = ApplyOptions::from_beets(&preview.config, preview.paths.directory.clone())
-        .map_err(|error| error.to_string())?;
+    let mut options = ApplyOptions::from_beets(&preview.config, preview.paths.directory.clone())?;
     options.dry_run = preview.request.dry_run;
     let mut library = if preview.request.dry_run {
         if preview.paths.library.exists() {
@@ -219,8 +204,7 @@ pub fn apply_import_with_cancel(
     }
     .map_err(|error| error.to_string())?;
     let result =
-        apply::apply_with_cancel(&mut library, &preview.plan, decisions, &options, cancelled)
-            .map_err(|error| error.to_string())?;
+        apply::apply_with_cancel(&mut library, &preview.plan, decisions, &options, cancelled)?;
     let mut outcome = ImportOutcome {
         planned_albums: preview.plan.albums.len(),
         apply: result,
@@ -241,9 +225,9 @@ pub fn apply_import_with_cancel(
     Ok(outcome)
 }
 
-fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     if cancelled() {
-        Err(crate::Error::Cancelled.to_string())
+        Err(Error::Cancelled)
     } else {
         Ok(())
     }
@@ -252,7 +236,7 @@ fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), String> {
 pub fn import_with(
     request: ImportRequest,
     mut decide: impl FnMut(&AlbumPlan) -> AlbumDecision,
-) -> Result<ImportOutcome, String> {
+) -> Result<ImportOutcome> {
     let preview = plan_import(request)?;
     let decisions = preview
         .plan
@@ -268,13 +252,14 @@ pub fn sync_library(
     config_path: Option<&Path>,
     dry_run: bool,
     nowrite: bool,
-) -> Result<SyncOutcome, String> {
+) -> Result<SyncOutcome> {
     let (_, paths) = load_paths(config_path, json!({}))?;
     if !paths.library.exists() {
         return Err(format!(
             "library database does not exist: {}",
             paths.library.display()
-        ));
+        )
+        .into());
     }
     if dry_run {
         let library = Library::open_read_only(&paths.library).map_err(|error| error.to_string())?;
@@ -292,12 +277,11 @@ pub fn sync_library(
     let mut library =
         Library::open_read_write(&paths.library).map_err(|error| error.to_string())?;
     let provider = MetadataClient::new(USER_AGENT);
-    let result =
-        sync::sync(&mut library, &provider, query, !nowrite).map_err(|error| error.to_string())?;
+    let result = sync::sync(&mut library, &provider, query, !nowrite)?;
     Ok(SyncOutcome::Updated(result))
 }
 
-fn legacy_history(statefile: &Path) -> Result<Vec<Vec<PathBuf>>, String> {
+fn legacy_history(statefile: &Path) -> Result<Vec<Vec<PathBuf>>> {
     if IncrementalHistory::path_for_statefile(statefile).exists() || !statefile.exists() {
         return Ok(Vec::new());
     }
@@ -305,29 +289,29 @@ fn legacy_history(statefile: &Path) -> Result<Vec<Vec<PathBuf>>, String> {
     let state = serde_pickle::value_from_slice(&bytes, serde_pickle::DeOptions::new())
         .map_err(|error| format!("invalid beets import state: {error}"))?;
     let Value::Dict(fields) = state else {
-        return Err("beets import state is not a dictionary".to_owned());
+        return Err("beets import state is not a dictionary".into());
     };
     let Some(entries) = fields.get(&HashableValue::String("taghistory".to_owned())) else {
         return Ok(Vec::new());
     };
     let Value::Set(entries) = entries else {
-        return Err("beets import history is not a set".to_owned());
+        return Err("beets import history is not a set".into());
     };
     entries
         .iter()
         .map(|entry| {
             let HashableValue::Tuple(paths) = entry else {
-                return Err("beets import history entry is not a tuple".to_owned());
+                return Err("beets import history entry is not a tuple".into());
             };
             if paths.is_empty() {
-                return Err("beets import history entry is empty".to_owned());
+                return Err("beets import history entry is empty".into());
             }
             paths.iter().map(legacy_path).collect()
         })
         .collect()
 }
 
-fn legacy_path(value: &HashableValue) -> Result<PathBuf, String> {
+fn legacy_path(value: &HashableValue) -> Result<PathBuf> {
     match value {
         HashableValue::String(path) => Ok(PathBuf::from(path)),
         HashableValue::Bytes(bytes) => {
@@ -341,7 +325,7 @@ fn legacy_path(value: &HashableValue) -> Result<PathBuf, String> {
                 Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
             }
         }
-        _ => Err("beets import history path is not text or bytes".to_owned()),
+        _ => Err("beets import history path is not text or bytes".into()),
     }
 }
 
@@ -349,16 +333,17 @@ pub fn write_library_tags(
     directory: &Path,
     config_path: Option<&Path>,
     dry_run: bool,
-) -> Result<usize, String> {
+) -> Result<usize> {
     if !directory.exists() {
-        return Err(format!("Directory not found: {}", directory.display()));
+        return Err(format!("Directory not found: {}", directory.display()).into());
     }
     let (_, paths) = load_paths(config_path, json!({}))?;
     if !paths.library.exists() {
         return Err(format!(
             "library database does not exist: {}",
             paths.library.display()
-        ));
+        )
+        .into());
     }
     let library = Library::open_read_only(&paths.library).map_err(|error| error.to_string())?;
     let requested = directory
@@ -401,7 +386,7 @@ pub fn write_library_tags(
         }
     }
     if count == 0 {
-        return Err(format!("No library items match {}", directory.display()));
+        return Err(format!("No library items match {}", directory.display()).into());
     }
     Ok(count)
 }

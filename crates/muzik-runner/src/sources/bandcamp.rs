@@ -15,9 +15,9 @@ const MEGABYTE: u64 = 1024 * 1024;
 
 pub(super) struct Bandcamp;
 
-pub(super) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
+pub(super) fn ensure(repository: &Repository, paths: &Paths) -> crate::Result<bool> {
     match bandcamp::Login::load(paths) {
-        Some(login) => repository.ensure(&bandcamp_source(&login.user)),
+        Some(login) => Ok(repository.ensure(&bandcamp_source(&login.user))?),
         None => Ok(false),
     }
 }
@@ -26,7 +26,7 @@ impl Source for Bandcamp {
     fn load(&self, adapter: &mut Adapter<'_, '_>, _: &Playlist) -> Result<LoadedSource, JobError> {
         let login = bandcamp::Login::load(&adapter.prepared.settings.paths)
             .ok_or_else(|| JobError::Operation(LOGIN.into()))?;
-        let purchases = bandcamp::collection(&login)?;
+        let purchases = bandcamp::collection(&login).map_err(String::from)?;
         check_cancelled(adapter.cancelled)?;
         Ok(items(&purchases))
     }
@@ -102,7 +102,7 @@ impl Source for Bandcamp {
                 } else {
                     JobError::Failed {
                         stage: Stage::Download,
-                        message: error,
+                        message: error.to_string(),
                     }
                 }
             })?;

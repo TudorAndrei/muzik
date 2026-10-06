@@ -1,15 +1,18 @@
 [package]
 name = "muzik-media"
-version = "2.12.0"
+version.workspace = true
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "ffmpeg, ffprobe, and the chapter splitter for muzik"
+description = "ffmpeg, audio quality, and the chapter splitter for muzik"
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 muzik-core = { path = "../muzik-core" }
 muzik-tags = { path = "../muzik-tags" }
+parking_lot = "0.12"
+process-wrap = { version = "10.0", default-features = false, features = ["std", "process-group", "job-object"] }
+rayon = "1.12"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

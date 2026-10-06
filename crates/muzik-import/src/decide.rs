@@ -32,7 +32,7 @@ pub fn decide_album(
     album: &AlbumPlan,
     policy: ImportPolicy,
     ask: &mut dyn Ask,
-) -> Result<AlbumDecision, String> {
+) -> crate::Result<AlbumDecision> {
     let choice = if policy.interactive {
         ask.choose_match(album)?
     } else {

@@ -48,7 +48,7 @@ jobs:
       - uses: jdx/mise-action@v4
         if: inputs.tag == ''
         with:
-          install_args: rust mr-boxington cocogitto hk
+          install_args: rust mr-boxington cocogitto hk cargo:cargo-edit
       - run: cargo fetch --locked
         if: inputs.tag == ''
       - name: Set release Git access

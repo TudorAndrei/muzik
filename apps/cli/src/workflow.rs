@@ -10,25 +10,20 @@ use serde_json::{Map, Value, json};
 
 use crate::Workflow;
 
-pub fn run(args: &Workflow) -> Result<(), String> {
+pub fn run(args: &Workflow) -> anyhow::Result<()> {
     run_with(&Paths::user(), args)
 }
 
-fn run_with(paths: &Paths, args: &Workflow) -> Result<(), String> {
+fn run_with(paths: &Paths, args: &Workflow) -> anyhow::Result<()> {
     let jobs = Arc::new(Jobs::open(paths)?);
-    let id = jobs
-        .workflow(&params(args)?)
-        .map_err(|error| error.to_string())?;
+    let id = jobs.workflow(&params(args)?)?;
     println!("Queued {} as {}.", args.raw, job_id(id));
     crate::jobs::drain(&jobs)
 }
 
-fn params(args: &Workflow) -> Result<Value, String> {
-    let absolute = |path: &Path| {
-        std::path::absolute(path)
-            .map(|path| path.to_string_lossy().into_owned())
-            .map_err(|error| error.to_string())
-    };
+fn params(args: &Workflow) -> anyhow::Result<Value> {
+    let absolute =
+        |path: &Path| std::path::absolute(path).map(|path| path.to_string_lossy().into_owned());
     let raw = if matches!(classify_input(&args.raw), WorkflowInput::Local(_)) {
         absolute(Path::new(&args.raw))?
     } else {

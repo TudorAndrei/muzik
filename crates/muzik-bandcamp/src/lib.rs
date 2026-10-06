@@ -16,6 +16,34 @@ const PAGE_LIMIT: u64 = 64 * 1024 * 1024;
 const REQUEST_BUDGET: Duration = Duration::from_secs(120);
 const DOWNLOAD_ATTEMPTS: u32 = 5;
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Message(String),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self::Message(message.to_owned())
+    }
+}
+
+impl From<Error> for String {
+    fn from(error: Error) -> Self {
+        error.to_string()
+    }
+}
+
 /// Download formats that Bandcamp offers for a purchase.
 #[derive(
     Clone,
@@ -76,7 +104,7 @@ pub struct Cookie {
     pub value: String,
 }
 
-pub fn parse_cookies(text: &str) -> Result<Vec<Cookie>, String> {
+pub fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
     let text = text.trim();
     let mut cookies = if text.starts_with('[') || text.starts_with('{') {
         json_cookies(text)?
@@ -98,7 +126,7 @@ pub fn parse_cookies(text: &str) -> Result<Vec<Cookie>, String> {
     Ok(cookies)
 }
 
-fn json_cookies(text: &str) -> Result<Vec<Cookie>, String> {
+fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
     let value: Value = serde_json::from_str(text)
         .map_err(|error| format!("The cookie JSON is not valid: {error}"))?;
     let list = match &value {
@@ -194,7 +222,7 @@ impl Login {
         (!user.is_empty()).then_some(Self { user, cookies })
     }
 
-    pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self, String> {
+    pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self> {
         Self::save_to(
             &paths.bandcamp_user(),
             &paths.bandcamp_cookies(),
@@ -208,11 +236,10 @@ impl Login {
         cookie_file: &Path,
         user: &str,
         cookie_text: &str,
-    ) -> Result<Self, String> {
+    ) -> Result<Self> {
         let cookies = if cookie_text.trim().is_empty() {
             parse_cookies(
-                &fs::read_to_string(cookie_file)
-                    .map_err(|_| "Paste your Bandcamp cookies.".to_owned())?,
+                &fs::read_to_string(cookie_file).map_err(|_| "Paste your Bandcamp cookies.")?,
             )?
         } else {
             parse_cookies(cookie_text)?
@@ -234,14 +261,14 @@ impl Login {
             return Err("Enter your Bandcamp user name, as in bandcamp.com/<user name>.".into());
         }
         if let Some(parent) = cookie_file.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            fs::create_dir_all(parent)?;
         }
         write_private(cookie_file, &netscape(&cookies))?;
         write_private(user_file, &format!("{user}\n"))?;
         Ok(Self { user, cookies })
     }
 
-    fn account_user(&self) -> Result<String, String> {
+    fn account_user(&self) -> Result<String> {
         let summary: Value = self
             .get("https://bandcamp.com/api/fan/2/collection_summary")?
             .body_mut()
@@ -256,13 +283,13 @@ impl Login {
             .ok_or_else(|| "Bandcamp did not accept the cookies. Log in to Bandcamp in the browser, then copy the identity cookie again.".into())
     }
 
-    pub fn clear(paths: &Paths) -> Result<bool, String> {
+    pub fn clear(paths: &Paths) -> Result<bool> {
         let mut removed = false;
         for path in [paths.bandcamp_cookies(), paths.bandcamp_user()] {
             match fs::remove_file(&path) {
                 Ok(()) => removed = true,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.to_string()),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(removed)
@@ -276,7 +303,7 @@ impl Login {
             .join("; ")
     }
 
-    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>, String> {
+    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
         ureq::get(url)
             .header("User-Agent", USER_AGENT)
             .header("Cookie", self.header())
@@ -284,10 +311,10 @@ impl Login {
             .timeout_global(Some(Duration::from_secs(60)))
             .build()
             .call()
-            .map_err(|error| format!("Bandcamp did not answer {url}: {error}"))
+            .map_err(|error| format!("Bandcamp did not answer {url}: {error}").into())
     }
 
-    fn page_blob(&self, url: &str) -> Result<Value, String> {
+    fn page_blob(&self, url: &str) -> Result<Value> {
         let html = self
             .get(url)?
             .body_mut()
@@ -295,7 +322,7 @@ impl Login {
             .limit(PAGE_LIMIT)
             .read_to_string()
             .map_err(|error| format!("Bandcamp sent a page that is not valid: {error}"))?;
-        page_blob(&html).ok_or_else(|| format!("Bandcamp sent no page data for {url}."))
+        page_blob(&html).ok_or_else(|| format!("Bandcamp sent no page data for {url}.").into())
     }
 }
 
@@ -309,7 +336,7 @@ pub fn status(paths: &Paths) -> Value {
     }
 }
 
-fn write_private(path: &Path, text: &str) -> Result<(), String> {
+fn write_private(path: &Path, text: &str) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
@@ -320,7 +347,7 @@ fn write_private(path: &Path, text: &str) -> Result<(), String> {
     options
         .open(path)
         .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))
+        .map_err(|error| format!("cannot write {}: {error}", path.display()).into())
 }
 
 fn page_blob(html: &str) -> Option<Value> {
@@ -330,47 +357,7 @@ fn page_blob(html: &str) -> Option<Value> {
     let tag = &tag[tag.rfind('<')?..];
     let blob = tag.split_once("data-blob=\"")?.1;
     let blob = &blob[..blob.find('"')?];
-    serde_json::from_str(&unescape(blob)).ok()
-}
-
-fn unescape(text: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find('&') {
-        output.push_str(&rest[..index]);
-        rest = &rest[index..];
-        let Some(end) = rest.find(';').filter(|end| *end <= 10) else {
-            output.push('&');
-            rest = &rest[1..];
-            continue;
-        };
-        let entity = &rest[1..end];
-        let decoded = match entity {
-            "quot" => Some('"'),
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "apos" => Some('\''),
-            _ => entity
-                .strip_prefix("#x")
-                .or_else(|| entity.strip_prefix("#X"))
-                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match decoded {
-            Some(character) => {
-                output.push(character);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                output.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    output.push_str(rest);
-    output
+    serde_json::from_str(&html_escape::decode_html_entities(blob)).ok()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -394,13 +381,14 @@ impl Purchase {
     }
 }
 
-pub fn collection(login: &Login) -> Result<Vec<Purchase>, String> {
+pub fn collection(login: &Login) -> Result<Vec<Purchase>> {
     let blob = login.page_blob(&format!("https://bandcamp.com/{}", login.user))?;
     if blob["fan_data"]["is_own_page"] != true {
         return Err(format!(
             "Bandcamp did not accept the login for \"{}\". Check the user name, or copy the cookies again.",
             login.user
-        ));
+        )
+        .into());
     }
     let fan_id = blob["fan_data"]["fan_id"].clone();
     let mut details: Vec<Value> = Vec::new();
@@ -487,7 +475,7 @@ pub fn download(
     destination: &Path,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<PathBuf>> {
     let folder = destination
         .file_name()
         .ok_or("The Bandcamp download folder has no name.")?
@@ -511,6 +499,7 @@ pub fn download(
                     "Bandcamp has no {format} download for this purchase. It has: {}.",
                     downloads.keys().cloned().collect::<Vec<_>>().join(", ")
                 )
+                .into()
             })
     };
     let name = transfer(
@@ -520,15 +509,15 @@ pub fn download(
         cancelled,
         on_progress,
     )?;
-    fs::create_dir_all(destination).map_err(|error| error.to_string())?;
+    fs::create_dir_all(destination)?;
     let target = destination.join(&name);
-    fs::rename(&partial, &target).map_err(|error| error.to_string())?;
+    fs::rename(&partial, &target)?;
     if target
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
     {
         extract(&target, destination)?;
-        fs::remove_file(&target).map_err(|error| error.to_string())?;
+        fs::remove_file(&target)?;
     }
     let files = audio_files(destination);
     if files.is_empty() {
@@ -538,12 +527,12 @@ pub fn download(
 }
 
 fn transfer(
-    locate: &mut dyn FnMut() -> Result<String, String>,
+    locate: &mut dyn FnMut() -> Result<String>,
     cookie: &str,
     partial: &Path,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
-) -> Result<String, String> {
+) -> Result<String> {
     let mut url = Some(locate()?);
     let mut failures = 0;
     loop {
@@ -580,7 +569,7 @@ fn fetch(
     partial: &Path,
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
-) -> Result<String, String> {
+) -> Result<String> {
     let offset = saved_bytes(partial);
     let mut request = ureq::get(url)
         .header("User-Agent", USER_AGENT)
@@ -599,7 +588,7 @@ fn fetch(
             let _ = fs::remove_file(partial);
             return Err("Bandcamp did not accept the saved part of the download.".into());
         }
-        Err(error) => return Err(format!("Bandcamp did not send the download: {error}")),
+        Err(error) => return Err(format!("Bandcamp did not send the download: {error}").into()),
     };
     let header = |name: &str| {
         response
@@ -626,8 +615,7 @@ fn fetch(
         fs::OpenOptions::new().append(true).open(partial)
     } else {
         fs::File::create(partial)
-    }
-    .map_err(|error| error.to_string())?;
+    }?;
     let mut received = if resumed { offset } else { 0 };
     let mut reader = response.into_body().into_reader();
     let mut buffer = vec![0; 256 * 1024];
@@ -642,12 +630,11 @@ fn fetch(
         if count == 0 {
             break;
         }
-        file.write_all(&buffer[..count])
-            .map_err(|error| error.to_string())?;
+        file.write_all(&buffer[..count])?;
         received += count as u64;
         on_progress(received, total);
     }
-    file.sync_all().map_err(|error| error.to_string())?;
+    file.sync_all()?;
     if total.is_some_and(|total| total != received) {
         return Err("The Bandcamp download ended early.".into());
     }
@@ -676,7 +663,13 @@ fn disposition_name(header: &str) -> Option<String> {
         .split(';')
         .map(str::trim)
         .find_map(|part| part.strip_prefix("filename*="))
-        .and_then(|value| value.split_once("''").map(|(_, name)| percent_decode(name)));
+        .and_then(|value| {
+            value.split_once("''").map(|(_, name)| {
+                percent_encoding::percent_decode_str(name)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+        });
     let plain = || {
         header
             .split(';')
@@ -694,47 +687,12 @@ fn disposition_name(header: &str) -> Option<String> {
     safe.then(|| name.to_owned())
 }
 
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let hex = bytes
-            .get(index + 1..index + 3)
-            .and_then(|pair| std::str::from_utf8(pair).ok())
-            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
-        if let (b'%', Some(byte)) = (bytes[index], hex) {
-            output.push(byte);
-            index += 3;
-            continue;
-        }
-        output.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&output).into_owned()
-}
-
-fn extract(archive: &Path, destination: &Path) -> Result<(), String> {
-    let file = fs::File::open(archive).map_err(|error| error.to_string())?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?;
-    for index in 0..zip.len() {
-        let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
-        let Some(relative) = entry.enclosed_name() else {
-            return Err("The Bandcamp ZIP file has an unsafe path.".into());
-        };
-        let target = destination.join(relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let mut output = fs::File::create(&target).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+fn extract(archive: &Path, destination: &Path) -> Result<()> {
+    let file = fs::File::open(archive)?;
+    zip::ZipArchive::new(file)
+        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?
+        .extract(destination)
+        .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}").into())
 }
 
 pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
@@ -787,7 +745,7 @@ mod tests {
     }
 
     #[test]
-    fn cookies_parse_from_a_header_a_cookie_file_and_json() -> Result<(), String> {
+    fn cookies_parse_from_a_header_a_cookie_file_and_json() -> Result<()> {
         let header = parse_cookies("Cookie: client_id=abc; identity=7%09token%7B; js_logged_in=1")?;
         assert!(header.contains(&Cookie {
             name: "identity".into(),
@@ -971,5 +929,28 @@ mod tests {
         );
         assert_eq!(disposition_name(r#"attachment; filename="../x.zip""#), None);
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
+    }
+
+    #[test]
+    fn archive_entries_stay_inside_the_destination() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let write = |name: &str, entries: &[&str]| -> Result<PathBuf, Box<dyn std::error::Error>> {
+            let path = directory.path().join(name);
+            let mut zip = zip::ZipWriter::new(fs::File::create(&path)?);
+            for entry in entries {
+                zip.start_file(*entry, zip::write::SimpleFileOptions::default())?;
+                zip.write_all(b"audio")?;
+            }
+            zip.finish()?;
+            Ok(path)
+        };
+        let destination = directory.path().join("out");
+        extract(&write("good.zip", &["Album/01 Song.flac"])?, &destination)?;
+        assert_eq!(fs::read(destination.join("Album/01 Song.flac"))?, b"audio");
+
+        let unsafe_archive = write("bad.zip", &["../escape.flac"])?;
+        assert!(extract(&unsafe_archive, &destination).is_err());
+        assert!(!directory.path().join("escape.flac").exists());
+        Ok(())
     }
 }

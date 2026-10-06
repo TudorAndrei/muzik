@@ -9,11 +9,12 @@ use crate::{gates, watchlist};
 use muzik_core::paths::Paths;
 use muzik_store::jobs::CancelRequest;
 use muzik_store::watchlist::{self as saved, ItemAction, ItemId, Playlist, Repository};
+use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
@@ -39,7 +40,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn start(options: AppOptions) -> Result<Self, String> {
+    pub fn start(options: AppOptions) -> crate::Result<Self> {
         let jobs = Arc::new(if options.in_memory {
             Jobs::in_memory(&options.paths)?
         } else {
@@ -121,13 +122,13 @@ impl App {
         self.queued(self.jobs.item(&params))
     }
 
-    pub fn answer(&self, id: i64, value: &Value) -> Result<bool, String> {
+    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
         let answered = self.jobs.answer(id, value)?;
         self.changed();
         Ok(answered)
     }
 
-    pub fn cancel(&self, job: &str) -> Result<bool, String> {
+    pub fn cancel(&self, job: &str) -> crate::Result<bool> {
         if self
             .runner
             .as_ref()
@@ -155,31 +156,30 @@ impl App {
     pub fn reply(&self, decision_id: &str, value: Value) -> bool {
         self.decisions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
             .remove(decision_id)
             .is_some_and(|reply| reply.send(value).is_ok())
     }
 
-    pub fn add_source(&self, url: &str) -> Result<Playlist, String> {
-        self.edit(|repository| repository.add(url))
+    pub fn add_source(&self, url: &str) -> crate::Result<Playlist> {
+        self.edit(|repository| Ok(repository.add(url)?))
     }
 
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
-        self.edit(|repository| repository.rename(playlist_id, title))
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
+        self.edit(|repository| Ok(repository.rename(playlist_id, title)?))
     }
 
-    pub fn remove_source(&self, playlist_id: &str) -> Result<bool, String> {
-        self.edit(|repository| repository.remove(playlist_id))
+    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
+        self.edit(|repository| Ok(repository.remove(playlist_id)?))
     }
 
-    pub fn load_watchlist(&self, busy: Busy) -> Result<(Value, WatchlistCheck), String> {
+    pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
         let generation = {
-            let _gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+            let _gate = self.gate.lock();
             self.generation.fetch_add(1, Ordering::SeqCst) + 1
         };
         let repository = self.repository();
-        if let Err(message) = watchlist::ensure_sources(&self.paths) {
-            (self.sink)(AppEvent::WatchlistError(message));
+        if let Err(error) = watchlist::ensure_sources(&self.paths) {
+            (self.sink)(AppEvent::WatchlistError(error.to_string()));
         }
         let settings = Settings::resolve(&self.paths, &json!({}))?;
         let saved = saved::view(
@@ -200,8 +200,8 @@ impl App {
         Ok((saved, check))
     }
 
-    fn edit<T>(&self, change: impl FnOnce(&Repository) -> Result<T, String>) -> Result<T, String> {
-        let _gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+    fn edit<T>(&self, change: impl FnOnce(&Repository) -> crate::Result<T>) -> crate::Result<T> {
+        let _gate = self.gate.lock();
         let result = change(&self.repository())?;
         self.generation.fetch_add(1, Ordering::SeqCst);
         Ok(result)
@@ -237,9 +237,9 @@ pub struct WatchlistCheck {
 
 impl WatchlistCheck {
     pub fn run(self) {
-        if let Err(message) = self.check() {
+        if let Err(error) = self.check() {
             if self.current() {
-                (self.sink)(AppEvent::WatchlistError(message));
+                (self.sink)(AppEvent::WatchlistError(error.to_string()));
             }
         }
     }
@@ -252,7 +252,7 @@ impl WatchlistCheck {
         (self.busy)() || self.jobs.has_running() || !self.current()
     }
 
-    fn check(&self) -> Result<(), String> {
+    fn check(&self) -> crate::Result<()> {
         let options = self.settings.reconcile();
         saved::import_cache(&self.repository, options)?;
         for _ in 0..3 {
@@ -262,7 +262,7 @@ impl WatchlistCheck {
             let revision = self.repository.revision()?;
             let mut checked = self.repository.load()?;
             saved::reconcile(&mut checked, options)?;
-            let written = self.repository.locked(|| -> Result<bool, String> {
+            let written = self.repository.locked(|| -> crate::Result<bool> {
                 if self.busy() {
                     return Ok(true);
                 }
@@ -283,7 +283,7 @@ impl WatchlistCheck {
                 &self.settings.request.output,
                 &self.settings.paths.cache,
             )?;
-            let _gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+            let _gate = self.gate.lock();
             if self.current() {
                 (self.sink)(AppEvent::WatchlistUpdated(visible));
             }
@@ -301,10 +301,7 @@ fn ask(
 ) -> Result<Value, String> {
     let decision_id = format!("{}-decision-{number}", prompt.job_id);
     let (reply, receiver) = mpsc::channel();
-    decisions
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(decision_id.clone(), reply);
+    decisions.lock().insert(decision_id.clone(), reply);
     sink(AppEvent::DecisionRequest {
         job_id: prompt.job_id.to_owned(),
         decision_id: decision_id.clone(),
@@ -323,10 +320,7 @@ fn ask(
             }
         }
     };
-    decisions
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(&decision_id);
+    decisions.lock().remove(&decision_id);
     answer
 }
 
@@ -338,12 +332,11 @@ mod tests {
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
     use std::sync::mpsc::{self, Receiver};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use std::time::Duration;
 
     fn app(root: &std::path::Path, run: bool) -> Result<(App, Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
-        let sender = Mutex::new(sender);
         let app = App::start(AppOptions {
             paths: Paths::under(root),
             workers: 2,
@@ -351,9 +344,7 @@ mod tests {
             in_memory: true,
             chooser: None,
             sink: Arc::new(move |event| {
-                if let Ok(sender) = sender.lock() {
-                    let _ = sender.send(event);
-                }
+                let _ = sender.send(event);
             }),
         })?;
         Ok((app, receiver))

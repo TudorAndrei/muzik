@@ -89,25 +89,6 @@ pub fn title_from_name(stem: &str) -> String {
     stem.to_owned()
 }
 
-pub fn human_size(bytes: u64) -> String {
-    let mut scale = 1_u128;
-    for unit in ["B", "KB", "MB", "GB"] {
-        if u128::from(bytes) < scale.saturating_mul(1024) {
-            let tenths = u128::from(bytes)
-                .saturating_mul(10)
-                .saturating_add(scale / 2)
-                / scale;
-            return format!("{}.{:01} {unit}", tenths / 10, tenths % 10);
-        }
-        scale = scale.saturating_mul(1024);
-    }
-    let tenths = u128::from(bytes)
-        .saturating_mul(10)
-        .saturating_add(scale / 2)
-        / scale;
-    format!("{}.{:01} TB", tenths / 10, tenths % 10)
-}
-
 #[cfg(test)]
 mod tests {
     use super::scan;

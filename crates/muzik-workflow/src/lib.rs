@@ -10,12 +10,14 @@ pub use muzik_core::{
 pub use muzik_media::splitter::SplitProgress;
 use std::collections::HashSet;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use url::Url;
 
+pub use error::{Error, Result};
+
 pub mod discovery;
+mod error;
 pub mod playlist;
 pub mod quality;
 pub mod upgrade;
@@ -210,24 +212,6 @@ pub enum WorkflowEvent {
     Completed,
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("workflow cancelled")]
-    Cancelled,
-    #[error("file operation failed: {0}")]
-    Io(#[from] io::Error),
-    #[error("chapter lookup failed: {0}")]
-    Chapters(#[from] chapters::Error),
-    #[error("{0}")]
-    Operation(String),
-    #[error("playlist workflow needs a playlist adapter")]
-    PlaylistAdapterRequired,
-    #[error("Spotify export workflow needs a playlist adapter")]
-    SpotifyAdapterRequired,
-    #[error("no audio files found in output directory")]
-    NoAudio,
-}
-
 pub trait WorkflowOperations {
     /// Return acquired files. The implementation may use the existing Rust yt-dlp path.
     fn download_youtube(
@@ -279,7 +263,7 @@ pub trait WorkflowOperations {
         selected: MetadataSource,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Chapter>, String> {
-        discovery::discover(source, selected, cancelled)
+        discovery::discover(source, selected, cancelled).map_err(String::from)
     }
     /// Ask for a decision when `WorkflowOptions::review` is set.
     /// Returning `Reject` treats the source as one track.

@@ -61,6 +61,10 @@ impl Paths {
     pub fn soulseek(&self) -> PathBuf {
         self.data.join("soulseek")
     }
+
+    pub fn logs(&self) -> PathBuf {
+        self.cache.join("logs")
+    }
 }
 
 pub fn expand_home(path: &Path) -> PathBuf {

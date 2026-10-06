@@ -231,7 +231,6 @@ fn request_with_retry<T>(
     };
     operation
         .retry(ExponentialBuilder::default().with_max_times(3))
-        .sleep(thread::sleep)
         .when(|error| is_temporary(error))
         .notify(|error, delay| tracing::warn!(%error, ?delay, "retry MusicBrainz request"))
         .call()

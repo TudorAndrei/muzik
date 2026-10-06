@@ -1,7 +1,8 @@
+use crate::{Error, Result};
+use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
@@ -79,7 +80,7 @@ impl Drop for Permit {
             return;
         };
         HELD.with(|held| held.borrow_mut().retain(|entry| entry.1 != ticket));
-        let mut state = lock();
+        let mut state = STATE.lock();
         state.lanes[gate.index()]
             .active
             .retain(|(active, _)| *active != ticket);
@@ -89,20 +90,20 @@ impl Drop for Permit {
 }
 
 pub fn listen(listener: impl Fn(Value) + Send + 'static) {
-    *LISTENER.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(listener));
-    publish(&lock());
+    *LISTENER.lock() = Some(Box::new(listener));
+    publish(&STATE.lock());
 }
 
 pub fn set_label(label: &str) {
     LABEL.with(|current| label.clone_into(&mut current.borrow_mut()));
 }
 
-pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit, String> {
+pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit> {
     if HELD.with(|held| held.borrow().iter().any(|entry| entry.0 == gate)) {
         return Ok(Permit { held: None });
     }
     let label = LABEL.with(|label| label.borrow().clone());
-    let mut state = lock();
+    let mut state = STATE.lock();
     let ticket = state.next;
     state.next += 1;
     state.lanes[gate.index()].waiting.push((ticket, label));
@@ -122,7 +123,7 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
     }
     let mut labels = Vec::new();
     {
-        let mut state = lock();
+        let mut state = STATE.lock();
         for (gate, ticket) in &held {
             let lane = &mut state.lanes[gate.index()];
             if let Some(index) = lane.active.iter().position(|entry| entry.0 == *ticket) {
@@ -135,7 +136,7 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
     let result = work();
     let never = AtomicBool::new(false);
     for ((gate, ticket), label) in held.into_iter().zip(labels) {
-        let mut state = lock();
+        let mut state = STATE.lock();
         let waiting = &mut state.lanes[gate.index()].waiting;
         let at = waiting.partition_point(|entry| entry.0 < ticket);
         waiting.insert(at, (ticket, label));
@@ -152,14 +153,14 @@ fn admit(
     gate: Gate,
     ticket: u64,
     cancelled: &AtomicBool,
-) -> Result<MutexGuard<'static, State>, String> {
+) -> Result<MutexGuard<'static, State>> {
     loop {
         let lane = &mut state.lanes[gate.index()];
         if cancelled.load(Ordering::SeqCst) {
             lane.waiting.retain(|entry| entry.0 != ticket);
             CHANGED.notify_all();
             publish(&state);
-            return Err(format!("{gate} queue wait cancelled"));
+            return Err(Error::GateCancelled(gate));
         }
         if lane.active.len() < gate.limit()
             && lane.waiting.first().map(|entry| entry.0) == Some(ticket)
@@ -170,15 +171,12 @@ fn admit(
             publish(&state);
             return Ok(state);
         }
-        state = CHANGED
-            .wait_timeout(state, Duration::from_millis(200))
-            .unwrap_or_else(PoisonError::into_inner)
-            .0;
+        CHANGED.wait_for(&mut state, Duration::from_millis(200));
     }
 }
 
 pub fn snapshot() -> Value {
-    describe(&lock())
+    describe(&STATE.lock())
 }
 
 fn describe(state: &State) -> Value {
@@ -200,17 +198,9 @@ fn describe(state: &State) -> Value {
 }
 
 fn publish(state: &State) {
-    if let Some(listener) = LISTENER
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .as_ref()
-    {
+    if let Some(listener) = LISTENER.lock().as_ref() {
         listener(describe(state));
     }
-}
-
-fn lock() -> MutexGuard<'static, State> {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

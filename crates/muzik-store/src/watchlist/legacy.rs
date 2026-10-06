@@ -1,7 +1,7 @@
 //! A one-time import of the cache files that the Python version wrote.
 
 use super::{now, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist};
-use crate::db;
+use crate::Result;
 use muzik_core::audio::is_audio;
 use rusqlite::OptionalExtension;
 use serde_json::{json, Value};
@@ -19,27 +19,21 @@ enum CacheStatus {
     Organized,
 }
 
-pub fn import_cache(
-    repository: &Repository,
-    options: ReconcileOptions<'_>,
-) -> Result<bool, String> {
+pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> Result<bool> {
     repository.update_with(|document, connection| {
         let done: Option<String> = connection
             .query_row("SELECT value FROM meta WHERE key = ?1", [IMPORTED], |row| {
                 row.get(0)
             })
-            .optional()
-            .map_err(db::text)?;
+            .optional()?;
         if done.is_some() {
             return Ok(false);
         }
         apply(document, options);
-        connection
-            .execute(
-                "INSERT INTO meta (key, value) VALUES (?1, ?2)",
-                [IMPORTED, &now()],
-            )
-            .map_err(db::text)?;
+        connection.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)",
+            [IMPORTED, &now()],
+        )?;
         Ok(true)
     })
 }

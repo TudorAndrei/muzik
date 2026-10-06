@@ -1,6 +1,6 @@
 [package]
 name = "muzik-runner"
-version = "2.12.0"
+version.workspace = true
 edition = "2021"
 publish = false
 license = "GPL-3.0-only"
@@ -16,9 +16,14 @@ muzik-media = { path = "../muzik-media" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-spotify = { path = "../muzik-spotify" }
 muzik-workflow = { path = "../muzik-workflow" }
+parking_lot = "0.12"
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strum = "0.28"
 strum_macros = "0.28"
 tempfile = "3"
+thiserror = "2"
+
+[dev-dependencies]
+keyring-core = "1.0"

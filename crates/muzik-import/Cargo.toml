@@ -1,6 +1,6 @@
 [package]
 name = "muzik-import"
-version = "2.12.0"
+version.workspace = true
 edition = "2024"
 license = "Apache-2.0"
 publish = false
@@ -22,3 +22,4 @@ thiserror = "2"
 tracing = "0.1"
 trash = "5.2"
 tempfile = "3"
+walkdir = "2.5"

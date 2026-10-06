@@ -1,6 +1,9 @@
+use crate::Result;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
-use muzik_soulseek::session::{Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use muzik_soulseek::session::{
+    self, Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -13,7 +16,7 @@ pub struct SoulseekAccount<'a> {
     pub server_port: Option<u64>,
 }
 
-pub fn soulseek_account(config_file: &Path) -> Result<Value, String> {
+pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     let config = app_config::load(config_file)?;
     let section = &config["soulseek"];
     let text = |key: &str| section[key].as_str().unwrap_or("").to_owned();
@@ -26,16 +29,13 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value, String> {
         .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
     Ok(json!({
         "username": text("username"),
-        "has_password": !text("password").is_empty(),
+        "has_password": !text("password").is_empty() || session::saved_password().is_some(),
         "server_host": host,
         "server_port": port,
     }))
 }
 
-pub fn save_soulseek_account(
-    config_file: &Path,
-    account: &SoulseekAccount<'_>,
-) -> Result<(), String> {
+pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) -> Result<()> {
     let config = app_config::load(config_file)?;
     let saved = |key: &str| config["soulseek"][key].as_str().unwrap_or("").to_owned();
     let username = account
@@ -57,7 +57,10 @@ pub fn save_soulseek_account(
         return Err("Enter a server port from 1 to 65535.".into());
     }
     let password = account.password.unwrap_or("");
-    if password.trim().is_empty() && saved("password").is_empty() {
+    if password.trim().is_empty()
+        && saved("password").is_empty()
+        && session::saved_password().is_none()
+    {
         return Err("Enter the Soulseek password.".into());
     }
     app_config::save_section_string(config_file, "soulseek", "username", &username)?;
@@ -65,7 +68,21 @@ pub fn save_soulseek_account(
         app_config::save_section_string(config_file, "soulseek", "password", password)?;
     }
     app_config::save_section_string(config_file, "soulseek", "server_host", host)?;
-    app_config::save_section_string(config_file, "soulseek", "server_port", &port.to_string())
+    app_config::save_section_string(config_file, "soulseek", "server_port", &port.to_string())?;
+    move_soulseek_password(config_file)
+}
+
+pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
+    let config = app_config::load(config_file)?;
+    let password = config["soulseek"]["password"].as_str().unwrap_or("").trim();
+    if password.is_empty() || session::save_password(password).is_err() {
+        return Ok(());
+    }
+    Ok(app_config::remove_section_key(
+        config_file,
+        "soulseek",
+        "password",
+    )?)
 }
 
 #[derive(Debug, Serialize)]
@@ -255,7 +272,7 @@ mod tests {
         let error = save_soulseek_account(&path, &account(None, Some("b"), None))
             .err()
             .ok_or("expected an error")?;
-        assert!(error.contains("username"));
+        assert!(error.to_string().contains("username"));
         Ok(())
     }
 
@@ -266,7 +283,7 @@ mod tests {
         let error = save_soulseek_account(&path, &account(Some("a"), Some("b"), Some(70000)))
             .err()
             .ok_or("expected an error")?;
-        assert_eq!(error, "Enter a server port from 1 to 65535.");
+        assert_eq!(error.to_string(), "Enter a server port from 1 to 65535.");
         Ok(())
     }
 }

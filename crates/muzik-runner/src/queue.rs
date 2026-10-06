@@ -4,10 +4,10 @@ use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_store::db;
 use muzik_store::jobs::{CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
+use parking_lot::{Mutex, MutexGuard};
 use serde_json::{json, Value};
 use std::fmt;
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +35,12 @@ impl From<String> for EnqueueError {
     }
 }
 
+impl From<muzik_store::Error> for EnqueueError {
+    fn from(error: muzik_store::Error) -> Self {
+        Self::Store(error.to_string())
+    }
+}
+
 pub struct Jobs {
     store: Mutex<Store>,
     lock_path: Option<PathBuf>,
@@ -42,7 +48,7 @@ pub struct Jobs {
 }
 
 impl Jobs {
-    pub fn open(paths: &Paths) -> Result<Self, String> {
+    pub fn open(paths: &Paths) -> crate::Result<Self> {
         Ok(Self {
             store: Mutex::new(Store::from_connection(db::open(&paths.database())?)),
             lock_path: Some(paths.data.join("jobs.lock")),
@@ -50,7 +56,7 @@ impl Jobs {
         })
     }
 
-    pub fn in_memory(paths: &Paths) -> Result<Self, String> {
+    pub fn in_memory(paths: &Paths) -> crate::Result<Self> {
         Ok(Self {
             store: Mutex::new(Store::from_connection(db::open_in_memory()?)),
             lock_path: None,
@@ -58,18 +64,20 @@ impl Jobs {
         })
     }
 
-    pub(crate) fn import_legacy(&self) -> Result<usize, String> {
+    pub(crate) fn import_legacy(&self) -> crate::Result<usize> {
         if self.lock_path.is_none() {
             return Ok(0);
         }
-        self.store().import_legacy(&self.paths.data.join("jobs.db"))
+        Ok(self
+            .store()
+            .import_legacy(&self.paths.data.join("jobs.db"))?)
     }
 
     pub fn paths(&self) -> &Paths {
         &self.paths
     }
 
-    pub(crate) fn runner_lock(&self) -> Result<Option<Option<RunnerLock>>, String> {
+    pub(crate) fn runner_lock(&self) -> crate::Result<Option<Option<RunnerLock>>> {
         match &self.lock_path {
             None => Ok(Some(None)),
             Some(path) => Ok(RunnerLock::try_acquire(path)?.map(Some)),
@@ -77,7 +85,7 @@ impl Jobs {
     }
 
     pub fn store(&self) -> MutexGuard<'_, Store> {
-        self.store.lock().unwrap_or_else(PoisonError::into_inner)
+        self.store.lock()
     }
 
     pub fn refresh(&self, params: &Value) -> Result<i64, EnqueueError> {
@@ -105,7 +113,8 @@ impl Jobs {
         if raw.is_empty() {
             return Err(EnqueueError::Invalid("Enter a URL or path.".into()));
         }
-        Settings::resolve(&self.paths, params).map_err(EnqueueError::Invalid)?;
+        Settings::resolve(&self.paths, params)
+            .map_err(|error| EnqueueError::Invalid(error.to_string()))?;
         let key = format!("{raw}#{}", unique());
         Ok(self.store().enqueue(&NewJob {
             kind: Kind::Workflow,
@@ -117,7 +126,7 @@ impl Jobs {
 
     pub fn item(&self, params: &Value) -> Result<i64, EnqueueError> {
         let key = validate_item(params)
-            .map_err(EnqueueError::Invalid)?
+            .map_err(|error| EnqueueError::Invalid(error.to_string()))?
             .to_string();
         let store = self.store();
         for open in store.find_open(Kind::Item, &key)? {
@@ -142,17 +151,17 @@ impl Jobs {
         })?)
     }
 
-    pub fn answer(&self, id: i64, value: &Value) -> Result<bool, String> {
+    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
         let store = self.store();
         let kind = store
             .get(id)?
             .and_then(|job| job.question)
             .map(|question| question["kind"].clone())
             .unwrap_or(Value::Null);
-        store.answer(id, &json!({"kind":kind,"value":value}))
+        Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
-    pub fn release_import_questions(&self) -> Result<usize, String> {
+    pub fn release_import_questions(&self) -> crate::Result<usize> {
         let store = self.store();
         let mut released = 0;
         for job in store.list(Status::Waiting)? {
@@ -177,12 +186,12 @@ impl Jobs {
         Ok(released)
     }
 
-    pub fn cancel(&self, id: i64) -> Result<CancelRequest, String> {
-        self.store().request_cancel(id)
+    pub fn cancel(&self, id: i64) -> crate::Result<CancelRequest> {
+        Ok(self.store().request_cancel(id)?)
     }
 
-    pub fn get(&self, id: i64) -> Result<Option<Job>, String> {
-        self.store().get(id)
+    pub fn get(&self, id: i64) -> crate::Result<Option<Job>> {
+        Ok(self.store().get(id)?)
     }
 
     pub fn has_running(&self) -> bool {
@@ -225,7 +234,7 @@ pub fn parse_job_id(text: &str) -> Option<i64> {
     text.strip_prefix("queue-").unwrap_or(text).parse().ok()
 }
 
-fn validate_item(params: &Value) -> Result<ItemId, String> {
+fn validate_item(params: &Value) -> crate::Result<ItemId> {
     let id = ItemId::from_params(params)?;
     let action = params
         .get("action")

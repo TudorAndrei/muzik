@@ -1,21 +1,20 @@
 //! Chapter review and the native ffmpeg splitter command.
 
-use std::io::{self, Write};
 use std::path::PathBuf;
-use std::process::Command;
 
+use anyhow::{Context, anyhow, bail};
 use muzik_core::chapters::{self, Chapter};
 use muzik_media::splitter::{self, SplitOptions};
 
 use crate::Split;
 
-pub fn run(args: &Split) -> Result<PathBuf, String> {
+pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
     if !args.path.is_file() {
-        return Err(format!("File not found: {}", args.path.display()));
+        bail!("File not found: {}", args.path.display());
     }
-    let mut chapters = chapters::find_chapters(&args.path).map_err(|error| error.to_string())?;
+    let mut chapters = chapters::find_chapters(&args.path)?;
     if chapters.is_empty() {
-        return Err("No chapters found. Add a .chapters.txt or .info.json sidecar.".into());
+        bail!("No chapters found. Add a .chapters.txt or .info.json sidecar.");
     }
     show_chapters(&chapters);
     if args.review {
@@ -27,7 +26,7 @@ pub fn run(args: &Split) -> Result<PathBuf, String> {
     }
     let output = match &args.output {
         Some(path) => path.clone(),
-        None => splitter::default_output(&args.path).map_err(|error| error.to_string())?,
+        None => splitter::default_output(&args.path)?,
     };
     let options = SplitOptions {
         jobs: args.jobs,
@@ -47,12 +46,12 @@ pub fn run(args: &Split) -> Result<PathBuf, String> {
     Ok(output)
 }
 
-pub(crate) fn split_error(error: splitter::SplitError) -> String {
+pub(crate) fn split_error(error: splitter::SplitError) -> anyhow::Error {
     match error {
         splitter::SplitError::OutputNotEmpty(_) => {
-            format!("{error} Use --force to replace them.")
+            anyhow!("{error} Use --force to replace them.")
         }
-        other => other.to_string(),
+        other => other.into(),
     }
 }
 
@@ -79,21 +78,16 @@ fn clock(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> Result<Option<Vec<Chapter>>, String> {
+pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<Chapter>>> {
     loop {
-        print!("Continue, edit, or abort? [c/e/a] ");
-        io::stdout().flush().map_err(|error| error.to_string())?;
-        let mut answer = String::new();
-        let bytes = io::stdin()
-            .read_line(&mut answer)
-            .map_err(|error| error.to_string())?;
-        if bytes == 0 {
-            return Ok(None);
-        }
-        match answer.trim().to_ascii_lowercase().as_str() {
-            "c" | "continue" => return Ok(Some(chapters)),
-            "a" | "abort" => return Ok(None),
-            "e" | "edit" => {
+        let choice = dialoguer::Select::new()
+            .with_prompt("Continue, edit, or abort?")
+            .items(["Continue", "Edit", "Abort"])
+            .default(0)
+            .interact_opt()?;
+        match choice {
+            Some(0) => return Ok(Some(chapters)),
+            Some(1) => {
                 let edited = edit_chapters(&chapters)?;
                 if edited.is_empty() {
                     eprintln!("No valid chapters in the edited file. The prior list remains.");
@@ -102,37 +96,22 @@ pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> Result<Option<Vec<C
                     show_chapters(&chapters);
                 }
             }
-            _ => eprintln!("Enter c, e, or a."),
+            _ => return Ok(None),
         }
     }
 }
 
-pub(crate) fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String> {
-    let mut file = tempfile::Builder::new()
-        .prefix("muzik-chapters-")
-        .suffix(".chapters.txt")
-        .tempfile()
-        .map_err(|error| error.to_string())?;
+pub(crate) fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
+    let mut text = String::new();
     for chapter in chapters {
-        writeln!(file, "{} {}", clock(chapter.start), chapter.title)
-            .map_err(|error| error.to_string())?;
+        text.push_str(&format!("{} {}\n", clock(chapter.start), chapter.title));
     }
-    file.flush().map_err(|error| error.to_string())?;
-    let editor = std::env::var("EDITOR")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("VISUAL").ok())
-        .unwrap_or_else(|| "vi".into());
-    let mut parts = editor.split_whitespace();
-    let program = parts.next().ok_or("Editor command is empty")?;
-    let status = Command::new(program)
-        .args(parts)
-        .arg(file.path())
-        .status()
-        .map_err(|error| format!("Cannot open editor: {error}"))?;
-    if !status.success() {
-        return Err(format!("Editor exited with {status}"));
-    }
-    let text = std::fs::read_to_string(file.path()).map_err(|error| error.to_string())?;
+    let text = edit::edit_with_builder(
+        text,
+        edit::Builder::new()
+            .prefix("muzik-chapters-")
+            .suffix(".chapters.txt"),
+    )
+    .context("Cannot open editor")?;
     Ok(chapters::parse_chapters(&text))
 }

@@ -7,7 +7,7 @@ use muzik_workflow::ytdlp::{self, YtDlp};
 
 use crate::{Download, paths};
 
-pub fn run(args: &Download) -> Result<(), String> {
+pub fn run(args: &Download) -> anyhow::Result<()> {
     let output = args.output.clone().unwrap_or_else(paths::download_dir);
     println!("Downloading: {}", args.url);
     println!("Output: {}", output.display());
@@ -24,7 +24,7 @@ pub fn run(args: &Download) -> Result<(), String> {
     let files = match YtDlp::default().download(&request, &AtomicBool::new(false)) {
         Ok(files) => files,
         Err(Error::NoAudio) => Vec::new(),
-        Err(error) => return Err(error.to_string()),
+        Err(error) => return Err(error.into()),
     };
     println!("Download complete: {}", output.display());
     for file in files {
