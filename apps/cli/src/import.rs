@@ -49,7 +49,7 @@ pub fn run(args: &Import) -> Result<(), String> {
                 decide_album(album, policy, &mut NeverAsk)
             }
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
     let result = beets::apply_import(preview, &decisions)?;
     if result.apply.already_in_library > 0 {
         println!(
