@@ -1,28 +1,21 @@
 use muzik_core::{app_config, paths};
 use muzik_import::beets;
-use muzik_library::{Item, Library, SqlValue, path_from_sql, scalar_text};
+use muzik_library::Library;
 use muzik_media::quality::{self, MeasuredQuality};
 use muzik_soulseek::fetch::{Timeouts, local_files};
 use muzik_soulseek::ranking::RankedCandidate;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
-use muzik_soulseek::types::{Candidate, FileEntry};
-use serde::{Deserialize, Serialize};
+use muzik_soulseek::types::FileEntry;
+use muzik_workflow::upgrade::{
+    CachedCandidate, candidate_id, load_candidate, save_candidate, scan_library, select_upgrade,
+};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use crate::{Import, SoulseekCheckLibrary, SoulseekDownload, import};
-
-#[derive(Deserialize, Serialize)]
-struct CachedCandidate {
-    query: String,
-    score: f64,
-    candidate: Candidate,
-}
 
 pub fn check() -> Result<(), String> {
     let config = app_config::load(&app_config::path()).map_err(|error| error.to_string())?;
@@ -53,15 +46,6 @@ pub fn search(query: &str, prefer: &str, limit: usize, json_output: bool) -> Res
     let ranked = ranked_search(&session, &config, query, prefer, limit)?;
     show_candidates(&ranked, query, json_output)?;
     Ok(())
-}
-
-struct FlaggedTrack {
-    artist: String,
-    sort_artist: String,
-    album: String,
-    title: String,
-    duration: Option<f64>,
-    quality: MeasuredQuality,
 }
 
 pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
@@ -158,228 +142,6 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
         );
     }
     Ok(())
-}
-
-fn scan_library(
-    items: Vec<Item>,
-    directory: &Path,
-    min_bitrate: u32,
-    mut measure: impl FnMut(&Path) -> Result<Option<MeasuredQuality>, String>,
-) -> Result<(usize, Vec<FlaggedTrack>), String> {
-    let mut scanned = 0_usize;
-    let mut flagged = Vec::new();
-    for item in items {
-        let Some(path) = item.field("path").and_then(path_from_sql) else {
-            continue;
-        };
-        let path = if path.is_absolute() {
-            path
-        } else {
-            directory.join(path)
-        };
-        if !path.is_file() {
-            continue;
-        }
-        let Some(measured) = measure(&path)? else {
-            continue;
-        };
-        scanned += 1;
-        if measured.lossless
-            || measured
-                .bitrate_kbps
-                .is_some_and(|rate| rate >= min_bitrate)
-        {
-            continue;
-        }
-        let artist = item
-            .field("artist")
-            .and_then(scalar_text)
-            .unwrap_or_default();
-        let title = item
-            .field("title")
-            .and_then(scalar_text)
-            .unwrap_or_default();
-        let album = item
-            .field("album")
-            .and_then(scalar_text)
-            .unwrap_or_default();
-        let album_artist = item
-            .field("albumartist")
-            .and_then(scalar_text)
-            .unwrap_or_default();
-        let duration = item
-            .field("length")
-            .and_then(scalar_number)
-            .filter(|value| *value > 0.0);
-        flagged.push(FlaggedTrack {
-            sort_artist: if album_artist.is_empty() {
-                artist.clone()
-            } else {
-                album_artist
-            },
-            artist,
-            album,
-            title,
-            duration,
-            quality: measured,
-        });
-    }
-    Ok((scanned, flagged))
-}
-
-fn scalar_number(value: &SqlValue) -> Option<f64> {
-    match value {
-        SqlValue::Integer(number) => number.to_string().parse().ok(),
-        SqlValue::Real(number) => Some(*number),
-        SqlValue::Text(text) => text.parse().ok(),
-        _ => None,
-    }
-}
-
-fn select_upgrade(
-    track: &FlaggedTrack,
-    ranked: &[RankedCandidate],
-    prefer: &str,
-) -> Option<(Candidate, f64)> {
-    let current = quality_score(
-        &track.quality.format,
-        track.quality.bitrate_kbps,
-        track.quality.sample_rate,
-        track.quality.bit_depth,
-        prefer,
-    );
-    ranked
-        .iter()
-        .flat_map(|ranked| {
-            ranked
-                .candidate
-                .files
-                .iter()
-                .map(move |file| (ranked, file))
-        })
-        .filter(|(ranked, file)| safe_track_match(track, file, &ranked.candidate.username))
-        .filter_map(|(ranked, file)| {
-            let format = muzik_soulseek::ranking::format(file);
-            let score = quality_score(
-                format,
-                file.bitrate_kbps,
-                file.sample_rate_hz,
-                file.bit_depth,
-                prefer,
-            );
-            (score > current).then(|| {
-                (
-                    Candidate {
-                        files: vec![file.clone()],
-                        ..ranked.candidate.clone()
-                    },
-                    score,
-                    ranked.score,
-                )
-            })
-        })
-        .max_by(|left, right| {
-            left.1
-                .total_cmp(&right.1)
-                .then_with(|| left.2.total_cmp(&right.2))
-        })
-        .map(|(candidate, _, ranking)| (candidate, ranking))
-}
-
-fn safe_track_match(track: &FlaggedTrack, file: &FileEntry, username: &str) -> bool {
-    if muzik_soulseek::ranking::format(file).is_empty() {
-        return false;
-    }
-    if let Some(duration) = track.duration {
-        let Some(found) = file.duration_seconds else {
-            return false;
-        };
-        if (duration - f64::from(found)).abs() > 10.0 {
-            return false;
-        }
-    }
-    let title = tokens(&track.title);
-    if title.is_empty() {
-        return false;
-    }
-    let artist = tokens(&track.artist);
-    if artist.is_empty() {
-        return false;
-    }
-    let path = tokens(&file.name);
-    let filename = file.name.rsplit(['/', '\\']).next().unwrap_or("");
-    let filename = tokens(filename);
-    let username = tokens(username);
-    let title_overlap = title
-        .iter()
-        .filter(|token| filename.contains(*token))
-        .count();
-    if title_overlap * 3 < title.len() * 2 {
-        return false;
-    }
-    let all = path.union(&username).cloned().collect::<HashSet<_>>();
-    if artist.iter().filter(|token| all.contains(*token)).count() * 3 < artist.len() * 2 {
-        return false;
-    }
-    let target = tokens(&format!("{} {}", track.title, track.album));
-    for marker in [
-        "live",
-        "remix",
-        "instrumental",
-        "karaoke",
-        "cover",
-        "demo",
-        "extended",
-    ] {
-        if filename.contains(marker) && !target.contains(marker) {
-            return false;
-        }
-    }
-    true
-}
-
-fn tokens(text: &str) -> HashSet<String> {
-    text.to_ascii_lowercase()
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| token.len() > 2)
-        .map(str::to_owned)
-        .collect()
-}
-
-fn quality_score(
-    format: &str,
-    bitrate: Option<u32>,
-    sample_rate: Option<u32>,
-    bit_depth: Option<u32>,
-    prefer: &str,
-) -> f64 {
-    let lossless = muzik_soulseek::ranking::is_lossless(format)
-        || muzik_core::audio::is_lossless_codec(format);
-    let mut score = if lossless {
-        100.0
-    } else if format == "mp3" {
-        50.0
-    } else if !format.is_empty() {
-        40.0
-    } else {
-        0.0
-    };
-    if (prefer == "lossless" && lossless)
-        || (prefer == "mp3-320" && format == "mp3" && bitrate == Some(320))
-        || prefer == format
-    {
-        score += 30.0;
-    }
-    if let Some(rate) = bitrate {
-        score += f64::from(rate.min(320)) / 10.0;
-    }
-    if let Some(rate) = sample_rate {
-        score += f64::from(rate.min(192_000)) / 48_000.0;
-    }
-    if let Some(depth) = bit_depth {
-        score += f64::from(depth) / 4.0;
-    }
-    score
 }
 
 fn quality_label(quality: &MeasuredQuality) -> String {
@@ -673,52 +435,14 @@ fn remote_parent(path: &str) -> &str {
         .unwrap_or("")
 }
 
-fn candidate_id(candidate: &Candidate) -> Result<String, String> {
-    let bytes = serde_json::to_vec(candidate).map_err(|error| error.to_string())?;
-    let digest = Sha256::digest(bytes);
-    let hex = format!("{digest:x}");
-    Ok(hex.get(..16).unwrap_or(&hex).to_owned())
-}
-
-fn cache_path(root: &Path, id: &str) -> Result<PathBuf, String> {
-    if id.len() != 16 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("candidate ID must contain 16 hexadecimal digits".into());
-    }
-    Ok(root.join(format!("soulseek_{id}.json")))
-}
-
-fn save_candidate(root: &Path, id: &str, candidate: &CachedCandidate) -> Result<(), String> {
-    let path = cache_path(root, id)?;
-    fs::create_dir_all(root).map_err(|error| error.to_string())?;
-    let bytes = serde_json::to_vec_pretty(candidate).map_err(|error| error.to_string())?;
-    fs::write(&path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))
-}
-
-fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate, String> {
-    let path = cache_path(root, id)?;
-    let bytes =
-        fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    let candidate: CachedCandidate = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("invalid Soulseek candidate: {error}"))?;
-    if candidate_id(&candidate.candidate)? != id {
-        return Err("cached Soulseek candidate ID does not match its files".into());
-    }
-    Ok(candidate)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        CachedCandidate, FlaggedTrack, candidate_id, candidate_row, check_library, load_candidate,
-        safe_track_match, save_candidate, scan_library, select_upgrade,
-    };
+    use super::{candidate_row, check_library};
     use crate::SoulseekCheckLibrary;
-    use muzik_library::{Fields, Library, SqlValue};
-    use muzik_media::quality::MeasuredQuality;
+    use muzik_library::Library;
     use muzik_soulseek::ranking::RankedCandidate;
     use muzik_soulseek::types::{Candidate, FileEntry};
     use std::fs;
-    use std::path::Path;
 
     fn candidate(names: &[&str]) -> Candidate {
         Candidate {
@@ -741,39 +465,6 @@ mod tests {
     }
 
     #[test]
-    fn saved_candidate_round_trips_and_keeps_its_identity() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
-        let selected = candidate(&["Album\\01 Song.flac"]);
-        let id = candidate_id(&selected)?;
-        save_candidate(
-            dir.path(),
-            &id,
-            &CachedCandidate {
-                query: "Artist Song".into(),
-                score: 120.0,
-                candidate: selected,
-            },
-        )?;
-        let loaded = load_candidate(dir.path(), &id)?;
-        assert_eq!(loaded.query, "Artist Song");
-        assert_eq!(
-            loaded
-                .candidate
-                .files
-                .first()
-                .map(|file| file.name.as_str()),
-            Some("Album\\01 Song.flac")
-        );
-        let path = dir.path().join(format!("soulseek_{id}.json"));
-        let changed =
-            fs::read_to_string(&path)?.replace("Album\\\\01 Song.flac", "Album\\\\02 Song.flac");
-        fs::write(&path, changed)?;
-        assert!(load_candidate(dir.path(), &id).is_err());
-        Ok(())
-    }
-
-    #[test]
     fn search_result_has_a_small_structured_row() {
         let result = candidate_row(
             &RankedCandidate {
@@ -786,150 +477,6 @@ mod tests {
         assert_eq!(result["format"], "flac");
         assert_eq!(result["file_count"], 1);
         assert_eq!(result["username"], "peer");
-    }
-
-    fn low_quality_track() -> FlaggedTrack {
-        FlaggedTrack {
-            artist: "Mara Vale".into(),
-            sort_artist: "Mara Vale".into(),
-            album: "Night Lines".into(),
-            title: "Moon River".into(),
-            duration: Some(180.0),
-            quality: MeasuredQuality {
-                format: "mp3".into(),
-                lossless: false,
-                bitrate_kbps: Some(128),
-                sample_rate: Some(44_100),
-                bit_depth: None,
-                channels: Some(2),
-                size: Some(100),
-            },
-        }
-    }
-
-    fn file(name: &str, duration: Option<u32>) -> FileEntry {
-        FileEntry {
-            name: name.into(),
-            size: 100,
-            bitrate_kbps: Some(900),
-            duration_seconds: duration,
-            vbr: None,
-            sample_rate_hz: Some(44_100),
-            bit_depth: Some(16),
-        }
-    }
-
-    #[test]
-    fn replacement_needs_title_artist_and_duration_evidence() {
-        let track = low_quality_track();
-        assert!(safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", Some(183)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Another Song.flac", Some(180)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River/Another Song.flac", Some(180)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Other/Moon River.flac", Some(180)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon Lake.flac", Some(180)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River Live.flac", Some(180)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", Some(205)),
-            "peer"
-        ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", None),
-            "peer"
-        ));
-    }
-
-    #[test]
-    fn suggestion_caches_only_the_matching_file() {
-        let ranked = vec![RankedCandidate {
-            candidate: Candidate {
-                username: "peer".into(),
-                slots: 1,
-                speed: 100_000,
-                files: vec![
-                    file("Mara Vale/Another Song.flac", Some(180)),
-                    file("Mara Vale/Moon River.flac", Some(182)),
-                ],
-            },
-            score: 123.0,
-        }];
-        let (chosen, _) = select_upgrade(&low_quality_track(), &ranked, "lossless")
-            .expect("a safe candidate exists");
-        assert_eq!(chosen.files.len(), 1);
-        assert_eq!(chosen.files[0].name, "Mara Vale/Moon River.flac");
-    }
-
-    #[test]
-    fn suggestion_requires_better_audio_quality() {
-        let mut weaker = file("Mara Vale/Moon River.mp3", Some(180));
-        weaker.bitrate_kbps = Some(96);
-        weaker.bit_depth = None;
-        let ranked = vec![RankedCandidate {
-            candidate: Candidate {
-                username: "peer".into(),
-                slots: 1,
-                speed: 100_000,
-                files: vec![weaker],
-            },
-            score: 80.0,
-        }];
-        assert!(select_upgrade(&low_quality_track(), &ranked, "lossless").is_none());
-    }
-
-    #[test]
-    fn library_scan_uses_beets_query_and_resolves_relative_paths()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let music = dir.path().join("Music");
-        fs::create_dir_all(&music)?;
-        fs::write(music.join("song.mp3"), b"audio")?;
-        let database = dir.path().join("library.db");
-        let mut library = Library::open_or_create(&database)?;
-        for (artist, title) in [("Mara Vale", "Moon River"), ("Other", "Elsewhere")] {
-            let mut fields = Fields::new();
-            fields.insert("path".into(), SqlValue::Text("song.mp3".into()));
-            fields.insert("artist".into(), SqlValue::Text(artist.into()));
-            fields.insert("title".into(), SqlValue::Text(title.into()));
-            fields.insert("length".into(), SqlValue::Real(180.0));
-            library.insert_item(&fields, &Fields::new())?;
-        }
-        drop(library);
-        let library = Library::open_read_only(&database)?;
-        let items = library.query_items("artist:Mara")?;
-        let (scanned, flagged) = scan_library(items, &music, 256, |path: &Path| {
-            assert_eq!(path, music.join("song.mp3"));
-            Ok(Some(low_quality_track().quality))
-        })?;
-        assert_eq!(scanned, 1);
-        assert_eq!(flagged.len(), 1);
-        assert_eq!(flagged[0].artist, "Mara Vale");
-        assert_eq!(flagged[0].duration, Some(180.0));
-        Ok(())
     }
 
     #[test]

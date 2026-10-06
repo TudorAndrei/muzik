@@ -4419,7 +4419,6 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
- "sha2 0.10.9",
  "tempfile",
  "usage-rs",
 ]
@@ -4642,11 +4641,14 @@ version = "2.12.0"
 dependencies = [
  "csv",
  "muzik-core",
+ "muzik-library",
  "muzik-media",
  "muzik-metadata",
  "muzik-soulseek",
  "muzik-tags",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "url",

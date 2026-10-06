@@ -17,6 +17,7 @@ use url::Url;
 pub mod discovery;
 pub mod playlist;
 pub mod quality;
+pub mod upgrade;
 pub mod ytdlp;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
