@@ -17,7 +17,7 @@ pub(super) struct Bandcamp;
 
 pub(super) fn ensure(repository: &Repository, paths: &Paths) -> Result<bool, String> {
     match bandcamp::Login::load(paths) {
-        Some(login) => repository.ensure(&bandcamp_source(&login.user)),
+        Some(login) => Ok(repository.ensure(&bandcamp_source(&login.user))?),
         None => Ok(false),
     }
 }

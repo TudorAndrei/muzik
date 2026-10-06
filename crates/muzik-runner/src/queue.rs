@@ -35,6 +35,12 @@ impl From<String> for EnqueueError {
     }
 }
 
+impl From<muzik_store::Error> for EnqueueError {
+    fn from(error: muzik_store::Error) -> Self {
+        Self::Store(error.to_string())
+    }
+}
+
 pub struct Jobs {
     store: Mutex<Store>,
     lock_path: Option<PathBuf>,
@@ -62,7 +68,9 @@ impl Jobs {
         if self.lock_path.is_none() {
             return Ok(0);
         }
-        self.store().import_legacy(&self.paths.data.join("jobs.db"))
+        Ok(self
+            .store()
+            .import_legacy(&self.paths.data.join("jobs.db"))?)
     }
 
     pub fn paths(&self) -> &Paths {
@@ -149,7 +157,7 @@ impl Jobs {
             .and_then(|job| job.question)
             .map(|question| question["kind"].clone())
             .unwrap_or(Value::Null);
-        store.answer(id, &json!({"kind":kind,"value":value}))
+        Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
     pub fn release_import_questions(&self) -> Result<usize, String> {
@@ -178,11 +186,11 @@ impl Jobs {
     }
 
     pub fn cancel(&self, id: i64) -> Result<CancelRequest, String> {
-        self.store().request_cancel(id)
+        Ok(self.store().request_cancel(id)?)
     }
 
     pub fn get(&self, id: i64) -> Result<Option<Job>, String> {
-        self.store().get(id)
+        Ok(self.store().get(id)?)
     }
 
     pub fn has_running(&self) -> bool {

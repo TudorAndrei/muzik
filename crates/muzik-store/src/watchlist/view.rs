@@ -1,5 +1,6 @@
 use super::source::availability;
 use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
+use crate::Result;
 use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -51,7 +52,7 @@ impl Summary {
     }
 }
 
-pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value, String> {
+pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value> {
     let index = AudioIndex::scan(output);
     let mut value = document.to_value();
     let playlists = value["playlists"]
@@ -68,12 +69,7 @@ pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value, 
     Ok(value)
 }
 
-fn enrich(
-    card: &mut Value,
-    item: &WatchItem,
-    index: &AudioIndex,
-    cache: &Path,
-) -> Result<(), String> {
+fn enrich(card: &mut Value, item: &WatchItem, index: &AudioIndex, cache: &Path) -> Result<()> {
     let summary = Summary::of(item);
     let primary = if matches!(
         summary,

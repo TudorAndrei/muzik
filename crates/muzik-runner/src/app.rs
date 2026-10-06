@@ -161,15 +161,15 @@ impl App {
     }
 
     pub fn add_source(&self, url: &str) -> Result<Playlist, String> {
-        self.edit(|repository| repository.add(url))
+        self.edit(|repository| Ok(repository.add(url)?))
     }
 
     pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
-        self.edit(|repository| repository.rename(playlist_id, title))
+        self.edit(|repository| Ok(repository.rename(playlist_id, title)?))
     }
 
     pub fn remove_source(&self, playlist_id: &str) -> Result<bool, String> {
-        self.edit(|repository| repository.remove(playlist_id))
+        self.edit(|repository| Ok(repository.remove(playlist_id)?))
     }
 
     pub fn load_watchlist(&self, busy: Busy) -> Result<(Value, WatchlistCheck), String> {

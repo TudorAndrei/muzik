@@ -1,5 +1,6 @@
 use super::library_lookup::MusicLibrary;
 use super::{AudioIndex, Stage, StageStatus, WatchItem, Watchlist};
+use crate::Result;
 use muzik_core::QualityPolicy;
 use std::path::Path;
 
@@ -16,7 +17,7 @@ pub struct ReconcileOptions<'a> {
     pub quality_policy: QualityPolicy,
 }
 
-pub fn reconcile(document: &mut Watchlist, options: ReconcileOptions<'_>) -> Result<(), String> {
+pub fn reconcile(document: &mut Watchlist, options: ReconcileOptions<'_>) -> Result<()> {
     let music_library = MusicLibrary::open(options.config);
     let audio = AudioIndex::scan(options.output);
     for playlist in &mut document.playlists {

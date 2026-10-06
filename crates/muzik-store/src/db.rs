@@ -1,5 +1,6 @@
 //! The shared muzik state database.
 
+use crate::{Error, Result};
 use rusqlite::{Connection, TransactionBehavior};
 use rusqlite_migration::{MigrationDefinitionError, Migrations, M};
 use std::path::Path;
@@ -50,33 +51,27 @@ const MIGRATIONS: &[&str] = &[
     ) WITHOUT ROWID;",
 ];
 
-pub fn open(path: &Path) -> Result<Connection, String> {
+pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(parent)?;
     }
-    let connection = Connection::open(path).map_err(text)?;
-    connection
-        .pragma_update(None, "journal_mode", "WAL")
-        .map_err(text)?;
+    let connection = Connection::open(path)?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
     prepare(connection)
 }
 
-pub fn open_in_memory() -> Result<Connection, String> {
-    prepare(Connection::open_in_memory().map_err(text)?)
+pub fn open_in_memory() -> Result<Connection> {
+    prepare(Connection::open_in_memory()?)
 }
 
-fn prepare(mut connection: Connection) -> Result<Connection, String> {
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(text)?;
-    connection
-        .pragma_update(None, "foreign_keys", true)
-        .map_err(text)?;
+fn prepare(mut connection: Connection) -> Result<Connection> {
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "foreign_keys", true)?;
     migrate(&mut connection)?;
     Ok(connection)
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), String> {
+fn migrate(connection: &mut Connection) -> Result<()> {
     let migrations = Migrations::new(MIGRATIONS.iter().copied().map(M::up).collect());
     connection.set_transaction_behavior(TransactionBehavior::Immediate);
     let migrated = migrations
@@ -86,17 +81,13 @@ fn migrate(connection: &mut Connection) -> Result<(), String> {
     migrated.map_err(|error| match error {
         rusqlite_migration::Error::MigrationDefinition(
             MigrationDefinitionError::DatabaseTooFarAhead,
-        ) => "muzik.db has a newer version than this build supports".to_owned(),
-        error => error.to_string(),
+        ) => Error::from("muzik.db has a newer version than this build supports"),
+        error => Error::from(error),
     })
 }
 
-pub(crate) fn text(error: rusqlite::Error) -> String {
-    error.to_string()
-}
-
-pub(crate) fn integer(value: usize) -> Result<i64, String> {
-    i64::try_from(value).map_err(|error| error.to_string())
+pub(crate) fn integer(value: usize) -> Result<i64> {
+    Ok(i64::try_from(value)?)
 }
 
 #[cfg(test)]

@@ -525,7 +525,11 @@ pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String
             Some(serde_json::to_string(encoding).map_err(|error| error.to_string())?)
         }
     };
-    sync_files::save(connection, &transfer.destination, encoding.as_deref())
+    Ok(sync_files::save(
+        connection,
+        &transfer.destination,
+        encoding.as_deref(),
+    )?)
 }
 
 pub fn run(

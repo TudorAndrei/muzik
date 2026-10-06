@@ -43,7 +43,7 @@ pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path
         }
         Err(error) => ids
             .iter()
-            .map(|id| update(id, Err(error.clone())))
+            .map(|id| update(id, Err(error.to_string())))
             .collect(),
     };
     json!({"thumbnails": updates})

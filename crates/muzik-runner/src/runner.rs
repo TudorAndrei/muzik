@@ -284,7 +284,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
             let key = item.id.to_string();
             if store
                 .find_open(Kind::Item, &key)
-                .map_err(|error| (false, error))?
+                .map_err(|error| (false, error.to_string()))?
                 .is_empty()
             {
                 store
@@ -294,7 +294,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
                         title: &item.title,
                         params: &params,
                     })
-                    .map_err(|error| (false, error))?;
+                    .map_err(|error| (false, error.to_string()))?;
                 queued += 1;
             }
         }

@@ -1,4 +1,5 @@
 use super::{ItemAction, SourceKind, Stage, StageStatus};
+use crate::Result;
 use chrono::{Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -122,7 +123,7 @@ impl ItemId {
         Self::new(playlist_id, item.position, item.video_id.as_deref())
     }
 
-    pub fn from_params(params: &Value) -> Result<Self, String> {
+    pub fn from_params(params: &Value) -> Result<Self> {
         let playlist_id = params["playlist_id"]
             .as_str()
             .filter(|id| !id.trim().is_empty())
@@ -162,7 +163,7 @@ pub fn now() -> String {
 }
 
 impl Watchlist {
-    pub fn from_value(value: Value) -> Result<Self, String> {
+    pub fn from_value(value: Value) -> Result<Self> {
         let watchlist: Self =
             serde_json::from_value(value).map_err(|error| format!("invalid watchlist: {error}"))?;
         watchlist.normalized()
@@ -172,9 +173,9 @@ impl Watchlist {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    pub fn normalized(mut self) -> Result<Self, String> {
+    pub fn normalized(mut self) -> Result<Self> {
         if !(1..=3).contains(&self.version) {
-            return Err(format!("unsupported watchlist version: {}", self.version));
+            return Err(format!("unsupported watchlist version: {}", self.version).into());
         }
         self.version = current_version();
         for (index, playlist) in self.playlists.iter_mut().enumerate() {
@@ -219,7 +220,7 @@ impl Playlist {
         }
     }
 
-    fn normalize(&mut self) -> Result<(), String> {
+    fn normalize(&mut self) -> Result<()> {
         if self.playlist_id.trim().is_empty() {
             return Err("playlist_id must be a non-empty string".into());
         }
@@ -317,7 +318,7 @@ impl WatchItem {
         }
     }
 
-    fn validate(&self) -> Result<(), String> {
+    fn validate(&self) -> Result<()> {
         if self.position == 0 {
             return Err("position must be a positive integer".into());
         }

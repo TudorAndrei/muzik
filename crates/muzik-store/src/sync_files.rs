@@ -1,19 +1,16 @@
+use crate::Result;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, String>, String> {
-    let mut statement = connection
-        .prepare("SELECT destination, encoding FROM sync_files")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|error| error.to_string())?;
+pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, String>> {
+    let mut statement = connection.prepare("SELECT destination, encoding FROM sync_files")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut files = BTreeMap::new();
     for row in rows {
-        let (destination, encoding) = row.map_err(|error| error.to_string())?;
+        let (destination, encoding) = row?;
         let destination = PathBuf::from(destination);
         if destination.starts_with(root) {
             files.insert(destination, encoding);
@@ -22,11 +19,7 @@ pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, St
     Ok(files)
 }
 
-pub fn save(
-    connection: &Connection,
-    destination: &Path,
-    encoding: Option<&str>,
-) -> Result<(), String> {
+pub fn save(connection: &Connection, destination: &Path, encoding: Option<&str>) -> Result<()> {
     let destination = destination.to_string_lossy();
     match encoding {
         None => connection.execute(
@@ -40,7 +33,7 @@ pub fn save(
         ),
     }
     .map(drop)
-    .map_err(|error| error.to_string())
+    .map_err(Into::into)
 }
 
 #[cfg(test)]

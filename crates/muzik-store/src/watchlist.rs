@@ -1,6 +1,6 @@
 //! Versioned watchlist data shared with the existing application.
 
-use crate::db;
+use crate::{db, Result};
 use muzik_core::paths::Paths;
 use parking_lot::Mutex;
 use rusqlite::{Connection, TransactionBehavior};
@@ -247,57 +247,49 @@ impl Repository {
         work()
     }
 
-    pub fn update<T>(
-        &self,
-        change: impl FnOnce(&mut Watchlist) -> Result<T, String>,
-    ) -> Result<T, String> {
+    pub fn update<T>(&self, change: impl FnOnce(&mut Watchlist) -> Result<T>) -> Result<T> {
         self.update_with(|document, _| change(document))
     }
 
     pub fn update_with<T>(
         &self,
-        change: impl FnOnce(&mut Watchlist, &Connection) -> Result<T, String>,
-    ) -> Result<T, String> {
+        change: impl FnOnce(&mut Watchlist, &Connection) -> Result<T>,
+    ) -> Result<T> {
         self.locked(|| {
             let mut connection = self.connect()?;
-            let transaction = connection
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .map_err(db::text)?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let before = read_document(&transaction)?;
             let mut document = before.clone();
             let result = change(&mut document, &transaction)?;
             write_changes(&transaction, &before, &document.normalized()?)?;
-            transaction.commit().map_err(db::text)?;
+            transaction.commit()?;
             Ok(result)
         })
     }
 
-    pub fn load(&self) -> Result<Watchlist, String> {
+    pub fn load(&self) -> Result<Watchlist> {
         read_document(&self.connect()?)
     }
 
-    pub fn save(&self, value: &Watchlist) -> Result<(), String> {
+    pub fn save(&self, value: &Watchlist) -> Result<()> {
         let value = value.clone().normalized()?;
         let mut connection = self.connect()?;
-        let transaction = connection
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(db::text)?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let before = read_document(&transaction)?;
         write_changes(&transaction, &before, &value)?;
-        transaction.commit().map_err(db::text)
+        Ok(transaction.commit()?)
     }
 
-    pub fn revision(&self) -> Result<i64, String> {
-        self.connect()?
-            .query_row(
-                "SELECT revision FROM watchlist_revision WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(db::text)
+    pub fn revision(&self) -> Result<i64> {
+        Ok(self.connect()?.query_row(
+            "SELECT revision FROM watchlist_revision WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?)
     }
 
-    pub fn ensure(&self, source: &Playlist) -> Result<bool, String> {
+    pub fn ensure(&self, source: &Playlist) -> Result<bool> {
         if self.load()?.playlist(&source.playlist_id).is_some() {
             return Ok(false);
         }
@@ -310,7 +302,7 @@ impl Repository {
         })
     }
 
-    pub fn add(&self, input: &str) -> Result<Playlist, String> {
+    pub fn add(&self, input: &str) -> Result<Playlist> {
         let source = parse_source(input)?;
         self.update(|document| {
             if document.playlist(&source.playlist_id).is_some() {
@@ -321,7 +313,7 @@ impl Repository {
         })
     }
 
-    pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool, String> {
+    pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool> {
         self.update(|document| {
             let Some(playlist) = document.playlist_mut(playlist_id) else {
                 return Ok(false);
@@ -332,7 +324,7 @@ impl Repository {
         })
     }
 
-    pub fn remove(&self, playlist_id: &str) -> Result<bool, String> {
+    pub fn remove(&self, playlist_id: &str) -> Result<bool> {
         self.update(|document| {
             let before = document.playlists.len();
             document
@@ -342,7 +334,7 @@ impl Repository {
         })
     }
 
-    fn connect(&self) -> Result<Connection, String> {
+    fn connect(&self) -> Result<Connection> {
         let mut connection = db::open(&self.path)?;
         if let Some(legacy) = &self.legacy {
             import_legacy(&mut connection, legacy)?;
@@ -351,18 +343,15 @@ impl Repository {
     }
 }
 
-fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<(), String> {
+fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<()> {
     if !legacy.is_file() {
         return Ok(());
     }
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db::text)?;
-    let stored: i64 = transaction
-        .query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let stored: i64 =
+        transaction.query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
             row.get(0)
-        })
-        .map_err(db::text)?;
+        })?;
     if stored > 0 {
         return Ok(());
     }
@@ -372,22 +361,21 @@ fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<(), Strin
         .map_err(|error| format!("invalid watchlist {}: {error}", legacy.display()))?;
     let value = Watchlist::from_value(value)?;
     write_changes(&transaction, &Watchlist::default(), &value)?;
-    transaction.commit().map_err(db::text)?;
+    transaction.commit()?;
     let mut backup = legacy.as_os_str().to_owned();
     backup.push(".migrated");
-    fs::rename(legacy, backup).map_err(|error| error.to_string())
+    Ok(fs::rename(legacy, backup)?)
 }
 
-fn read_document(connection: &Connection) -> Result<Watchlist, String> {
+fn read_document(connection: &Connection) -> Result<Watchlist> {
     let mut playlists = Vec::new();
     let mut positions = HashMap::new();
-    let mut statement = connection
-        .prepare("SELECT playlist_id, data FROM watchlist_playlists ORDER BY ordinal")
-        .map_err(db::text)?;
-    let mut rows = statement.query([]).map_err(db::text)?;
-    while let Some(row) = rows.next().map_err(db::text)? {
-        let id: String = row.get(0).map_err(db::text)?;
-        let data: String = row.get(1).map_err(db::text)?;
+    let mut statement =
+        connection.prepare("SELECT playlist_id, data FROM watchlist_playlists ORDER BY ordinal")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let data: String = row.get(1)?;
         let mut playlist: Playlist = serde_json::from_str(&data)
             .map_err(|error| format!("invalid playlist {id}: {error}"))?;
         playlist.items.clear();
@@ -395,12 +383,11 @@ fn read_document(connection: &Connection) -> Result<Watchlist, String> {
         playlists.push(playlist);
     }
     let mut statement = connection
-        .prepare("SELECT playlist_id, data FROM watchlist_items ORDER BY playlist_id, ordinal")
-        .map_err(db::text)?;
-    let mut rows = statement.query([]).map_err(db::text)?;
-    while let Some(row) = rows.next().map_err(db::text)? {
-        let id: String = row.get(0).map_err(db::text)?;
-        let data: String = row.get(1).map_err(db::text)?;
+        .prepare("SELECT playlist_id, data FROM watchlist_items ORDER BY playlist_id, ordinal")?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let data: String = row.get(1)?;
         let item: WatchItem = serde_json::from_str(&data)
             .map_err(|error| format!("invalid item in playlist {id}: {error}"))?;
         let index = *positions
@@ -415,23 +402,18 @@ fn read_document(connection: &Connection) -> Result<Watchlist, String> {
     .normalized()
 }
 
-fn header(playlist: &Playlist) -> Result<String, String> {
+fn header(playlist: &Playlist) -> Result<String> {
     let mut value = serde_json::to_value(Playlist {
         items: Vec::new(),
         ..playlist.clone()
-    })
-    .map_err(|error| error.to_string())?;
+    })?;
     if let Some(fields) = value.as_object_mut() {
         fields.remove("items");
     }
     Ok(value.to_string())
 }
 
-fn write_changes(
-    connection: &Connection,
-    before: &Watchlist,
-    after: &Watchlist,
-) -> Result<(), String> {
+fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist) -> Result<()> {
     let old: HashMap<&str, (usize, &Playlist)> = before
         .playlists
         .iter()
@@ -445,12 +427,10 @@ fn write_changes(
         .collect();
     let mut changed = false;
     for id in old.keys().filter(|id| !kept.contains(*id)) {
-        connection
-            .execute(
-                "DELETE FROM watchlist_playlists WHERE playlist_id = ?1",
-                [id],
-            )
-            .map_err(db::text)?;
+        connection.execute(
+            "DELETE FROM watchlist_playlists WHERE playlist_id = ?1",
+            [id],
+        )?;
         changed = true;
     }
     for (ordinal, playlist) in after.playlists.iter().enumerate() {
@@ -458,56 +438,48 @@ fn write_changes(
         let previous = old.get(id);
         let data = header(playlist)?;
         if previous.is_none_or(|(index, value)| {
-            *index != ordinal || header(value).as_deref() != Ok(data.as_str())
+            *index != ordinal || header(value).ok().as_deref() != Some(data.as_str())
         }) {
-            connection
-                .execute(
-                    "INSERT INTO watchlist_playlists (playlist_id, ordinal, data)
+            connection.execute(
+                "INSERT INTO watchlist_playlists (playlist_id, ordinal, data)
                      VALUES (?1, ?2, ?3)
                      ON CONFLICT (playlist_id) DO UPDATE
                      SET ordinal = excluded.ordinal, data = excluded.data",
-                    rusqlite::params![id, db::integer(ordinal)?, data],
-                )
-                .map_err(db::text)?;
+                rusqlite::params![id, db::integer(ordinal)?, data],
+            )?;
             changed = true;
         }
         let old_items = previous.map_or(&[][..], |(_, value)| value.items.as_slice());
         for (ordinal, item) in playlist.items.iter().enumerate() {
             if old_items.get(ordinal) != Some(item) {
-                let data = serde_json::to_string(item).map_err(|error| error.to_string())?;
-                connection
-                    .execute(
-                        "INSERT INTO watchlist_items (playlist_id, ordinal, data)
+                let data = serde_json::to_string(item)?;
+                connection.execute(
+                    "INSERT INTO watchlist_items (playlist_id, ordinal, data)
                          VALUES (?1, ?2, ?3)
                          ON CONFLICT (playlist_id, ordinal) DO UPDATE SET data = excluded.data",
-                        rusqlite::params![id, db::integer(ordinal)?, data],
-                    )
-                    .map_err(db::text)?;
+                    rusqlite::params![id, db::integer(ordinal)?, data],
+                )?;
                 changed = true;
             }
         }
         if old_items.len() > playlist.items.len() {
-            connection
-                .execute(
-                    "DELETE FROM watchlist_items WHERE playlist_id = ?1 AND ordinal >= ?2",
-                    rusqlite::params![id, db::integer(playlist.items.len())?],
-                )
-                .map_err(db::text)?;
+            connection.execute(
+                "DELETE FROM watchlist_items WHERE playlist_id = ?1 AND ordinal >= ?2",
+                rusqlite::params![id, db::integer(playlist.items.len())?],
+            )?;
             changed = true;
         }
     }
     if changed {
-        connection
-            .execute(
-                "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
-                [],
-            )
-            .map_err(db::text)?;
+        connection.execute(
+            "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
+            [],
+        )?;
     }
     Ok(())
 }
 
-pub fn parse_source(input: &str) -> Result<Playlist, String> {
+pub fn parse_source(input: &str) -> Result<Playlist> {
     let text = input.trim();
     let lower = text.to_ascii_lowercase();
     if matches!(

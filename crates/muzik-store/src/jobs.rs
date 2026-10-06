@@ -1,3 +1,4 @@
+use crate::Result;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
 use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
 use serde_json::Value;
@@ -97,20 +98,19 @@ pub struct RunnerLock {
 }
 
 impl RunnerLock {
-    pub fn try_acquire(path: &Path) -> Result<Option<Self>, String> {
+    pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(path)
-            .map_err(|error| error.to_string())?;
+            .open(path)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(Self { _file: file })),
             Err(TryLockError::WouldBlock) => Ok(None),
-            Err(TryLockError::Error(error)) => Err(error.to_string()),
+            Err(TryLockError::Error(error)) => Err(error.into()),
         }
     }
 }
@@ -124,34 +124,30 @@ impl Store {
         Self { connection }
     }
 
-    pub fn import_legacy(&self, path: &Path) -> Result<usize, String> {
+    pub fn import_legacy(&self, path: &Path) -> Result<usize> {
         if !path.is_file() {
             return Ok(0);
         }
         let jobs = {
-            let legacy = Connection::open(path).map_err(text)?;
-            let mut statement = legacy
-                .prepare(
-                    "SELECT queue, kind, item_key, title, status, params, question, answer, created_at
+            let legacy = Connection::open(path)?;
+            let mut statement = legacy.prepare(
+                "SELECT queue, kind, item_key, title, status, params, question, answer, created_at
                      FROM jobs WHERE status IN ('queued', 'running', 'waiting') ORDER BY id",
-                )
-                .map_err(text)?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, Option<String>>(6)?,
-                        row.get::<_, Option<String>>(7)?,
-                        row.get::<_, i64>(8)?,
-                    ))
-                })
-                .map_err(text)?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(text)?
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
         };
         let time = now();
         for (queue, kind, item_key, title, status, params, question, answer, created) in &jobs {
@@ -165,27 +161,23 @@ impl Store {
                     "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                     params![queue, kind, item_key, title, status, params, question, answer, created, time],
-                )
-                .map_err(text)?;
+                )?;
         }
         let mut backup = path.as_os_str().to_owned();
         backup.push(".migrated");
-        std::fs::rename(path, backup).map_err(|error| error.to_string())?;
+        std::fs::rename(path, backup)?;
         Ok(jobs.len())
     }
 
-    pub fn request_cancel(&self, id: i64) -> Result<CancelRequest, String> {
+    pub fn request_cancel(&self, id: i64) -> Result<CancelRequest> {
         if self.cancel_open(id)? {
             return Ok(CancelRequest::Removed);
         }
-        let changed = self
-            .connection
-            .execute(
-                "UPDATE jobs SET cancel_requested = 1, updated_at = ?1
+        let changed = self.connection.execute(
+            "UPDATE jobs SET cancel_requested = 1, updated_at = ?1
                  WHERE id = ?2 AND status = 'running'",
-                params![now(), id],
-            )
-            .map_err(text)?;
+            params![now(), id],
+        )?;
         Ok(if changed == 1 {
             CancelRequest::Requested
         } else {
@@ -193,43 +185,41 @@ impl Store {
         })
     }
 
-    pub fn cancel_requests(&self) -> Result<Vec<i64>, String> {
+    pub fn cancel_requests(&self) -> Result<Vec<i64>> {
         let mut statement = self
             .connection
-            .prepare("SELECT id FROM jobs WHERE status = 'running' AND cancel_requested = 1")
-            .map_err(text)?;
-        let rows = statement.query_map([], |row| row.get(0)).map_err(text)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+            .prepare("SELECT id FROM jobs WHERE status = 'running' AND cancel_requested = 1")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn recover(&self) -> Result<usize, String> {
-        self.connection
-            .execute(
-                "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
-                params![now()],
-            )
-            .map_err(text)
+    pub fn recover(&self) -> Result<usize> {
+        Ok(self.connection.execute(
+            "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
+            params![now()],
+        )?)
     }
 
-    pub fn enqueue(&self, job: &NewJob<'_>) -> Result<i64, String> {
+    pub fn enqueue(&self, job: &NewJob<'_>) -> Result<i64> {
         if let Some(id) = self.open_job(job.kind, job.item_key)? {
             return Ok(id);
         }
         self.insert(job, Status::Queued, None)
     }
 
-    pub fn park(&self, job: &NewJob<'_>, question: &Value) -> Result<i64, String> {
+    pub fn park(&self, job: &NewJob<'_>, question: &Value) -> Result<i64> {
         park_on(&self.connection, job, question)
     }
 
-    pub fn claim(&self, queue: Queue) -> Result<Option<Job>, String> {
+    pub fn claim(&self, queue: Queue) -> Result<Option<Job>> {
         self.claim_any(&[queue])
     }
 
-    pub fn claim_any(&self, queues: &[Queue]) -> Result<Option<Job>, String> {
+    pub fn claim_any(&self, queues: &[Queue]) -> Result<Option<Job>> {
         let names: Vec<&str> = queues.iter().map(|queue| queue.as_ref()).collect();
-        let names = serde_json::to_string(&names).map_err(|error| error.to_string())?;
-        self.connection
+        let names = serde_json::to_string(&names)?;
+        Ok(self
+            .connection
             .query_row(
                 &format!(
                     "UPDATE jobs SET status = 'running', cancel_requested = 0, updated_at = ?1
@@ -240,135 +230,110 @@ impl Store {
                 params![now(), names],
                 job,
             )
-            .optional()
-            .map_err(text)
+            .optional()?)
     }
 
-    pub fn list_open(&self) -> Result<Vec<Job>, String> {
-        let mut statement = self
-            .connection
-            .prepare(&format!(
-                "SELECT {COLUMNS} FROM jobs WHERE status IN ('queued', 'running') ORDER BY id"
-            ))
-            .map_err(text)?;
-        let rows = statement.query_map([], job).map_err(text)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+    pub fn list_open(&self) -> Result<Vec<Job>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM jobs WHERE status IN ('queued', 'running') ORDER BY id"
+        ))?;
+        let rows = statement.query_map([], job)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn cancel_open(&self, id: i64) -> Result<bool, String> {
-        self.connection
-            .execute(
-                "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+    pub fn cancel_open(&self, id: i64) -> Result<bool> {
+        let changed = self.connection.execute(
+            "UPDATE jobs SET status = 'cancelled', updated_at = ?1
                  WHERE id = ?2 AND status IN ('queued', 'waiting')",
-                params![now(), id],
-            )
-            .map(|changed| changed == 1)
-            .map_err(text)
+            params![now(), id],
+        )?;
+        Ok(changed == 1)
     }
 
-    pub fn answer(&self, id: i64, answer: &Value) -> Result<bool, String> {
-        self.connection
-            .execute(
-                "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
+    pub fn answer(&self, id: i64, answer: &Value) -> Result<bool> {
+        let changed = self.connection.execute(
+            "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
                  WHERE id = ?3 AND status = 'waiting'",
-                params![answer, now(), id],
-            )
-            .map(|changed| changed == 1)
-            .map_err(text)
+            params![answer, now(), id],
+        )?;
+        Ok(changed == 1)
     }
 
-    pub fn reopen(&self, id: i64) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
+    pub fn reopen(&self, id: i64) -> Result<()> {
+        self.connection.execute(
+            "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
                  WHERE id = ?2 AND question IS NOT NULL",
-                params![now(), id],
-            )
-            .map(|_| ())
-            .map_err(text)
+            params![now(), id],
+        )?;
+        Ok(())
     }
 
-    pub fn finish(&self, id: i64) -> Result<(), String> {
+    pub fn finish(&self, id: i64) -> Result<()> {
         self.set_status(id, Status::Done, None)
     }
 
-    pub fn fail(&self, id: i64, error: &str) -> Result<(), String> {
+    pub fn fail(&self, id: i64, error: &str) -> Result<()> {
         self.set_status(id, Status::Failed, Some(error))
     }
 
-    pub fn cancel(&self, id: i64) -> Result<(), String> {
+    pub fn cancel(&self, id: i64) -> Result<()> {
         self.set_status(id, Status::Cancelled, None)
     }
 
-    pub fn get(&self, id: i64) -> Result<Option<Job>, String> {
-        self.connection
+    pub fn get(&self, id: i64) -> Result<Option<Job>> {
+        Ok(self
+            .connection
             .query_row(
                 &format!("SELECT {COLUMNS} FROM jobs WHERE id = ?1"),
                 params![id],
                 job,
             )
-            .optional()
-            .map_err(text)
+            .optional()?)
     }
 
-    pub fn list(&self, status: Status) -> Result<Vec<Job>, String> {
-        let mut statement = self
-            .connection
-            .prepare(&format!(
-                "SELECT {COLUMNS} FROM jobs WHERE status = ?1 ORDER BY id"
-            ))
-            .map_err(text)?;
-        let rows = statement.query_map(params![status], job).map_err(text)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+    pub fn list(&self, status: Status) -> Result<Vec<Job>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM jobs WHERE status = ?1 ORDER BY id"
+        ))?;
+        let rows = statement.query_map(params![status], job)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn find_open(&self, kind: Kind, item_key: &str) -> Result<Vec<Job>, String> {
-        let mut statement = self
-            .connection
-            .prepare(&format!(
-                "SELECT {COLUMNS} FROM jobs WHERE kind = ?1 AND item_key = ?2
+    pub fn find_open(&self, kind: Kind, item_key: &str) -> Result<Vec<Job>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {COLUMNS} FROM jobs WHERE kind = ?1 AND item_key = ?2
                  AND status IN ('queued', 'running', 'waiting') ORDER BY id"
-            ))
-            .map_err(text)?;
-        let rows = statement
-            .query_map(params![kind, item_key], job)
-            .map_err(text)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(text)
+        ))?;
+        let rows = statement.query_map(params![kind, item_key], job)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    fn open_job(&self, kind: Kind, item_key: &str) -> Result<Option<i64>, String> {
-        self.connection
+    fn open_job(&self, kind: Kind, item_key: &str) -> Result<Option<i64>> {
+        Ok(self
+            .connection
             .query_row(
                 "SELECT id FROM jobs WHERE kind = ?1 AND item_key = ?2
                  AND status IN ('queued', 'running', 'waiting') ORDER BY id LIMIT 1",
                 params![kind, item_key],
                 |row| row.get(0),
             )
-            .optional()
-            .map_err(text)
+            .optional()?)
     }
 
-    fn insert(
-        &self,
-        job: &NewJob<'_>,
-        status: Status,
-        question: Option<&Value>,
-    ) -> Result<i64, String> {
+    fn insert(&self, job: &NewJob<'_>, status: Status, question: Option<&Value>) -> Result<i64> {
         insert_on(&self.connection, job, status, question)
     }
 
-    fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<(), String> {
-        self.connection
-            .execute(
-                "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
-                params![status, error, now(), id],
-            )
-            .map(|_| ())
-            .map_err(text)
+    fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<()> {
+        self.connection.execute(
+            "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
+            params![status, error, now(), id],
+        )?;
+        Ok(())
     }
 }
 
-pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64, String> {
+pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64> {
     let updated = connection
         .query_row(
             "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4
@@ -383,8 +348,7 @@ pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> R
             ],
             |row| row.get(0),
         )
-        .optional()
-        .map_err(text)?;
+        .optional()?;
     match updated {
         Some(id) => Ok(id),
         None => insert_on(connection, job, Status::Waiting, Some(question)),
@@ -396,24 +360,22 @@ fn insert_on(
     job: &NewJob<'_>,
     status: Status,
     question: Option<&Value>,
-) -> Result<i64, String> {
+) -> Result<i64> {
     let time = now();
-    connection
-        .execute(
-            "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
+    connection.execute(
+        "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-            params![
-                job.kind.queue(),
-                job.kind,
-                job.item_key,
-                job.title,
-                status,
-                job.params,
-                question,
-                time
-            ],
-        )
-        .map_err(text)?;
+        params![
+            job.kind.queue(),
+            job.kind,
+            job.item_key,
+            job.title,
+            status,
+            job.params,
+            question,
+            time
+        ],
+    )?;
     Ok(connection.last_insert_rowid())
 }
 
@@ -438,10 +400,6 @@ fn now() -> i64 {
         .map_or(0, |duration| {
             i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
         })
-}
-
-fn text(error: rusqlite::Error) -> String {
-    error.to_string()
 }
 
 #[cfg(test)]
