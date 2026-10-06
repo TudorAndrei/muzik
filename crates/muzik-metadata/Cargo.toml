@@ -7,8 +7,8 @@ publish = false
 description = "MusicBrainz release search and lookup for muzik"
 
 [dependencies]
-backon = "1.6"
-governor = "0.10"
+backon = { version = "1.6", default-features = false, features = ["std", "std-blocking-sleep"] }
+governor = { version = "0.10", default-features = false, features = ["std"] }
 musicbrainz_rs = { version = "0.14", features = ["sync", "rustls"] }
 muzik-core = { path = "../muzik-core" }
 thiserror = "2"
