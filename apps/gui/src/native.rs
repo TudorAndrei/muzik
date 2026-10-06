@@ -142,7 +142,7 @@ mod tests {
             &json!({"output": dir.path()}),
         )
         .map_err(std::io::Error::other)?;
-        assert_eq!(result["total_size"], "5.0 B");
+        assert_eq!(result["total_size"], "5 B");
         assert_eq!(result["items"][0]["title"], "Track");
         assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");
         assert!(result["items"][0]["modified"]

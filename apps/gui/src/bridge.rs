@@ -492,7 +492,7 @@ mod tests {
         fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
         let (_state, mut bridge) = started()?;
         let id = bridge.send("library.scan", json!({"output": dir.path()}))?;
-        assert_eq!(response(&bridge, &id)?["result"]["total_size"], "5.0 B");
+        assert_eq!(response(&bridge, &id)?["result"]["total_size"], "5 B");
         Ok(())
     }
 
