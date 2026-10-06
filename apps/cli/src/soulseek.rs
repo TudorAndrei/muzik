@@ -1,3 +1,4 @@
+use anyhow::{Context, anyhow, bail};
 use muzik_core::paths::Paths;
 use muzik_core::{PreferredAudio, app_config, paths};
 use muzik_import::beets;
@@ -19,9 +20,9 @@ use std::sync::atomic::AtomicBool;
 
 use crate::{Import, SoulseekCheckLibrary, SoulseekDownload, import};
 
-pub fn check() -> Result<(), String> {
-    let config = app_config::load(&app_config::path()).map_err(|error| error.to_string())?;
-    let settings = SessionSettings::configured(&config).ok_or(
+pub fn check() -> anyhow::Result<()> {
+    let config = app_config::load(&app_config::path())?;
+    let settings = SessionSettings::configured(&config).context(
         "Set MUZIK_SOULSEEK_USERNAME and MUZIK_SOULSEEK_PASSWORD, or save them with 'muzik config set-soulseek'.",
     )?;
     let username = settings.username.clone();
@@ -33,8 +34,7 @@ pub fn check() -> Result<(), String> {
     let download_dir = setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| Paths::user().soulseek());
-    let _session =
-        Session::connect(settings).map_err(|error| format!("Soulseek check failed: {error}"))?;
+    let _session = Session::connect(settings).context("Soulseek check failed")?;
     println!("Soulseek reachable");
     println!("  Username: {username}");
     println!("  Server: {host}:{port}");
@@ -47,7 +47,7 @@ pub fn search(
     prefer: PreferredAudio,
     limit: usize,
     json_output: bool,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let config = app_config::load(&app_config::path())?;
     let session = connect(&config)?;
     let ranked = ranked_search(&session, &config, query, prefer, limit)?;
@@ -55,14 +55,12 @@ pub fn search(
     Ok(())
 }
 
-pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
+pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
     let prefer = args.prefer;
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
-    let library = Library::open_read_only(&paths.library)
-        .map_err(|error| format!("Could not open the music library: {error}"))?;
-    let items = library
-        .query_items(args.query.as_deref().unwrap_or(""))
-        .map_err(|error| error.to_string())?;
+    let library =
+        Library::open_read_only(&paths.library).context("Could not open the music library")?;
+    let items = library.query_items(args.query.as_deref().unwrap_or(""))?;
     let (scanned, mut flagged) =
         scan_library(items, &paths.directory, args.min_bitrate, quality::measure)?;
     flagged.sort_by(|left, right| {
@@ -101,7 +99,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
                 safe_display(&track.artist),
                 safe_display(&track.title),
                 current,
-                safe_display(&error)
+                safe_display(&format!("{error:#}"))
             ),
             Ok(ranked) => match select_upgrade(track, &ranked, prefer) {
                 None => println!(
@@ -171,11 +169,11 @@ fn file_quality_label(file: &FileEntry) -> String {
     )
 }
 
-fn connect(config: &Value) -> Result<Session, String> {
-    let settings = SessionSettings::configured(config).ok_or(
+fn connect(config: &Value) -> anyhow::Result<Session> {
+    let settings = SessionSettings::configured(config).context(
         "Set MUZIK_SOULSEEK_USERNAME and MUZIK_SOULSEEK_PASSWORD, or save them with 'muzik config set-soulseek'.",
     )?;
-    Session::connect(settings).map_err(|error| format!("Soulseek connection failed: {error}"))
+    Session::connect(settings).context("Soulseek connection failed")
 }
 
 fn ranked_search(
@@ -184,9 +182,9 @@ fn ranked_search(
     query: &str,
     prefer: PreferredAudio,
     limit: usize,
-) -> Result<Vec<RankedCandidate>, String> {
+) -> anyhow::Result<Vec<RankedCandidate>> {
     if !(1..=100).contains(&limit) {
-        return Err("limit must be from 1 to 100".into());
+        bail!("limit must be from 1 to 100");
     }
     Ok(session.search(
         query,
@@ -201,7 +199,7 @@ fn show_candidates(
     ranked: &[RankedCandidate],
     query: &str,
     json_output: bool,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     let mut rows = Vec::new();
     for item in ranked {
         let id = candidate_id(&item.candidate)?;
@@ -219,8 +217,7 @@ fn show_candidates(
     if json_output {
         println!(
             "{}",
-            serde_json::to_string(&json!({"query": query, "results": rows}))
-                .map_err(|error| error.to_string())?
+            serde_json::to_string(&json!({"query": query, "results": rows}))?
         );
     } else if rows.is_empty() {
         println!("No candidates found.");
@@ -260,16 +257,19 @@ fn candidate_row(item: &RankedCandidate, id: &str) -> Value {
         "path": path})
 }
 
-pub fn download(args: &SoulseekDownload) -> Result<(), String> {
+pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
     if args.query.is_some() && args.candidate.is_some() {
-        return Err("give a query or --candidate, not both".into());
+        bail!("give a query or --candidate, not both");
     }
     let config = app_config::load(&app_config::path())?;
     let mut session = None;
     let (id, saved) = if let Some(id) = &args.candidate {
         (id.clone(), load_candidate(&paths::cache_dir(), id)?)
     } else {
-        let query = args.query.as_deref().ok_or("give a query or --candidate")?;
+        let query = args
+            .query
+            .as_deref()
+            .context("give a query or --candidate")?;
         let connected = connect(&config)?;
         let ranked = ranked_search(&connected, &config, query, args.prefer, args.limit)?;
         if ranked.is_empty() {
@@ -280,7 +280,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
         let index = choose_index(ranked.len(), args.no_interactive)?;
         let selected = ranked
             .get(index)
-            .ok_or("candidate number is out of range")?;
+            .context("candidate number is out of range")?;
         let id = candidate_id(&selected.candidate)?;
         session = Some(connected);
         (
@@ -293,10 +293,10 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
         )
     };
     if saved.candidate.files.is_empty() || saved.candidate.username.trim().is_empty() {
-        return Err("selected Soulseek result has no user or files".into());
+        bail!("selected Soulseek result has no user or files");
     }
     if saved.candidate.username.chars().any(char::is_control) {
-        return Err("Soulseek result has an invalid username".into());
+        bail!("Soulseek result has an invalid username");
     }
     println!(
         "Selected {} ({} file(s), score {:.1})",
@@ -315,10 +315,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
     let files = local_files(&saved.candidate, &root)?;
     for file in &files {
         if file.exists() {
-            return Err(format!(
-                "download target already exists: {}",
-                file.display()
-            ));
+            bail!("download target already exists: {}", file.display());
         }
     }
     if args.dry_run {
@@ -371,10 +368,9 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
         "resolved": {"title": title, "artist": artist, "album": album, "tracks": []},
         "candidate": saved.candidate,
     });
-    let mut bytes = serde_json::to_vec_pretty(&metadata).map_err(|error| error.to_string())?;
+    let mut bytes = serde_json::to_vec_pretty(&metadata)?;
     bytes.push(b'\n');
-    fs::write(&sidecar, bytes)
-        .map_err(|error| format!("cannot write {}: {error}", sidecar.display()))?;
+    fs::write(&sidecar, bytes).with_context(|| format!("cannot write {}", sidecar.display()))?;
     println!("Metadata: {}", sidecar.display());
     if !args.no_organize {
         let import_args = Import {
@@ -394,7 +390,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
     Ok(())
 }
 
-fn choose_index(count: usize, no_interactive: bool) -> Result<usize, String> {
+fn choose_index(count: usize, no_interactive: bool) -> anyhow::Result<usize> {
     if no_interactive {
         return Ok(0);
     }
@@ -409,9 +405,9 @@ fn choose_index(count: usize, no_interactive: bool) -> Result<usize, String> {
             }
         })
         .interact_text()
-        .map_err(
-            |_| "no candidate was selected; use --no-interactive to select the first result",
-        )?;
+        .map_err(|_| {
+            anyhow!("no candidate was selected; use --no-interactive to select the first result")
+        })?;
     Ok(number - 1)
 }
 

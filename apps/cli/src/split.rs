@@ -2,18 +2,19 @@
 
 use std::path::PathBuf;
 
+use anyhow::{Context, anyhow, bail};
 use muzik_core::chapters::{self, Chapter};
 use muzik_media::splitter::{self, SplitOptions};
 
 use crate::Split;
 
-pub fn run(args: &Split) -> Result<PathBuf, String> {
+pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
     if !args.path.is_file() {
-        return Err(format!("File not found: {}", args.path.display()));
+        bail!("File not found: {}", args.path.display());
     }
-    let mut chapters = chapters::find_chapters(&args.path).map_err(|error| error.to_string())?;
+    let mut chapters = chapters::find_chapters(&args.path)?;
     if chapters.is_empty() {
-        return Err("No chapters found. Add a .chapters.txt or .info.json sidecar.".into());
+        bail!("No chapters found. Add a .chapters.txt or .info.json sidecar.");
     }
     show_chapters(&chapters);
     if args.review {
@@ -25,7 +26,7 @@ pub fn run(args: &Split) -> Result<PathBuf, String> {
     }
     let output = match &args.output {
         Some(path) => path.clone(),
-        None => splitter::default_output(&args.path).map_err(|error| error.to_string())?,
+        None => splitter::default_output(&args.path)?,
     };
     let options = SplitOptions {
         jobs: args.jobs,
@@ -45,12 +46,12 @@ pub fn run(args: &Split) -> Result<PathBuf, String> {
     Ok(output)
 }
 
-pub(crate) fn split_error(error: splitter::SplitError) -> String {
+pub(crate) fn split_error(error: splitter::SplitError) -> anyhow::Error {
     match error {
         splitter::SplitError::OutputNotEmpty(_) => {
-            format!("{error} Use --force to replace them.")
+            anyhow!("{error} Use --force to replace them.")
         }
-        other => other.to_string(),
+        other => other.into(),
     }
 }
 
@@ -77,14 +78,13 @@ fn clock(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> Result<Option<Vec<Chapter>>, String> {
+pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<Chapter>>> {
     loop {
         let choice = dialoguer::Select::new()
             .with_prompt("Continue, edit, or abort?")
             .items(["Continue", "Edit", "Abort"])
             .default(0)
-            .interact_opt()
-            .map_err(|error| error.to_string())?;
+            .interact_opt()?;
         match choice {
             Some(0) => return Ok(Some(chapters)),
             Some(1) => {
@@ -101,7 +101,7 @@ pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> Result<Option<Vec<C
     }
 }
 
-pub(crate) fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String> {
+pub(crate) fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
     let mut text = String::new();
     for chapter in chapters {
         text.push_str(&format!("{} {}\n", clock(chapter.start), chapter.title));
@@ -112,6 +112,6 @@ pub(crate) fn edit_chapters(chapters: &[Chapter]) -> Result<Vec<Chapter>, String
             .prefix("muzik-chapters-")
             .suffix(".chapters.txt"),
     )
-    .map_err(|error| format!("Cannot open editor: {error}"))?;
+    .context("Cannot open editor")?;
     Ok(chapters::parse_chapters(&text))
 }

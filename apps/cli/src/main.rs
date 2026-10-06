@@ -662,8 +662,8 @@ struct SetSpotifyClientId {
     client_id: String,
 }
 
-fn run(command: Command) -> Result<(), String> {
-    for (old, new) in paths::migrate_legacy(&paths::Paths::user()).map_err(|e| e.to_string())? {
+fn run(command: Command) -> anyhow::Result<()> {
+    for (old, new) in paths::migrate_legacy(&paths::Paths::user())? {
         eprintln!("Moved {} to {}", old.display(), new.display());
     }
     match command {
@@ -675,8 +675,7 @@ fn run(command: Command) -> Result<(), String> {
             CacheCommand::Size => cache::size(),
             CacheCommand::Purge => cache::purge(),
             CacheCommand::Clean(args) => cache::clean(args.max_age),
-        }
-        .map_err(|error| error.to_string()),
+        },
         Command::Config(args) => match args.command {
             ConfigCommand::Show(args) => config::show(args.config.as_deref()),
             ConfigCommand::SetLibrary(args) => {
@@ -684,15 +683,14 @@ fn run(command: Command) -> Result<(), String> {
             }
             ConfigCommand::SetSoulseek(args) => config::set_soulseek(&args),
             ConfigCommand::Edit(args) => config::edit(args.config.as_deref()),
-            ConfigCommand::SetSyncTarget(args) => return sync::set_target(&args),
-        }
-        .map_err(|error| error.to_string()),
+            ConfigCommand::SetSyncTarget(args) => sync::set_target(&args),
+        },
         Command::Download(args) => download::run(&args),
         Command::Downloaded(args) => {
             let output = args.output.unwrap_or_else(paths::download_dir);
-            downloaded::list(&output).map_err(|error| error.to_string())
+            downloaded::list(&output)
         }
-        Command::Init => init::run().map_err(|error| error.to_string()),
+        Command::Init => init::run(),
         Command::Import(args) => import::run(&args),
         Command::Jobs(args) => match args.command {
             JobsCommand::List => jobs::list(),
@@ -753,7 +751,7 @@ fn main() -> std::process::ExitCode {
         tracing::warn!(%error, "the Soulseek password did not move to the keychain");
     }
     if let Err(error) = run(Muzik::parse().command) {
-        eprintln!("error: {error}");
+        eprintln!("error: {error:#}");
         std::process::ExitCode::FAILURE
     } else {
         std::process::ExitCode::SUCCESS

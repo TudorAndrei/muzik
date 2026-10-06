@@ -1,19 +1,20 @@
 //! CLI presentation for the shared Beets import service.
 
+use anyhow::{Context, bail};
 use muzik_import::apply::{AlbumDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest, SyncOutcome};
 use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
 
 use crate::Import;
 
-pub fn run(args: &Import) -> Result<(), String> {
+pub fn run(args: &Import) -> anyhow::Result<()> {
     match (&args.directory, &args.library) {
-        (None, None) => return Err("give an audio path or --library QUERY".into()),
-        (Some(_), Some(_)) => return Err("choose an audio path or --library QUERY".into()),
+        (None, None) => bail!("give an audio path or --library QUERY"),
+        (Some(_), Some(_)) => bail!("choose an audio path or --library QUERY"),
         (None, Some(query)) => return sync(query, args),
         (Some(_), None) => {}
     }
-    let source = args.directory.as_ref().ok_or("audio path is missing")?;
+    let source = args.directory.as_ref().context("audio path is missing")?;
     let preview = beets::plan_import(ImportRequest {
         source: source.clone(),
         config_path: args.config.clone(),
@@ -83,7 +84,7 @@ pub fn run(args: &Import) -> Result<(), String> {
     Ok(())
 }
 
-fn sync(query: &str, args: &Import) -> Result<(), String> {
+fn sync(query: &str, args: &Import) -> anyhow::Result<()> {
     match beets::sync_library(query, args.config.as_deref(), args.dry_run, args.nowrite)? {
         SyncOutcome::Preview { albums, items } => {
             println!("Sync preview: {albums} albums and {items} items selected");

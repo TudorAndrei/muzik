@@ -2,6 +2,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+use anyhow::Context;
 use serde_json::{Value, json};
 
 use crate::SetSoulseek;
@@ -9,7 +10,7 @@ use muzik_core::app_config;
 use muzik_core::paths::{Paths, expand_home};
 use muzik_runner::setup::{self, SoulseekAccount};
 
-pub fn show(path: Option<&Path>) -> io::Result<()> {
+pub fn show(path: Option<&Path>) -> anyhow::Result<()> {
     let library_path = path
         .map(Path::to_path_buf)
         .unwrap_or_else(muzik_core::default_config_path);
@@ -29,7 +30,7 @@ pub fn show(path: Option<&Path>) -> io::Result<()> {
     }
 
     let muzik_path = app_config::path();
-    let muzik = app_config::load(&muzik_path).map_err(io::Error::other)?;
+    let muzik = app_config::load(&muzik_path)?;
     let soulseek = muzik.get("soulseek");
     println!("Muzik config: {}", muzik_path.display());
     println!(
@@ -53,7 +54,7 @@ pub fn show(path: Option<&Path>) -> io::Result<()> {
     Ok(())
 }
 
-pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> io::Result<()> {
+pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> anyhow::Result<()> {
     let library_path = path
         .map(Path::to_path_buf)
         .unwrap_or_else(muzik_core::default_config_path);
@@ -68,7 +69,7 @@ pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> 
     let mut data = read_yaml(&library_path)?;
     let object = data
         .as_object_mut()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "library config is not a map"))?;
+        .context("library config is not a map")?;
     object.insert("directory".to_owned(), json!(directory));
     object.insert("library".to_owned(), json!(db));
     object.entry("paths").or_insert_with(|| {
@@ -88,7 +89,7 @@ pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> 
     Ok(())
 }
 
-pub fn set_soulseek(args: &SetSoulseek) -> io::Result<()> {
+pub fn set_soulseek(args: &SetSoulseek) -> anyhow::Result<()> {
     let path = app_config::path();
     setup::save_soulseek_account(
         &path,
@@ -98,25 +99,21 @@ pub fn set_soulseek(args: &SetSoulseek) -> io::Result<()> {
             server_host: args.server_host.as_deref(),
             server_port: args.server_port.map(u64::from),
         },
-    )
-    .map_err(io::Error::other)?;
+    )?;
     let downloads = args
         .download_dir
         .clone()
         .unwrap_or_else(|| Paths::user().soulseek());
     let downloads = expand_home(&downloads);
-    let downloads_text = downloads
-        .to_str()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "download folder is not text"))?;
-    app_config::save_section_string(&path, "soulseek", "download_dir", downloads_text)
-        .map_err(io::Error::other)?;
+    let downloads_text = downloads.to_str().context("download folder is not text")?;
+    app_config::save_section_string(&path, "soulseek", "download_dir", downloads_text)?;
     fs::create_dir_all(&downloads)?;
     println!("Soulseek config saved: {}", path.display());
     println!("  downloads: {}", downloads.display());
     Ok(())
 }
 
-pub fn edit(path: Option<&Path>) -> io::Result<()> {
+pub fn edit(path: Option<&Path>) -> anyhow::Result<()> {
     let path = path
         .map(Path::to_path_buf)
         .unwrap_or_else(muzik_core::default_config_path);
@@ -131,7 +128,7 @@ pub fn edit(path: Option<&Path>) -> io::Result<()> {
              library: ~/music/.library.db\n",
         )?;
     }
-    edit::edit_file(&path)
+    Ok(edit::edit_file(&path)?)
 }
 
 fn read_yaml(path: &Path) -> io::Result<Value> {

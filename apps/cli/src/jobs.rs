@@ -1,3 +1,4 @@
+use anyhow::{Context, bail};
 use muzik_core::DecisionKind;
 use muzik_core::chapters::Chapter;
 use muzik_core::paths::Paths;
@@ -26,11 +27,11 @@ fn entries(value: &Value, key: &str) -> Vec<Value> {
     field(value, key).as_array().cloned().unwrap_or_default()
 }
 
-pub fn open() -> Result<Arc<Jobs>, String> {
+pub fn open() -> anyhow::Result<Arc<Jobs>> {
     Ok(Arc::new(Jobs::open(&Paths::user())?))
 }
 
-pub fn list() -> Result<(), String> {
+pub fn list() -> anyhow::Result<()> {
     let snapshot = open()?.snapshot();
     let open_jobs = entries(&snapshot, "open");
     let waiting = entries(&snapshot, "waiting");
@@ -63,12 +64,14 @@ pub fn list() -> Result<(), String> {
     Ok(())
 }
 
-pub fn show(id: &str) -> Result<(), String> {
-    let number = parse_job_id(id).ok_or("Enter a job ID such as queue-12.")?;
+pub fn show(id: &str) -> anyhow::Result<()> {
+    let number = parse_job_id(id).context("Enter a job ID such as queue-12.")?;
     let job = open()?
         .get(number)?
-        .ok_or_else(|| format!("Job {id} does not exist."))?;
-    let question = job.question.ok_or("This job does not wait for a choice.")?;
+        .with_context(|| format!("Job {id} does not exist."))?;
+    let question = job
+        .question
+        .context("This job does not wait for a choice.")?;
     println!(
         "{} · {}",
         job.title,
@@ -82,20 +85,22 @@ pub fn show(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn answer(id: &str, choice: Option<usize>, value: Option<&str>) -> Result<(), String> {
-    let number = parse_job_id(id).ok_or("Enter a job ID such as queue-12.")?;
+pub fn answer(id: &str, choice: Option<usize>, value: Option<&str>) -> anyhow::Result<()> {
+    let number = parse_job_id(id).context("Enter a job ID such as queue-12.")?;
     let jobs = open()?;
     let job = jobs
         .get(number)?
-        .ok_or_else(|| format!("Job {id} does not exist."))?;
-    let question = job.question.ok_or("This job does not wait for a choice.")?;
+        .with_context(|| format!("Job {id} does not exist."))?;
+    let question = job
+        .question
+        .context("This job does not wait for a choice.")?;
     let answer = match (choice, value) {
         (Some(choice), None) => pick(&choices::choices(&question), choice)?,
         (None, Some(value)) => serde_json::from_str(value).unwrap_or(Value::from(value)),
-        _ => return Err("Give a choice number or --value, not both.".into()),
+        _ => bail!("Give a choice number or --value, not both."),
     };
     if !jobs.answer(number, &answer)? {
-        return Err("This job does not wait for a choice now.".into());
+        bail!("This job does not wait for a choice now.");
     }
     println!(
         "The answer is saved and {} is back in the queue.",
@@ -104,23 +109,23 @@ pub fn answer(id: &str, choice: Option<usize>, value: Option<&str>) -> Result<()
     drain(&jobs)
 }
 
-pub fn cancel(id: &str) -> Result<(), String> {
-    let number = parse_job_id(id).ok_or("Enter a job ID such as queue-12.")?;
+pub fn cancel(id: &str) -> anyhow::Result<()> {
+    let number = parse_job_id(id).context("Enter a job ID such as queue-12.")?;
     match open()?.cancel(number)? {
         CancelRequest::Removed => println!("Removed {} from the queue.", job_id(number)),
         CancelRequest::Requested => {
             println!("{} stops at the next safe point.", job_id(number));
         }
-        CancelRequest::NotOpen => return Err(format!("{} is not open.", job_id(number))),
+        CancelRequest::NotOpen => bail!("{} is not open.", job_id(number)),
     }
     Ok(())
 }
 
-pub fn run() -> Result<(), String> {
+pub fn run() -> anyhow::Result<()> {
     drain(&open()?)
 }
 
-pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
+pub fn drain(jobs: &Arc<Jobs>) -> anyhow::Result<()> {
     let titles = Mutex::new(HashMap::<String, String>::new());
     let failed = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&failed);
@@ -150,7 +155,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
     });
     runner.wait_until_idle(&INTERRUPTED);
     if INTERRUPTED.load(Ordering::SeqCst) {
-        return Err("Interrupted. Queued jobs stay in the queue.".into());
+        bail!("Interrupted. Queued jobs stay in the queue.");
     }
     let waiting = entries(&jobs.snapshot(), "waiting").len();
     if waiting > 0 {
@@ -158,7 +163,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> Result<(), String> {
     }
     match failed.load(Ordering::SeqCst) {
         0 => Ok(()),
-        count => Err(format!("{count} job(s) failed")),
+        count => bail!("{count} job(s) failed"),
     }
 }
 
@@ -237,7 +242,7 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
         .interact_opt()
         .map_err(|error| error.to_string())?
         .ok_or("No answer was given.")?;
-    pick(&choices::choices(&question), index + 1)
+    pick(&choices::choices(&question), index + 1).map_err(|error| error.to_string())
 }
 
 fn edit_chapters(payload: &Value) -> Result<Value, String> {
@@ -253,7 +258,7 @@ fn edit_chapters(payload: &Value) -> Result<Value, String> {
         })
         .collect::<Option<Vec<_>>>()
         .ok_or("The chapters to edit are not valid.")?;
-    let edited = crate::split::edit_chapters(&chapters)?;
+    let edited = crate::split::edit_chapters(&chapters).map_err(|error| format!("{error:#}"))?;
     let chosen = if edited.is_empty() { chapters } else { edited };
     Ok(Value::Array(
         chosen
@@ -305,12 +310,12 @@ fn option_lines(question: &Value) -> Vec<String> {
         .collect()
 }
 
-fn pick(options: &[Choice], choice: usize) -> Result<Value, String> {
+fn pick(options: &[Choice], choice: usize) -> anyhow::Result<Value> {
     choice
         .checked_sub(1)
         .and_then(|index| options.get(index))
         .map(|option| option.value.clone())
-        .ok_or_else(|| format!("Enter a number from 1 to {}.", options.len()))
+        .with_context(|| format!("Enter a number from 1 to {}.", options.len()))
 }
 
 pub(crate) fn text(value: &Value) -> String {

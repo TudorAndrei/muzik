@@ -4648,6 +4648,7 @@ dependencies = [
 name = "muzik-cli"
 version = "2.12.0"
 dependencies = [
+ "anyhow",
  "bytesize",
  "ctrlc",
  "dialoguer",

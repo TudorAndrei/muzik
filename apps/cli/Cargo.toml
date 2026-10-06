@@ -33,6 +33,7 @@ muzik-workflow = { path = "../../crates/muzik-workflow" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
 muzik-spotify = { path = "../../crates/muzik-spotify" }
 muzik-sync = { path = "../../crates/muzik-sync" }
+anyhow = "1"
 bytesize = "2.3"
 ctrlc = "3.5"
 dialoguer = { version = "0.12", default-features = false }

@@ -5,7 +5,7 @@ use crate::paths;
 
 const IMPORT_DEFAULTS: &str = "import:\n  move: yes\n  duplicate_action: skip\n  none_rec_action: asis\nmatch:\n  strong_rec_thresh: 0.10\n  medium_rec_thresh: 0.20\n";
 
-pub fn run() -> io::Result<()> {
+pub fn run() -> anyhow::Result<()> {
     for (name, path) in [
         ("Downloads", paths::download_dir()),
         ("Bandcamp", paths::data_dir().join("bandcamp")),
@@ -25,7 +25,7 @@ pub fn run() -> io::Result<()> {
     let current = match fs::read_to_string(&library_path) {
         Ok(text) => text,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-        Err(error) => return Err(error),
+        Err(error) => return Err(error.into()),
     };
     let updated = with_import_defaults(&current);
     if current != updated {

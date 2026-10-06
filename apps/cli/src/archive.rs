@@ -3,19 +3,18 @@
 use std::fs;
 use std::path::PathBuf;
 
+use anyhow::bail;
 use muzik_core::chapters;
 
 use crate::{Archive, Organize, Split, organize, split};
 
-pub fn run(args: &Archive) -> Result<(), String> {
+pub fn run(args: &Archive) -> anyhow::Result<()> {
     if !args.directory.is_dir() {
-        return Err(format!("Directory not found: {}", args.directory.display()));
+        bail!("Directory not found: {}", args.directory.display());
     }
-    let mut audio = fs::read_dir(&args.directory)
-        .map_err(|error| error.to_string())?
+    let mut audio = fs::read_dir(&args.directory)?
         .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<Result<Vec<PathBuf>, _>>()
-        .map_err(|error| error.to_string())?;
+        .collect::<Result<Vec<PathBuf>, _>>()?;
     audio.retain(|path| path.is_file() && muzik_core::audio::is_audio(path));
     audio.sort();
     if audio.is_empty() {
@@ -69,7 +68,7 @@ pub fn run(args: &Archive) -> Result<(), String> {
             match split::run(&request) {
                 Ok(_) => processed += 1,
                 Err(error) => {
-                    eprintln!("Split failed for {}: {error}", path.display());
+                    eprintln!("Split failed for {}: {error:#}", path.display());
                     failed += 1;
                 }
             }
@@ -79,12 +78,7 @@ pub fn run(args: &Archive) -> Result<(), String> {
     if !args.skip_organize {
         if args.dry_run {
             println!("Would organize audio under {}", args.output.display());
-        } else if args.output.is_dir()
-            && fs::read_dir(&args.output)
-                .map_err(|error| error.to_string())?
-                .next()
-                .is_some()
-        {
+        } else if args.output.is_dir() && fs::read_dir(&args.output)?.next().is_some() {
             organize::run(&Organize {
                 directory: args.output.clone(),
                 import: args.import,
@@ -97,7 +91,7 @@ pub fn run(args: &Archive) -> Result<(), String> {
         }
     }
     if failed > 0 {
-        return Err(format!("{failed} audio file(s) failed to split"));
+        bail!("{failed} audio file(s) failed to split");
     }
     println!("Archive processing complete.");
     Ok(())

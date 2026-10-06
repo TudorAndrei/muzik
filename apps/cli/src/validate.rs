@@ -1,16 +1,17 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, bail};
 use serde_json::Value;
 
 use crate::Validate;
 
-pub fn run(args: &Validate) -> Result<(), String> {
+pub fn run(args: &Validate) -> anyhow::Result<()> {
     if !args.path.exists() {
-        return Err(format!("not found: {}", args.path.display()));
+        bail!("not found: {}", args.path.display());
     }
     let mut files = Vec::new();
-    collect(&args.path, args.recursive, &mut files).map_err(|error| error.to_string())?;
+    collect(&args.path, args.recursive, &mut files)?;
     files.retain(|path| kind(path).is_some());
     files.sort();
     if files.is_empty() {
@@ -54,7 +55,7 @@ pub fn run(args: &Validate) -> Result<(), String> {
             }
             Err(error) => {
                 invalid += 1;
-                println!("{}\tFAIL\t{error}", name.display());
+                println!("{}\tFAIL\t{error:#}", name.display());
             }
         }
     }
@@ -63,7 +64,7 @@ pub fn run(args: &Validate) -> Result<(), String> {
         files.len()
     );
     if invalid > 0 {
-        Err(format!("{invalid} files failed validation"))
+        bail!("{invalid} files failed validation")
     } else {
         Ok(())
     }
@@ -99,12 +100,12 @@ fn kind(path: &Path) -> Option<&'static str> {
     }
 }
 
-fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
-    let file_kind = kind(path).ok_or("unsupported file")?;
+fn check(path: &Path) -> anyhow::Result<(&'static str, String, Vec<String>)> {
+    let file_kind = kind(path).context("unsupported file")?;
     let mut warnings = Vec::new();
     let details = match file_kind {
         "audio" => {
-            let properties = muzik_tags::probe(path).map_err(|error| error.to_string())?;
+            let properties = muzik_tags::probe(path)?;
             if metadata_for_audio(path).is_none() {
                 warnings.push("metadata sidecar missing".into());
             }
@@ -118,10 +119,10 @@ fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
             )
         }
         "chapters" => {
-            let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
+            let source = fs::read_to_string(path)?;
             let count = source.lines().filter(|line| chapter_line(line)).count();
             if count == 0 {
-                return Err("no valid chapter lines found".into());
+                bail!("no valid chapter lines found");
             }
             format!("{count} chapters")
         }
@@ -156,7 +157,7 @@ fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
                 .and_then(Value::as_array)
                 .map_or(0, Vec::len);
             if expected > 0 {
-                let actual = count_audio(path.parent().ok_or("sidecar has no parent")?)?;
+                let actual = count_audio(path.parent().context("sidecar has no parent")?)?;
                 if actual < expected {
                     warnings.push(format!(
                         "album appears incomplete ({actual}/{expected} audio files)"
@@ -168,7 +169,7 @@ fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
                 value.get("source").and_then(Value::as_str).unwrap_or("?")
             )
         }
-        _ => return Err("unsupported file".into()),
+        _ => bail!("unsupported file"),
     };
     Ok((file_kind, details, warnings))
 }
@@ -181,11 +182,11 @@ fn metadata_for_audio(path: &Path) -> Option<Value> {
         .find_map(|sidecar| read_object(&sidecar).ok())
 }
 
-fn read_object(path: &Path) -> Result<Value, String> {
-    let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let value: Value = serde_json::from_str(&source).map_err(|error| error.to_string())?;
+fn read_object(path: &Path) -> anyhow::Result<Value> {
+    let source = fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(&source)?;
     if !value.is_object() {
-        return Err("root is not a JSON object".into());
+        bail!("root is not a JSON object");
     }
     Ok(value)
 }
@@ -200,9 +201,9 @@ fn chapter_line(line: &str) -> bool {
         && !title.trim().is_empty()
 }
 
-fn count_audio(root: &Path) -> Result<usize, String> {
+fn count_audio(root: &Path) -> anyhow::Result<usize> {
     let mut files = Vec::new();
-    collect(root, true, &mut files).map_err(|error| error.to_string())?;
+    collect(root, true, &mut files)?;
     Ok(files
         .into_iter()
         .filter(|path| kind(path) == Some("audio"))
@@ -228,7 +229,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let sidecar = dir.path().join(".muzik.json");
         fs::write(&sidecar, r#"{"candidate":{"files":[{},{}]}}"#)?;
-        let (_, _, warnings) = check(&sidecar).map_err(std::io::Error::other)?;
+        let (_, _, warnings) = check(&sidecar)?;
         assert!(warnings.iter().any(|item| item == "missing source"));
         assert!(warnings.iter().any(|item| item == "missing source_id"));
         assert!(

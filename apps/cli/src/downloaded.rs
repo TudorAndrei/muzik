@@ -1,10 +1,9 @@
-use std::io;
 use std::path::Path;
 
 use bytesize::ByteSize;
 use muzik_core::downloads::scan;
 
-pub fn list(directory: &Path) -> io::Result<()> {
+pub fn list(directory: &Path) -> anyhow::Result<()> {
     let items = scan(directory)?;
     if items.is_empty() {
         println!("No downloads found. ({})", directory.display());

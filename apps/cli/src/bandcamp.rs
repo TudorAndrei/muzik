@@ -1,19 +1,20 @@
 use std::fs;
 use std::sync::atomic::AtomicBool;
 
+use anyhow::Context;
 use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
 
 use crate::{Bandcamp, paths};
 
-pub fn download(args: &Bandcamp) -> Result<(), String> {
+pub fn download(args: &Bandcamp) -> anyhow::Result<()> {
     let login = match &args.cookies {
         Some(file) => {
             let text = fs::read_to_string(file)
-                .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+                .with_context(|| format!("cannot read {}", file.display()))?;
             bandcamp::Login::save(&Paths::user(), args.user.as_deref().unwrap_or(""), &text)?
         }
-        None => bandcamp::Login::load(&Paths::user()).ok_or(
+        None => bandcamp::Login::load(&Paths::user()).context(
             "Save the Bandcamp login first: give --cookies <file>, or use Settings in the app.",
         )?,
     };
