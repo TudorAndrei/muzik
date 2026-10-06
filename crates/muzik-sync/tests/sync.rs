@@ -1,6 +1,6 @@
 use muzik_core::quality::MeasuredQuality;
-use muzik_core::sync::{self, Action, Encoding, Target};
 use muzik_core::SyncPreset;
+use muzik_sync::{self as sync, Action, Encoding, Target};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};

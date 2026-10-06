@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 use muzik_core::paths::Paths;
-use muzik_core::sync::{self, Action, Encoding, Target, Transfer};
 use muzik_core::{app_config, db, quality};
 use muzik_import::beets;
 use muzik_library::{Item, Library, path_from_sql};
+use muzik_sync::{self as sync, Action, Encoding, Target, Transfer};
 use serde_json::json;
 
 use crate::{SetSyncTarget, Sync};

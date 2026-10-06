@@ -29,6 +29,7 @@ muzik-library = { path = "../../crates/muzik-library" }
 muzik-tags = { path = "../../crates/muzik-tags" }
 muzik-workflow = { path = "../../crates/muzik-workflow" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
+muzik-sync = { path = "../../crates/muzik-sync" }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"

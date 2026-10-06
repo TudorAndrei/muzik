@@ -1,11 +1,8 @@
 //! Copy library tracks to a device folder in formats that the device plays.
 
-use crate::app_config;
-use crate::config_choices::SyncPreset;
-use crate::db;
-use crate::ffmpeg::{Convert, Ffmpeg};
-use crate::paths;
-use crate::quality::MeasuredQuality;
+use muzik_core::ffmpeg::{Convert, Ffmpeg};
+use muzik_core::quality::MeasuredQuality;
+use muzik_core::{app_config, paths, SyncPreset};
 use rusqlite::Connection;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -15,7 +12,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-pub use crate::ffmpeg::Encoding;
+pub use muzik_core::ffmpeg::Encoding;
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
@@ -89,7 +86,7 @@ impl Target {
                 .as_str()
                 .ok_or_else(|| format!("sync target {name}: preset must be a string"))?
                 .parse()
-                .map_err(|error: crate::ChoiceError| error.to_string())?,
+                .map_err(|error: muzik_core::ChoiceError| error.to_string())?,
         };
         let bitrate = match entry.get("bitrate") {
             None | Some(Value::Null) => None,
@@ -152,7 +149,7 @@ impl Target {
         let codec = audio.format.as_str();
         match self.preset {
             SyncPreset::EchoMini => {
-                let plays = crate::audio::is_lossless_codec(codec)
+                let plays = muzik_core::audio::is_lossless_codec(codec)
                     || matches!(codec, "aac" | "mp3" | "vorbis" | "wmav1" | "wmav2");
                 if !plays {
                     return Action::Convert(Encoding::Mp3 {
@@ -342,7 +339,7 @@ fn guess(source: &Path) -> Option<MeasuredQuality> {
     };
     Some(MeasuredQuality {
         format: format.to_owned(),
-        lossless: crate::audio::is_lossless_codec(format),
+        lossless: muzik_core::audio::is_lossless_codec(format),
         bitrate_kbps: None,
         sample_rate: None,
         bit_depth: None,
@@ -465,15 +462,15 @@ pub fn encodings(
 ) -> Result<BTreeMap<PathBuf, Encoding>, String> {
     let mut statement = connection
         .prepare("SELECT destination, encoding FROM sync_files")
-        .map_err(db::text)?;
+        .map_err(|error| error.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
-        .map_err(db::text)?;
+        .map_err(|error| error.to_string())?;
     let mut encodings = BTreeMap::new();
     for row in rows {
-        let (destination, encoding) = row.map_err(db::text)?;
+        let (destination, encoding) = row.map_err(|error| error.to_string())?;
         let destination = PathBuf::from(destination);
         if let (true, Ok(encoding)) = (
             destination.starts_with(root),
@@ -502,7 +499,7 @@ pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String
         ),
     }
     .map(drop)
-    .map_err(db::text)
+    .map_err(|error| error.to_string())
 }
 
 pub fn run(

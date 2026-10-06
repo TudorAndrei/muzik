@@ -4399,6 +4399,7 @@ dependencies = [
  "muzik-library",
  "muzik-runner",
  "muzik-soulseek",
+ "muzik-sync",
  "muzik-tags",
  "muzik-workflow",
  "serde",
@@ -4421,7 +4422,6 @@ dependencies = [
  "open",
  "regex",
  "rusqlite",
- "rustix",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -4567,6 +4567,19 @@ dependencies = [
  "soulseek-rs-lib",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "muzik-sync"
+version = "2.12.0"
+dependencies = [
+ "muzik-core",
+ "muzik-library",
+ "muzik-tags",
+ "rusqlite",
+ "rustix",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -15,7 +15,6 @@ pub mod process;
 pub mod quality;
 pub mod splitter;
 pub mod spotify;
-pub mod sync;
 pub mod thumbnails;
 mod types;
 pub mod watchlist;
