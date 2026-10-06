@@ -1,6 +1,7 @@
 use muzik_core::QualityPolicy;
 use muzik_store::watchlist::{
-    bandcamp_source, import_cache, reconcile, view, ReconcileOptions, Repository, Watchlist,
+    bandcamp_source, import_cache, reconcile, view, CheckedWrite, ReconcileOptions, Repository,
+    SourceKind, Stage, StageStatus, WatchItem, Watchlist,
 };
 use serde_json::{json, Value};
 use std::fs;
@@ -515,4 +516,93 @@ fn each_decision_kind_maps_to_its_stage() {
         Stage::of_decision(DecisionKind::SoulseekCandidate),
         Stage::Download
     );
+}
+
+fn source_with_item(path: &Path) -> Result<Repository, Box<dyn std::error::Error>> {
+    let repository = Repository::new(path.to_path_buf());
+    repository.add("https://www.youtube.com/playlist?list=PL1")?;
+    repository.update(|document| {
+        document.playlists[0].items = vec![WatchItem::new(1, "Song", SourceKind::Youtube)];
+        Ok(())
+    })?;
+    Ok(repository)
+}
+
+#[test]
+fn a_checked_write_keeps_a_concurrent_source_edit_and_succeeds_on_retry() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("muzik.db");
+    let check = source_with_item(&path)?;
+    let editor = Repository::new(path);
+    let (mut stale, revision) = check.load_revision()?;
+    assert_eq!(revision, check.revision()?);
+    editor.rename("PL1", "Edited")?;
+    stale.playlists[0].items[0].title = "Checked".into();
+    assert_eq!(check.save_at(revision, &stale)?, CheckedWrite::Conflict);
+    let saved = editor.load()?;
+    assert_eq!(saved.playlists[0].title.as_deref(), Some("Edited"));
+    assert_eq!(saved.playlists[0].items[0].title, "Song");
+    let (mut fresh, revision) = check.load_revision()?;
+    fresh.playlists[0].items[0].title = "Checked".into();
+    assert_eq!(check.save_at(revision, &fresh)?, CheckedWrite::Written);
+    let saved = editor.load()?;
+    assert_eq!(saved.playlists[0].title.as_deref(), Some("Edited"));
+    assert_eq!(saved.playlists[0].items[0].title, "Checked");
+    assert_eq!(editor.revision()?, revision + 1);
+    Ok(())
+}
+
+#[test]
+fn a_checked_write_keeps_a_concurrent_stage_change() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("muzik.db");
+    let check = source_with_item(&path)?;
+    let runner = Repository::new(path);
+    let (stale, revision) = check.load_revision()?;
+    runner.update(|document| {
+        document.playlists[0].items[0].complete(Stage::Download, None);
+        Ok(())
+    })?;
+    assert_eq!(check.save_at(revision, &stale)?, CheckedWrite::Conflict);
+    assert_eq!(
+        runner.load()?.playlists[0].items[0].status(Stage::Download),
+        StageStatus::Complete
+    );
+    Ok(())
+}
+
+#[test]
+fn a_checked_write_of_an_unchanged_document_keeps_the_revision() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let repository = source_with_item(&directory.path().join("muzik.db"))?;
+    let (document, revision) = repository.load_revision()?;
+    assert_eq!(
+        repository.save_at(revision, &document)?,
+        CheckedWrite::Written
+    );
+    assert_eq!(repository.revision()?, revision);
+    assert_eq!(repository.load()?, document);
+    Ok(())
+}
+
+#[test]
+fn a_failed_checked_write_changes_nothing() -> TestResult {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("muzik.db");
+    let repository = source_with_item(&path)?;
+    let (mut document, revision) = repository.load_revision()?;
+    rusqlite::Connection::open(&path)?.execute_batch(
+        "CREATE TRIGGER refuse BEFORE INSERT ON watchlist_items
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    )?;
+    document.playlists[0].title = Some("Renamed".into());
+    document.playlists[0]
+        .items
+        .push(WatchItem::new(2, "New", SourceKind::Youtube));
+    assert!(repository.save_at(revision, &document).is_err());
+    let saved = repository.load()?;
+    assert_eq!(saved.playlists[0].title, None);
+    assert_eq!(saved.playlists[0].items.len(), 1);
+    assert_eq!(repository.revision()?, revision);
+    Ok(())
 }

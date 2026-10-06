@@ -1,111 +1,71 @@
-# TODO: Deepen the watchlist, acquisition, queue, and GUI modules
+# TODO: Deepen queue admission, watchlist writes, and device sync
 
-## Phase 1: Settings, paths, and the decision agent as values
+## Phase 1: Atomic queue admission
 
-- [x] `Paths` and `expand_home` in `muzik-core/src/paths.rs`
-- [x] `Repository` and `db` take `&Paths`
-- [x] `muzik-runner/src/settings.rs` with `Settings::resolve`
-- [x] Local, remote, watchlist, GUI, and CLI callers use `Settings`
-- [x] `Chooser` seam (`Codex` adapter; `None` in tests) in `runner::Options`
-- [x] Delete the four extra `~` expanders
-- [x] Tests use `Paths::under(temp)`
-- [x] Commit: `refactor(runner): resolve settings and paths once and inject the decision agent`
+- [x] Normal second pause: confirm one waiting row and a done running row (`run_job` calls `finish`).
+- [x] Cancelled resumed job: confirm whether `park_on` can insert a waiting row before `reopen`; record the result in PLAN.md.
+- [x] Add a failing single-connection test: a lower-id waiting row and a queued row; an explicit request reports busy and keeps the waiting row.
+- [x] Put the admission check and writes in one immediate transaction in `crates/muzik-store/src/jobs.rs`; admission methods take `&mut self`.
+- [x] Preserve explicit-request busy results, waiting-job replacement, and existing-ID results from `Store::enqueue`.
+- [x] Replace caller admission sequences in `Jobs::item` and `run_refresh`; count only new refresh jobs.
+- [x] Test competing admissions from two connections to one temporary database with a barrier; check that only one open job exists.
+- [x] Test independent item keys and preserve existing active jobs without partial cancellation.
+- [x] Test waiting replacement and rollback after a failed insertion.
+- [x] Add the missing waiting-job case to the existing queue test.
+- [x] Preserve pause, answer, resume, cancellation, and legacy import behavior.
+- [x] Record that the two-connection race test does not fail reliably on the baseline; the partial-cancellation test is the baseline failure.
+- [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
+- [x] Commit: `fix(jobs): make queue admission atomic across processes`
 
-## Phase 2: One yt-dlp module
+## Phase 2: Atomic checked watchlist writes
 
-- [x] `muzik-workflow/src/ytdlp.rs` with tests
-- [x] Replace yt-dlp code in runner, workflow discovery, and CLI
-- [x] Commit: `refactor(workflow): run yt-dlp through one cancellable module`
+- [x] Read the watchlist document and revision in one transaction through `Repository`.
+- [x] Check the expected revision and write changes in one immediate transaction.
+- [x] Return a conflict without changing data; preserve unchanged-document revision behavior.
+- [x] Replace the caller write protocol in `WatchlistCheck::check`.
+- [x] Preserve the three-attempt limit, busy checks, generation checks, and saved/checked events.
+- [x] Run the full busy check before the write; hold `gate` around the conditional write and check only `current()` inside it.
+- [x] Do not call `Jobs` while `gate` or a write transaction is held.
+- [x] Test stale writes after concurrent source edits and stage changes using separate connections.
+- [x] Test a successful retry and rollback after a write error.
+- [x] Preserve the combined waiting-stage and question transaction in `watchlist_jobs.rs`.
+- [x] Reproduce a stale overwrite against the baseline and verify that committed edits survive.
+- [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
+- [x] Commit: `fix(watchlist): make checked writes atomic across processes`
 
-## Phase 3: Soulseek search and fetch in muzik-soulseek
+## Phase 3: Device sync owns its execution conditions
 
-- [x] `Session::search` and `Session::fetch`
-- [x] Timeouts in `fetch::Timeouts`
-- [x] Runner, quality check, and CLI use them
-- [x] Commit: `refactor(soulseek): search and fetch through one blocking interface`
-
-## Phase 4: One import decision policy
-
-- [x] `muzik-import/src/decide.rs` with `ImportPolicy` and `decide_album`
-- [x] Runner and CLI import use it; `muzik import --duplicates`
-- [x] Policy matrix test
-- [x] Commit: `fix(import): apply the duplicates setting on every import path`
-
-## Phase 5: CLI workflow through the runner
-
-- [x] `compilation` workflow option
-- [x] `muzik workflow` enqueues and drains; `CliOperations` deleted
-- [x] CLI `ask` handles chapter edits
-- [x] `drain` returns an error when a job fails, so the exit code stays correct
-- [x] Commit: `refactor(cli): run the workflow command through the shared runner`
-
-## Phase 6: Typed watchlist item
-
-- [x] `watchlist/item.rs` typed document and transitions
-- [x] Core and runner use the typed item
-- [x] Delete duplicated stage helpers and audio lookups
-- [x] Stored JSON round-trip test
-- [x] Real watchlist: `muzik watchlist list --items` output is the same before and after
-- [x] Commit: `refactor(watchlist): type the watchlist item and own its stage transitions`
-
-## Phase 7: Job queue in muzik.db and one item identity
-
-- [x] muzik.db migration 2 with `jobs`
-- [x] `Store::from_connection`; one-time `jobs.db` copy (only under the runner lock, never for an in-memory queue)
-- [x] `ItemId` in queue, park, jobs, GUI (same key format, so open jobs keep their keys)
-- [x] Bridge tests use temporary paths
-- [ ] Park and waiting state in one transaction (moved to Phase 9, where the pause becomes a returned value)
-- [x] Commit: `feat(jobs): store the job queue in muzik.db with one item identity`
-
-## Phase 8: Source modules
-
-- [x] `muzik-runner/src/sources/` with YouTube, Spotify, Bandcamp behind a `Source` trait
-- [x] Availability rules move into `muzik-core/src/watchlist/source.rs`, one function per kind (core must compute them for the view)
-- [x] Bandcamp `ensure` in the watchlist sync (`watchlist::ensure_sources`); the GUI calls it
-- [x] `release_import_questions` asks `SourceKind::keeps_current_tags`
-- [x] CLI `bandcamp` uses the Rust module; bandsnatch removed
-- [x] Same `watchlist list --items` output on a copy of the real data
-- [x] Commit: `refactor(watchlist): give each source kind one module behind a Source seam`
-
-## Phase 9: Waiting for a choice as a returned value
-
-- [x] Park and waiting state in one transaction (`Operations::park`, `Repository::update_with`, `muzik_jobs::park_on`)
-- [x] Typed `DecisionError` — not done; the decide callback keeps `String` (see PLAN.md)
-- [x] `ItemOutcome::Waiting` carries the question
-- [x] Delete `mark_stage`, `take_stage`, and the event-driven park; explicit `Cell<Stage>`
-- [x] End-to-end decide → park → answer → resume test
-- [x] Commit: `refactor(runner): return a pause for a choice instead of side channels`
-
-## Phase 10: Retire the legacy cache reconcile
-
-- [x] muzik.db migration 3 with `meta`
-- [x] `watchlist/legacy.rs` one-time import (runner sync and GUI check call `import_cache`)
-- [x] Slim `reconcile.rs`; update core watchlist tests
-- [x] A second reconcile changes no rows (test), so a load does not rewrite thousands of rows
-- [x] Same item states as the old reconcile on a copy of the real data
-- [x] Commit: `refactor(watchlist): import the legacy cache once and slim the reconcile`
-
-## Phase 11: Typed application module behind the GUI
-
-- [x] `muzik-runner/src/app.rs` with `App`; `AppEvent` from the runner `Sink`
-- [x] Bridge is a thin adapter; watchlist load, reconcile, edits, and keys out of the GUI
-- [x] `main.rs` matches on `AppEvent` (responses for GUI-local settings stay string commands)
-- [x] Bridge tests use temp paths and no chooser
-- [x] `muzik-gpui --check-backend` works on a copy of the real data; 79 open jobs move from `jobs.db`
-- [x] Commit: `refactor(gui): drive the desktop app through a typed application module`
+- [x] Keep the plan, target, and execution options private in `Prepared`.
+- [x] Give the CLI read-only preview access and consume the prepared state during apply; `apply` takes no second target or `jobs` value.
+- [x] Centralize the capacity decision for preview and execution in a private function that receives available space.
+- [x] Refresh target existence, needed bytes, remaining stale bytes, and available space before file changes.
+- [x] Preserve the current policy when available space cannot be measured.
+- [x] Adapt `apps/cli/src/sync.rs` and all existing sync test callers.
+- [x] Test missing-target refusal before file changes in `tests/run.rs`.
+- [x] Test insufficient and unknown space in a `#[cfg(test)]` module in `src/run.rs`; move the `fits` test from `tests/run.rs` there.
+- [x] Test a stale file removed between preview and apply.
+- [x] Preserve collision, encoding-change, unreadable-track, copy, and record-error coverage.
+- [x] Pass `cargo test --locked -p muzik-sync -p muzik-cli` and `mise run check`.
+- [x] Commit: `refactor(sync): own execution checks in the prepared sync`
 
 ## Verification
 
-- [x] `mise run check` passes after each phase (fmt, clippy `-D warnings`, tests, cargo deny); 296 tests at the end
-- [x] New tests: settings resolve, yt-dlp fake script, Soulseek fetch cancel, import policy matrix, stored JSON round trip, jobs.db copy, legacy cache import, decide → park → resume
-- [x] Manual smoke test with a temporary HOME: `muzik workflow <local flac> --dry-run`, `muzik watchlist list --items`, `muzik-gpui --check-backend` (the GPUI window itself was not opened)
-- [x] Edge cases: muzik.db at version 1 with a legacy `jobs.db`; waiting jobs survive the copy; Spotify waiting import questions still release; cancelled yt-dlp stops within 5 s
-- [x] No behavior change in the watchlist cards: same `watchlist list --items` output and the same item states after reconcile, on a copy of the real data
-- [x] Migration: a version 1 database keeps its rows; `jobs.db.migrated` kept; a newer database version still refuses to open
+- [x] No behavior change in CLI flags, output, dry runs, progress, item keys, saved formats, or GUI events, except the documented race fixes and execution refusals.
+- [x] Existing database migration tests pass; the schema version and stored formats remain compatible.
+- [x] Reopen a temporary database with job questions, watchlist stages, and sync encoding records; verify that the rows retain their values.
+- [x] Verify queue and watchlist transaction rollback after a controlled write failure.
+- [x] Verify code rollback on a database copy without a schema conversion; stop newer processes first.
+- [x] Smoke-test two `Jobs` instances on the same temporary database: request one item, retain or reject the second request, then cancel it.
+- [x] Smoke-test a local watchlist check with a concurrent source edit; verify the saved edit and current display result.
+- [x] Smoke-test sync with a temporary library and device directory: preview, copy, rerun, and deletion blocked by an unreadable track.
+- [x] Use `.tmp` and `Paths::under` for fixtures; keep real user data outside the test paths.
+- [x] Run `mise run test-scoped` on macOS and the full `mise run check` gate after the final phase.
+- [x] Tests assert current behavior or persistence contracts; no tombstone tests or public test-only hooks were added.
 
 ## Review
 
-- [ ] Code reviewed (by you)
-- [x] PLAN.md updated if approach changed during implementation
-- [x] All phase commits are clean and describe their intent
-- [x] TODO.md items all checked off, except the review
+- [x] Review each phase and its tests before its commit.
+- [x] Update PLAN.md and TODO.md before changing the phase scope.
+- [x] Mark each commit complete only after that commit succeeds.
+- [x] Verify that all phase commits are scoped conventional commits.
+- [x] Check all implementation and verification items before closing the work.

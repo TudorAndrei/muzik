@@ -1,6 +1,6 @@
 use crate::Result;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
+use rusqlite::{params, Connection, OptionalExtension, Row, ToSql, TransactionBehavior};
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
@@ -84,6 +84,20 @@ pub struct Job {
     pub question: Option<Value>,
     pub answer: Option<Value>,
     pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Admission {
+    Inserted(i64),
+    Retained(i64),
+}
+
+impl Admission {
+    pub fn id(self) -> i64 {
+        match self {
+            Self::Inserted(id) | Self::Retained(id) => id,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,11 +214,47 @@ impl Store {
         )?)
     }
 
-    pub fn enqueue(&self, job: &NewJob<'_>) -> Result<i64> {
-        if let Some(id) = self.open_job(job.kind, job.item_key)? {
-            return Ok(id);
+    pub fn enqueue(&mut self, job: &NewJob<'_>) -> Result<Admission> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let open = transaction
+            .query_row(
+                "SELECT id FROM jobs WHERE kind = ?1 AND item_key = ?2
+                 AND status IN ('queued', 'running', 'waiting') ORDER BY id LIMIT 1",
+                params![job.kind, job.item_key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let admission = match open {
+            Some(id) => Admission::Retained(id),
+            None => Admission::Inserted(insert_on(&transaction, job, Status::Queued, None)?),
+        };
+        transaction.commit()?;
+        Ok(admission)
+    }
+
+    pub fn replace_waiting(&mut self, job: &NewJob<'_>) -> Result<Option<i64>> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let active: bool = transaction.query_row(
+            "SELECT EXISTS (SELECT 1 FROM jobs WHERE kind = ?1 AND item_key = ?2
+             AND status IN ('queued', 'running'))",
+            params![job.kind, job.item_key],
+            |row| row.get(0),
+        )?;
+        if active {
+            return Ok(None);
         }
-        self.insert(job, Status::Queued, None)
+        transaction.execute(
+            "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+             WHERE kind = ?2 AND item_key = ?3 AND status = 'waiting'",
+            params![now(), job.kind, job.item_key],
+        )?;
+        let id = insert_on(&transaction, job, Status::Queued, None)?;
+        transaction.commit()?;
+        Ok(Some(id))
     }
 
     pub fn park(&self, job: &NewJob<'_>, question: &Value) -> Result<i64> {
@@ -308,22 +358,6 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    fn open_job(&self, kind: Kind, item_key: &str) -> Result<Option<i64>> {
-        Ok(self
-            .connection
-            .query_row(
-                "SELECT id FROM jobs WHERE kind = ?1 AND item_key = ?2
-                 AND status IN ('queued', 'running', 'waiting') ORDER BY id LIMIT 1",
-                params![kind, item_key],
-                |row| row.get(0),
-            )
-            .optional()?)
-    }
-
-    fn insert(&self, job: &NewJob<'_>, status: Status, question: Option<&Value>) -> Result<i64> {
-        insert_on(&self.connection, job, status, question)
-    }
-
     fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<()> {
         self.connection.execute(
             "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
@@ -404,7 +438,7 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
+    use super::{Admission, CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
     fn memory() -> Result<Store, String> {
@@ -422,11 +456,14 @@ mod tests {
 
     #[test]
     fn claim_takes_the_oldest_queued_job_once() -> Result<(), String> {
-        let store = memory()?;
+        let mut store = memory()?;
         let params = json!({});
-        let first = store.enqueue(&job(Kind::Item, "a", &params))?;
-        let second = store.enqueue(&job(Kind::Item, "b", &params))?;
-        assert_eq!(store.enqueue(&job(Kind::Item, "a", &params))?, first);
+        let first = store.enqueue(&job(Kind::Item, "a", &params))?.id();
+        let second = store.enqueue(&job(Kind::Item, "b", &params))?.id();
+        assert_eq!(
+            store.enqueue(&job(Kind::Item, "a", &params))?,
+            Admission::Retained(first)
+        );
         let claimed = store.claim(Queue::Item)?.ok_or("job was not queued")?;
         assert_eq!(
             (claimed.id, claimed.queue, claimed.kind),
@@ -440,11 +477,11 @@ mod tests {
 
     #[test]
     fn claim_any_takes_the_oldest_job_of_the_named_queues() -> Result<(), String> {
-        let store = memory()?;
+        let mut store = memory()?;
         let params = json!({});
-        let first = store.enqueue(&job(Kind::Refresh, "refresh", &params))?;
-        let second = store.enqueue(&job(Kind::Item, "a", &params))?;
-        let third = store.enqueue(&job(Kind::Item, "b", &params))?;
+        let first = store.enqueue(&job(Kind::Refresh, "refresh", &params))?.id();
+        let second = store.enqueue(&job(Kind::Item, "a", &params))?.id();
+        let third = store.enqueue(&job(Kind::Item, "b", &params))?.id();
         assert_eq!(
             store
                 .list_open()?
@@ -466,8 +503,8 @@ mod tests {
             Some(first)
         );
         assert_eq!(store.list_open()?.len(), 2);
-        let older = store.enqueue(&job(Kind::Item, "c", &params))?;
-        let newer = store.enqueue(&job(Kind::Refresh, "again", &params))?;
+        let older = store.enqueue(&job(Kind::Item, "c", &params))?.id();
+        let newer = store.enqueue(&job(Kind::Refresh, "again", &params))?.id();
         assert_eq!(
             store
                 .find_open(Kind::Item, "c")?
@@ -525,10 +562,10 @@ mod tests {
 
     #[test]
     fn a_cancel_removes_a_queued_job_and_flags_a_running_one() -> Result<(), String> {
-        let store = memory()?;
+        let mut store = memory()?;
         let params = json!({});
-        let queued = store.enqueue(&job(Kind::Item, "a", &params))?;
-        let running = store.enqueue(&job(Kind::Workflow, "b", &params))?;
+        let queued = store.enqueue(&job(Kind::Item, "a", &params))?.id();
+        let running = store.enqueue(&job(Kind::Workflow, "b", &params))?.id();
         store.claim(Queue::Workflow)?;
         assert_eq!(store.request_cancel(queued)?, CancelRequest::Removed);
         assert_eq!(store.request_cancel(running)?, CancelRequest::Requested);
@@ -536,6 +573,116 @@ mod tests {
         store.cancel(running)?;
         assert_eq!(store.request_cancel(running)?, CancelRequest::NotOpen);
         assert!(store.cancel_requests()?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn competing_admissions_leave_one_open_job() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("muzik.db");
+        let params = json!({});
+        Store::from_connection(crate::db::open(&path)?).park(
+            &job(Kind::Item, "a", &params),
+            &json!({"kind":"import_match"}),
+        )?;
+        let barrier = std::sync::Barrier::new(4);
+        let replaced = std::thread::scope(|scope| {
+            let admissions: Vec<_> = (0..4)
+                .map(|index| {
+                    let (barrier, path, params) = (&barrier, &path, &params);
+                    scope.spawn(move || -> Result<bool, String> {
+                        let mut store = Store::from_connection(crate::db::open(path)?);
+                        barrier.wait();
+                        let job = job(Kind::Item, "a", params);
+                        if index % 2 == 0 {
+                            Ok(store.replace_waiting(&job)?.is_some())
+                        } else {
+                            store.enqueue(&job)?;
+                            Ok(false)
+                        }
+                    })
+                })
+                .collect();
+            admissions
+                .into_iter()
+                .map(|admission| {
+                    admission
+                        .join()
+                        .map_err(|_| "an admission panicked".to_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })?;
+        let replaced = replaced.into_iter().collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(replaced.iter().filter(|inserted| **inserted).count(), 1);
+        let open = Store::from_connection(crate::db::open(&path)?).find_open(Kind::Item, "a")?;
+        assert_eq!(
+            open.iter().map(|job| job.status).collect::<Vec<_>>(),
+            [Status::Queued]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_replacement_touches_only_its_own_item() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("muzik.db");
+        let params = json!({});
+        let question = json!({"kind":"import_match"});
+        let mut first = Store::from_connection(crate::db::open(&path)?);
+        let mut second = Store::from_connection(crate::db::open(&path)?);
+        let busy = first.park(&job(Kind::Item, "a", &params), &question)?;
+        super::insert_on(
+            &second.connection,
+            &job(Kind::Item, "a", &params),
+            Status::Queued,
+            None,
+        )?;
+        let free = first.park(&job(Kind::Item, "b", &params), &question)?;
+        assert_eq!(
+            second.replace_waiting(&job(Kind::Item, "a", &params))?,
+            None
+        );
+        let inserted = second
+            .replace_waiting(&job(Kind::Item, "b", &params))?
+            .ok_or("the free item was not admitted")?;
+        assert_eq!(
+            first.enqueue(&job(Kind::Item, "b", &params))?,
+            Admission::Retained(inserted)
+        );
+        assert!(matches!(
+            first.enqueue(&job(Kind::Item, "c", &params))?,
+            Admission::Inserted(_)
+        ));
+        let kept = first.get(busy)?.ok_or("job is missing")?;
+        assert_eq!(
+            (kept.status, kept.question),
+            (Status::Waiting, Some(question))
+        );
+        assert_eq!(
+            first.get(free)?.map(|job| job.status),
+            Some(Status::Cancelled)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_failed_insertion_keeps_the_waiting_job() -> Result<(), Box<dyn std::error::Error>> {
+        let mut store = memory()?;
+        let params = json!({});
+        let question = json!({"kind":"import_match"});
+        let waiting = store.park(&job(Kind::Item, "a", &params), &question)?;
+        store.connection.execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+        )?;
+        assert!(store
+            .replace_waiting(&job(Kind::Item, "a", &params))
+            .is_err());
+        let kept = store.get(waiting)?.ok_or("job is missing")?;
+        assert_eq!(
+            (kept.status, kept.question),
+            (Status::Waiting, Some(question))
+        );
+        assert_eq!(store.find_open(Kind::Item, "a")?.len(), 1);
         Ok(())
     }
 
@@ -557,8 +704,8 @@ mod tests {
         let path = directory.path().join("muzik.db");
         let params = json!({});
         let id = {
-            let store = Store::from_connection(crate::db::open(&path)?);
-            let id = store.enqueue(&job(Kind::Workflow, "a", &params))?;
+            let mut store = Store::from_connection(crate::db::open(&path)?);
+            let id = store.enqueue(&job(Kind::Workflow, "a", &params))?.id();
             store.claim(Queue::Workflow)?;
             id
         };

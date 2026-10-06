@@ -4,9 +4,9 @@ use crate::queue::{job_id, Jobs};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::DecisionKind;
-use muzik_store::jobs::{Job, Kind, NewJob, Queue, RunnerLock, Store};
+use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
 use muzik_store::watchlist::jobs::JobError;
-use muzik_store::watchlist::{ItemAction, Stage};
+use muzik_store::watchlist::Stage;
 use muzik_workflow::{classify_input, WorkflowInput};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{json, Value};
@@ -273,32 +273,10 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
         },
     )
     .map_err(job_error)?;
-    let mut queued = 0;
-    {
-        let store = shared.store();
-        for item in &pending {
-            let mut params = job.params.clone();
-            item.id.write(&mut params);
-            params["title"] = json!(item.title);
-            params["action"] = json!(ItemAction::Run);
-            let key = item.id.to_string();
-            if store
-                .find_open(Kind::Item, &key)
-                .map_err(|error| (false, error.to_string()))?
-                .is_empty()
-            {
-                store
-                    .enqueue(&NewJob {
-                        kind: Kind::Item,
-                        item_key: &key,
-                        title: &item.title,
-                        params: &params,
-                    })
-                    .map_err(|error| (false, error.to_string()))?;
-                queued += 1;
-            }
-        }
-    }
+    let queued = shared
+        .jobs
+        .queue_pending(&job.params, &pending)
+        .map_err(|error| (false, error.to_string()))?;
     shared.event(
         job_id,
         Source::Workflow,

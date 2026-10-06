@@ -3,7 +3,7 @@ use muzik_core::SyncPreset;
 use muzik_library::{Fields, Library, SqlValue};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;
-use muzik_sync::{Options, Plan, Prepared, Selection, Target};
+use muzik_sync::{Error, Options, Prepared, Selection, Target};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -89,6 +89,15 @@ fn prepare(
     )
 }
 
+fn destinations(prepared: &Prepared) -> Vec<PathBuf> {
+    prepared
+        .plan()
+        .pending
+        .iter()
+        .map(|transfer| transfer.destination.clone())
+        .collect()
+}
+
 #[test]
 fn prepare_blocks_delete_when_a_track_cannot_be_read() -> Outcome {
     let layout = layout()?;
@@ -96,10 +105,10 @@ fn prepare_blocks_delete_when_a_track_cannot_be_read() -> Outcome {
     stray(&layout)?;
     let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
-    assert!(!prepared.delete);
-    assert!(prepared.delete_blocked);
-    assert!(prepared.stale.is_empty());
-    assert_eq!(prepared.freed, 0);
+    assert!(!prepared.delete());
+    assert!(prepared.delete_blocked());
+    assert!(prepared.stale().is_empty());
+    assert_eq!(prepared.freed(), 0);
     Ok(())
 }
 
@@ -110,27 +119,27 @@ fn prepare_lists_stale_files_when_delete_is_safe() -> Outcome {
     let old = stray(&layout)?;
     let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
-    assert!(prepared.delete);
-    assert!(!prepared.delete_blocked);
-    assert_eq!(prepared.stale, vec![old]);
-    assert_eq!(prepared.freed, 7);
+    assert!(prepared.delete());
+    assert!(!prepared.delete_blocked());
+    assert_eq!(prepared.stale(), [old]);
+    assert_eq!(prepared.freed(), 7);
     Ok(())
 }
 
 #[test]
-fn prepared_fits_uses_freed_space() {
-    let prepared = |available, freed| Prepared {
-        plan: Plan::default(),
-        delete: true,
-        delete_blocked: false,
-        stale: Vec::new(),
-        freed,
-        needed: 10,
-        available,
-    };
-    assert!(prepared(Some(5), 5).fits());
-    assert!(!prepared(Some(5), 4).fits());
-    assert!(prepared(None, 0).fits());
+fn apply_refuses_a_target_that_is_gone_before_it_changes_files() -> Outcome {
+    let layout = layout()?;
+    let selection = add_tracks(&layout, &["good.mp3"])?;
+    stray(&layout)?;
+    let connection = muzik_store::db::open_in_memory()?;
+    let prepared = prepare(&layout, &selection, &connection, true)?;
+    let unplugged = layout.card.with_file_name("unplugged");
+    fs::rename(&layout.card, &unplugged)?;
+    let result = muzik_sync::apply(prepared, connection, &|_| {});
+    assert!(matches!(result, Err(Error::TargetMissing(path)) if path == layout.card));
+    assert!(unplugged.join("Old/old.mp3").is_file());
+    assert!(!layout.card.exists());
+    Ok(())
 }
 
 #[test]
@@ -140,18 +149,19 @@ fn apply_deletes_stale_files_and_copies_pending() -> Outcome {
     let old = stray(&layout)?;
     let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
+    let destinations = destinations(&prepared);
     let calls = AtomicUsize::new(0);
-    let report = muzik_sync::apply(&prepared, &layout.target, connection, 1, &|done| {
+    let report = muzik_sync::apply(prepared, connection, &|done| {
         assert!(done.result.is_ok());
         assert!(done.record_error.is_none());
         calls.fetch_add(1, Ordering::Relaxed);
     })?;
-    let pending = prepared.plan.pending.len();
+    let pending = destinations.len();
     assert_eq!(pending, 2);
     assert!(!old.exists());
     assert!(!layout.card.join("Old").exists());
-    for transfer in &prepared.plan.pending {
-        assert!(transfer.destination.is_file());
+    for destination in &destinations {
+        assert!(destination.is_file());
     }
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);
@@ -166,13 +176,14 @@ fn apply_skips_stale_files_that_are_already_gone() -> Outcome {
     let old = stray(&layout)?;
     let connection = muzik_store::db::open_in_memory()?;
     let prepared = prepare(&layout, &selection, &connection, true)?;
-    assert_eq!(prepared.stale, vec![old.clone()]);
+    assert_eq!(prepared.stale(), std::slice::from_ref(&old));
     fs::remove_file(&old)?;
-    let report = muzik_sync::apply(&prepared, &layout.target, connection, 1, &|_| {})?;
-    let pending = prepared.plan.pending.len();
+    let destinations = destinations(&prepared);
+    let report = muzik_sync::apply(prepared, connection, &|_| {})?;
+    let pending = destinations.len();
     assert_eq!(pending, 2);
-    for transfer in &prepared.plan.pending {
-        assert!(transfer.destination.is_file());
+    for destination in &destinations {
+        assert!(destination.is_file());
     }
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);
@@ -187,13 +198,13 @@ fn apply_counts_transfers_whose_encoding_was_not_saved() -> Outcome {
     let prepared = prepare(&layout, &selection, &migrated, false)?;
     let bare = Connection::open_in_memory()?;
     let unsaved = AtomicUsize::new(0);
-    let report = muzik_sync::apply(&prepared, &layout.target, bare, 1, &|done| {
+    let pending = prepared.plan().pending.len();
+    let report = muzik_sync::apply(prepared, bare, &|done| {
         assert!(done.result.is_ok());
         if done.record_error.is_some() {
             unsaved.fetch_add(1, Ordering::Relaxed);
         }
     })?;
-    let pending = prepared.plan.pending.len();
     assert_eq!(pending, 2);
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);

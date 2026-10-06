@@ -217,6 +217,12 @@ pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
         .ok()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckedWrite {
+    Written,
+    Conflict,
+}
+
 pub struct Repository {
     path: PathBuf,
     legacy: Option<PathBuf>,
@@ -242,7 +248,7 @@ impl Repository {
         &self.path
     }
 
-    pub fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
+    fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
         let _writer = WRITER.lock();
         work()
     }
@@ -282,11 +288,32 @@ impl Repository {
     }
 
     pub fn revision(&self) -> Result<i64> {
-        Ok(self.connect()?.query_row(
-            "SELECT revision FROM watchlist_revision WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )?)
+        read_revision(&self.connect()?)
+    }
+
+    pub fn load_revision(&self) -> Result<(Watchlist, i64)> {
+        let mut connection = self.connect()?;
+        let transaction = connection.transaction()?;
+        let revision = read_revision(&transaction)?;
+        let document = read_document(&transaction)?;
+        transaction.commit()?;
+        Ok((document, revision))
+    }
+
+    pub fn save_at(&self, revision: i64, value: &Watchlist) -> Result<CheckedWrite> {
+        let value = value.clone().normalized()?;
+        self.locked(|| {
+            let mut connection = self.connect()?;
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            if read_revision(&transaction)? != revision {
+                return Ok(CheckedWrite::Conflict);
+            }
+            let before = read_document(&transaction)?;
+            write_changes(&transaction, &before, &value)?;
+            transaction.commit()?;
+            Ok(CheckedWrite::Written)
+        })
     }
 
     pub fn ensure(&self, source: &Playlist) -> Result<bool> {
@@ -365,6 +392,14 @@ fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<()> {
     let mut backup = legacy.as_os_str().to_owned();
     backup.push(".migrated");
     Ok(fs::rename(legacy, backup)?)
+}
+
+fn read_revision(connection: &Connection) -> Result<i64> {
+    Ok(connection.query_row(
+        "SELECT revision FROM watchlist_revision WHERE id = 1",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 fn read_document(connection: &Connection) -> Result<Watchlist> {

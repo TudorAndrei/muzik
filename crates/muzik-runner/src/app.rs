@@ -8,7 +8,9 @@ use crate::settings::Settings;
 use crate::{gates, watchlist};
 use muzik_core::paths::Paths;
 use muzik_store::jobs::CancelRequest;
-use muzik_store::watchlist::{self as saved, ItemAction, ItemId, Playlist, Repository};
+use muzik_store::watchlist::{
+    self as saved, CheckedWrite, ItemAction, ItemId, Playlist, Repository,
+};
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -259,20 +261,19 @@ impl WatchlistCheck {
             if self.busy() {
                 return Ok(());
             }
-            let revision = self.repository.revision()?;
-            let mut checked = self.repository.load()?;
+            let (mut checked, revision) = self.repository.load_revision()?;
             saved::reconcile(&mut checked, options)?;
-            let written = self.repository.locked(|| -> crate::Result<bool> {
-                if self.busy() {
-                    return Ok(true);
+            if self.busy() {
+                return Ok(());
+            }
+            let written = {
+                let _gate = self.gate.lock();
+                if !self.current() {
+                    return Ok(());
                 }
-                if self.repository.revision()? != revision {
-                    return Ok(false);
-                }
-                self.repository.save(&checked)?;
-                Ok(true)
-            })?;
-            if !written {
+                self.repository.save_at(revision, &checked)?
+            };
+            if written == CheckedWrite::Conflict {
                 continue;
             }
             if self.busy() {

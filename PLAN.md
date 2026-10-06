@@ -1,276 +1,337 @@
-# Plan: Deepen the watchlist, acquisition, queue, and GUI modules
+# Plan: Deepen queue admission, watchlist writes, and device sync
 
 ## Goal
 
-Implement the eight candidates from the 2026-10-01 architecture review. The
-watchlist, the runner, the CLI, and the GUI now share untyped JSON, global
-config reads, three copies of the acquisition steps, and side channels for
-"waiting for a choice". After this work, each concept has one deep module with
-a small interface: a typed watchlist item with its stage rules, one Source
-module per source kind, shared yt-dlp and Soulseek modules, one import
-decision policy, one item identity in one database, a returned `Waiting`
-outcome, settings resolved once, and a typed application module behind the
-GUI. The work also fixes the `--duplicates` divergence between the direct CLI
-path and the queue path.
+Put queue admission, conditional watchlist writes, and device sync checks in
+the modules that own those operations. Callers will not have to combine
+separate checks and writes to use those modules correctly. Implement all
+three candidates from the 2026-10-06 review, with queue admission first.
+The queue and watchlist races come from code inspection. Reproduce them
+before describing them as tested failures.
+
+This plan replaces the completed 2026-10-01 plan. Its decisions and checklist
+remain in Git at `631b41a78780c2d57eae7ed3334dcb6193e74086:PLAN.md` and the
+same revision of `TODO.md`.
 
 ## Approach
 
-### Order
+### Queue admission
 
-The phases go from the foundation up, so each phase can use the modules of
-the phases before it:
+`Jobs::item` in `crates/muzik-runner/src/queue.rs` checks open jobs, cancels
+waiting jobs, and then calls `Store::enqueue`. `run_refresh` in
+`crates/muzik-runner/src/runner.rs` has another check before enqueue.
+`Store::enqueue` in `crates/muzik-store/src/jobs.rs` also checks, then inserts.
+The mutex protects one `Jobs` instance. It does not protect another process.
 
-1. Settings, paths, and the decision agent become values that callers pass in.
-2. One yt-dlp module, one Soulseek `search_and_fetch`, and one import decision
-   policy replace the copies in the CLI, the runner, and muzik-workflow.
-3. The CLI `workflow` command runs through the runner, so `CliOperations` goes
-   away.
-4. The watchlist document becomes typed (`Watchlist`, `Playlist`, `WatchItem`,
-   `StageRecord`) with transition methods. The stored JSON shape stays the
-   same, so muzik.db needs no data migration for this step.
-5. The job queue moves into muzik.db, and `ItemId` becomes the one item
-   identity.
-6. Each source kind becomes one module behind a `Source` trait.
-7. A pause for a choice becomes a returned value; the thread-local stage and
-   the `item_waiting` control event go away.
-8. A one-time import of the legacy Python cache files replaces most of
-   `reconcile.rs`.
-9. A typed `App` module in muzik-runner replaces the string-command bridge.
+Move the admission decisions behind the store interface. Use an immediate
+SQLite transaction for the check and each related write. Distinguish these
+existing caller policies and return enough information to count new jobs:
 
-### Key design decisions
+- An explicit item request reports busy when a queued or running job exists.
+  If only waiting jobs exist, cancel them and insert the requested job in
+  the same transaction. On failure, keep their questions and status.
+- A source refresh retains an existing open item job. Count only new jobs
+  in the refresh result.
+- Direct `Store::enqueue` calls retain their existing behavior of returning
+  an existing open job ID. Make that check and insertion atomic too.
 
-- **Settings (`muzik-runner/src/settings.rs`).** `Settings::resolve(defaults:
-  &Value, params: &Value)` merges the GUI defaults with the request params one
-  time and parses every field into types. It replaces
-  `local_workflow::parse`, `remote_workflow::parse`, `watchlist::Prepared::new`,
-  `apps/gui/src/watchlist.rs::Options`, and `apps/cli/src/watchlist.rs::output`.
-  `muzik_core::paths::expand_home` becomes the one `~` expander. The other
-  four copies are deleted (`local_workflow.rs:105-120`,
-  `apps/gui/src/watchlist.rs:76-97`, `apps/cli/src/config.rs:195`,
-  `apps/cli/src/soulseek.rs:833`).
-- **Paths (`muzik-core/src/paths.rs`).** A `Paths` value (`data`, `cache`,
-  `config_file`, `downloads`) with `Paths::user()` for the app and
-  `Paths::under(root)` for tests. `Repository::default()` and
-  `db::default_path()` take a `&Paths`. Tests stop reading the real user
-  config and muzik.db.
-- **Decision agent seam (`muzik-runner/src/agent.rs`).** A `Chooser` trait with
-  two adapters: `CodexChooser` (wraps `muzik_agent::decide`) and `NoChooser`.
-  `Runner` `Options` gets `chooser: Arc<dyn Chooser>` and `settings` (a
-  function that returns the current GUI defaults), so `agent_model` stops
-  reading `app_config::path()` per decision. Tests use `NoChooser`, so they
-  never start `codex`.
-- **yt-dlp module (`muzik-workflow/src/ytdlp.rs`).** One cancellable runner
-  (`run(args, timeout, cancelled) -> Output`) plus `json`, `print`,
-  `download`, `playlist_ids`, and `environment_args`. It replaces
-  `remote_workflow::{execute, execute_with_path, download, playlist_ids,
-  yt_dlp_environment_args}`, `runner/watchlist.rs::{youtube_source,
-  youtube_video_metadata}`, `discovery.rs:84-112`, `apps/cli/src/download.rs`
-  argument building, and `apps/cli/src/workflow.rs::{youtube_print,
-  youtube_playlist_video_ids}`. Gate entry stays at the runner call sites.
-- **Soulseek (`muzik-soulseek/src/fetch.rs`).** `Session::search(query,
-  prefer, timeout, cancelled) -> Vec<RankedCandidate>` and
-  `Session::fetch(candidate, destination, limit, timeout, cancelled) ->
-  Vec<PathBuf>` block, poll, cancel, check file names, and apply the timeout
-  inside the crate. `remote_workflow::soulseek_download`,
-  `apps/cli/src/soulseek.rs::{ranked_search, wait_download}` and
-  `quality.rs::{SoulseekBackend::search, SoulseekBackend::download,
-  await_job}` call them. Timeout settings move into a `fetch::Timeouts`
-  value (not `SessionSettings`: a timeout change must not reconnect the
-  shared session).
-- **Import policy (`muzik-import/src/decide.rs`).** `decide_album(album,
-  policy, ask) -> AlbumDecision` holds the match and duplicate rules now in
-  `local_workflow.rs:224-279`. `ImportPolicy { interactive, force,
-  duplicates }` is the input; `ask` is the only callback. `apps/cli/src/import.rs`
-  uses the same function, so `--duplicates` applies on every path.
-- **CLI workflow through the runner.** `muzik workflow` builds the params,
-  enqueues one workflow job, and drains the queue with the CLI `ask` prompt.
-  `--queue` stays as an accepted alias. `--compilation` becomes a workflow
-  option that the runner passes to `SplitOptions::compilation`. A chapter edit
-  question opens the editor through `split::review_chapters`.
-- **Typed watchlist (`muzik-core/src/watchlist/item.rs`).** Serde structs with
-  the current JSON field names. `WatchItem` methods: `start(action)`,
-  `complete(stage)`, `fail(stage, message)`, `wait(stage, question)`,
-  `invalidate_after(stage)`, `skip(stage)`, `stage(stage)`,
-  `downloaded_audio(output)`, `is_unavailable()`, `is_done()`. One timestamp
-  rule. One audio lookup (recursive) for the view and the runner. JSON exists
-  only in `Repository` and in the `Serialize` output for the GUI.
-- **One database.** muzik.db migration 2 creates the `jobs` table (with
-  `cancel_requested`). `muzik_jobs::Store::from_connection` takes the
-  connection that `muzik_core::db::open` returns. When the runner first holds
-  the runner lock, open jobs in `jobs.db` are copied and the file is renamed
-  to `jobs.db.migrated`. An in-memory queue never imports.
-  `ItemId { playlist_id, position, video_id }` lives in the watchlist module;
-  the queue, `park`, `jobs.rs`, and the GUI use it. It keeps the old key
-  format, so open jobs keep their keys. Park and the waiting stage write in
-  one transaction (Phase 9).
-- **Source modules (`muzik-runner/src/sources/{mod,youtube,spotify,bandcamp}.rs`).**
-  `trait Source { fn load(..) -> LoadedSource; fn process(item, action, ctx) ->
-  Result<WatchItem, JobError>; fn stages(..); fn availability(item, action) ->
-  Availability; fn answers_import_questions(&self) -> bool; }` plus
-  `SourceKind::parse_input` in core for the add step. `runner/watchlist.rs`
-  keeps the `Operations` adapter and dispatches by kind one time.
-  `queue.rs::release_spotify_questions` asks the source. The Bandcamp
-  `ensure` step moves from the GUI bridge into the watchlist load. The CLI
-  `bandcamp` command uses the Rust Bandcamp module, and the bandsnatch
-  dependency goes away.
-- **Waiting as a value.** `jobs::run_item` returns
-  `ItemOutcome::Waiting { stage, question }` and calls `Operations::park`
-  inside the transaction that saves the waiting stage, so park and waiting
-  state commit together. The runner's watchlist adapter parks there with
-  `muzik_jobs::park_on`. Each operation sets an explicit `Cell<Stage>`, and
-  the source modules map a failure to `JobError::Failed { stage }`.
-  `gates::{mark_stage, take_stage}` and the parking on the `item_waiting`
-  event are deleted; `item_waiting` stays only as an event for display.
-  Change during the work: the decide callback keeps `Result<Value, String>`,
-  because a typed error would change every `WorkflowOperations` method. The
-  one `Parked` slot stays, as an explicit parameter between the runner and
-  the adapter.
-- **Legacy cache.** A one-time import in `watchlist/legacy.rs` reads
-  `playlist_{id}.json` and `yt_{id}.txt`, writes the stage state into
-  muzik.db, and records `legacy_cache_imported` in a `meta` table (migration
-  3). `reconcile` keeps only: reset of stale `Running` stages at start, the
-  library lookup, and the output folder lookup.
-- **GUI app module (`muzik-runner/src/app.rs`).** `App` with typed methods
-  (`load_watchlist`, `edit_watchlist`, `refresh`, `run_item`, `start_workflow`,
-  `answer`, `cancel`, `jobs`) and an `AppEvent` enum. `apps/gui/src/bridge.rs`
-  shrinks to a thin adapter over `App`; `main.rs::message` matches on
-  `AppEvent`, not on strings. The GUI stops calling `muzik_runner::item_key`
-  and stops merging launcher defaults.
-  Change during the work: the runner `Sink` emits `AppEvent` (the CLI uses it
-  too). The request and response side stays a string command table for the
-  GUI-local settings commands (config, Spotify, Soulseek, Bandcamp, services,
-  library scan, thumbnails); those are not queue or watchlist logic.
+Keep validation and user text in `Jobs`. Keep admission rules in the store.
+Use the existing SQLite adapter and persistence seam. Do not add a generic
+storage trait or a new crate.
 
-### Out of scope
+`Jobs::item` already has a defect that one connection can show. `find_open`
+returns rows in id order. When a waiting row has a lower id than a queued or
+running row, `Jobs::item` cancels the waiting row and then reports busy.
+Write a failing test for this case before the change.
 
-- New features, new source kinds, and GUI layout changes.
-- The Python-era `watchlist.json` import (it already exists and stays).
-- `choices.rs` (clean and tested; no change).
+`Store` methods take `&self`, but an immediate rusqlite transaction needs
+`&mut Connection`. Change the admission methods to take `&mut self`. The
+`MutexGuard` from `Jobs::store` and the runner store guard give that access.
+Do not start the transaction with `unchecked_transaction`, because it starts
+a deferred transaction.
+
+The contract is atomic admission, not a unique row across every open status.
+`park_on` can create a waiting row before `run_job` finishes the running row.
+Preserve that transition and its shared transaction with the watchlist stage.
+Do not add an open-job unique index. Do not remove existing duplicate rows as
+part of this change. If active rows already exist, reject or retain them
+according to the caller policy without partly cancelling waiting rows.
+
+A resumed job can park again. `park_on` then finds no waiting row for its
+key and inserts one. `JobError::Waiting` becomes `ItemOutcome::Waiting` in
+`crates/muzik-store/src/watchlist/jobs.rs`, so `run_item` returns success
+and `run_job` calls `finish` on the running row. This path leaves one
+waiting row. `run_job` calls `reopen` only when a job that has a question
+is cancelled (`crates/muzik-runner/src/runner.rs:243`). Before Phase 1
+starts, check these two paths separately:
+
+- Normal second pause: confirm that the item has one waiting row and that
+  the earlier running row is done.
+- Cancellation of a resumed job: confirm whether `park_on` can insert a
+  waiting row before the cancellation result, so that `reopen` makes a
+  second waiting row. If it cannot, record why.
+
+Admission must cancel every waiting row for the key in either case.
+
+Result of the Phase 1 check (code inspection, 2026-10-06):
+
+- Normal second pause: the resumed row is `running`, so the `UPDATE` in
+  `park_on` matches no row and inserts one new waiting row. `run_item`
+  returns `ItemOutcome::Waiting`, `watchlist::action` returns success, and
+  `run_job` calls `finish` on the running row. The item has one waiting
+  row and one done row.
+- Cancellation of a resumed job: `park_on` cannot run before `reopen`.
+  `park_on` runs only in the `JobError::Waiting` branch of `run_item`, and
+  that branch becomes a success result. The adapter in
+  `crates/muzik-runner/src/watchlist.rs` converts any process error to
+  `JobError::Waiting` when a question is parked, also after a cancel. The
+  `JobError::Cancelled` branch does not call `park_on`, and only that result
+  makes `run_job` call `reopen`. After the cancel, the reopened row is the
+  only waiting row for the item.
+- `replace_waiting` cancels every waiting row for the key, so a duplicate
+  waiting row from an older database also goes away on the next request.
+
+The two-connection admission test with a barrier cannot run on the
+baseline, because the baseline has no store admission operation, and the
+baseline race between two autocommit statements does not fail reliably.
+The single-connection test `a_busy_item_keeps_its_older_waiting_job` in
+`crates/muzik-runner/src/queue.rs` is the test that fails on the baseline.
+
+### Conditional watchlist writes
+
+`WatchlistCheck::check` in `crates/muzik-runner/src/app.rs` owns a revision,
+load, reconcile, lock, revision, and save sequence. `Repository::revision`
+and `Repository::save` in `crates/muzik-store/src/watchlist.rs` use separate
+connections. The process mutex cannot prevent a second process from writing
+between the final revision check and save.
+
+Extend the repository interface to load a document with its revision from
+one read transaction. Add a conditional write operation in the same module.
+It must start an immediate transaction, compare the expected revision, and
+call the existing `write_changes` before it commits. Return a conflict
+separately from a storage error. A conflict must make no data changes.
+
+Keep `reconcile` outside the write transaction. In `WatchlistCheck::check`,
+use the repository operations and retain the three-attempt retry limit,
+busy checks, generation checks, and saved-card then checked-card events.
+
+`WatchlistCheck::busy` calls `Jobs::has_running`, which locks the `Jobs`
+mutex and reads the jobs table. The current code calls it while it holds
+the repository `WRITER` lock. Do the full busy check before the write
+starts. Then lock `gate`, check only `current()`, and run the conditional
+write. Release `gate` after the commit. This is the same order as
+`App::edit`: `gate` first, then the database write. Do not call `Jobs` while
+`gate` or a database write transaction is held. Check `busy` again before
+publishing results, and keep the existing `gate` lock around the publish.
+Revisions protect stored data; the application generation still controls
+which result the GUI displays.
+
+Result of the Phase 2 reproduction (2026-10-06): a temporary test ran the
+baseline sequence `revision`, `load`, `revision`, then a rename through a
+second `Repository`, then `save`. The saved title was `None`, so the rename
+was lost. With `load_revision` and `save_at`, the same interleaving returns
+`CheckedWrite::Conflict` and the rename stays. The committed tests check
+the stored results of the new interface, not the baseline sequence.
+
+Keep `Repository::update_with` and the atomic stage-and-question write used
+by `Operations::park`. Reuse normalization and changed-row detection so an
+unchanged document does not increment the revision. Restrict lower-level
+write operations only after their remaining callers have been checked.
+
+### Device sync execution checks
+
+`crates/muzik-sync/src/run.rs` already owns `select`, `prepare`, and `apply`.
+Keep that module. `Prepared` currently exposes mutable execution fields.
+`apply` accepts the target again and a separate `jobs` value, although
+`prepare` already received both. The CLI alone checks `fits`. The main
+purpose of this phase is that interface: one prepared value carries its
+own target, options, and capacity decision.
+
+Keep the prepared plan, target, and execution options together inside
+`Prepared`. Give the CLI read-only access to the information it needs for
+preview and progress. Apply a prepared operation once, using its own target
+and options. Adapt `apps/cli/src/sync.rs` and existing test callers together.
+
+Put the capacity decision in the sync module. The preview path must retain
+the current insufficient-space error, including during a dry run. Before
+`apply` removes or writes files, check that the target directory still
+exists and refresh the capacity estimate. Recalculate needed bytes and the
+space that the remaining stale files can release. Do not count a stale file
+that has already disappeared. Preserve the current behavior when available
+space cannot be measured. Keep error formatting and progress text in the CLI.
+
+The CLI calls `apply` immediately after the preview, with no confirmation
+step, and `prepare` measures space after it probes the tracks. The check
+before apply therefore covers only a short interval in the CLI. Keep it
+because it is cheap and protects any later caller with a longer interval.
+
+`available_bytes` uses `statvfs`, so an integration test cannot force a
+small capacity. Pass available space to a private capacity function, and
+test it in a `#[cfg(test)]` module in `src/run.rs`. Move the current `fits`
+test from `tests/run.rs:122` there, because it builds `Prepared` with
+public fields.
+
+Retain deletion protection for unreadable tracks, destination collision
+handling, encoding records, partial-file replacement, and separate transfer
+and record errors. Capacity remains an estimate. This change does not reserve
+space or guarantee that the device stays connected after a check.
+
+### Data format and rollback
+
+No phase needs a database schema migration or a new dependency. Keep the
+`MIGRATIONS` list in `crates/muzik-store/src/db.rs`, stored item keys, job
+statuses, watchlist JSON, and sync encoding records compatible.
+
+Verify existing migration tests and reopen a temporary database containing
+jobs, questions, watchlist state, and sync records after the changes. Verify
+that a failed transaction preserves the previous rows. Code rollback needs
+no database conversion. An older binary restores the earlier race risks;
+stop newer processes before testing a rollback on a copy of the data.
+
+Verification results (2026-10-06):
+
+- A temporary runner test wrote a job question, a waiting watchlist stage,
+  and a sync encoding record, reopened the database, and read the same
+  values. Two `Jobs` instances on one database admitted one item job,
+  rejected the second request as busy, cancelled the job from the other
+  instance, and admitted the item again.
+- A local watchlist check after a rename from a second `Repository` kept
+  the rename and sent it in `WatchlistUpdated`.
+- The baseline commit `f0208be` opened a copy of that database, read the
+  three records, and inserted a job. No schema conversion was necessary.
+- The CLI with a temporary HOME and beets config ran a dry run, a copy, a
+  rerun with all tracks up to date, `--delete` with an unreadable track
+  (the old device file stayed), and a sync to a missing target (refused).
+- The smoke fixtures were in the session scratch folder, not in `.tmp`.
+  The committed tests use `tempfile` and `Paths::under`, and
+  `mise run test-scoped` sets `TMPDIR` to `.tmp`. Real user data was not
+  used. The temporary tests were deleted after the run.
+
+### Scope limits
+
+Preserve the decisions for the string decision callback, `Parked`, source
+modules, and GUI-local commands. This plan does not change the GUI layout,
+job scheduling, provider behavior, legacy import policy, or device formats.
+It does not repair old duplicate jobs, guarantee file rollback after a
+transfer fails, or detect device identity after a remount.
 
 ## Implementation Phases
 
-### Phase 1: Settings, paths, and the decision agent as values
+Each phase includes its caller changes and tests. Run its focused checks and
+`mise run check` before its commit. Update this plan and TODO.md before
+splitting a phase. Mark the commit checkbox only after the commit succeeds.
 
-- Add `Paths` and `expand_home` to `crates/muzik-core/src/paths.rs`; make
-  `db::default_path`, `watchlist::Repository`, `app_config::path` take or use
-  `&Paths`.
-- Add `crates/muzik-runner/src/settings.rs` with `Settings::resolve`; move the
-  parsing from `local_workflow::parse` into it; use it in
-  `remote_workflow::supported`, `local_workflow::supported`,
-  `watchlist::Prepared`, the GUI `watchlist::Options`, and the CLI watchlist.
-- Add `crates/muzik-runner/src/agent.rs` with `Chooser`, `CodexChooser`,
-  `NoChooser`; pass it and the settings source in `runner::Options`.
-- Delete the four extra `~` expanders.
-- Fix `remote_workflow` test `selects_youtube_video_and_playlist` to use an
-  explicit `Paths::under(temp)`.
-  **Commit:** `refactor(runner): resolve settings and paths once and inject the decision agent`
+### Phase 1: Atomic queue admission
 
-### Phase 2: One yt-dlp module
+- Check the normal second pause (`finish`) and the cancellation of a
+  resumed job (`reopen`) separately. Confirm the number of waiting rows
+  each path leaves for one item. Record the result in this plan.
+- Add a failing single-connection test: a waiting row with a lower id and
+  a queued row for the same item. An explicit request must report busy and
+  leave the waiting row unchanged.
+- Extend `Store::enqueue` and the item admission operations in
+  `crates/muzik-store/src/jobs.rs` to own the transaction and caller policy.
+  Take `&mut self` and use an immediate transaction. Return whether
+  admission inserted a job or retained an existing job.
+- Replace the check-and-write sequences in `Jobs::item` and `run_refresh`
+  with calls through that interface. Count only inserted refresh jobs.
+- Keep `park_on`, `answer`, `reopen`, cancellation, and legacy import
+  compatible with the existing pause and resume path.
+- Extend the store tests with two connections to one temporary database.
+  Cover competing admissions, different item keys, waiting replacement,
+  and rollback if insertion fails after cancellation.
+- Extend the current runner tests only for caller-specific behavior:
+  explicit requests report busy, refresh retains a job, and pause, answer,
+  and resume still work. The existing queue test name mentions a waiting
+  job but does not create one; add that case to its fixture.
+- The baseline race is between two autocommit statements in
+  `Store::enqueue`. Two connections cannot stop at that point without a
+  hook or timing. Do not add a hook. Use the partial-cancellation test as
+  the test that fails on the baseline. After the change, add a test that
+  runs competing admissions from two connections with a barrier and checks
+  that only one open job exists. Record that this test does not fail
+  reliably on the baseline. Do not add public test hooks or source-absence
+  tests.
+- Run `cargo test --locked -p muzik-store -p muzik-runner` and
+  `mise run check`.
 
-- Add `crates/muzik-workflow/src/ytdlp.rs`; move the fake-script tests from
-  `remote_workflow.rs` into it.
-- Replace the yt-dlp code in `remote_workflow.rs`, `runner/watchlist.rs`,
-  `discovery.rs`, `apps/cli/src/download.rs`, `apps/cli/src/workflow.rs`.
-  **Commit:** `refactor(workflow): run yt-dlp through one cancellable module`
+**Commit:** `fix(jobs): make queue admission atomic across processes`
 
-### Phase 3: Soulseek search and fetch in muzik-soulseek
+### Phase 2: Atomic checked watchlist writes
 
-- Add `crates/muzik-soulseek/src/fetch.rs` with `Session::search` and
-  `Session::fetch`; move timeouts into `fetch::Timeouts`.
-- Use them in `remote_workflow::soulseek_download`, `quality.rs`
-  `SoulseekBackend`, and `apps/cli/src/soulseek.rs`.
-  **Commit:** `refactor(soulseek): search and fetch through one blocking interface`
+- Extend `Repository` in `crates/muzik-store/src/watchlist.rs` with a coherent
+  document-and-revision read and a conditional transaction write. Reuse
+  `read_document`, normalization, and `write_changes`.
+- Replace the external revision-lock-save sequence in
+  `WatchlistCheck::check`. Keep reconciliation outside the transaction and
+  preserve retry, busy, generation, and event behavior.
+- Run the full busy check before the write. Hold `gate` around the
+  conditional write and check only `current()` inside it. Do not call
+  `Jobs` while `gate` or a write transaction is held.
+- Extend `crates/muzik-store/tests/watchlist.rs` to cover a concurrent source
+  edit, a concurrent stage change, a stale write conflict, a successful
+  retry, an unchanged document, and transaction rollback on a write error.
+  Use separate connections to the same temporary database.
+- Keep `crates/muzik-store/tests/watchlist_jobs.rs` coverage for the combined
+  waiting stage and question write. Preserve application event coverage in
+  `crates/muzik-runner/src/app.rs` and pause/resume coverage in `runner.rs`.
+- Reproduce a stale overwrite against the baseline and confirm that the
+  repository interface preserves the other writer's committed changes.
+  Tests must check stored results, not the use of a mutex or SQL text.
+- Run `cargo test --locked -p muzik-store -p muzik-runner` and
+  `mise run check`.
 
-### Phase 4: One import decision policy
+**Commit:** `fix(watchlist): make checked writes atomic across processes`
 
-- Add `crates/muzik-import/src/decide.rs` with `ImportPolicy` and
-  `decide_album`; move the rules from `local_workflow::organize`.
-- Use it in `apps/cli/src/import.rs` and `organize.rs`; add a `--duplicates`
-  option to `muzik import`.
-- Test the policy matrix (interactive × force × duplicates × has-duplicates).
-  **Commit:** `fix(import): apply the duplicates setting on every import path`
+### Phase 3: Device sync owns its execution conditions
 
-### Phase 5: CLI workflow through the runner
+- Make execution state in `Prepared` private in
+  `crates/muzik-sync/src/run.rs`. Store its target and options there. Retain
+  only the read access needed by the CLI. Update `apply` to consume that
+  state without accepting a second target.
+- Centralize the capacity decision. Use it for preview and before apply.
+  Refresh the target, needed-byte, stale-file, and available-space checks
+  before the first file change.
+- Adapt `apps/cli/src/sync.rs` to the preview and execution interface. Keep
+  dry-run output, progress, failure exit behavior, and record warnings.
+- Adapt `crates/muzik-sync/tests/run.rs` to the real interface. Test refusal
+  before deletion or transfer when the target is gone. Test a stale file
+  removed between preview and apply.
+- Pass available space to a private capacity function. Test insufficient
+  space and unknown space in a `#[cfg(test)]` module in `src/run.rs`. Move
+  the `fits` test from `tests/run.rs:122` into that module.
+- Use temporary files and the existing SQLite and probe adapters. Do not
+  add a public hook or dependency solely for tests.
+- Preserve existing collision, encoding-change, unreadable-track, copy,
+  and record-error coverage in `tests/run.rs` and `tests/sync.rs`.
+- Run `cargo test --locked -p muzik-sync -p muzik-cli` and
+  `mise run check`.
 
-- Add `compilation` to `WorkflowOptions` and pass it to `SplitOptions`.
-- `apps/cli/src/workflow.rs::run` enqueues and drains; delete
-  `CliOperations`; the CLI `ask` handles `ChapterEdit` with the editor.
-  **Commit:** `refactor(cli): run the workflow command through the shared runner`
-
-### Phase 6: Typed watchlist item
-
-- Add `crates/muzik-core/src/watchlist/item.rs` with the typed document and
-  transition methods; use it in `watchlist.rs`, `jobs.rs`, `reconcile.rs`,
-  `view.rs`, and `runner/watchlist.rs`.
-- Delete the three `set_stage` copies, `stage_path`, `set_path`,
-  `view::find_audio` and `runner::downloaded_audio` in favor of the methods.
-- Keep the JSON shape; add a round-trip test on a stored document.
-  **Commit:** `refactor(watchlist): type the watchlist item and own its stage transitions`
-
-### Phase 7: Job queue in muzik.db and one item identity
-
-- muzik.db migration 2 with the `jobs` table; `Store::from_connection`;
-  one-time copy of open `jobs.db` jobs; rename to `jobs.db.migrated`.
-- Add `ItemId`; use it in `queue.rs`, `runner.rs::park_item`, `jobs.rs`, and
-  the GUI; write park and waiting state in one transaction.
-  **Commit:** `feat(jobs): store the job queue in muzik.db with one item identity`
-
-### Phase 8: Source modules
-
-- Add `crates/muzik-runner/src/sources/`; move `process_youtube`,
-  `process_spotify`, `process_bandcamp`, the item mapping, and the
-  availability rules into one module per kind.
-- Move the Bandcamp `ensure` step into the watchlist load; ask the source in
-  `release_spotify_questions`.
-- Replace the bandsnatch CLI path with the Rust Bandcamp module; remove the
-  bandsnatch service check and docs.
-  **Commit:** `refactor(watchlist): give each source kind one module behind a Source seam`
-
-### Phase 9: Waiting for a choice as a returned value
-
-- Typed `DecisionError` for the decide callback; `ItemOutcome::Waiting`
-  carries the question; the runner parks from it.
-- Delete `gates::{mark_stage, take_stage}`, `Parked`, and the event-driven
-  park.
-- Add an end-to-end test: decide → park → answer → resume through the real
-  watchlist adapter with a fake source.
-  **Commit:** `refactor(runner): return a pause for a choice instead of side channels`
-
-### Phase 10: Retire the legacy cache reconcile
-
-- muzik.db migration 3 (`meta` table); `watchlist/legacy.rs` one-time import.
-- Shrink `reconcile.rs` to the stale-run reset, the library lookup, and the
-  output lookup; update `crates/muzik-core/tests/watchlist.rs`.
-  **Commit:** `refactor(watchlist): import the legacy cache once and slim the reconcile`
-
-### Phase 11: Typed application module behind the GUI
-
-- Add `crates/muzik-runner/src/app.rs` (`App`, `AppEvent`); move the watchlist
-  load, reconcile-and-save, and retry logic out of `apps/gui/src/bridge.rs`.
-- `main.rs` matches on `AppEvent`; delete the string command table and the
-  `pending` / `latest_reads` command-string bookkeeping where `App` covers it.
-- Bridge tests use `Paths::under(temp)` and `NoChooser`.
-  **Commit:** `refactor(gui): drive the desktop app through a typed application module`
+**Commit:** `refactor(sync): own execution checks in the prepared sync`
 
 ## Risks & Tradeoffs
 
-- **Size.** Eleven phases touch most crates. Each phase must pass `mise run
-  check` before its commit, so a regression stops at its phase.
-- **Stored data.** Phase 6 keeps the JSON shape, so no data changes. Phases 7
-  and 10 change muzik.db; each migration runs in one transaction, keeps the
-  old file as `*.migrated`, and has a test that opens a pre-migration fixture.
-- **Behavior changes that are intended.** A direct `muzik workflow` run now
-  asks the import match question in a terminal (as the queue path does) and
-  applies `--duplicates`. `muzik bandcamp` stops using bandsnatch.
-- **Item identity.** `ItemId` keeps the old `playlist:position:video_id`
-  key, so no stored key changes.
-- **Tests and real data.** A test that starts a runner on the user paths can
-  move the real `jobs.db`. Every test uses `Paths::under(temp)`, and an
-  in-memory queue never imports.
-- **GUI phase.** GPUI code is hard to test; the `App` module carries the
-  logic so tests run without GPUI.
+- SQLite serializes writers. Keep transactions short and preserve the
+  existing five-second busy timeout. Return storage errors without an
+  unbounded retry loop.
+- A process mutex can hide a concurrency defect in tests. Use independent
+  connections and check committed results. A second process is needed when
+  a test would otherwise share the same global mutex.
+- Waiting and running rows can coexist during a pause. A broad unique
+  constraint would reject valid work. Preserve this lifecycle explicitly.
+- Generation and database revision have different purposes. Preserve both
+  controls so a safe database write does not permit an old GUI result.
+- Consuming `Prepared` changes the Rust interface. Update every in-repository
+  caller in the same phase. Preserve the CLI behavior apart from the
+  intended refusal when execution conditions have changed.
+- Sync checks cannot prevent later filesystem changes or reserve capacity.
+  Preserve existing transfer errors and partial-file handling.
 
 ## Open Questions
 
-- None that block the work. If a phase shows that a design above does not
-  fit, PLAN.md and TODO.md change before that phase continues.
+- None require a product decision before implementation. Method names and
+  private helpers can follow existing naming when each phase starts.
+- If a race cannot be reproduced with a reliable regression, record that
+  limit and revise the verification step before declaring the fix tested.
+- If implementation needs a schema change, update this plan with migration,
+  data repair, and rollback steps before making that change.
