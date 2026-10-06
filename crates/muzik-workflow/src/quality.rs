@@ -9,12 +9,11 @@ use muzik_soulseek::ranking::{format as file_format, rank};
 use muzik_soulseek::session::{Session, SessionSettings};
 use muzik_soulseek::types::Candidate;
 use serde_json::{Value, json};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const DURATION_TOLERANCE: f64 = 10.0;
+use crate::upgrade::{DURATION_TOLERANCE, Wanted, safe_match, tokens};
 
 #[derive(Debug)]
 pub struct QualityUpgradeResult {
@@ -161,7 +160,17 @@ fn check_with_backend(
     let selected = rank(candidates, &query, prefer, 20)
         .into_iter()
         .map(|item| item.candidate)
-        .find(|candidate| safe_match(candidate, &track) && better(candidate, &current));
+        .find(|candidate| {
+            safe_match(
+                candidate,
+                &Wanted {
+                    artist: &track.artist,
+                    title: &track.title,
+                    album: "",
+                    duration: Some(track.duration),
+                },
+            ) && better(candidate, &current)
+        });
     let Some(candidate) = selected else {
         on_event(message(
             "Quality check: no safe, better Soulseek file was found.".into(),
@@ -317,88 +326,6 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-fn tokens(value: &str) -> HashSet<String> {
-    value
-        .split(|character: char| !character.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|word| {
-            word.len() >= 2
-                && !matches!(
-                    word.as_str(),
-                    "the" | "and" | "feat" | "ft" | "official" | "audio"
-                )
-        })
-        .collect()
-}
-
-fn overlap(need: &HashSet<String>, haystack: &HashSet<String>) -> bool {
-    !need.is_empty() && need.intersection(haystack).count() * 3 >= need.len() * 2
-}
-
-fn safe_match(candidate: &Candidate, track: &Track) -> bool {
-    if candidate.username.trim().is_empty() || candidate.files.is_empty() {
-        return false;
-    }
-    let files = candidate
-        .files
-        .iter()
-        .filter(|file| !file_format(file).is_empty())
-        .collect::<Vec<_>>();
-    if files.len() != candidate.files.len() {
-        return false;
-    }
-    let names = files
-        .iter()
-        .map(|file| file.name.as_str())
-        .collect::<Vec<_>>();
-    let all_text = tokens(&names.join(" "));
-    let title_text = if files.len() == 1 {
-        tokens(files[0].name.rsplit(['/', '\\']).next().unwrap_or(""))
-    } else {
-        let common_parent = files[0]
-            .name
-            .rsplit_once(['/', '\\'])
-            .map(|(parent, _)| parent);
-        if common_parent.is_none()
-            || files.iter().any(|file| {
-                file.name.rsplit_once(['/', '\\']).map(|(parent, _)| parent) != common_parent
-            })
-        {
-            return false;
-        }
-        tokens(common_parent.unwrap_or(""))
-    };
-    if !overlap(&tokens(&track.artist), &all_text) || !overlap(&tokens(&track.title), &title_text) {
-        return false;
-    }
-    let source_versions = version_tokens(&track.title);
-    if version_tokens(&names.join(" "))
-        .iter()
-        .any(|version| !source_versions.contains(version))
-    {
-        return false;
-    }
-    let durations = files
-        .iter()
-        .map(|file| file.duration_seconds.map(f64::from))
-        .collect::<Option<Vec<_>>>();
-    durations.is_some_and(|values| {
-        (values.iter().sum::<f64>() - track.duration).abs() <= DURATION_TOLERANCE
-    })
-}
-
-fn version_tokens(value: &str) -> HashSet<String> {
-    tokens(value)
-        .into_iter()
-        .filter(|word| {
-            matches!(
-                word.as_str(),
-                "live" | "remix" | "remaster" | "remastered" | "cover" | "instrumental" | "karaoke"
-            )
-        })
-        .collect()
 }
 
 fn better(candidate: &Candidate, current: &MeasuredQuality) -> bool {
@@ -684,27 +611,6 @@ mod tests {
             },
         )
         .unwrap()
-    }
-
-    #[test]
-    fn rejects_wrong_title_or_duration_before_download() {
-        let track = Track {
-            artist: "Artist".into(),
-            title: "Album".into(),
-            duration: 3600.0,
-        };
-        assert!(!safe_match(
-            &candidate("Artist/Other/Artist - Other.flac", 3600, Some(950)),
-            &track
-        ));
-        assert!(!safe_match(
-            &candidate("Artist/Album/Artist - Album.flac", 100, Some(950)),
-            &track
-        ));
-        assert!(!safe_match(
-            &candidate("Artist/Album/Artist - Album Remix.flac", 3600, Some(950)),
-            &track
-        ));
     }
 
     #[test]

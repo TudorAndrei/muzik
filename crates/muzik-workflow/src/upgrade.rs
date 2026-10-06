@@ -1,7 +1,7 @@
 use muzik_library::{Item, SqlValue, path_from_sql, scalar_text};
 use muzik_media::quality::MeasuredQuality;
 use muzik_soulseek::ranking::RankedCandidate;
-use muzik_soulseek::types::{Candidate, FileEntry};
+use muzik_soulseek::types::Candidate;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -121,8 +121,20 @@ pub fn select_upgrade(
                 .iter()
                 .map(move |file| (ranked, file))
         })
-        .filter(|(ranked, file)| safe_track_match(track, file, &ranked.candidate.username))
         .filter_map(|(ranked, file)| {
+            let one_file = Candidate {
+                files: vec![file.clone()],
+                ..ranked.candidate.clone()
+            };
+            let wanted = Wanted {
+                artist: &track.artist,
+                title: &track.title,
+                album: &track.album,
+                duration: track.duration,
+            };
+            if !safe_match(&one_file, &wanted) {
+                return None;
+            }
             let format = muzik_soulseek::ranking::format(file);
             let score = quality_score(
                 format,
@@ -131,16 +143,7 @@ pub fn select_upgrade(
                 file.bit_depth,
                 prefer,
             );
-            (score > current).then(|| {
-                (
-                    Candidate {
-                        files: vec![file.clone()],
-                        ..ranked.candidate.clone()
-                    },
-                    score,
-                    ranked.score,
-                )
-            })
+            (score > current).then_some((one_file, score, ranked.score))
         })
         .max_by(|left, right| {
             left.1
@@ -150,63 +153,104 @@ pub fn select_upgrade(
         .map(|(candidate, _, ranking)| (candidate, ranking))
 }
 
-fn safe_track_match(track: &FlaggedTrack, file: &FileEntry, username: &str) -> bool {
-    if muzik_soulseek::ranking::format(file).is_empty() {
-        return false;
-    }
-    if let Some(duration) = track.duration {
-        let Some(found) = file.duration_seconds else {
-            return false;
-        };
-        if (duration - f64::from(found)).abs() > 10.0 {
-            return false;
-        }
-    }
-    let title = tokens(&track.title);
-    if title.is_empty() {
-        return false;
-    }
-    let artist = tokens(&track.artist);
-    if artist.is_empty() {
-        return false;
-    }
-    let path = tokens(&file.name);
-    let filename = file.name.rsplit(['/', '\\']).next().unwrap_or("");
-    let filename = tokens(filename);
-    let username = tokens(username);
-    let title_overlap = title
-        .iter()
-        .filter(|token| filename.contains(*token))
-        .count();
-    if title_overlap * 3 < title.len() * 2 {
-        return false;
-    }
-    let all = path.union(&username).cloned().collect::<HashSet<_>>();
-    if artist.iter().filter(|token| all.contains(*token)).count() * 3 < artist.len() * 2 {
-        return false;
-    }
-    let target = tokens(&format!("{} {}", track.title, track.album));
-    for marker in [
-        "live",
-        "remix",
-        "instrumental",
-        "karaoke",
-        "cover",
-        "demo",
-        "extended",
-    ] {
-        if filename.contains(marker) && !target.contains(marker) {
-            return false;
-        }
-    }
-    true
+pub const DURATION_TOLERANCE: f64 = 10.0;
+
+pub struct Wanted<'a> {
+    pub artist: &'a str,
+    pub title: &'a str,
+    pub album: &'a str,
+    pub duration: Option<f64>,
 }
 
-fn tokens(text: &str) -> HashSet<String> {
-    text.to_ascii_lowercase()
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| token.len() > 2)
-        .map(str::to_owned)
+pub(crate) fn tokens(value: &str) -> HashSet<String> {
+    value
+        .split(|character: char| !character.is_alphanumeric())
+        .map(str::to_lowercase)
+        .filter(|word| {
+            word.len() >= 2
+                && !matches!(
+                    word.as_str(),
+                    "the" | "and" | "feat" | "ft" | "official" | "audio"
+                )
+        })
+        .collect()
+}
+
+fn overlap(need: &HashSet<String>, haystack: &HashSet<String>) -> bool {
+    !need.is_empty() && need.intersection(haystack).count() * 3 >= need.len() * 2
+}
+
+pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
+    if candidate.username.trim().is_empty() || candidate.files.is_empty() {
+        return false;
+    }
+    let files = candidate
+        .files
+        .iter()
+        .filter(|file| !muzik_soulseek::ranking::format(file).is_empty())
+        .collect::<Vec<_>>();
+    if files.len() != candidate.files.len() {
+        return false;
+    }
+    let names = files
+        .iter()
+        .map(|file| file.name.as_str())
+        .collect::<Vec<_>>();
+    let all_text = tokens(&names.join(" "));
+    let title_text = if files.len() == 1 {
+        tokens(files[0].name.rsplit(['/', '\\']).next().unwrap_or(""))
+    } else {
+        let common_parent = files[0]
+            .name
+            .rsplit_once(['/', '\\'])
+            .map(|(parent, _)| parent);
+        if common_parent.is_none()
+            || files.iter().any(|file| {
+                file.name.rsplit_once(['/', '\\']).map(|(parent, _)| parent) != common_parent
+            })
+        {
+            return false;
+        }
+        tokens(common_parent.unwrap_or(""))
+    };
+    if !overlap(&tokens(wanted.artist), &all_text) || !overlap(&tokens(wanted.title), &title_text) {
+        return false;
+    }
+    let source_versions = version_tokens(&format!("{} {}", wanted.title, wanted.album));
+    if version_tokens(&names.join(" "))
+        .iter()
+        .any(|version| !source_versions.contains(version))
+    {
+        return false;
+    }
+    let Some(expected) = wanted.duration else {
+        return true;
+    };
+    let durations = files
+        .iter()
+        .map(|file| file.duration_seconds.map(f64::from))
+        .collect::<Option<Vec<_>>>();
+    durations
+        .is_some_and(|values| (values.iter().sum::<f64>() - expected).abs() <= DURATION_TOLERANCE)
+}
+
+fn version_tokens(value: &str) -> HashSet<String> {
+    tokens(value)
+        .into_iter()
+        .filter(|word| {
+            matches!(
+                word.as_str(),
+                "live"
+                    | "remix"
+                    | "remaster"
+                    | "remastered"
+                    | "cover"
+                    | "instrumental"
+                    | "karaoke"
+                    | "demo"
+                    | "extended"
+            )
+        })
         .collect()
 }
 
@@ -282,7 +326,7 @@ pub fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate, String> 
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedCandidate, FlaggedTrack, candidate_id, load_candidate, safe_track_match,
+        CachedCandidate, FlaggedTrack, Wanted, candidate_id, load_candidate, safe_match,
         save_candidate, scan_library, select_upgrade,
     };
     use muzik_library::{Fields, Library, SqlValue};
@@ -376,49 +420,152 @@ mod tests {
         }
     }
 
+    fn one(file: FileEntry) -> Candidate {
+        Candidate {
+            username: "peer".into(),
+            slots: 1,
+            speed: 1,
+            files: vec![file],
+        }
+    }
+
+    fn moon_river() -> Wanted<'static> {
+        Wanted {
+            artist: "Mara Vale",
+            title: "Moon River",
+            album: "Night Lines",
+            duration: Some(180.0),
+        }
+    }
+
     #[test]
     fn replacement_needs_title_artist_and_duration_evidence() {
-        let track = low_quality_track();
-        assert!(safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", Some(183)),
-            "peer"
+        let wanted = moon_river();
+        assert!(safe_match(
+            &one(file("Mara Vale/Moon River.flac", Some(183))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Another Song.flac", Some(180)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Another Song.flac", Some(180))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River/Another Song.flac", Some(180)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Moon River/Another Song.flac", Some(180))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Other/Moon River.flac", Some(180)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Other/Moon River.flac", Some(180))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon Lake.flac", Some(180)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Moon Lake.flac", Some(180))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River Live.flac", Some(180)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Moon River Live.flac", Some(180))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", Some(205)),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Moon River.flac", Some(205))),
+            &wanted
         ));
-        assert!(!safe_track_match(
-            &track,
-            &file("Mara Vale/Moon River.flac", None),
-            "peer"
+        assert!(!safe_match(
+            &one(file("Mara Vale/Moon River.flac", None)),
+            &wanted
         ));
+    }
+
+    #[test]
+    fn rejects_wrong_title_or_duration_before_download() {
+        let wanted = Wanted {
+            artist: "Artist",
+            title: "Album",
+            album: "",
+            duration: Some(3600.0),
+        };
+        assert!(!safe_match(
+            &one(file("Artist/Other/Artist - Other.flac", Some(3600))),
+            &wanted
+        ));
+        assert!(!safe_match(
+            &one(file("Artist/Album/Artist - Album.flac", Some(100))),
+            &wanted
+        ));
+        assert!(!safe_match(
+            &one(file("Artist/Album/Artist - Album Remix.flac", Some(3600))),
+            &wanted
+        ));
+    }
+
+    #[test]
+    fn extended_and_demo_files_need_the_marker_in_the_source() {
+        let file = one(file("Mara Vale/Moon River (Extended Mix).flac", Some(180)));
+        assert!(!safe_match(&file, &moon_river()));
+        assert!(safe_match(
+            &file,
+            &Wanted {
+                title: "Moon River (Extended Mix)",
+                ..moon_river()
+            }
+        ));
+    }
+
+    #[test]
+    fn remastered_files_need_the_marker_in_the_source_or_album() {
+        let file = one(file("Mara Vale/Moon River (Remastered).flac", Some(180)));
+        assert!(!safe_match(&file, &moon_river()));
+        assert!(safe_match(
+            &file,
+            &Wanted {
+                album: "Night Lines (Remastered)",
+                ..moon_river()
+            }
+        ));
+    }
+
+    #[test]
+    fn unknown_wanted_duration_skips_the_duration_check() {
+        let wanted = Wanted {
+            duration: None,
+            ..moon_river()
+        };
+        assert!(safe_match(
+            &one(file("Mara Vale/Moon River.flac", None)),
+            &wanted
+        ));
+    }
+
+    #[test]
+    fn user_name_is_not_artist_evidence() {
+        let mut candidate = one(file("Uploads/Moon River.flac", Some(180)));
+        candidate.username = "mara_vale".into();
+        assert!(!safe_match(&candidate, &moon_river()));
+    }
+
+    #[test]
+    fn album_candidates_match_the_title_against_their_folder() {
+        let wanted = Wanted {
+            artist: "Artist",
+            title: "Album",
+            album: "",
+            duration: Some(360.0),
+        };
+        let together = Candidate {
+            files: vec![
+                file("Artist/Album/01 a.flac", Some(180)),
+                file("Artist/Album/02 b.flac", Some(180)),
+            ],
+            ..one(file("x.flac", None))
+        };
+        assert!(safe_match(&together, &wanted));
+        let apart = Candidate {
+            files: vec![
+                file("Artist/Album/01 a.flac", Some(180)),
+                file("Artist/Other/02 b.flac", Some(180)),
+            ],
+            ..one(file("x.flac", None))
+        };
+        assert!(!safe_match(&apart, &wanted));
     }
 
     #[test]
