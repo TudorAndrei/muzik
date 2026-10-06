@@ -66,6 +66,9 @@ fn wait_for_code(
         match listener.accept() {
             Ok((mut stream, _)) => {
                 stream
+                    .set_nonblocking(false)
+                    .map_err(|error| error.to_string())?;
+                stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .map_err(|error| error.to_string())?;
                 let mut line = String::new();
