@@ -12,7 +12,10 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+mod run;
+
 pub use muzik_core::ffmpeg::Encoding;
+pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection};
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
