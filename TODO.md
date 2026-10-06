@@ -46,26 +46,26 @@
 - [x] Test a stale file removed between preview and apply.
 - [x] Preserve collision, encoding-change, unreadable-track, copy, and record-error coverage.
 - [x] Pass `cargo test --locked -p muzik-sync -p muzik-cli` and `mise run check`.
-- [ ] Commit: `refactor(sync): own execution checks in the prepared sync`
+- [x] Commit: `refactor(sync): own execution checks in the prepared sync`
 
 ## Verification
 
-- [ ] No behavior change in CLI flags, output, dry runs, progress, item keys, saved formats, or GUI events, except the documented race fixes and execution refusals.
-- [ ] Existing database migration tests pass; the schema version and stored formats remain compatible.
-- [ ] Reopen a temporary database with job questions, watchlist stages, and sync encoding records; verify that the rows retain their values.
-- [ ] Verify queue and watchlist transaction rollback after a controlled write failure.
-- [ ] Verify code rollback on a database copy without a schema conversion; stop newer processes first.
-- [ ] Smoke-test two `Jobs` instances on the same temporary database: request one item, retain or reject the second request, then cancel it.
-- [ ] Smoke-test a local watchlist check with a concurrent source edit; verify the saved edit and current display result.
-- [ ] Smoke-test sync with a temporary library and device directory: preview, copy, rerun, and deletion blocked by an unreadable track.
-- [ ] Use `.tmp` and `Paths::under` for fixtures; keep real user data outside the test paths.
-- [ ] Run `mise run test-scoped` on macOS and the full `mise run check` gate after the final phase.
-- [ ] Tests assert current behavior or persistence contracts; no tombstone tests or public test-only hooks were added.
+- [x] No behavior change in CLI flags, output, dry runs, progress, item keys, saved formats, or GUI events, except the documented race fixes and execution refusals.
+- [x] Existing database migration tests pass; the schema version and stored formats remain compatible.
+- [x] Reopen a temporary database with job questions, watchlist stages, and sync encoding records; verify that the rows retain their values.
+- [x] Verify queue and watchlist transaction rollback after a controlled write failure.
+- [x] Verify code rollback on a database copy without a schema conversion; stop newer processes first.
+- [x] Smoke-test two `Jobs` instances on the same temporary database: request one item, retain or reject the second request, then cancel it.
+- [x] Smoke-test a local watchlist check with a concurrent source edit; verify the saved edit and current display result.
+- [x] Smoke-test sync with a temporary library and device directory: preview, copy, rerun, and deletion blocked by an unreadable track.
+- [x] Use `.tmp` and `Paths::under` for fixtures; keep real user data outside the test paths.
+- [x] Run `mise run test-scoped` on macOS and the full `mise run check` gate after the final phase.
+- [x] Tests assert current behavior or persistence contracts; no tombstone tests or public test-only hooks were added.
 
 ## Review
 
-- [ ] Review each phase and its tests before its commit.
-- [ ] Update PLAN.md and TODO.md before changing the phase scope.
-- [ ] Mark each commit complete only after that commit succeeds.
-- [ ] Verify that all phase commits are scoped conventional commits.
-- [ ] Check all implementation and verification items before closing the work.
+- [x] Review each phase and its tests before its commit.
+- [x] Update PLAN.md and TODO.md before changing the phase scope.
+- [x] Mark each commit complete only after that commit succeeds.
+- [x] Verify that all phase commits are scoped conventional commits.
+- [x] Check all implementation and verification items before closing the work.

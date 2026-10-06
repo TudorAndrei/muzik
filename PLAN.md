@@ -188,6 +188,25 @@ that a failed transaction preserves the previous rows. Code rollback needs
 no database conversion. An older binary restores the earlier race risks;
 stop newer processes before testing a rollback on a copy of the data.
 
+Verification results (2026-10-06):
+
+- A temporary runner test wrote a job question, a waiting watchlist stage,
+  and a sync encoding record, reopened the database, and read the same
+  values. Two `Jobs` instances on one database admitted one item job,
+  rejected the second request as busy, cancelled the job from the other
+  instance, and admitted the item again.
+- A local watchlist check after a rename from a second `Repository` kept
+  the rename and sent it in `WatchlistUpdated`.
+- The baseline commit `f0208be` opened a copy of that database, read the
+  three records, and inserted a job. No schema conversion was necessary.
+- The CLI with a temporary HOME and beets config ran a dry run, a copy, a
+  rerun with all tracks up to date, `--delete` with an unreadable track
+  (the old device file stayed), and a sync to a missing target (refused).
+- The smoke fixtures were in the session scratch folder, not in `.tmp`.
+  The committed tests use `tempfile` and `Paths::under`, and
+  `mise run test-scoped` sets `TMPDIR` to `.tmp`. Real user data was not
+  used. The temporary tests were deleted after the run.
+
 ### Scope limits
 
 Preserve the decisions for the string decision callback, `Parked`, source
