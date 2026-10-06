@@ -130,7 +130,7 @@ impl Library {
                 Ok(Item {
                     id,
                     fields,
-                    attributes: self.attributes("item_attributes", id)?,
+                    attributes: self.attributes(Entity::Item, id)?,
                 })
             })
             .transpose()
@@ -146,15 +146,15 @@ impl Library {
                 Ok(Album {
                     id,
                     fields,
-                    attributes: self.attributes("album_attributes", id)?,
+                    attributes: self.attributes(Entity::Album, id)?,
                 })
             })
             .transpose()
     }
 
     pub fn items(&self) -> Result<Vec<Item>, Error> {
-        let rows = self.rows("SELECT * FROM items ORDER BY id", "items")?;
-        let attributes = self.all_attributes("item_attributes")?;
+        let rows = self.rows(Entity::Item)?;
+        let attributes = self.all_attributes(Entity::Item)?;
         Ok(rows
             .into_iter()
             .map(|(id, fields)| Item {
@@ -166,8 +166,8 @@ impl Library {
     }
 
     pub fn albums(&self) -> Result<Vec<Album>, Error> {
-        let rows = self.rows("SELECT * FROM albums ORDER BY id", "albums")?;
-        let attributes = self.all_attributes("album_attributes")?;
+        let rows = self.rows(Entity::Album)?;
+        let attributes = self.all_attributes(Entity::Album)?;
         Ok(rows
             .into_iter()
             .map(|(id, fields)| Album {
@@ -186,11 +186,11 @@ impl Library {
         let mut items = Vec::new();
         for row in rows {
             let fields = row?;
-            let id = row_id(&fields, "items")?;
+            let id = row_id(&fields, Entity::Item.table())?;
             items.push(Item {
                 id,
                 fields,
-                attributes: self.attributes("item_attributes", id)?,
+                attributes: self.attributes(Entity::Item, id)?,
             });
         }
         Ok(items)
@@ -212,35 +212,35 @@ impl Library {
         Ok(albums)
     }
 
-    fn rows(&self, query: &str, table: &'static str) -> Result<Vec<(i64, Fields)>, Error> {
-        let mut statement = self.connection.prepare(query)?;
+    fn rows(&self, entity: Entity) -> Result<Vec<(i64, Fields)>, Error> {
+        let mut statement = self
+            .connection
+            .prepare(&format!("SELECT * FROM {} ORDER BY id", entity.table()))?;
         let rows = statement.query_map([], row_fields)?;
         rows.map(|row| {
             let fields = row?;
-            let id = row_id(&fields, table)?;
+            let id = row_id(&fields, entity.table())?;
             Ok((id, fields))
         })
         .collect()
     }
 
-    fn attributes(&self, table: &'static str, id: i64) -> Result<Fields, Error> {
-        let query = match table {
-            "item_attributes" => "SELECT key, value FROM item_attributes WHERE entity_id = ?1",
-            _ => "SELECT key, value FROM album_attributes WHERE entity_id = ?1",
-        };
-        let mut statement = self.connection.prepare(query)?;
+    fn attributes(&self, entity: Entity, id: i64) -> Result<Fields, Error> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT key, value FROM {} WHERE entity_id = ?1",
+            entity.attribute_table()
+        ))?;
         let rows = statement.query_map([id], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Value>(1)?))
         })?;
         rows.collect::<Result<Fields, _>>().map_err(Error::from)
     }
 
-    fn all_attributes(&self, table: &'static str) -> Result<BTreeMap<i64, Fields>, Error> {
-        let query = match table {
-            "item_attributes" => "SELECT entity_id, key, value FROM item_attributes",
-            _ => "SELECT entity_id, key, value FROM album_attributes",
-        };
-        let mut statement = self.connection.prepare(query)?;
+    fn all_attributes(&self, entity: Entity) -> Result<BTreeMap<i64, Fields>, Error> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT entity_id, key, value FROM {}",
+            entity.attribute_table()
+        ))?;
         let rows = statement.query_map([], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -254,6 +254,28 @@ impl Library {
             attributes.entry(id).or_default().insert(key, value);
         }
         Ok(attributes)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Entity {
+    Item,
+    Album,
+}
+
+impl Entity {
+    fn table(self) -> &'static str {
+        match self {
+            Self::Item => "items",
+            Self::Album => "albums",
+        }
+    }
+
+    fn attribute_table(self) -> &'static str {
+        match self {
+            Self::Item => "item_attributes",
+            Self::Album => "album_attributes",
+        }
     }
 }
 

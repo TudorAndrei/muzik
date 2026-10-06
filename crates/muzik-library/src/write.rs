@@ -1,6 +1,6 @@
 //! Transactional writes to the existing beets schema.
 
-use crate::{Error, Fields, Library, Value};
+use crate::{Entity, Error, Fields, Library, Value};
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension, Transaction};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -159,23 +159,11 @@ impl Library {
 
 impl LibraryWrite<'_> {
     pub fn insert_album(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
-        insert(
-            &self.transaction,
-            "albums",
-            "album_attributes",
-            fields,
-            attributes,
-        )
+        insert(&self.transaction, Entity::Album, fields, attributes)
     }
 
     pub fn insert_item(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
-        insert(
-            &self.transaction,
-            "items",
-            "item_attributes",
-            fields,
-            attributes,
-        )
+        insert(&self.transaction, Entity::Item, fields, attributes)
     }
 
     pub fn update_album(
@@ -184,14 +172,7 @@ impl LibraryWrite<'_> {
         fields: &Fields,
         attributes: &Fields,
     ) -> Result<(), Error> {
-        update(
-            &self.transaction,
-            "albums",
-            "album_attributes",
-            id,
-            fields,
-            attributes,
-        )
+        update(&self.transaction, Entity::Album, id, fields, attributes)
     }
 
     pub fn update_item(
@@ -200,14 +181,7 @@ impl LibraryWrite<'_> {
         fields: &Fields,
         attributes: &Fields,
     ) -> Result<(), Error> {
-        update(
-            &self.transaction,
-            "items",
-            "item_attributes",
-            id,
-            fields,
-            attributes,
-        )
+        update(&self.transaction, Entity::Item, id, fields, attributes)
     }
 
     pub fn remove_album(&mut self, id: i64) -> Result<(), Error> {
@@ -219,9 +193,9 @@ impl LibraryWrite<'_> {
             .collect::<Result<Vec<_>, _>>()?;
         drop(statement);
         for item_id in item_ids {
-            remove(&self.transaction, "items", "item_attributes", item_id)?;
+            remove(&self.transaction, Entity::Item, item_id)?;
         }
-        remove(&self.transaction, "albums", "album_attributes", id)
+        remove(&self.transaction, Entity::Album, id)
     }
 
     pub fn remove_item(&mut self, id: i64) -> Result<(), Error> {
@@ -232,7 +206,7 @@ impl LibraryWrite<'_> {
             })
             .optional()?
             .flatten();
-        remove(&self.transaction, "items", "item_attributes", id)?;
+        remove(&self.transaction, Entity::Item, id)?;
         if let Some(album_id) = album_id {
             let remaining: i64 = self.transaction.query_row(
                 "SELECT count(*) FROM items WHERE album_id = ?1",
@@ -240,7 +214,7 @@ impl LibraryWrite<'_> {
                 |row| row.get(0),
             )?;
             if remaining == 0 {
-                remove(&self.transaction, "albums", "album_attributes", album_id)?;
+                remove(&self.transaction, Entity::Album, album_id)?;
             }
         }
         Ok(())
@@ -268,11 +242,11 @@ fn validate(connection: &Connection, table: &'static str, fields: &Fields) -> Re
 
 fn insert(
     connection: &Connection,
-    table: &'static str,
-    attribute_table: &'static str,
+    entity: Entity,
     fields: &Fields,
     attributes: &Fields,
 ) -> Result<i64, Error> {
+    let table = entity.table();
     validate(connection, table, fields)?;
     if fields.is_empty() {
         connection.execute(&format!("INSERT INTO {table} DEFAULT VALUES"), [])?;
@@ -287,18 +261,18 @@ fn insert(
         connection.execute(&sql, params_from_iter(fields.values()))?;
     }
     let id = connection.last_insert_rowid();
-    put_attributes(connection, attribute_table, id, attributes)?;
+    put_attributes(connection, entity, id, attributes)?;
     Ok(id)
 }
 
 fn update(
     connection: &Connection,
-    table: &'static str,
-    attribute_table: &'static str,
+    entity: Entity,
     id: i64,
     fields: &Fields,
     attributes: &Fields,
 ) -> Result<(), Error> {
+    let table = entity.table();
     validate(connection, table, fields)?;
     let exists: bool = connection.query_row(
         &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id = ?1)"),
@@ -320,21 +294,20 @@ fn update(
         values.push(&id_value);
         connection.execute(&sql, params_from_iter(values))?;
     }
-    put_attributes(connection, attribute_table, id, attributes)
+    put_attributes(connection, entity, id, attributes)
 }
 
-fn remove(
-    connection: &Connection,
-    table: &'static str,
-    attribute_table: &'static str,
-    id: i64,
-) -> Result<(), Error> {
+fn remove(connection: &Connection, entity: Entity, id: i64) -> Result<(), Error> {
+    let table = entity.table();
     let removed = connection.execute(&format!("DELETE FROM {table} WHERE id = ?1"), [id])?;
     if removed == 0 {
         return Err(Error::MissingRow { table, id });
     }
     connection.execute(
-        &format!("DELETE FROM {attribute_table} WHERE entity_id = ?1"),
+        &format!(
+            "DELETE FROM {} WHERE entity_id = ?1",
+            entity.attribute_table()
+        ),
         [id],
     )?;
     Ok(())
@@ -342,10 +315,11 @@ fn remove(
 
 fn put_attributes(
     connection: &Connection,
-    table: &'static str,
+    entity: Entity,
     id: i64,
     attributes: &Fields,
 ) -> Result<(), Error> {
+    let table = entity.attribute_table();
     for (key, value) in attributes {
         connection.execute(
             &format!("INSERT INTO {table} (entity_id, key, value) VALUES (?1, ?2, ?3) ON CONFLICT(entity_id, key) DO UPDATE SET value = excluded.value"),
