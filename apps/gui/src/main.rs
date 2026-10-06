@@ -1,7 +1,6 @@
 mod bridge;
 mod native;
 mod pages;
-mod services;
 mod style;
 mod thumbnails;
 mod watch_table;

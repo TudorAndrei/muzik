@@ -1,3 +1,4 @@
+use muzik_core::paths::Paths;
 use muzik_core::{app_config, paths};
 use muzik_import::beets;
 use muzik_library::Library;
@@ -32,7 +33,7 @@ pub fn check() -> Result<(), String> {
     let port = settings.server_port.unwrap_or(DEFAULT_SERVER_PORT);
     let download_dir = setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir")
         .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| paths::data_dir().join("soulseek"));
+        .unwrap_or_else(|| Paths::user().soulseek());
     let _session =
         Session::connect(settings).map_err(|error| format!("Soulseek check failed: {error}"))?;
     println!("Soulseek reachable");

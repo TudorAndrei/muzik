@@ -4577,6 +4577,7 @@ dependencies = [
  "muzik-spotify",
  "muzik-workflow",
  "rusqlite",
+ "serde",
  "serde_json",
  "strum",
  "strum_macros",

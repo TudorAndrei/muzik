@@ -1,10 +1,9 @@
-use crate::services;
 use chrono::{DateTime, Local};
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
-use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use muzik_runner::setup;
 use muzik_spotify as spotify;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -57,11 +56,28 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
         "config.get" => Ok(json!({"defaults": app_config::load_gui_defaults(paths)?})),
         "config.save" => Ok(json!({"defaults": app_config::save_gui_defaults(paths, params)?})),
         "library.scan" => library_scan(paths, params),
-        "services.check" => Ok(json!({"services": services::check(paths)})),
-        "soulseek.get" => soulseek_settings(&path),
+        "services.check" => Ok(json!({"services": setup::check_services(paths)})),
+        "soulseek.get" => setup::soulseek_account(&path),
         "soulseek.save" => {
-            save_soulseek(&path, params)?;
-            soulseek_settings(&path)
+            let username = params["username"]
+                .as_str()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or("username must be a non-empty string.")?;
+            let server_port = params["server_port"]
+                .as_u64()
+                .or_else(|| params["server_port"].as_str()?.trim().parse().ok())
+                .ok_or("Enter a server port from 1 to 65535.")?;
+            setup::save_soulseek_account(
+                &path,
+                &setup::SoulseekAccount {
+                    username: Some(username),
+                    password: params["password"].as_str(),
+                    server_host: params["server_host"].as_str(),
+                    server_port: Some(server_port),
+                },
+            )?;
+            setup::soulseek_account(&path)
         }
         "spotify.set_client_id" => {
             let client_id = params
@@ -77,62 +93,6 @@ pub fn dispatch(paths: &Paths, command: &str, params: &Value) -> Result<Value, S
             .map(|playlists| json!({"playlists": playlists})),
         _ => Err(format!("unknown command: {command}")),
     }
-}
-
-fn required_string<'a>(params: &'a Value, key: &str) -> Result<&'a str, String> {
-    params
-        .get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{key} must be a non-empty string."))
-}
-
-fn soulseek_settings(path: &Path) -> Result<Value, String> {
-    let config = app_config::load(path)?;
-    let section = &config["soulseek"];
-    let text = |key: &str| section[key].as_str().unwrap_or("").to_owned();
-    let port = section["server_port"]
-        .as_u64()
-        .or_else(|| section["server_port"].as_str()?.parse().ok())
-        .unwrap_or(u64::from(DEFAULT_SERVER_PORT));
-    let host = Some(text("server_host"))
-        .filter(|host| !host.is_empty())
-        .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
-    Ok(json!({
-        "username": text("username"),
-        "has_password": !text("password").is_empty(),
-        "server_host": host,
-        "server_port": port,
-    }))
-}
-
-fn save_soulseek(path: &Path, params: &Value) -> Result<(), String> {
-    let username = required_string(params, "username")?;
-    let host = params["server_host"]
-        .as_str()
-        .map(str::trim)
-        .filter(|host| !host.is_empty())
-        .unwrap_or(DEFAULT_SERVER_HOST);
-    let port = params["server_port"]
-        .as_u64()
-        .or_else(|| params["server_port"].as_str()?.trim().parse().ok())
-        .filter(|port| (1..=65535).contains(port))
-        .ok_or("Enter a server port from 1 to 65535.")?;
-    let password = params["password"].as_str().unwrap_or("");
-    let has_password = !app_config::load(path)?["soulseek"]["password"]
-        .as_str()
-        .unwrap_or("")
-        .is_empty();
-    if password.trim().is_empty() && !has_password {
-        return Err("Enter the Soulseek password.".into());
-    }
-    app_config::save_section_string(path, "soulseek", "username", username)?;
-    if !password.trim().is_empty() {
-        app_config::save_section_string(path, "soulseek", "password", password)?;
-    }
-    app_config::save_section_string(path, "soulseek", "server_host", host)?;
-    app_config::save_section_string(path, "soulseek", "server_port", &port.to_string())
 }
 
 pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
@@ -168,7 +128,7 @@ pub fn library_scan(paths: &Paths, params: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{library_scan, save_soulseek, soulseek_settings};
+    use super::library_scan;
     use serde_json::json;
     use std::fs;
 
@@ -187,38 +147,6 @@ mod tests {
         assert!(result["items"][0]["modified"]
             .as_str()
             .is_some_and(|date| !date.is_empty()));
-        Ok(())
-    }
-
-    #[test]
-    fn soulseek_account_saves_without_returning_the_password(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let path = dir.path().join("config.yaml");
-        fs::write(&path, "native_gui:\n  jobs: 2\n")?;
-        assert!(
-            save_soulseek(&path, &json!({"username": "listener", "server_port": 2416})).is_err()
-        );
-        save_soulseek(
-            &path,
-            &json!({"username": "listener", "password": "secret", "server_port": "2242"}),
-        )
-        .map_err(std::io::Error::other)?;
-        let settings = soulseek_settings(&path).map_err(std::io::Error::other)?;
-        assert_eq!(settings["username"], "listener");
-        assert_eq!(settings["has_password"], true);
-        assert_eq!(settings["server_host"], "server.slsknet.org");
-        assert_eq!(settings["server_port"], 2242);
-        assert!(settings.get("password").is_none());
-        save_soulseek(
-            &path,
-            &json!({"username": "renamed", "password": "", "server_port": 2242}),
-        )
-        .map_err(std::io::Error::other)?;
-        let saved = fs::read_to_string(&path)?;
-        assert!(saved.contains("secret"));
-        assert!(saved.contains("renamed"));
-        assert!(saved.contains("jobs: 2"));
         Ok(())
     }
 }
