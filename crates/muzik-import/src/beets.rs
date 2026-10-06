@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use muzik_core::BeetsConfig;
-use muzik_library::{Item, Library, SqlValue};
+use muzik_library::{Item, Library, SqlValue, path_from_sql, scalar_text};
 use muzik_match::MatchConfig;
 use muzik_metadata::MetadataClient;
 use muzik_tags::TagData;
@@ -366,7 +366,7 @@ pub fn write_library_tags(
         .map_err(|error| error.to_string())?;
     let mut count = 0;
     for item in library.items().map_err(|error| error.to_string())? {
-        let Some(path) = item.field("path").and_then(stored_path) else {
+        let Some(path) = item.field("path").and_then(path_from_sql) else {
             continue;
         };
         let path = if path.is_absolute() {
@@ -404,24 +404,6 @@ pub fn write_library_tags(
         return Err(format!("No library items match {}", directory.display()));
     }
     Ok(count)
-}
-
-fn stored_path(value: &SqlValue) -> Option<PathBuf> {
-    match value {
-        SqlValue::Blob(bytes) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStringExt;
-                Some(std::ffi::OsString::from_vec(bytes.clone()).into())
-            }
-            #[cfg(not(unix))]
-            {
-                Some(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
-            }
-        }
-        SqlValue::Text(text) => Some(PathBuf::from(text)),
-        _ => None,
-    }
 }
 
 fn tags_from_item(item: &Item) -> TagData {
@@ -469,15 +451,6 @@ fn tags_from_item(item: &Item) -> TagData {
             .insert("comp".into(), if comp == "0" { "0" } else { "1" }.into());
     }
     tags
-}
-
-fn scalar_text(value: &SqlValue) -> Option<String> {
-    match value {
-        SqlValue::Text(text) => Some(text.clone()),
-        SqlValue::Integer(number) => Some(number.to_string()),
-        SqlValue::Real(number) => Some(number.to_string()),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -2,14 +2,14 @@
 
 use crate::settings::Settings;
 use crate::sources;
-use muzik_core::watchlist::jobs::{
+use muzik_core::DecisionKind;
+use muzik_store::jobs::{park_on, Kind, NewJob};
+use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
-use muzik_core::watchlist::{
+use muzik_store::watchlist::{
     import_cache, AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
 };
-use muzik_core::DecisionKind;
-use muzik_jobs::{park_on, Kind, NewJob};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::cell::RefCell;
@@ -163,7 +163,7 @@ impl Operations for Adapter<'_, '_> {
             let Some(parked) = self.parked.replace(None) else {
                 return error;
             };
-            let stage = parked.kind.stage();
+            let stage = Stage::of_decision(parked.kind);
             let question = parked.question();
             (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
                 "playlist_id":playlist.playlist_id,

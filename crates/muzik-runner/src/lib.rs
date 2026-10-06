@@ -10,6 +10,7 @@ mod queue;
 mod remote_workflow;
 mod runner;
 pub mod settings;
+pub mod setup;
 mod sources;
 pub mod watchlist;
 

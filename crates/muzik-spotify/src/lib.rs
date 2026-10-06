@@ -1,6 +1,6 @@
 //! Spotify settings and saved token path shared by the two apps.
 
-use crate::app_config;
+use muzik_core::app_config;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;

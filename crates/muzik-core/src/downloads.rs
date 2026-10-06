@@ -6,8 +6,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const AUDIO_EXTENSIONS: &[&str] = &["flac", "mp3", "m4a", "opus", "wav", "aac"];
-
 #[derive(Debug, Serialize)]
 pub struct DownloadedItem {
     pub path: PathBuf,
@@ -31,13 +29,14 @@ pub fn scan(directory: &Path) -> io::Result<Vec<DownloadedItem>> {
         if !path.is_file() {
             continue;
         }
-        let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
-            continue;
-        };
-        let ext = ext.to_ascii_lowercase();
-        if !AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+        if !crate::audio::is_audio(&path) {
             continue;
         }
+        let ext = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let metadata = entry.metadata()?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let stem = path

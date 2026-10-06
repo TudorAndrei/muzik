@@ -1,7 +1,6 @@
 mod bridge;
 mod native;
 mod pages;
-mod services;
 mod style;
 mod thumbnails;
 mod watch_table;
@@ -24,13 +23,14 @@ use gpui_kit::component::theme::Theme;
 use gpui_kit::component::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use muzik_core::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };
-use muzik_jobs::Status as JobStatus;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
+use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
+use muzik_store::jobs::Status as JobStatus;
+use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -187,11 +187,7 @@ struct ActivitySection {
 const CHOICES: &[(&str, &str, &[&str])] = &[
     ("audio_source", "Audio source", AudioSource::CHOICES),
     ("metadata_source", "Metadata", MetadataSource::CHOICES),
-    (
-        "prefer",
-        "Prefer",
-        muzik_core::config_choices::PREFERRED_AUDIO_CHOICES,
-    ),
+    ("prefer", "Prefer", muzik_core::PreferredAudio::CHOICES),
     ("fallback", "Fallback", AudioFallback::CHOICES),
     ("quality_policy", "Quality policy", QualityPolicy::CHOICES),
     (
@@ -1842,13 +1838,13 @@ impl ConfigView {
             }),
             host: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("server.slsknet.org")
-                    .default_value("server.slsknet.org")
+                    .placeholder(DEFAULT_SERVER_HOST)
+                    .default_value(DEFAULT_SERVER_HOST)
             }),
             port: cx.new(|cx| {
                 InputState::new(window, cx)
-                    .placeholder("2416")
-                    .default_value("2416")
+                    .placeholder(DEFAULT_SERVER_PORT.to_string())
+                    .default_value(DEFAULT_SERVER_PORT.to_string())
                     .step(1.)
                     .min(1.)
                     .max(65535.)

@@ -1,7 +1,7 @@
 use crate::jobs::{self, field, text};
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::{self, ItemAction, Repository, Summary};
 use muzik_runner::{Settings, job_id};
+use muzik_store::watchlist::{self, ItemAction, Repository, Summary};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 

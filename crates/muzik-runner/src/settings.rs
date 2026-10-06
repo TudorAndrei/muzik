@@ -1,6 +1,6 @@
 use muzik_core::paths::{expand_home, Paths};
-use muzik_core::watchlist::ReconcileOptions;
 use muzik_core::{app_config, ChoiceError};
+use muzik_store::watchlist::ReconcileOptions;
 use muzik_workflow::{WorkflowOptions, WorkflowRequest};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ impl Settings {
             options.duplicates = choice(value, "duplicates")?;
         }
         if let Some(value) = values.get("prefer") {
-            options.prefer = value.as_str().ok_or("prefer must be a string")?.to_owned();
+            options.prefer = choice(value, "prefer")?;
         }
         let raw = match values.get("raw") {
             None | Some(Value::Null) => String::new(),
@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(settings.request.raw, "song");
         assert_eq!(settings.request.output, paths.downloads());
         assert_eq!(settings.request.splits, paths.splits());
-        assert_eq!(settings.options.prefer, "flac");
+        assert_eq!(settings.options.prefer.to_string(), "flac");
         assert_eq!(settings.options.audio_source.as_str(), "soulseek");
         assert_eq!(settings.agent_model, None);
         Ok(())

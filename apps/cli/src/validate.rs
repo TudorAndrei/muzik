@@ -5,8 +5,6 @@ use serde_json::Value;
 
 use crate::Validate;
 
-const AUDIO_EXTENSIONS: &[&str] = &["flac", "mp3", "m4a", "opus", "wav", "aac"];
-
 pub fn run(args: &Validate) -> Result<(), String> {
     if !args.path.exists() {
         return Err(format!("not found: {}", args.path.display()));
@@ -88,8 +86,7 @@ fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::R
 
 fn kind(path: &Path) -> Option<&'static str> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
-    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-    if AUDIO_EXTENSIONS.contains(&ext.as_str()) {
+    if muzik_core::audio::is_audio(path) {
         Some("audio")
     } else if name.ends_with(".chapters.txt") {
         Some("chapters")
@@ -113,7 +110,10 @@ fn check(path: &Path) -> Result<(&'static str, String, Vec<String>), String> {
             }
             format!(
                 "codec={} duration={:.0}s",
-                properties.codec,
+                properties
+                    .codec
+                    .as_ref()
+                    .map_or_else(|| properties.format.to_string(), ToString::to_string),
                 properties.duration_seconds.unwrap_or(0.0)
             )
         }

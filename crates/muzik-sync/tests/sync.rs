@@ -1,13 +1,14 @@
-use muzik_core::quality::MeasuredQuality;
-use muzik_core::sync::{self, Action, Encoding, Target};
+use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
+use muzik_media::quality::MeasuredQuality;
+use muzik_sync::{self as sync, Action, Encoding, Target};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 fn audio(format: &str, sample_rate: u32, bit_depth: Option<u32>) -> MeasuredQuality {
     MeasuredQuality {
-        format: format.into(),
+        format: Codec::from_ffprobe(format),
         lossless: false,
         bitrate_kbps: Some(128),
         sample_rate: Some(sample_rate),
@@ -197,7 +198,7 @@ fn a_converted_file_is_current_only_with_the_recorded_encoding(
     let probe = |_: &Path| -> Result<Option<MeasuredQuality>, String> {
         Ok(Some(audio("flac", 44_100, Some(16))))
     };
-    let connection = muzik_core::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory()?;
     let mp3 = target(&card, SyncPreset::Mp3);
     let plan_with = |target: &Target| -> Result<sync::Plan, String> {
         let encodings = sync::encodings(&connection, &card)?;

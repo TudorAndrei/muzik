@@ -6,8 +6,10 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
-use crate::{SetSoulseek, paths};
-use muzik_core::paths::expand_home;
+use crate::SetSoulseek;
+use muzik_core::app_config;
+use muzik_core::paths::{Paths, expand_home};
+use muzik_runner::setup::{self, SoulseekAccount};
 
 pub fn show(path: Option<&Path>) -> io::Result<()> {
     let library_path = path
@@ -28,8 +30,8 @@ pub fn show(path: Option<&Path>) -> io::Result<()> {
         println!("{}", fs::read_to_string(&library_path)?);
     }
 
-    let muzik_path = paths::config_dir().join("config.yaml");
-    let muzik = read_yaml(&muzik_path)?;
+    let muzik_path = app_config::path();
+    let muzik = app_config::load(&muzik_path).map_err(io::Error::other)?;
     let soulseek = muzik.get("soulseek");
     println!("Muzik config: {}", muzik_path.display());
     println!(
@@ -91,39 +93,27 @@ pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> 
 }
 
 pub fn set_soulseek(args: &SetSoulseek) -> io::Result<()> {
-    let path = paths::config_dir().join("config.yaml");
-    let mut data = read_yaml(&path)?;
-    let object = data
-        .as_object_mut()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "muzik config is not a map"))?;
-    let settings = object
-        .entry("soulseek")
-        .or_insert_with(|| json!({}))
-        .as_object_mut()
-        .ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "soulseek config is not a map")
-        })?;
-    if let Some(username) = &args.username {
-        settings.insert("username".to_owned(), json!(username));
-    }
-    if let Some(password) = &args.password {
-        settings.insert("password".to_owned(), json!(password));
-    }
-    settings.insert(
-        "server_host".to_owned(),
-        json!(args.server_host.as_deref().unwrap_or("server.slsknet.org")),
-    );
-    settings.insert(
-        "server_port".to_owned(),
-        json!(args.server_port.unwrap_or(2416)),
-    );
+    let path = app_config::path();
+    setup::save_soulseek_account(
+        &path,
+        &SoulseekAccount {
+            username: args.username.as_deref(),
+            password: args.password.as_deref(),
+            server_host: args.server_host.as_deref(),
+            server_port: args.server_port.map(u64::from),
+        },
+    )
+    .map_err(io::Error::other)?;
     let downloads = args
         .download_dir
         .clone()
-        .unwrap_or_else(|| paths::data_dir().join("soulseek"));
+        .unwrap_or_else(|| Paths::user().soulseek());
     let downloads = expand_home(&downloads);
-    settings.insert("download_dir".to_owned(), json!(downloads));
-    write_yaml(&path, &data)?;
+    let downloads_text = downloads
+        .to_str()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "download folder is not text"))?;
+    app_config::save_section_string(&path, "soulseek", "download_dir", downloads_text)
+        .map_err(io::Error::other)?;
     fs::create_dir_all(&downloads)?;
     println!("Soulseek config saved: {}", path.display());
     println!("  downloads: {}", downloads.display());

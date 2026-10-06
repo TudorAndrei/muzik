@@ -1,10 +1,11 @@
 //! Request and response transport between the desktop view and the runner `App`.
 use crate::{native, thumbnails};
+use muzik_core::app_config;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::{ItemAction, ItemId};
-use muzik_core::{app_config, spotify};
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::{App, AppEvent, AppOptions, EnqueueError};
+use muzik_spotify as spotify;
+use muzik_store::watchlist::{ItemAction, ItemId};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};

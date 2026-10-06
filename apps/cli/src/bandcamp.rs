@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::atomic::AtomicBool;
 
-use muzik_core::bandcamp;
+use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
 
 use crate::{Bandcamp, paths};
@@ -43,7 +43,7 @@ pub fn download(args: &Bandcamp) -> Result<(), String> {
         let files = bandcamp::download(
             &login,
             &purchase.download_page,
-            &args.format,
+            args.format,
             &folder,
             &cancelled,
             &mut |_, _| {},

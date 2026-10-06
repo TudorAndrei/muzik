@@ -1,20 +1,20 @@
 //! Safe quality replacement for a freshly acquired YouTube audio file.
 
+use muzik_core::audio::AudioFormat;
 use muzik_core::chapters::sidecar_path;
 use muzik_core::paths::Paths;
-use muzik_core::quality::{self, MeasuredQuality, QualityDecision};
-use muzik_core::{DecisionKind, QualityPolicy, app_config};
+use muzik_core::{DecisionKind, PreferredAudio, QualityPolicy, app_config};
+use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::ranking::{format as file_format, rank};
 use muzik_soulseek::session::{Session, SessionSettings};
 use muzik_soulseek::types::Candidate;
 use serde_json::{Value, json};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const DURATION_TOLERANCE: f64 = 10.0;
+use crate::upgrade::{DURATION_TOLERANCE, Wanted, safe_match, tokens};
 
 #[derive(Debug)]
 pub struct QualityUpgradeResult {
@@ -45,7 +45,7 @@ trait Backend {
     fn search(
         &mut self,
         query: &str,
-        prefer: &str,
+        prefer: PreferredAudio,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Candidate>, String>;
     fn download(
@@ -65,7 +65,7 @@ pub fn check_youtube_quality(
     audio_files: Vec<PathBuf>,
     policy: QualityPolicy,
     min_bitrate: u32,
-    prefer: &str,
+    prefer: PreferredAudio,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -92,7 +92,7 @@ fn check_with_backend(
     audio_files: Vec<PathBuf>,
     policy: QualityPolicy,
     min_bitrate: u32,
-    prefer: &str,
+    prefer: PreferredAudio,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -161,7 +161,17 @@ fn check_with_backend(
     let selected = rank(candidates, &query, prefer, 20)
         .into_iter()
         .map(|item| item.candidate)
-        .find(|candidate| safe_match(candidate, &track) && better(candidate, &current));
+        .find(|candidate| {
+            safe_match(
+                candidate,
+                &Wanted {
+                    artist: &track.artist,
+                    title: &track.title,
+                    album: "",
+                    duration: Some(track.duration),
+                },
+            ) && better(candidate, &current)
+        });
     let Some(candidate) = selected else {
         on_event(message(
             "Quality check: no safe, better Soulseek file was found.".into(),
@@ -319,92 +329,9 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
     }
 }
 
-fn tokens(value: &str) -> HashSet<String> {
-    value
-        .split(|character: char| !character.is_alphanumeric())
-        .map(str::to_lowercase)
-        .filter(|word| {
-            word.len() >= 2
-                && !matches!(
-                    word.as_str(),
-                    "the" | "and" | "feat" | "ft" | "official" | "audio"
-                )
-        })
-        .collect()
-}
-
-fn overlap(need: &HashSet<String>, haystack: &HashSet<String>) -> bool {
-    !need.is_empty() && need.intersection(haystack).count() * 3 >= need.len() * 2
-}
-
-fn safe_match(candidate: &Candidate, track: &Track) -> bool {
-    if candidate.username.trim().is_empty() || candidate.files.is_empty() {
-        return false;
-    }
-    let files = candidate
-        .files
-        .iter()
-        .filter(|file| !file_format(file).is_empty())
-        .collect::<Vec<_>>();
-    if files.len() != candidate.files.len() {
-        return false;
-    }
-    let names = files
-        .iter()
-        .map(|file| file.name.as_str())
-        .collect::<Vec<_>>();
-    let all_text = tokens(&names.join(" "));
-    let title_text = if files.len() == 1 {
-        tokens(files[0].name.rsplit(['/', '\\']).next().unwrap_or(""))
-    } else {
-        let common_parent = files[0]
-            .name
-            .rsplit_once(['/', '\\'])
-            .map(|(parent, _)| parent);
-        if common_parent.is_none()
-            || files.iter().any(|file| {
-                file.name.rsplit_once(['/', '\\']).map(|(parent, _)| parent) != common_parent
-            })
-        {
-            return false;
-        }
-        tokens(common_parent.unwrap_or(""))
-    };
-    if !overlap(&tokens(&track.artist), &all_text) || !overlap(&tokens(&track.title), &title_text) {
-        return false;
-    }
-    let source_versions = version_tokens(&track.title);
-    if version_tokens(&names.join(" "))
-        .iter()
-        .any(|version| !source_versions.contains(version))
-    {
-        return false;
-    }
-    let durations = files
-        .iter()
-        .map(|file| file.duration_seconds.map(f64::from))
-        .collect::<Option<Vec<_>>>();
-    durations.is_some_and(|values| {
-        (values.iter().sum::<f64>() - track.duration).abs() <= DURATION_TOLERANCE
-    })
-}
-
-fn version_tokens(value: &str) -> HashSet<String> {
-    tokens(value)
-        .into_iter()
-        .filter(|word| {
-            matches!(
-                word.as_str(),
-                "live" | "remix" | "remaster" | "remastered" | "cover" | "instrumental" | "karaoke"
-            )
-        })
-        .collect()
-}
-
 fn better(candidate: &Candidate, current: &MeasuredQuality) -> bool {
     candidate.files.iter().all(|file| {
-        let format = file_format(file);
-        let lossless = matches!(format, "flac" | "alac" | "wav" | "aiff" | "ape" | "wv");
+        let lossless = file_format(file).is_some_and(AudioFormat::is_lossless);
         if lossless && !current.lossless {
             return true;
         }
@@ -429,7 +356,7 @@ fn candidate_payload(candidate: &Candidate) -> Value {
     json!({
         "username":candidate.username,
         "title":first.name.rsplit(['/', '\\']).next().unwrap_or("Audio file"),
-        "quality":{"format":file_format(first).to_ascii_uppercase(),"bitrate":first.bitrate_kbps},
+        "quality":{"format":file_format(first).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.bitrate_kbps},
         "files":candidate.files,
     })
 }
@@ -523,7 +450,7 @@ impl Backend for SoulseekBackend {
     fn search(
         &mut self,
         query: &str,
-        prefer: &str,
+        prefer: PreferredAudio,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Candidate>, String> {
         let (session, timeouts) = self.session()?;
@@ -554,6 +481,7 @@ impl Backend for SoulseekBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muzik_core::audio::Codec;
     use muzik_soulseek::types::FileEntry;
 
     struct FakeBackend {
@@ -597,7 +525,7 @@ mod tests {
                 .extension()
                 .is_some_and(|extension| extension == "flac");
             Ok(Some(MeasuredQuality {
-                format: if lossless { "flac" } else { "mp3" }.into(),
+                format: if lossless { Codec::Flac } else { Codec::Mp3 },
                 lossless,
                 bitrate_kbps: Some(if lossless { 950 } else { 128 }),
                 sample_rate: None,
@@ -618,7 +546,7 @@ mod tests {
         fn search(
             &mut self,
             _query: &str,
-            _prefer: &str,
+            _prefer: PreferredAudio,
             _cancelled: &AtomicBool,
         ) -> Result<Vec<Candidate>, String> {
             Ok(self.candidates.clone())
@@ -675,7 +603,7 @@ mod tests {
             vec![original],
             policy,
             320,
-            "lossless",
+            PreferredAudio::Lossless,
             &AtomicBool::new(false),
             &mut |_| {},
             &mut |kind, _| {
@@ -684,27 +612,6 @@ mod tests {
             },
         )
         .unwrap()
-    }
-
-    #[test]
-    fn rejects_wrong_title_or_duration_before_download() {
-        let track = Track {
-            artist: "Artist".into(),
-            title: "Album".into(),
-            duration: 3600.0,
-        };
-        assert!(!safe_match(
-            &candidate("Artist/Other/Artist - Other.flac", 3600, Some(950)),
-            &track
-        ));
-        assert!(!safe_match(
-            &candidate("Artist/Album/Artist - Album.flac", 100, Some(950)),
-            &track
-        ));
-        assert!(!safe_match(
-            &candidate("Artist/Album/Artist - Album Remix.flac", 3600, Some(950)),
-            &track
-        ));
     }
 
     #[test]
@@ -747,7 +654,7 @@ mod tests {
             vec![original],
             QualityPolicy::Auto,
             320,
-            "lossless",
+            PreferredAudio::Lossless,
             &AtomicBool::new(true),
             &mut |_| {},
             &mut |_, _| Ok(json!(true)),

@@ -4,9 +4,9 @@ use super::{
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::watchlist::jobs::{JobError, LoadedSource};
-use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
 use muzik_core::{chapters, ChapterAnswer, DecisionKind};
+use muzik_store::watchlist::jobs::{JobError, LoadedSource};
+use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
 use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
 use muzik_workflow::ytdlp::{is_video_id, YtDlp};
 use muzik_workflow::{classify_input, WorkflowInput, WorkflowOperations};
@@ -150,7 +150,7 @@ pub(super) fn local_stage(
             vec![audio],
             options.quality_policy,
             options.min_bitrate,
-            &options.prefer,
+            options.prefer,
             cancelled,
             &mut |event| (events.borrow_mut())(event),
             adapter.decide,
@@ -416,8 +416,8 @@ mod tests {
     use super::{apply_quality_result, items, ready_quality_directory, refresh_chapters_with};
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
-    use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
     use muzik_core::{ChapterAnswer, DecisionKind};
+    use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
     use muzik_workflow::quality::QualityUpgradeResult;
     use serde_json::json;
     use std::fs;

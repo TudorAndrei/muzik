@@ -1,12 +1,10 @@
 //! Copy library tracks to a device folder in formats that the device plays.
 
-use crate::app_config;
-use crate::config_choices::SyncPreset;
-use crate::db;
-use crate::ffmpeg::{Convert, Ffmpeg};
-use crate::paths;
-use crate::quality::MeasuredQuality;
-use rusqlite::Connection;
+use muzik_core::audio::Codec;
+use muzik_core::{app_config, paths, SyncPreset};
+use muzik_media::ffmpeg::{Convert, Ffmpeg};
+use muzik_media::quality::MeasuredQuality;
+use muzik_store::{sync_files, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
@@ -15,14 +13,71 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-pub use crate::ffmpeg::Encoding;
+mod run;
+
+pub use muzik_media::ffmpeg::Encoding;
+pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection};
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
-const MEDIA_EXTENSIONS: &[&str] = &[
-    "aac", "aif", "aiff", "ape", "dff", "dsf", "flac", "jpeg", "jpg", "m4a", "mp3", "mp4", "ogg",
-    "opus", "png", "wav", "wma",
-];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceFile {
+    Aac,
+    Aiff,
+    Ape,
+    Dff,
+    Dsf,
+    Flac,
+    Jpeg,
+    M4a,
+    Mp3,
+    Mp4,
+    Ogg,
+    Opus,
+    Png,
+    Wav,
+    Wma,
+}
+
+impl DeviceFile {
+    fn from_path(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+        Some(match extension.as_str() {
+            "aac" => Self::Aac,
+            "aif" | "aiff" => Self::Aiff,
+            "ape" => Self::Ape,
+            "dff" => Self::Dff,
+            "dsf" => Self::Dsf,
+            "flac" => Self::Flac,
+            "jpeg" | "jpg" => Self::Jpeg,
+            "m4a" => Self::M4a,
+            "mp3" => Self::Mp3,
+            "mp4" => Self::Mp4,
+            "ogg" => Self::Ogg,
+            "opus" => Self::Opus,
+            "png" => Self::Png,
+            "wav" => Self::Wav,
+            "wma" => Self::Wma,
+            _ => return None,
+        })
+    }
+
+    fn codec(self) -> Option<Codec> {
+        match self {
+            Self::Flac => Some(Codec::Flac),
+            Self::Mp3 => Some(Codec::Mp3),
+            Self::Opus => Some(Codec::Opus),
+            Self::Wav => Some(Codec::Pcm("pcm_s16le".into())),
+            Self::Aiff => Some(Codec::Pcm("pcm_s16be".into())),
+            Self::Ape => Some(Codec::Ape),
+            Self::Dsf => Some(Codec::Dsd("dsd_lsbf_planar".into())),
+            Self::Dff => Some(Codec::Dsd("dsd_msbf".into())),
+            Self::Wma => Some(Codec::WmaV2),
+            Self::Aac | Self::Jpeg | Self::M4a | Self::Mp4 | Self::Ogg | Self::Png => None,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Target {
@@ -89,7 +144,7 @@ impl Target {
                 .as_str()
                 .ok_or_else(|| format!("sync target {name}: preset must be a string"))?
                 .parse()
-                .map_err(|error: crate::ChoiceError| error.to_string())?,
+                .map_err(|error: muzik_core::ChoiceError| error.to_string())?,
         };
         let bitrate = match entry.get("bitrate") {
             None | Some(Value::Null) => None,
@@ -149,17 +204,20 @@ impl Target {
     }
 
     pub fn action(&self, audio: &MeasuredQuality) -> Action {
-        let codec = audio.format.as_str();
+        let codec = &audio.format;
         match self.preset {
             SyncPreset::EchoMini => {
-                let plays = lossless(codec)
-                    || matches!(codec, "aac" | "mp3" | "vorbis" | "wmav1" | "wmav2");
+                let plays = codec.is_lossless()
+                    || matches!(
+                        codec,
+                        Codec::Aac | Codec::Mp3 | Codec::Vorbis | Codec::WmaV1 | Codec::WmaV2
+                    );
                 if !plays {
                     return Action::Convert(Encoding::Mp3 {
                         kbps: self.bitrate.unwrap_or(320),
                     });
                 }
-                if codec.starts_with("dsd_") {
+                if matches!(codec, Codec::Dsd(_)) {
                     return Action::Copy;
                 }
                 let sample_rate = audio
@@ -177,7 +235,7 @@ impl Target {
                 }
             }
             SyncPreset::Mp3 => {
-                if codec == "mp3" {
+                if *codec == Codec::Mp3 {
                     Action::Copy
                 } else {
                     Action::Convert(Encoding::Mp3 {
@@ -186,7 +244,7 @@ impl Target {
                 }
             }
             SyncPreset::Opus => {
-                if matches!(codec, "aac" | "mp3" | "opus" | "vorbis") {
+                if matches!(codec, Codec::Aac | Codec::Mp3 | Codec::Opus | Codec::Vorbis) {
                     Action::Copy
                 } else {
                     Action::Convert(Encoding::Opus {
@@ -299,7 +357,7 @@ fn plan_track(
     Step::Pending(Transfer {
         source: source.to_path_buf(),
         destination,
-        tags_in_stream: matches!(audio.format.as_str(), "opus" | "vorbis"),
+        tags_in_stream: matches!(audio.format, Codec::Opus | Codec::Vorbis),
         cover: target.covers && action != Action::Copy,
         action,
         bytes,
@@ -327,34 +385,16 @@ fn plan_cover(target: &Target, directory: &Path, source: &Path) -> Step {
 }
 
 fn guess(source: &Path) -> Option<MeasuredQuality> {
-    let extension = source.extension()?.to_str()?.to_ascii_lowercase();
-    let format = match extension.as_str() {
-        "flac" => "flac",
-        "mp3" => "mp3",
-        "opus" => "opus",
-        "wav" => "pcm_s16le",
-        "aif" | "aiff" => "pcm_s16be",
-        "ape" => "ape",
-        "dsf" => "dsd_lsbf_planar",
-        "dff" => "dsd_msbf",
-        "wma" => "wmav2",
-        _ => return None,
-    };
+    let format = DeviceFile::from_path(source)?.codec()?;
     Some(MeasuredQuality {
-        format: format.to_owned(),
-        lossless: lossless(format),
+        lossless: format.is_lossless(),
+        format,
         bitrate_kbps: None,
         sample_rate: None,
         bit_depth: None,
         channels: None,
         size: None,
     })
-}
-
-fn lossless(codec: &str) -> bool {
-    matches!(codec, "flac" | "alac" | "ape" | "wavpack" | "tta")
-        || codec.starts_with("pcm_")
-        || codec.starts_with("dsd_")
 }
 
 fn is_current(
@@ -469,46 +509,24 @@ pub fn encodings(
     connection: &Connection,
     root: &Path,
 ) -> Result<BTreeMap<PathBuf, Encoding>, String> {
-    let mut statement = connection
-        .prepare("SELECT destination, encoding FROM sync_files")
-        .map_err(db::text)?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    Ok(sync_files::load(connection, root)?
+        .into_iter()
+        .filter_map(|(destination, text)| {
+            serde_json::from_str(&text)
+                .ok()
+                .map(|encoding| (destination, encoding))
         })
-        .map_err(db::text)?;
-    let mut encodings = BTreeMap::new();
-    for row in rows {
-        let (destination, encoding) = row.map_err(db::text)?;
-        let destination = PathBuf::from(destination);
-        if let (true, Ok(encoding)) = (
-            destination.starts_with(root),
-            serde_json::from_str(&encoding),
-        ) {
-            encodings.insert(destination, encoding);
-        }
-    }
-    Ok(encodings)
+        .collect())
 }
 
 pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String> {
-    let destination = transfer.destination.to_string_lossy();
-    match &transfer.action {
-        Action::Copy => connection.execute(
-            "DELETE FROM sync_files WHERE destination = ?1",
-            [destination],
-        ),
-        Action::Convert(encoding) => connection.execute(
-            "INSERT INTO sync_files (destination, encoding) VALUES (?1, ?2)
-             ON CONFLICT (destination) DO UPDATE SET encoding = excluded.encoding",
-            (
-                destination,
-                serde_json::to_string(encoding).map_err(|error| error.to_string())?,
-            ),
-        ),
-    }
-    .map(drop)
-    .map_err(db::text)
+    let encoding = match &transfer.action {
+        Action::Copy => None,
+        Action::Convert(encoding) => {
+            Some(serde_json::to_string(encoding).map_err(|error| error.to_string())?)
+        }
+    };
+    sync_files::save(connection, &transfer.destination, encoding.as_deref())
 }
 
 pub fn run(
@@ -543,13 +561,7 @@ pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<P
             }
             let leftover = name.starts_with("._")
                 || (name.starts_with('.') && name.contains(&format!(".{PARTIAL}.")));
-            let media = !name.starts_with('.')
-                && path
-                    .extension()
-                    .and_then(|extension| extension.to_str())
-                    .is_some_and(|extension| {
-                        MEDIA_EXTENSIONS.contains(&extension.to_ascii_lowercase().as_str())
-                    });
+            let media = !name.starts_with('.') && DeviceFile::from_path(&path).is_some();
             if leftover || (media && !planned.contains(&path)) {
                 stale.push(path);
             }
@@ -611,4 +623,25 @@ fn parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R +
     let mut results = results.into_inner().unwrap_or_else(PoisonError::into_inner);
     results.sort_by_key(|(index, _)| *index);
     results.into_iter().map(|(_, result)| result).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceFile;
+    use std::path::Path;
+
+    #[test]
+    fn device_files_cover_the_media_extensions() {
+        for extension in [
+            "aac", "aif", "aiff", "ape", "dff", "dsf", "flac", "jpeg", "jpg", "m4a", "mp3", "mp4",
+            "ogg", "opus", "png", "wav", "wma", "WAV",
+        ] {
+            let path = Path::new("track").with_extension(extension);
+            assert!(DeviceFile::from_path(&path).is_some(), "{extension}");
+        }
+        for extension in ["wv", "mpc", "txt"] {
+            let path = Path::new("track").with_extension(extension);
+            assert_eq!(DeviceFile::from_path(&path), None, "{extension}");
+        }
+    }
 }

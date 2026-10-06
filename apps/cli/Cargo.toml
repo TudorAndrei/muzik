@@ -21,17 +21,20 @@ name = "muzik"
 path = "src/main.rs"
 
 [dependencies]
+muzik-bandcamp = { path = "../../crates/muzik-bandcamp" }
 muzik-core = { path = "../../crates/muzik-core" }
-muzik-jobs = { path = "../../crates/muzik-jobs" }
+muzik-store = { path = "../../crates/muzik-store" }
 muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-import = { path = "../../crates/muzik-import" }
 muzik-library = { path = "../../crates/muzik-library" }
+muzik-media = { path = "../../crates/muzik-media" }
 muzik-tags = { path = "../../crates/muzik-tags" }
 muzik-workflow = { path = "../../crates/muzik-workflow" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
+muzik-spotify = { path = "../../crates/muzik-spotify" }
+muzik-sync = { path = "../../crates/muzik-sync" }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
-sha2 = "0.10"
 serde-saphyr = "1.3"
 tempfile = "3"
 usage = { package = "usage-rs", version = "6.11.1", features = ["completions"] }

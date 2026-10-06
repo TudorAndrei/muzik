@@ -2,6 +2,7 @@
 
 mod functions;
 pub mod query;
+mod values;
 mod write;
 
 use rusqlite::types::ValueRef;
@@ -13,6 +14,7 @@ use thiserror::Error;
 
 pub use functions::register_functions;
 pub use rusqlite::types::Value as SqlValue;
+pub use values::{path_from_sql, path_to_sql, scalar_text};
 pub use write::LibraryWrite;
 use SqlValue as Value;
 

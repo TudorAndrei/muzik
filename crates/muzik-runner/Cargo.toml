@@ -7,13 +7,17 @@ license = "GPL-3.0-only"
 
 [dependencies]
 muzik-agent = { path = "../muzik-agent" }
+muzik-bandcamp = { path = "../muzik-bandcamp" }
 muzik-core = { path = "../muzik-core" }
 muzik-import = { path = "../muzik-import" }
-muzik-jobs = { path = "../muzik-jobs" }
+muzik-store = { path = "../muzik-store" }
 muzik-library = { path = "../muzik-library" }
+muzik-media = { path = "../muzik-media" }
 muzik-soulseek = { path = "../muzik-soulseek" }
+muzik-spotify = { path = "../muzik-spotify" }
 muzik-workflow = { path = "../muzik-workflow" }
 rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strum = "0.28"
 strum_macros = "0.28"

@@ -1,6 +1,7 @@
 //! Fetch watchlist images into the existing user cache.
 
-use muzik_core::{thumbnails as cache, watchlist::Repository};
+use muzik_core::thumbnails as cache;
+use muzik_store::watchlist::Repository;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -116,7 +117,7 @@ mod tests {
         let cache = dir.path().join("cache");
         fs::create_dir(&cache)?;
         fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"saved image")?;
-        watchlist.save(&muzik_core::watchlist::Watchlist::from_value(json!({
+        watchlist.save(&muzik_store::watchlist::Watchlist::from_value(json!({
             "version": 3,
             "playlists": [{
                 "playlist_id": "PL1",

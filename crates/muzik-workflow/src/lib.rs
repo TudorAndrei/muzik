@@ -4,9 +4,10 @@
 //! audio discovery, the split/organize order, and safe cancellation points.
 
 use muzik_core::chapters::{self, Chapter};
-use muzik_core::config_choices::DEFAULT_AUDIO_PREFERENCE;
-pub use muzik_core::splitter::SplitProgress;
-pub use muzik_core::{AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, QualityPolicy};
+pub use muzik_core::{
+    AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
+};
+pub use muzik_media::splitter::SplitProgress;
 use std::collections::HashSet;
 use std::fs;
 use std::io;
@@ -17,6 +18,7 @@ use url::Url;
 pub mod discovery;
 pub mod playlist;
 pub mod quality;
+pub mod upgrade;
 pub mod ytdlp;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,7 +43,7 @@ pub struct WorkflowOptions {
     pub config: Option<PathBuf>,
     pub metadata_source: MetadataSource,
     pub audio_source: AudioSource,
-    pub prefer: String,
+    pub prefer: PreferredAudio,
     pub fallback: AudioFallback,
     pub interactive: bool,
     pub quality_policy: QualityPolicy,
@@ -65,7 +67,7 @@ impl Default for WorkflowOptions {
             config: None,
             metadata_source: MetadataSource::default(),
             audio_source: AudioSource::default(),
-            prefer: DEFAULT_AUDIO_PREFERENCE.into(),
+            prefer: PreferredAudio::default(),
             fallback: AudioFallback::default(),
             interactive: true,
             quality_policy: QualityPolicy::default(),
@@ -316,7 +318,7 @@ pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
                 .collect::<Result<Vec<_>, _>>()?;
             children.sort();
             pending.extend(children.into_iter().rev());
-        } else if path.is_file() && is_audio(&path) {
+        } else if path.is_file() && muzik_core::audio::is_audio(&path) {
             let identity = fs::canonicalize(&path)?;
             if seen.insert(identity) {
                 result.push(path);
@@ -325,27 +327,6 @@ pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     }
     result.sort();
     Ok(result)
-}
-
-fn is_audio(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "flac"
-                    | "mp3"
-                    | "m4a"
-                    | "opus"
-                    | "wav"
-                    | "aac"
-                    | "ogg"
-                    | "aiff"
-                    | "aif"
-                    | "ape"
-                    | "wv"
-            )
-        })
 }
 
 pub fn plan_audio_processing(

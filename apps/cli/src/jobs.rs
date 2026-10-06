@@ -1,10 +1,10 @@
 use muzik_core::DecisionKind;
 use muzik_core::chapters::Chapter;
 use muzik_core::paths::Paths;
-use muzik_jobs::CancelRequest;
 use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
 use muzik_runner::{AppEvent, Jobs, Options, Prompt, Runner, job_id, parse_job_id};
+use muzik_store::jobs::CancelRequest;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, IsTerminal, Write};

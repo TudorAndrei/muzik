@@ -1,7 +1,7 @@
 //! Versioned watchlist data shared with the existing application.
 
 use crate::db;
-use crate::paths::Paths;
+use muzik_core::paths::Paths;
 use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,9 +19,7 @@ mod reconcile;
 pub mod source;
 mod view;
 
-pub use item::{
-    is_audio, now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist,
-};
+pub use item::{now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist};
 pub use legacy::import_cache;
 pub use reconcile::{reconcile, ReconcileOptions};
 pub use view::{view, Summary};
@@ -53,6 +51,19 @@ pub enum Stage {
 
 impl Stage {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
+
+    pub fn of_decision(kind: muzik_core::DecisionKind) -> Self {
+        match kind {
+            muzik_core::DecisionKind::ImportMatch | muzik_core::DecisionKind::ImportDuplicate => {
+                Self::Organize
+            }
+            muzik_core::DecisionKind::ChapterReview | muzik_core::DecisionKind::ChapterEdit => {
+                Self::Parse
+            }
+            muzik_core::DecisionKind::QualityReplacement => Self::Quality,
+            muzik_core::DecisionKind::SoulseekCandidate => Self::Download,
+        }
+    }
 
     pub fn resume_action(self) -> ItemAction {
         match self {

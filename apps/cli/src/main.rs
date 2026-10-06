@@ -262,7 +262,7 @@ struct Workflow {
     min_bitrate: u32,
     /// Preferred Soulseek audio quality.
     #[usage(long, default = "lossless")]
-    prefer: String,
+    prefer: muzik_core::PreferredAudio,
     /// Source to try if Soulseek has no result.
     #[usage(long, value_enum, default = "youtube")]
     fallback: muzik_core::AudioFallback,
@@ -518,22 +518,8 @@ struct Bandcamp {
     #[usage(long, short = 'o')]
     output: Option<PathBuf>,
     /// Audio format.
-    #[usage(
-        long,
-        short = 'f',
-        default = "flac",
-        choices(
-            "flac",
-            "wav",
-            "aac-hi",
-            "mp3-320",
-            "aiff-lossless",
-            "vorbis",
-            "mp3-v0",
-            "alac"
-        )
-    )]
-    format: String,
+    #[usage(long, short = 'f', value_enum, default = "flac")]
+    format: muzik_bandcamp::BandcampFormat,
     /// Path to a Bandcamp cookie file. Muzik saves the login for later runs.
     #[usage(long, short = 'c')]
     cookies: Option<PathBuf>,
@@ -619,7 +605,7 @@ struct SoulseekCheckLibrary {
     min_bitrate: u32,
     /// Preferred replacement quality.
     #[usage(long, default = "lossless")]
-    prefer: String,
+    prefer: muzik_core::PreferredAudio,
     /// Maximum number of low-quality tracks to search.
     #[usage(long, short = 'n', default = "20")]
     limit: usize,
@@ -634,7 +620,7 @@ struct SoulseekSearch {
     query: String,
     /// Preferred audio quality.
     #[usage(long, default = "lossless")]
-    prefer: String,
+    prefer: muzik_core::PreferredAudio,
     /// Maximum number of results to show.
     #[usage(long, short = 'n', default = "20")]
     limit: usize,
@@ -652,7 +638,7 @@ struct SoulseekDownload {
     candidate: Option<String>,
     /// Preferred audio quality for a new search.
     #[usage(long, default = "lossless")]
-    prefer: String,
+    prefer: muzik_core::PreferredAudio,
     /// Maximum number of results to consider.
     #[usage(long, short = 'n', default = "10")]
     limit: usize,
@@ -726,7 +712,7 @@ fn run(command: Command) -> Result<(), String> {
             SoulseekCommand::Check => soulseek::check(),
             SoulseekCommand::CheckLibrary(args) => soulseek::check_library(&args),
             SoulseekCommand::Search(args) => {
-                soulseek::search(&args.query, &args.prefer, args.limit, args.json)
+                soulseek::search(&args.query, args.prefer, args.limit, args.json)
             }
             SoulseekCommand::Download(args) => soulseek::download(&args),
         },

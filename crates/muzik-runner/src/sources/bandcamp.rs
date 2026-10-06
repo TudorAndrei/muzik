@@ -1,10 +1,10 @@
 use super::{check_cancelled, mark_full, organize, required, safe_name, Source};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
-use muzik_core::bandcamp;
+use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
-use muzik_core::watchlist::jobs::{JobError, LoadedSource};
-use muzik_core::watchlist::{
+use muzik_store::watchlist::jobs::{JobError, LoadedSource};
+use muzik_store::watchlist::{
     bandcamp_source, ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem,
 };
 use serde_json::json;
@@ -81,7 +81,7 @@ impl Source for Bandcamp {
             bandcamp::download(
                 &login,
                 page,
-                bandcamp::DEFAULT_FORMAT,
+                bandcamp::BandcampFormat::default(),
                 &directory,
                 cancelled,
                 &mut |received, total| {
@@ -161,12 +161,12 @@ fn items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
 #[cfg(test)]
 mod tests {
     use super::items;
-    use muzik_core::watchlist::SourceKind;
+    use muzik_store::watchlist::SourceKind;
     use serde_json::json;
 
     #[test]
     fn purchases_become_items_with_their_download_page() {
-        let loaded = items(&[muzik_core::bandcamp::Purchase {
+        let loaded = items(&[muzik_bandcamp::Purchase {
             key: "p12".into(),
             artist: "Band".into(),
             title: "Album".into(),

@@ -250,7 +250,7 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
 mod tests {
     use super::{rows, ColumnSort, WatchTable};
     use gpui_kit::WeakEntity;
-    use muzik_core::watchlist::Summary;
+    use muzik_store::watchlist::Summary;
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -264,7 +264,7 @@ mod tests {
         ]});
         let queued =
             HashSet::from([
-                muzik_core::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
+                muzik_store::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
             ]);
         let tab = |wanted: Summary| {
             1 + Summary::ALL

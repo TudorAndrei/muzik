@@ -1,17 +1,12 @@
-use std::collections::BTreeSet;
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
-
+use muzik_core::app_config;
 use muzik_core::paths::Paths;
-use muzik_core::sync::{self, Action, Encoding, Target, Transfer};
-use muzik_core::{app_config, db, quality};
 use muzik_import::beets;
-use muzik_library::{Item, Library};
+use muzik_library::Library;
+use muzik_media::quality;
+use muzik_store::db;
+use muzik_sync::{self as sync, Action, Encoding, Options, Target};
 use serde_json::json;
 
-use crate::soulseek::stored_path;
 use crate::{SetSyncTarget, Sync};
 
 pub fn set_target(args: &SetSyncTarget) -> Result<(), String> {
@@ -43,50 +38,32 @@ pub fn run(args: &Sync) -> Result<(), String> {
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
     let library = Library::open_read_only(&paths.library)
         .map_err(|error| format!("Could not open the music library: {error}"))?;
-    let items = library
-        .query_items(args.query.as_deref().unwrap_or(""))
-        .map_err(|error| error.to_string())?;
-    let tracks: Vec<PathBuf> = items
-        .iter()
-        .filter_map(|item| item.field("path").and_then(stored_path))
-        .map(|path| absolute(&paths.directory, path))
-        .collect();
-    let album_ids: BTreeSet<i64> = if target.covers {
-        items.iter().filter_map(Item::album_id).collect()
-    } else {
-        BTreeSet::new()
-    };
-    let mut covers = Vec::new();
-    for id in album_ids {
-        let album = library.album(id).map_err(|error| error.to_string())?;
-        if let Some(path) = album
-            .as_ref()
-            .and_then(|album| album.field("artpath"))
-            .and_then(stored_path)
-            .map(|path| absolute(&paths.directory, path))
-            .filter(|path| path.is_file())
-        {
-            covers.push(path);
-        }
-    }
+    let selection = sync::select(
+        &library,
+        &paths.directory,
+        args.query.as_deref().unwrap_or(""),
+        target.covers,
+    )?;
 
     println!(
         "Checking {} tracks for {} ({})",
-        tracks.len(),
+        selection.tracks.len(),
         target.path.display(),
         target.preset
     );
     let connection = db::open(&Paths::user().database())?;
-    let encodings = sync::encodings(&connection, &target.path)?;
-    let plan = sync::plan(
+    let prepared = sync::prepare(
         &target,
         &paths.directory,
-        &tracks,
-        &covers,
-        &encodings,
-        args.jobs,
+        &selection,
+        &connection,
+        Options {
+            delete: args.delete,
+            jobs: args.jobs,
+        },
         &quality::measure,
-    );
+    )?;
+    let plan = &prepared.plan;
     for source in &plan.outside {
         eprintln!("skip (outside the library folder): {}", source.display());
     }
@@ -104,51 +81,40 @@ pub fn run(args: &Sync) -> Result<(), String> {
         .iter()
         .filter(|transfer| transfer.action != Action::Copy)
         .count();
-    let needed = plan.bytes_needed();
     println!(
         "{} up to date, {} to copy, {} to convert, about {} to write",
         plan.fresh,
         plan.pending.len() - converts,
         converts,
-        size(needed)
+        size(prepared.needed)
     );
-    let delete = args.delete && plan.unreadable.is_empty();
-    if args.delete && !delete {
+    if prepared.delete_blocked {
         eprintln!(
             "not deleting old files: {} tracks could not be read, so muzik cannot tell which device files are old",
             plan.unreadable.len()
         );
     }
-    let stale = if delete {
-        sync::stale_files(&target.path, &plan.planned).map_err(|error| error.to_string())?
-    } else {
-        Vec::new()
-    };
-    let freed: u64 = stale
-        .iter()
-        .filter_map(|path| fs::metadata(path).ok())
-        .map(|meta| meta.len())
-        .sum();
-    if delete {
-        println!("{} files to delete ({})", stale.len(), size(freed));
+    if prepared.delete {
+        println!(
+            "{} files to delete ({})",
+            prepared.stale.len(),
+            size(prepared.freed)
+        );
     }
-    if let Some(available) = sync::available_bytes(&target.path) {
-        let space = available.saturating_add(freed);
-        if needed > space {
-            return Err(format!(
-                "not enough space: {} needed, {} available; select fewer tracks with --query{}",
-                size(needed),
-                size(space),
-                if args.delete {
-                    ""
-                } else {
-                    " or remove old files with --delete"
-                }
-            ));
-        }
+    if let (false, Some(space)) = (prepared.fits(), prepared.space()) {
+        return Err(format!(
+            "not enough space: {} needed, {} available; select fewer tracks with --query{}",
+            size(prepared.needed),
+            size(space),
+            if args.delete {
+                ""
+            } else {
+                " or remove old files with --delete"
+            }
+        ));
     }
     if args.dry_run {
-        for path in &stale {
+        for path in &prepared.stale {
             println!("delete\t{}", path.display());
         }
         for transfer in &plan.pending {
@@ -160,44 +126,37 @@ pub fn run(args: &Sync) -> Result<(), String> {
         }
         return Ok(());
     }
-    for path in &stale {
-        fs::remove_file(path).map_err(|error| format!("{}: {error}", path.display()))?;
-    }
-    if delete {
-        sync::remove_empty_folders(&target.path).map_err(|error| error.to_string())?;
-    }
-    let total = plan.pending.len();
-    let count = AtomicUsize::new(0);
-    let connection = Mutex::new(connection);
-    let failed = sync::run(
-        &plan.pending,
-        args.jobs,
-        &|transfer: &Transfer, result: &Result<(), String>| {
-            let done = count.fetch_add(1, Ordering::Relaxed) + 1;
-            let name = transfer
-                .destination
-                .strip_prefix(&target.path)
-                .unwrap_or(&transfer.destination)
-                .display();
-            match result {
-                Ok(()) => {
-                    println!("[{done}/{total}] {}\t{name}", label(&transfer.action));
-                    let recorded = sync::record(
-                        &connection.lock().unwrap_or_else(PoisonError::into_inner),
-                        transfer,
-                    );
-                    if let Err(error) = recorded {
-                        eprintln!("cannot record the encoding of {name}: {error}");
-                    }
+    let report = sync::apply(&prepared, &target, connection, args.jobs, &|done| {
+        let name = done
+            .transfer
+            .destination
+            .strip_prefix(&target.path)
+            .unwrap_or(&done.transfer.destination)
+            .display();
+        let (index, total) = (done.index, done.total);
+        match done.result {
+            Ok(()) => {
+                println!("[{index}/{total}] {}\t{name}", label(&done.transfer.action));
+                if let Some(error) = &done.record_error {
+                    eprintln!("cannot record the encoding of {name}: {error}");
                 }
-                Err(error) => eprintln!("[{done}/{total}] failed\t{name}: {error}"),
             }
-        },
-    );
-    if failed > 0 {
-        return Err(format!("{failed} of {total} files failed"));
+            Err(error) => eprintln!("[{index}/{total}] failed\t{name}: {error}"),
+        }
+    })?;
+    if report.failed > 0 {
+        return Err(format!(
+            "{} of {} files failed",
+            report.failed, report.written
+        ));
     }
-    println!("Sync complete: {total} files written");
+    if report.unrecorded > 0 {
+        return Err(format!(
+            "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
+            report.unrecorded, report.written
+        ));
+    }
+    println!("Sync complete: {} files written", report.written);
     Ok(())
 }
 
@@ -216,13 +175,5 @@ fn size(bytes: u64) -> String {
         format!("{}.{} GB", megabytes / 1_000, megabytes % 1_000 / 100)
     } else {
         format!("{megabytes} MB")
-    }
-}
-
-fn absolute(directory: &Path, path: PathBuf) -> PathBuf {
-    if path.is_absolute() {
-        path
-    } else {
-        directory.join(path)
     }
 }

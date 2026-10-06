@@ -1,13 +1,14 @@
 //! Measured audio quality for library scans and workflow decisions.
 
-use crate::QualityPolicy;
+use muzik_core::audio::Codec;
+use muzik_core::QualityPolicy;
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MeasuredQuality {
-    pub format: String,
+    pub format: Codec,
     pub lossless: bool,
     pub bitrate_kbps: Option<u32>,
     pub sample_rate: Option<u32>,
@@ -72,26 +73,17 @@ fn from_probe(document: &Value, size: Option<u64>) -> Option<MeasuredQuality> {
         .as_array()?
         .iter()
         .find(|stream| stream["codec_type"] == "audio")?;
-    let format = audio["codec_name"]
-        .as_str()
-        .unwrap_or("")
-        .to_ascii_lowercase();
+    let format = Codec::from_ffprobe(
+        &audio["codec_name"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_lowercase(),
+    );
     let bitrate_kbps = number(&audio["bit_rate"])
         .or_else(|| number(&document["format"]["bit_rate"]))
         .and_then(|value| u32::try_from(value / 1000).ok());
     Some(MeasuredQuality {
-        lossless: matches!(
-            format.as_str(),
-            "flac"
-                | "alac"
-                | "wav"
-                | "pcm_s16le"
-                | "pcm_s24le"
-                | "pcm_s32le"
-                | "aiff"
-                | "ape"
-                | "wavpack"
-        ),
+        lossless: format.is_lossless(),
         format,
         bitrate_kbps,
         sample_rate: number(&audio["sample_rate"]).and_then(|value| u32::try_from(value).ok()),
@@ -112,7 +104,8 @@ fn number(value: &Value) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{decide, from_probe, QualityDecision};
-    use crate::QualityPolicy;
+    use muzik_core::audio::Codec;
+    use muzik_core::QualityPolicy;
     use serde_json::json;
 
     #[test]
@@ -122,7 +115,7 @@ mod tests {
             {"codec_type":"audio","codec_name":"mp3","sample_rate":"44100","channels":2}
         ],"format":{"bit_rate":"192000"}});
         let measured = from_probe(&document, Some(500)).unwrap();
-        assert_eq!(measured.format, "mp3");
+        assert_eq!(measured.format, Codec::Mp3);
         assert_eq!(measured.bitrate_kbps, Some(192));
         assert_eq!(measured.sample_rate, Some(44_100));
         assert_eq!(measured.size, Some(500));
@@ -151,6 +144,16 @@ mod tests {
             decide(&measured, QualityPolicy::Auto, 320),
             QualityDecision::Keep
         );
+        assert!(measured.lossless);
+    }
+
+    #[test]
+    fn big_endian_pcm_from_aiff_is_lossless() {
+        let measured = from_probe(
+            &json!({"streams":[{"codec_type":"audio","codec_name":"pcm_s16be"}]}),
+            None,
+        )
+        .unwrap();
         assert!(measured.lossless);
     }
 }

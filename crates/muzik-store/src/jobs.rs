@@ -1,5 +1,5 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
-use rusqlite::{Connection, OptionalExtension, Row, ToSql, params};
+use rusqlite::{params, Connection, OptionalExtension, Row, ToSql};
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
@@ -452,7 +452,7 @@ mod tests {
     use serde_json::json;
 
     fn memory() -> Result<Store, String> {
-        Ok(Store::from_connection(muzik_core::db::open_in_memory()?))
+        Ok(Store::from_connection(crate::db::open_in_memory()?))
     }
 
     fn job<'a>(kind: Kind, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
@@ -601,12 +601,12 @@ mod tests {
         let path = directory.path().join("muzik.db");
         let params = json!({});
         let id = {
-            let store = Store::from_connection(muzik_core::db::open(&path)?);
+            let store = Store::from_connection(crate::db::open(&path)?);
             let id = store.enqueue(&job(Kind::Workflow, "a", &params))?;
             store.claim(Queue::Workflow)?;
             id
         };
-        let store = Store::from_connection(muzik_core::db::open(&path)?);
+        let store = Store::from_connection(crate::db::open(&path)?);
         assert_eq!(store.recover()?, 1);
         assert_eq!(store.claim(Queue::Workflow)?.map(|job| job.id), Some(id));
         Ok(())

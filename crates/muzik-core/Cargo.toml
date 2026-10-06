@@ -4,7 +4,7 @@ version = "2.12.0"
 edition = "2021"
 license = "Apache-2.0"
 publish = false
-description = "Domain types and beets-compatible config for muzik"
+description = "Shared muzik vocabulary, configuration, paths, and the watchlist"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -13,22 +13,7 @@ serde-saphyr = "1.3"
 thiserror = "2"
 tracing = "0.1"
 tempfile = "3"
-ureq = { version = "3.4.2", features = ["json"] }
-base64 = "0.22"
-getrandom = "0.4"
-open = "5.4.4"
-sha2 = "0.10"
-url = "2.5.8"
-muzik-library = { path = "../muzik-library" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
-rusqlite = { version = "0.40", features = ["bundled"] }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-muzik-tags = { path = "../muzik-tags" }
-unicode-normalization = "0.1"
 usage = { package = "usage-rs", version = "6.11.1" }
 strum = "0.28"
 strum_macros = "0.28"
-
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1", features = ["fs"] }
