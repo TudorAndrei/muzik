@@ -39,12 +39,39 @@ Keep validation and user text in `Jobs`. Keep admission rules in the store.
 Use the existing SQLite adapter and persistence seam. Do not add a generic
 storage trait or a new crate.
 
+`Jobs::item` already has a defect that one connection can show. `find_open`
+returns rows in id order. When a waiting row has a lower id than a queued or
+running row, `Jobs::item` cancels the waiting row and then reports busy.
+Write a failing test for this case before the change.
+
+`Store` methods take `&self`, but an immediate rusqlite transaction needs
+`&mut Connection`. Change the admission methods to take `&mut self`. The
+`MutexGuard` from `Jobs::store` and the runner store guard give that access.
+Do not start the transaction with `unchecked_transaction`, because it starts
+a deferred transaction.
+
 The contract is atomic admission, not a unique row across every open status.
 `park_on` can create a waiting row before `run_job` finishes the running row.
 Preserve that transition and its shared transaction with the watchlist stage.
 Do not add an open-job unique index. Do not remove existing duplicate rows as
 part of this change. If active rows already exist, reject or retain them
 according to the caller policy without partly cancelling waiting rows.
+
+A resumed job can park again. `park_on` then finds no waiting row for its
+key and inserts one. `JobError::Waiting` becomes `ItemOutcome::Waiting` in
+`crates/muzik-store/src/watchlist/jobs.rs`, so `run_item` returns success
+and `run_job` calls `finish` on the running row. This path leaves one
+waiting row. `run_job` calls `reopen` only when a job that has a question
+is cancelled (`crates/muzik-runner/src/runner.rs:243`). Before Phase 1
+starts, check these two paths separately:
+
+- Normal second pause: confirm that the item has one waiting row and that
+  the earlier running row is done.
+- Cancellation of a resumed job: confirm whether `park_on` can insert a
+  waiting row before the cancellation result, so that `reopen` makes a
+  second waiting row. If it cannot, record why.
+
+Admission must cancel every waiting row for the key in either case.
 
 ### Conditional watchlist writes
 
@@ -63,10 +90,17 @@ separately from a storage error. A conflict must make no data changes.
 Keep `reconcile` outside the write transaction. In `WatchlistCheck::check`,
 use the repository operations and retain the three-attempt retry limit,
 busy checks, generation checks, and saved-card then checked-card events.
-Check the generation before the commit and before publishing results.
-Keep lock ordering consistent with `App::edit`; do not call back into `Jobs`
-while holding a database write transaction. Revisions protect stored data;
-the application generation still controls which result the GUI displays.
+
+`WatchlistCheck::busy` calls `Jobs::has_running`, which locks the `Jobs`
+mutex and reads the jobs table. The current code calls it while it holds
+the repository `WRITER` lock. Do the full busy check before the write
+starts. Then lock `gate`, check only `current()`, and run the conditional
+write. Release `gate` after the commit. This is the same order as
+`App::edit`: `gate` first, then the database write. Do not call `Jobs` while
+`gate` or a database write transaction is held. Check `busy` again before
+publishing results, and keep the existing `gate` lock around the publish.
+Revisions protect stored data; the application generation still controls
+which result the GUI displays.
 
 Keep `Repository::update_with` and the atomic stage-and-question write used
 by `Operations::park`. Reuse normalization and changed-row detection so an
@@ -76,8 +110,11 @@ write operations only after their remaining callers have been checked.
 ### Device sync execution checks
 
 `crates/muzik-sync/src/run.rs` already owns `select`, `prepare`, and `apply`.
-Keep that module. `Prepared` currently exposes mutable execution fields,
-and `apply` accepts a separate `Target`. The CLI alone checks `fits`.
+Keep that module. `Prepared` currently exposes mutable execution fields.
+`apply` accepts the target again and a separate `jobs` value, although
+`prepare` already received both. The CLI alone checks `fits`. The main
+purpose of this phase is that interface: one prepared value carries its
+own target, options, and capacity decision.
 
 Keep the prepared plan, target, and execution options together inside
 `Prepared`. Give the CLI read-only access to the information it needs for
@@ -91,6 +128,17 @@ exists and refresh the capacity estimate. Recalculate needed bytes and the
 space that the remaining stale files can release. Do not count a stale file
 that has already disappeared. Preserve the current behavior when available
 space cannot be measured. Keep error formatting and progress text in the CLI.
+
+The CLI calls `apply` immediately after the preview, with no confirmation
+step, and `prepare` measures space after it probes the tracks. The check
+before apply therefore covers only a short interval in the CLI. Keep it
+because it is cheap and protects any later caller with a longer interval.
+
+`available_bytes` uses `statvfs`, so an integration test cannot force a
+small capacity. Pass available space to a private capacity function, and
+test it in a `#[cfg(test)]` module in `src/run.rs`. Move the current `fits`
+test from `tests/run.rs:122` there, because it builds `Prepared` with
+public fields.
 
 Retain deletion protection for unreadable tracks, destination collision
 handling, encoding records, partial-file replacement, and separate transfer
@@ -125,9 +173,16 @@ splitting a phase. Mark the commit checkbox only after the commit succeeds.
 
 ### Phase 1: Atomic queue admission
 
+- Check the normal second pause (`finish`) and the cancellation of a
+  resumed job (`reopen`) separately. Confirm the number of waiting rows
+  each path leaves for one item. Record the result in this plan.
+- Add a failing single-connection test: a waiting row with a lower id and
+  a queued row for the same item. An explicit request must report busy and
+  leave the waiting row unchanged.
 - Extend `Store::enqueue` and the item admission operations in
   `crates/muzik-store/src/jobs.rs` to own the transaction and caller policy.
-  Return whether admission inserted a job or retained an existing job.
+  Take `&mut self` and use an immediate transaction. Return whether
+  admission inserted a job or retained an existing job.
 - Replace the check-and-write sequences in `Jobs::item` and `run_refresh`
   with calls through that interface. Count only inserted refresh jobs.
 - Keep `park_on`, `answer`, `reopen`, cancellation, and legacy import
@@ -139,10 +194,14 @@ splitting a phase. Mark the commit checkbox only after the commit succeeds.
   explicit requests report busy, refresh retains a job, and pause, answer,
   and resume still work. The existing queue test name mentions a waiting
   job but does not create one; add that case to its fixture.
-- Reproduce the admission race against the baseline. Use controlled
-  connection contention and synchronization rather than sleep-based
-  timing. Keep the regression at the owning interface. Do not add public
-  test hooks or source-absence tests.
+- The baseline race is between two autocommit statements in
+  `Store::enqueue`. Two connections cannot stop at that point without a
+  hook or timing. Do not add a hook. Use the partial-cancellation test as
+  the test that fails on the baseline. After the change, add a test that
+  runs competing admissions from two connections with a barrier and checks
+  that only one open job exists. Record that this test does not fail
+  reliably on the baseline. Do not add public test hooks or source-absence
+  tests.
 - Run `cargo test --locked -p muzik-store -p muzik-runner` and
   `mise run check`.
 
@@ -156,6 +215,9 @@ splitting a phase. Mark the commit checkbox only after the commit succeeds.
 - Replace the external revision-lock-save sequence in
   `WatchlistCheck::check`. Keep reconciliation outside the transaction and
   preserve retry, busy, generation, and event behavior.
+- Run the full busy check before the write. Hold `gate` around the
+  conditional write and check only `current()` inside it. Do not call
+  `Jobs` while `gate` or a write transaction is held.
 - Extend `crates/muzik-store/tests/watchlist.rs` to cover a concurrent source
   edit, a concurrent stage change, a stale write conflict, a successful
   retry, an unchanged document, and transaction rollback on a write error.
@@ -183,12 +245,13 @@ splitting a phase. Mark the commit checkbox only after the commit succeeds.
 - Adapt `apps/cli/src/sync.rs` to the preview and execution interface. Keep
   dry-run output, progress, failure exit behavior, and record warnings.
 - Adapt `crates/muzik-sync/tests/run.rs` to the real interface. Test refusal
-  before deletion or transfer when space is insufficient or the target is
-  gone. Test a stale file removed between preview and apply.
-- Use temporary files and the existing SQLite and probe adapters. If a
-  controlled capacity value is needed, keep that setup private inside the
-  sync module's tests and call the same execution operation as production.
-  Do not add a public dependency solely for tests.
+  before deletion or transfer when the target is gone. Test a stale file
+  removed between preview and apply.
+- Pass available space to a private capacity function. Test insufficient
+  space and unknown space in a `#[cfg(test)]` module in `src/run.rs`. Move
+  the `fits` test from `tests/run.rs:122` into that module.
+- Use temporary files and the existing SQLite and probe adapters. Do not
+  add a public hook or dependency solely for tests.
 - Preserve existing collision, encoding-change, unreadable-track, copy,
   and record-error coverage in `tests/run.rs` and `tests/sync.rs`.
 - Run `cargo test --locked -p muzik-sync -p muzik-cli` and
