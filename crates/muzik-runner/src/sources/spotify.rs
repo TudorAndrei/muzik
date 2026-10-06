@@ -26,7 +26,8 @@ impl Source for Spotify {
             &adapter.prepared.settings.paths.config_file(),
             &adapter.prepared.settings.paths.spotify_token(),
             &playlist.playlist_id,
-        )?;
+        )
+        .map_err(String::from)?;
         check_cancelled(adapter.cancelled)?;
         items(&document)
     }

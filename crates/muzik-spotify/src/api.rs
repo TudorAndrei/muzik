@@ -1,6 +1,6 @@
 //! Spotify playlist references shared by the CLI and desktop app.
 
-use super::{connected, failed};
+use super::{connected, Error};
 use rspotify::clients::OAuthClient;
 use rspotify::model::SimplifiedPlaylist;
 use rspotify::prelude::Id;
@@ -26,7 +26,7 @@ pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<Playl
         image_url: None,
     }];
     for playlist in spotify.current_user_playlists() {
-        playlists.push(PlaylistRef::from(playlist.map_err(failed)?));
+        playlists.push(PlaylistRef::from(playlist.map_err(Error::from)?));
     }
     Ok(playlists)
 }

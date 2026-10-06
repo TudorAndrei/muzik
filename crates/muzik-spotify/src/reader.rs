@@ -1,6 +1,6 @@
 //! Read Spotify track metadata into the existing version 1 export format.
 
-use super::{connected, failed, utc};
+use super::{connected, utc, Result};
 use chrono::{DateTime, Utc};
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{
@@ -37,11 +37,7 @@ struct Album<'a> {
     artists: &'a [SimplifiedArtist],
 }
 
-pub fn load_playlist_document(
-    config_path: &Path,
-    token_path: &Path,
-    uri: &str,
-) -> Result<Value, String> {
+pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) -> Result<Value> {
     let reference = parse_reference(uri)?;
     let spotify = connected(config_path, token_path)?;
     let mut entries = Vec::new();
@@ -54,18 +50,16 @@ pub fn load_playlist_document(
     let (id, title, snapshot) = match reference {
         Reference::Liked => {
             for saved in spotify.current_user_saved_tracks(None) {
-                let saved = saved.map_err(failed)?;
+                let saved = saved?;
                 push(full_entry(&saved.track, Some(saved.added_at)));
             }
             ("liked".to_owned(), "Liked Songs".to_owned(), None)
         }
         Reference::Playlist(id) => {
-            let playlist = PlaylistId::from_id(id.as_str()).map_err(|error| error.to_string())?;
-            let details = spotify
-                .playlist(playlist.clone(), None, None)
-                .map_err(failed)?;
+            let playlist = PlaylistId::from_id(id.as_str())?;
+            let details = spotify.playlist(playlist.clone(), None, None)?;
             for item in spotify.playlist_items(playlist, None, None) {
-                let item = item.map_err(failed)?;
+                let item = item?;
                 if let Some(PlayableItem::Track(track)) = &item.item {
                     push(full_entry(track, item.added_at));
                 }
@@ -75,8 +69,8 @@ pub fn load_playlist_document(
             (id.clone(), title.unwrap_or(id), snapshot)
         }
         Reference::Album(id) => {
-            let album_id = AlbumId::from_id(id.as_str()).map_err(|error| error.to_string())?;
-            let album = spotify.album(album_id.clone(), None).map_err(failed)?;
+            let album_id = AlbumId::from_id(id.as_str())?;
+            let album = spotify.album(album_id.clone(), None)?;
             let fields = Album {
                 name: &album.name,
                 release_date: Some(&album.release_date),
@@ -84,7 +78,7 @@ pub fn load_playlist_document(
                 artists: &album.artists,
             };
             for track in spotify.album_track(album_id, None) {
-                push(entry(&simple_track(&track.map_err(failed)?), &fields, None));
+                push(entry(&simple_track(&track?), &fields, None));
             }
             let title = Some(album.name.clone()).filter(|name| !name.is_empty());
             (id.clone(), title.unwrap_or(id), None)
@@ -104,7 +98,7 @@ pub fn load_playlist_document(
     Ok(document)
 }
 
-fn parse_reference(uri: &str) -> Result<Reference, String> {
+fn parse_reference(uri: &str) -> Result<Reference> {
     let input = uri.trim();
     let unreadable = || format!("muzik cannot read the Spotify reference {uri}");
     let reference = if matches!(
@@ -119,7 +113,7 @@ fn parse_reference(uri: &str) -> Result<Reference, String> {
     } else {
         let link = Url::parse(input).map_err(|_| unreadable())?;
         if link.scheme() != "https" || link.host_str() != Some("open.spotify.com") {
-            return Err(unreadable());
+            return Err(unreadable().into());
         }
         let path: Vec<_> = link.path_segments().into_iter().flatten().collect();
         let path = match path.as_slice() {
@@ -130,7 +124,7 @@ fn parse_reference(uri: &str) -> Result<Reference, String> {
             ["collection", "tracks"] => Reference::Liked,
             ["playlist", id] => Reference::Playlist((*id).to_owned()),
             ["album", id] => Reference::Album((*id).to_owned()),
-            _ => return Err(unreadable()),
+            _ => return Err(unreadable().into()),
         }
     };
     if let Reference::Playlist(id) | Reference::Album(id) = &reference {
@@ -313,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn references_accept_uris_links_and_liked_songs() -> Result<(), String> {
+    fn references_accept_uris_links_and_liked_songs() -> crate::Result<()> {
         assert_eq!(parse_reference("Liked Songs")?, Reference::Liked);
         assert_eq!(
             parse_reference("https://open.spotify.com/collection/tracks")?,

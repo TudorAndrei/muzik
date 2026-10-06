@@ -1,6 +1,6 @@
 //! Spotify browser login with PKCE and one loopback callback.
 
-use super::{account_name, client, failed, settings};
+use super::{account_name, client, settings, Error, Result};
 use rspotify::clients::OAuthClient;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -36,7 +36,7 @@ pub fn login(
         .set_nonblocking(true)
         .map_err(|error| error.to_string())?;
     let mut spotify = client(&settings, token_path);
-    let url = spotify.get_authorize_url(Some(64)).map_err(failed)?;
+    let url = spotify.get_authorize_url(Some(64)).map_err(Error::from)?;
     open::that(url.as_str())
         .map_err(|error| format!("Unable to open Spotify login in the browser: {error}"))?;
     let code = wait_for_code(
@@ -48,8 +48,8 @@ pub fn login(
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    spotify.request_token(&code).map_err(failed)?;
-    account_name(&spotify)
+    spotify.request_token(&code).map_err(Error::from)?;
+    Ok(account_name(&spotify)?)
 }
 
 fn wait_for_code(
@@ -57,7 +57,7 @@ fn wait_for_code(
     state: &str,
     cancel: &AtomicBool,
     timeout: Duration,
-) -> Result<String, String> {
+) -> Result<String> {
     let start = Instant::now();
     while start.elapsed() < timeout {
         if cancel.load(Ordering::Relaxed) {
@@ -65,21 +65,10 @@ fn wait_for_code(
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream
-                    .set_nonblocking(false)
-                    .map_err(|error| error.to_string())?;
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(5)))
-                    .map_err(|error| error.to_string())?;
+                stream.set_nonblocking(false)?;
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
                 let mut line = String::new();
-                BufReader::new(
-                    stream
-                        .try_clone()
-                        .map_err(|error| error.to_string())?
-                        .take(8192),
-                )
-                .read_line(&mut line)
-                .map_err(|error| error.to_string())?;
+                BufReader::new(stream.try_clone()?.take(8192)).read_line(&mut line)?;
                 let target = line.split_whitespace().nth(1).unwrap_or("");
                 if !line.starts_with("GET ") || !target.starts_with("/callback?") {
                     answer(&mut stream, "404 Not Found", "Not found")?;
@@ -94,7 +83,7 @@ fn wait_for_code(
                         return Ok(code);
                     }
                     Err(error) => {
-                        answer(&mut stream, "400 Bad Request", &error)?;
+                        answer(&mut stream, "400 Bad Request", &error.to_string())?;
                         return Err(error);
                     }
                 }
@@ -102,7 +91,7 @@ fn wait_for_code(
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 std::thread::sleep(Duration::from_millis(100));
             }
-            Err(error) => return Err(format!("Spotify callback failed: {error}")),
+            Err(error) => return Err(format!("Spotify callback failed: {error}").into()),
         }
     }
     Err(
@@ -111,7 +100,7 @@ fn wait_for_code(
     )
 }
 
-fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
+fn callback_result(url: &Url, expected_state: &str) -> Result<String> {
     let fields = url
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
@@ -119,7 +108,7 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
         return Err("Spotify returned the wrong login state".into());
     }
     if let Some(error) = fields.get("error") {
-        return Err(format!("Spotify refused the login: {error}"));
+        return Err(format!("Spotify refused the login: {error}").into());
     }
     fields
         .get("code")
@@ -128,14 +117,12 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String, String> {
         .ok_or_else(|| "Spotify sent no authorization code".into())
 }
 
-fn answer(stream: &mut TcpStream, status: &str, body: &str) -> Result<(), String> {
+fn answer(stream: &mut TcpStream, status: &str, body: &str) -> Result<()> {
     let response = format!(
         "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
-    stream
-        .write_all(response.as_bytes())
-        .map_err(|error| error.to_string())
+    Ok(stream.write_all(response.as_bytes())?)
 }
 
 #[cfg(test)]

@@ -27,6 +27,44 @@ const SCOPES: [&str; 3] = [
     "user-library-read",
 ];
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Persist(#[from] tempfile::PersistError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Config(#[from] muzik_core::Error),
+    #[error("Spotify request failed: {0}")]
+    Client(#[from] ClientError),
+    #[error(transparent)]
+    Id(#[from] rspotify::model::IdError),
+    #[error("{0}")]
+    Message(String),
+}
+
+pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+impl From<String> for Error {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+
+impl From<&str> for Error {
+    fn from(message: &str) -> Self {
+        Self::Message(message.to_owned())
+    }
+}
+
+impl From<Error> for String {
+    fn from(error: Error) -> Self {
+        error.to_string()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub client_id: String,
@@ -39,21 +77,21 @@ impl Settings {
     }
 }
 
-pub fn set_client_id(path: &Path, client_id: &str) -> Result<String, String> {
+pub fn set_client_id(path: &Path, client_id: &str) -> Result<String> {
     let value = client_id.trim();
     app_config::save_section_string(path, "spotify", "client_id", value)?;
     Ok(value.to_owned())
 }
 
-pub fn clear_tokens(path: &Path) -> Result<bool, String> {
+pub fn clear_tokens(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(format!("cannot remove {}: {error}", path.display())),
+        Err(error) => Err(format!("cannot remove {}: {error}", path.display()).into()),
     }
 }
 
-pub fn settings(path: &Path) -> Result<Settings, String> {
+pub fn settings(path: &Path) -> Result<Settings> {
     let config = app_config::load(path).unwrap_or_else(|_| json!({}));
     let saved = &config["spotify"];
     let value = |environment: &str, key: &str, fallback: &str| {
@@ -124,32 +162,30 @@ fn load_token(path: &Path) -> Option<Token> {
         })
 }
 
-fn save_token(path: &Path, token: &Token) -> Result<(), String> {
+fn save_token(path: &Path, token: &Token) -> Result<()> {
     let mut token = token.clone();
     if token.refresh_token.is_none() {
         token.refresh_token = load_token(path).and_then(|saved| saved.refresh_token);
     }
     let parent = path.parent().ok_or("token path has no parent")?;
-    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    fs::create_dir_all(parent)?;
     let mut file = tempfile::Builder::new()
         .prefix(".spotify-token.json.")
-        .tempfile_in(parent)
-        .map_err(|error| error.to_string())?;
-    serde_json::to_writer_pretty(&mut file, &token).map_err(|error| error.to_string())?;
+        .tempfile_in(parent)?;
+    serde_json::to_writer_pretty(&mut file, &token)?;
     use std::io::Write;
-    file.write_all(b"\n").map_err(|error| error.to_string())?;
-    file.flush().map_err(|error| error.to_string())?;
-    file.as_file()
-        .sync_all()
-        .map_err(|error| error.to_string())?;
-    file.persist(path).map_err(|error| error.to_string())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    file.as_file().sync_all()?;
+    file.persist(path)?;
     Ok(())
 }
 
 fn client(settings: &Settings, token_path: &Path) -> AuthCodePkceSpotify {
     let path = token_path.to_path_buf();
-    let save =
-        move |token: Token| save_token(&path, &token).map_err(CallbackError::CustomizedError);
+    let save = move |token: Token| {
+        save_token(&path, &token).map_err(|error| CallbackError::CustomizedError(error.into()))
+    };
     AuthCodePkceSpotify::with_config(
         Credentials::new_pkce(&settings.client_id),
         OAuth {
@@ -165,7 +201,7 @@ fn client(settings: &Settings, token_path: &Path) -> AuthCodePkceSpotify {
     )
 }
 
-fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotify, String> {
+fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotify> {
     let token = load_token(token_path)
         .ok_or("muzik is not connected to Spotify. Run 'muzik spotify login'.")?;
     let client = client(&settings(config_path)?, token_path);
@@ -174,10 +210,6 @@ fn connected(config_path: &Path, token_path: &Path) -> Result<AuthCodePkceSpotif
         .lock()
         .map_err(|_| "the Spotify token is not available")? = Some(token);
     Ok(client)
-}
-
-fn failed(error: ClientError) -> String {
-    format!("Spotify request failed: {error}")
 }
 
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
@@ -193,14 +225,14 @@ pub fn status(config_path: &Path, token_path: &Path) -> Result<Value, String> {
                 result["connected"] = json!(true);
                 result["account_name"] = json!(name);
             }
-            Err(error) => result["error"] = json!(error),
+            Err(error) => result["error"] = json!(error.to_string()),
         }
     }
     Ok(result)
 }
 
-fn account_name(client: &AuthCodePkceSpotify) -> Result<String, String> {
-    let user = client.current_user().map_err(failed)?;
+fn account_name(client: &AuthCodePkceSpotify) -> Result<String> {
+    let user = client.current_user()?;
     Ok(user
         .display_name
         .filter(|name| !name.is_empty())

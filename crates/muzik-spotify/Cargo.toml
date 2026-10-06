@@ -14,4 +14,5 @@ rspotify = { version = "0.16.1", default-features = false, features = ["client-u
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
+thiserror = "2"
 url = "2.5.8"
