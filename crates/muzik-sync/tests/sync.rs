@@ -86,7 +86,9 @@ fn targets_round_trip_through_the_config_file() -> Result<(), Box<dyn std::error
     let loaded = muzik_core::app_config::load(&config)?;
     assert_eq!(Target::load(&loaded, "phone")?, phone);
     assert_eq!(loaded["spotify"]["client_id"], "kept");
-    assert!(Target::load(&loaded, "snowsky").is_err_and(|error| error.contains("phone")));
+    assert!(
+        Target::load(&loaded, "snowsky").is_err_and(|error| error.to_string().contains("phone"))
+    );
     let loud = Target {
         bitrate: Some(999),
         ..phone

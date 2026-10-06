@@ -1,6 +1,6 @@
 use crate::{
     available_bytes, encodings, plan, record, remove_empty_folders, run as transfer_all,
-    stale_files, Plan, Target, Transfer,
+    stale_files, Error, Plan, Result, Target, Transfer,
 };
 use muzik_library::{path_from_sql, Item, Library};
 use muzik_media::quality::MeasuredQuality;
@@ -36,8 +36,8 @@ pub struct Done<'a> {
     pub index: usize,
     pub total: usize,
     pub transfer: &'a Transfer,
-    pub result: &'a Result<(), String>,
-    pub record_error: Option<String>,
+    pub result: &'a Result<()>,
+    pub record_error: Option<Error>,
 }
 
 pub struct Report {
@@ -57,15 +57,8 @@ impl Prepared {
     }
 }
 
-pub fn select(
-    library: &Library,
-    directory: &Path,
-    query: &str,
-    covers: bool,
-) -> Result<Selection, String> {
-    let items = library
-        .query_items(query)
-        .map_err(|error| error.to_string())?;
+pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) -> Result<Selection> {
+    let items = library.query_items(query)?;
     let tracks: Vec<PathBuf> = items
         .iter()
         .filter_map(|item| item.field("path").and_then(path_from_sql))
@@ -78,7 +71,7 @@ pub fn select(
     };
     let mut cover_files = Vec::new();
     for id in album_ids {
-        let album = library.album(id).map_err(|error| error.to_string())?;
+        let album = library.album(id)?;
         if let Some(path) = album
             .as_ref()
             .and_then(|album| album.field("artpath"))
@@ -102,7 +95,7 @@ pub fn prepare(
     connection: &Connection,
     options: Options,
     probe: &(dyn Fn(&Path) -> Result<Option<MeasuredQuality>, String> + Sync),
-) -> Result<Prepared, String> {
+) -> Result<Prepared> {
     let known = encodings(connection, &target.path)?;
     let plan = plan(
         target,
@@ -115,7 +108,7 @@ pub fn prepare(
     );
     let delete = options.delete && plan.unreadable.is_empty();
     let stale = if delete {
-        stale_files(&target.path, &plan.planned).map_err(|error| error.to_string())?
+        stale_files(&target.path, &plan.planned)?
     } else {
         Vec::new()
     };
@@ -142,22 +135,22 @@ pub fn apply(
     connection: Connection,
     jobs: usize,
     done: &(dyn Fn(Done<'_>) + Sync),
-) -> Result<Report, String> {
+) -> Result<Report> {
     for path in &prepared.stale {
         match fs::remove_file(path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(format!("{}: {error}", path.display())),
+            Err(error) => return Err(Error::Message(format!("{}: {error}", path.display()))),
         }
     }
     if prepared.delete {
-        remove_empty_folders(&target.path).map_err(|error| error.to_string())?;
+        remove_empty_folders(&target.path)?;
     }
     let total = prepared.plan.pending.len();
     let count = AtomicUsize::new(0);
     let unrecorded = AtomicUsize::new(0);
     let connection = Mutex::new(connection);
-    let finished = |transfer: &Transfer, result: &Result<(), String>| {
+    let finished = |transfer: &Transfer, result: &Result<()>| {
         let index = count.fetch_add(1, Ordering::Relaxed) + 1;
         let record_error = match result {
             Ok(()) => record(&connection.lock(), transfer).err(),

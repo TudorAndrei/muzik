@@ -78,7 +78,7 @@ fn prepare(
     selection: &Selection,
     connection: &Connection,
     delete: bool,
-) -> Result<Prepared, String> {
+) -> muzik_sync::Result<Prepared> {
     muzik_sync::prepare(
         &layout.target,
         &layout.library,
