@@ -4,7 +4,7 @@ use muzik_bandcamp as bandcamp;
 use muzik_core::app_config;
 use muzik_core::downloads::{human_size, scan};
 use muzik_core::paths::Paths;
-use muzik_core::spotify;
+use muzik_spotify as spotify;
 use serde_json::{json, Value};
 use std::path::Path;
 

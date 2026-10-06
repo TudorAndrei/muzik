@@ -4412,6 +4412,7 @@ dependencies = [
  "muzik-media",
  "muzik-runner",
  "muzik-soulseek",
+ "muzik-spotify",
  "muzik-sync",
  "muzik-tags",
  "muzik-workflow",
@@ -4427,26 +4428,19 @@ dependencies = [
 name = "muzik-core"
 version = "2.12.0"
 dependencies = [
- "base64 0.22.1",
  "chrono",
- "getrandom 0.4.3",
  "muzik-library",
- "open",
  "regex",
  "rusqlite",
  "serde",
  "serde-saphyr",
  "serde_json",
- "sha2 0.10.9",
  "strum",
  "strum_macros",
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
- "ureq",
- "url",
  "usage-rs",
- "zip",
 ]
 
 [[package]]
@@ -4460,6 +4454,7 @@ dependencies = [
  "muzik-jobs",
  "muzik-runner",
  "muzik-soulseek",
+ "muzik-spotify",
  "serde",
  "serde_json",
  "strum",
@@ -4580,6 +4575,7 @@ dependencies = [
  "muzik-library",
  "muzik-media",
  "muzik-soulseek",
+ "muzik-spotify",
  "muzik-workflow",
  "rusqlite",
  "serde_json",
@@ -4597,6 +4593,22 @@ dependencies = [
  "soulseek-rs-lib",
  "thiserror 2.0.21",
  "tracing",
+]
+
+[[package]]
+name = "muzik-spotify"
+version = "2.12.0"
+dependencies = [
+ "base64 0.22.1",
+ "getrandom 0.4.3",
+ "muzik-core",
+ "open",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "ureq",
+ "url",
 ]
 
 [[package]]

@@ -9,7 +9,6 @@ pub mod db;
 mod decision;
 pub mod downloads;
 pub mod paths;
-pub mod spotify;
 pub mod thumbnails;
 mod types;
 pub mod watchlist;

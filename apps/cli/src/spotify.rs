@@ -1,5 +1,6 @@
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, spotify, watchlist};
+use muzik_core::{app_config, watchlist};
+use muzik_spotify as spotify;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 

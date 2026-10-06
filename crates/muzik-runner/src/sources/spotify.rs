@@ -3,9 +3,9 @@ use super::{
 };
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::spotify;
 use muzik_core::watchlist::jobs::{JobError, LoadedSource};
 use muzik_core::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
+use muzik_spotify as spotify;
 use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
 use muzik_workflow::process_audio_plan_with_events;
 use serde_json::Value;

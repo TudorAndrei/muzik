@@ -13,17 +13,10 @@ serde-saphyr = "1.3"
 thiserror = "2"
 tracing = "0.1"
 tempfile = "3"
-ureq = { version = "3.4.2", features = ["json"] }
-base64 = "0.22"
-getrandom = "0.4"
-open = "5.4.4"
-sha2 = "0.10"
-url = "2.5.8"
 muzik-library = { path = "../muzik-library" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled"] }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 usage = { package = "usage-rs", version = "6.11.1" }
 strum = "0.28"
 strum_macros = "0.28"
