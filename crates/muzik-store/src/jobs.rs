@@ -271,7 +271,7 @@ impl Store {
             .execute(
                 "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
                  WHERE id = ?3 AND status = 'waiting'",
-                params![answer.to_string(), now(), id],
+                params![answer, now(), id],
             )
             .map(|changed| changed == 1)
             .map_err(text)
@@ -352,7 +352,7 @@ impl Store {
         &self,
         job: &NewJob<'_>,
         status: Status,
-        question: Option<String>,
+        question: Option<&Value>,
     ) -> Result<i64, String> {
         insert_on(&self.connection, job, status, question)
     }
@@ -369,14 +369,13 @@ impl Store {
 }
 
 pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64, String> {
-    let question = question.to_string();
     let updated = connection
         .query_row(
             "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4
              WHERE kind = ?5 AND item_key = ?6 AND status = 'waiting' RETURNING id",
             params![
                 question,
-                job.params.to_string(),
+                job.params,
                 job.title,
                 now(),
                 job.kind,
@@ -396,7 +395,7 @@ fn insert_on(
     connection: &Connection,
     job: &NewJob<'_>,
     status: Status,
-    question: Option<String>,
+    question: Option<&Value>,
 ) -> Result<i64, String> {
     let time = now();
     connection
@@ -409,7 +408,7 @@ fn insert_on(
                 job.item_key,
                 job.title,
                 status,
-                job.params.to_string(),
+                job.params,
                 question,
                 time
             ],
@@ -419,7 +418,6 @@ fn insert_on(
 }
 
 fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
-    let json = |text: Option<String>| text.and_then(|text| serde_json::from_str(&text).ok());
     Ok(Job {
         id: row.get(0)?,
         queue: row.get(1)?,
@@ -427,9 +425,9 @@ fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
         item_key: row.get(3)?,
         title: row.get(4)?,
         status: row.get(5)?,
-        params: json(row.get(6)?).unwrap_or(Value::Null),
-        question: json(row.get(7)?),
-        answer: json(row.get(8)?),
+        params: row.get(6)?,
+        question: row.get(7)?,
+        answer: row.get(8)?,
         error: row.get(9)?,
     })
 }
