@@ -330,47 +330,7 @@ fn page_blob(html: &str) -> Option<Value> {
     let tag = &tag[tag.rfind('<')?..];
     let blob = tag.split_once("data-blob=\"")?.1;
     let blob = &blob[..blob.find('"')?];
-    serde_json::from_str(&unescape(blob)).ok()
-}
-
-fn unescape(text: &str) -> String {
-    let mut output = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(index) = rest.find('&') {
-        output.push_str(&rest[..index]);
-        rest = &rest[index..];
-        let Some(end) = rest.find(';').filter(|end| *end <= 10) else {
-            output.push('&');
-            rest = &rest[1..];
-            continue;
-        };
-        let entity = &rest[1..end];
-        let decoded = match entity {
-            "quot" => Some('"'),
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "apos" => Some('\''),
-            _ => entity
-                .strip_prefix("#x")
-                .or_else(|| entity.strip_prefix("#X"))
-                .and_then(|hex| u32::from_str_radix(hex, 16).ok())
-                .or_else(|| entity.strip_prefix('#').and_then(|dec| dec.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match decoded {
-            Some(character) => {
-                output.push(character);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                output.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    output.push_str(rest);
-    output
+    serde_json::from_str(&html_escape::decode_html_entities(blob)).ok()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -676,7 +636,13 @@ fn disposition_name(header: &str) -> Option<String> {
         .split(';')
         .map(str::trim)
         .find_map(|part| part.strip_prefix("filename*="))
-        .and_then(|value| value.split_once("''").map(|(_, name)| percent_decode(name)));
+        .and_then(|value| {
+            value.split_once("''").map(|(_, name)| {
+                percent_encoding::percent_decode_str(name)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            })
+        });
     let plain = || {
         header
             .split(';')
@@ -694,47 +660,12 @@ fn disposition_name(header: &str) -> Option<String> {
     safe.then(|| name.to_owned())
 }
 
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let hex = bytes
-            .get(index + 1..index + 3)
-            .and_then(|pair| std::str::from_utf8(pair).ok())
-            .and_then(|pair| u8::from_str_radix(pair, 16).ok());
-        if let (b'%', Some(byte)) = (bytes[index], hex) {
-            output.push(byte);
-            index += 3;
-            continue;
-        }
-        output.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&output).into_owned()
-}
-
 fn extract(archive: &Path, destination: &Path) -> Result<(), String> {
     let file = fs::File::open(archive).map_err(|error| error.to_string())?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?;
-    for index in 0..zip.len() {
-        let mut entry = zip.by_index(index).map_err(|error| error.to_string())?;
-        let Some(relative) = entry.enclosed_name() else {
-            return Err("The Bandcamp ZIP file has an unsafe path.".into());
-        };
-        let target = destination.join(relative);
-        if entry.is_dir() {
-            fs::create_dir_all(&target).map_err(|error| error.to_string())?;
-            continue;
-        }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let mut output = fs::File::create(&target).map_err(|error| error.to_string())?;
-        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
-    }
-    Ok(())
+    zip::ZipArchive::new(file)
+        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?
+        .extract(destination)
+        .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))
 }
 
 pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
@@ -971,5 +902,28 @@ mod tests {
         );
         assert_eq!(disposition_name(r#"attachment; filename="../x.zip""#), None);
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
+    }
+
+    #[test]
+    fn archive_entries_stay_inside_the_destination() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let write = |name: &str, entries: &[&str]| -> Result<PathBuf, Box<dyn std::error::Error>> {
+            let path = directory.path().join(name);
+            let mut zip = zip::ZipWriter::new(fs::File::create(&path)?);
+            for entry in entries {
+                zip.start_file(*entry, zip::write::SimpleFileOptions::default())?;
+                zip.write_all(b"audio")?;
+            }
+            zip.finish()?;
+            Ok(path)
+        };
+        let destination = directory.path().join("out");
+        extract(&write("good.zip", &["Album/01 Song.flac"])?, &destination)?;
+        assert_eq!(fs::read(destination.join("Album/01 Song.flac"))?, b"audio");
+
+        let unsafe_archive = write("bad.zip", &["../escape.flac"])?;
+        assert!(extract(&unsafe_archive, &destination).is_err());
+        assert!(!directory.path().join("escape.flac").exists());
+        Ok(())
     }
 }
