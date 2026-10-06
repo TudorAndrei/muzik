@@ -17,8 +17,6 @@ confidence-threshold = 0.8
 unused-allowed-license = "allow"
 private = { ignore = true }
 exceptions = [
-    { crate = "media-seek", allow = ["GPL-3.0-only"] },
-    { crate = "yt-dlp", allow = ["GPL-3.0-only"] },
     { crate = "ring", allow = ["ISC"] },
     { crate = "rustls-webpki", allow = ["ISC"] },
     { crate = "untrusted", allow = ["ISC"] },
