@@ -1,4 +1,4 @@
-use muzik_core::QualityPolicy;
+use muzik_core::{JobEvent, QualityPolicy};
 use muzik_store::watchlist::jobs::{self, JobError, JobOptions, LoadedSource, Operations};
 use muzik_store::watchlist::{
     ItemAction, ItemId, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus,
@@ -118,7 +118,7 @@ fn refresh_keeps_prior_state_and_processes_each_video_once() -> TestResult {
     assert_eq!(
         events
             .iter()
-            .filter(|event| event["event"] == "watchlist_saved")
+            .filter(|event| **event == JobEvent::WatchlistSaved)
             .count(),
         3
     );

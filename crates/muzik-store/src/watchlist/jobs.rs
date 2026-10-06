@@ -6,6 +6,7 @@ use super::{
     Stage, StageStatus, WatchItem, Watchlist,
 };
 use crate::Result;
+use muzik_core::{JobEvent, Severity, Task};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -97,7 +98,7 @@ pub fn sync(
     options: JobOptions<'_>,
     operations: &mut impl Operations,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
 ) -> Result<Synced, JobError> {
     let mut draft = repository.load()?;
     let mut ids: Vec<String> = draft
@@ -118,11 +119,11 @@ pub fn sync(
             )));
         }
     }
-    emit(
-        on_event,
-        "progress_started",
-        json!({"task_id":"watchlist-refresh", "description":"Checking watchlist playlists.", "total":ids.len()}),
-    );
+    on_event(JobEvent::ProgressStarted {
+        task: Task::WatchlistRefresh,
+        description: "Checking watchlist playlists.".into(),
+        total: Some(ids.len() as u64),
+    });
     let mut errors = 0;
     let mut loaded_ids = Vec::new();
     for id in &ids {
@@ -141,13 +142,12 @@ pub fn sync(
                     }
                     Ok(())
                 })?;
-                emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
+                on_event(JobEvent::WatchlistSaved);
                 errors += 1;
-                emit(
-                    on_event,
-                    "message",
-                    json!({"message":message, "severity":"error"}),
-                );
+                on_event(JobEvent::Message {
+                    message,
+                    severity: Severity::Error,
+                });
             }
             Ok(loaded) => {
                 check_cancelled(cancelled)?;
@@ -162,15 +162,15 @@ pub fn sync(
                     }
                     reconcile_keeping_running(document, options.reconcile)
                 })?;
-                emit(on_event, "watchlist_saved", json!({"playlist_id":id}));
+                on_event(JobEvent::WatchlistSaved);
                 loaded_ids.push(id.clone());
             }
         }
-        emit(
-            on_event,
-            "progress_advanced",
-            json!({"task_id":"watchlist-refresh"}),
-        );
+        on_event(JobEvent::ProgressAdvanced {
+            task: Task::WatchlistRefresh,
+            completed: None,
+            total: None,
+        });
     }
     let mut pending = Vec::new();
     for id in loaded_ids {
@@ -187,11 +187,10 @@ pub fn sync(
                     .collect()
             })
             .unwrap_or_default();
-        emit(
-            on_event,
-            "message",
-            json!({"message":format!("Playlist {id} has {} pending item(s).", items.len())}),
-        );
+        on_event(JobEvent::message(format!(
+            "Playlist {id} has {} pending item(s).",
+            items.len()
+        )));
         pending.extend(items);
     }
     Ok(Synced {
@@ -207,7 +206,7 @@ pub fn refresh(
     options: JobOptions<'_>,
     operations: &mut impl Operations,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
 ) -> Result<Value, JobError> {
     let synced = sync(repository, options, operations, cancelled, on_event)?;
     let mut completed = 0;
@@ -229,19 +228,14 @@ pub fn refresh(
                 Err(JobError::Cancelled) => return Err(JobError::Cancelled),
                 Err(_) => failed += 1,
             }
-            emit(
-                on_event,
-                "watchlist_saved",
-                json!({"playlist_id":item.id.playlist_id}),
-            );
+            on_event(JobEvent::WatchlistSaved);
         }
     }
     check_cancelled(cancelled)?;
-    emit(
-        on_event,
-        "progress_finished",
-        json!({"task_id":"watchlist-refresh", "success":failed == 0 && synced.errors == 0}),
-    );
+    on_event(JobEvent::ProgressFinished {
+        task: Task::WatchlistRefresh,
+        success: failed == 0 && synced.errors == 0,
+    });
     let document = if options.dry_run {
         synced.document
     } else {
@@ -433,8 +427,4 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
     } else {
         Ok(())
     }
-}
-
-fn emit(on_event: &mut dyn FnMut(Value), event: &str, data: Value) {
-    on_event(json!({"event":event,"data":data}));
 }

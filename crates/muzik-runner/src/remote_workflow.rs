@@ -4,7 +4,7 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, chapters::Chapter, DecisionKind, PreferredAudio};
+use muzik_core::{app_config, chapters::Chapter, DecisionKind, JobEvent, PreferredAudio, Step};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::session::{setting, Session, SessionSettings};
 use muzik_soulseek::types::Candidate;
@@ -26,8 +26,8 @@ pub fn run(
     settings: &Settings,
     cancelled: &AtomicBool,
     stage: &Cell<Stage>,
-    on_event: &mut dyn FnMut(Value),
-    on_import_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
+    on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<Value, muzik_workflow::Error> {
     if cancelled.load(Ordering::SeqCst) {
@@ -291,20 +291,12 @@ where
     }
 }
 
-fn event_record(event: WorkflowEvent) -> Value {
+fn event_record(event: WorkflowEvent) -> JobEvent {
     match event {
-        WorkflowEvent::InputClassified(_) => {
-            json!({"event":"message","data":{"message":"Reading remote input."}})
-        }
-        WorkflowEvent::AcquisitionStarted => {
-            json!({"event":"step_started","data":{"name":"download"}})
-        }
-        WorkflowEvent::AcquisitionCompleted { files } => {
-            json!({"event":"step_finished","data":{"name":"download","files":files}})
-        }
-        WorkflowEvent::Completed => {
-            json!({"event":"message","data":{"message":"Remote workflow complete."}})
-        }
+        WorkflowEvent::InputClassified(_) => JobEvent::message("Reading remote input."),
+        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted(Step::Download),
+        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished(Step::Download),
+        WorkflowEvent::Completed => JobEvent::message("Remote workflow complete."),
         other => local_workflow::event_record(other),
     }
 }

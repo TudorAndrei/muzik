@@ -17,7 +17,7 @@ pub mod watchlist;
 
 pub use app::{App, AppOptions};
 pub use error::{Error, Result};
-pub use events::AppEvent;
+pub use events::{AppEvent, Source};
 pub use queue::{job_id, parse_job_id, EnqueueError, Jobs};
 pub use runner::{Ask, Options, Prompt, Runner, Running, Sink};
 pub use settings::Settings;

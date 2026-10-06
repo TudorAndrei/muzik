@@ -153,18 +153,6 @@ pub enum AudioSource {
 
 config_choice!(AudioSource, "audio source", audio_source_error);
 
-/// Return the allowed values for a workflow config field.
-pub fn choices_for_field(field: &str) -> Option<&'static [&'static str]> {
-    match field {
-        "audio_source" => Some(AudioSource::CHOICES),
-        "fallback" => Some(AudioFallback::CHOICES),
-        "metadata_source" => Some(MetadataSource::CHOICES),
-        "quality_policy" => Some(QualityPolicy::CHOICES),
-        "duplicates" => Some(DuplicatePolicy::CHOICES),
-        _ => None,
-    }
-}
-
 /// Source to try when Soulseek has no acceptable result.
 #[derive(
     Clone,

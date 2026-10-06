@@ -2,7 +2,7 @@
 
 use crate::settings::Settings;
 use crate::sources;
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, JobEvent, Task};
 use muzik_store::jobs::{park_on, Kind, NewJob};
 use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
@@ -20,7 +20,7 @@ pub fn sync(
     settings: &Settings,
     playlist_id: Option<&str>,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
 ) -> Result<Vec<PendingItem>, JobError> {
     let prepared = Prepared::new(settings);
     sources::ensure(&prepared.repository, &settings.paths)?;
@@ -47,9 +47,10 @@ pub fn sync(
             (events.borrow_mut())(record);
         },
     )?;
-    (events.borrow_mut())(
-        json!({"event":"progress_finished","data":{"task_id":"watchlist-refresh","success":synced.errors == 0}}),
-    );
+    (events.borrow_mut())(JobEvent::ProgressFinished {
+        task: Task::WatchlistRefresh,
+        success: synced.errors == 0,
+    });
     Ok(synced.pending)
 }
 
@@ -61,8 +62,8 @@ pub fn action(
     settings: &Settings,
     params: &Value,
     cancelled: &AtomicBool,
-    on_event: &mut dyn FnMut(Value),
-    on_import_event: &mut dyn FnMut(Value),
+    on_event: &mut dyn FnMut(JobEvent),
+    on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
@@ -136,8 +137,8 @@ impl<'a> Prepared<'a> {
 pub(crate) struct Adapter<'a, 'b> {
     pub(crate) prepared: &'a Prepared<'a>,
     pub(crate) params: &'a Value,
-    pub(crate) events: &'a RefCell<&'b mut dyn FnMut(Value)>,
-    pub(crate) on_import_event: &'a mut dyn FnMut(Value),
+    pub(crate) events: &'a RefCell<&'b mut dyn FnMut(JobEvent)>,
+    pub(crate) on_import_event: &'a mut dyn FnMut(JobEvent),
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     pub(crate) parked: &'a RefCell<Option<Parked>>,
     pub(crate) cancelled: &'a AtomicBool,
@@ -151,7 +152,7 @@ impl Operations for Adapter<'_, '_> {
 
     fn process(
         &mut self,
-        playlist: &Playlist,
+        _playlist: &Playlist,
         item: &WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
@@ -165,14 +166,10 @@ impl Operations for Adapter<'_, '_> {
             };
             let stage = Stage::of_decision(parked.kind);
             let question = parked.question();
-            (self.events.borrow_mut())(json!({"event":"item_waiting","data":{
-                "playlist_id":playlist.playlist_id,
-                "position":item.position,
-                "video_id":item.video_id.as_deref().or(item.entry_id.as_deref()),
-                "title":item.title,
-                "stage":stage,
-                "question":question,
-            }}));
+            (self.events.borrow_mut())(JobEvent::ItemWaiting {
+                title: item.title.clone(),
+                question: question.clone(),
+            });
             JobError::Waiting { stage, question }
         })
     }

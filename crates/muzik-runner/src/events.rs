@@ -1,5 +1,13 @@
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, JobEvent};
+use muzik_store::jobs::Kind;
 use serde_json::Value;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Workflow,
+    Native,
+    Agent,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum AppEvent {
@@ -8,13 +16,12 @@ pub enum AppEvent {
     JobStarted {
         job_id: String,
         title: String,
-        kind: String,
+        kind: Kind,
     },
     JobEvent {
         job_id: String,
-        source: String,
-        name: String,
-        data: Value,
+        source: Source,
+        event: JobEvent,
     },
     JobCompleted {
         job_id: String,

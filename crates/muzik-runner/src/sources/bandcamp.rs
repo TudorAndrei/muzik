@@ -3,6 +3,7 @@ use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_bandcamp as bandcamp;
 use muzik_core::paths::Paths;
+use muzik_core::{JobEvent, Task};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{
     bandcamp_source, ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem,
@@ -88,12 +89,20 @@ impl Source for Bandcamp {
                     let completed = received / MEGABYTE;
                     let total = total.map(|total| total.div_ceil(MEGABYTE));
                     if reported.is_none() {
-                        on_import_event(json!({"event":"progress_started","data":{"task_id":"bandcamp-download","description":"Downloading from Bandcamp (MB)","total":total}}));
+                        on_import_event(JobEvent::ProgressStarted {
+                            task: Task::BandcampDownload,
+                            description: "Downloading from Bandcamp (MB)".into(),
+                            total,
+                        });
                     } else if reported == Some(completed) {
                         return;
                     }
                     reported = Some(completed);
-                    on_import_event(json!({"event":"progress_advanced","data":{"task_id":"bandcamp-download","completed":completed}}));
+                    on_import_event(JobEvent::ProgressAdvanced {
+                        task: Task::BandcampDownload,
+                        completed: Some(completed),
+                        total: None,
+                    });
                 },
             )
             .map_err(|error| {
@@ -106,9 +115,10 @@ impl Source for Bandcamp {
                     }
                 }
             })?;
-            on_import_event(
-                json!({"event":"progress_finished","data":{"task_id":"bandcamp-download","success":true}}),
-            );
+            on_import_event(JobEvent::ProgressFinished {
+                task: Task::BandcampDownload,
+                success: true,
+            });
         }
         let mut options = adapter.prepared.settings.options.clone();
         options.no_split = true;
