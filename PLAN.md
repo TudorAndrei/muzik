@@ -126,6 +126,13 @@ publishing results, and keep the existing `gate` lock around the publish.
 Revisions protect stored data; the application generation still controls
 which result the GUI displays.
 
+Result of the Phase 2 reproduction (2026-10-06): a temporary test ran the
+baseline sequence `revision`, `load`, `revision`, then a rename through a
+second `Repository`, then `save`. The saved title was `None`, so the rename
+was lost. With `load_revision` and `save_at`, the same interleaving returns
+`CheckedWrite::Conflict` and the rename stays. The committed tests check
+the stored results of the new interface, not the baseline sequence.
+
 Keep `Repository::update_with` and the atomic stage-and-question write used
 by `Operations::park`. Reuse normalization and changed-row detection so an
 unchanged document does not increment the revision. Restrict lower-level

@@ -15,22 +15,22 @@
 - [x] Preserve pause, answer, resume, cancellation, and legacy import behavior.
 - [x] Record that the two-connection race test does not fail reliably on the baseline; the partial-cancellation test is the baseline failure.
 - [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
-- [ ] Commit: `fix(jobs): make queue admission atomic across processes`
+- [x] Commit: `fix(jobs): make queue admission atomic across processes`
 
 ## Phase 2: Atomic checked watchlist writes
 
-- [ ] Read the watchlist document and revision in one transaction through `Repository`.
-- [ ] Check the expected revision and write changes in one immediate transaction.
-- [ ] Return a conflict without changing data; preserve unchanged-document revision behavior.
-- [ ] Replace the caller write protocol in `WatchlistCheck::check`.
-- [ ] Preserve the three-attempt limit, busy checks, generation checks, and saved/checked events.
-- [ ] Run the full busy check before the write; hold `gate` around the conditional write and check only `current()` inside it.
-- [ ] Do not call `Jobs` while `gate` or a write transaction is held.
-- [ ] Test stale writes after concurrent source edits and stage changes using separate connections.
-- [ ] Test a successful retry and rollback after a write error.
-- [ ] Preserve the combined waiting-stage and question transaction in `watchlist_jobs.rs`.
-- [ ] Reproduce a stale overwrite against the baseline and verify that committed edits survive.
-- [ ] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
+- [x] Read the watchlist document and revision in one transaction through `Repository`.
+- [x] Check the expected revision and write changes in one immediate transaction.
+- [x] Return a conflict without changing data; preserve unchanged-document revision behavior.
+- [x] Replace the caller write protocol in `WatchlistCheck::check`.
+- [x] Preserve the three-attempt limit, busy checks, generation checks, and saved/checked events.
+- [x] Run the full busy check before the write; hold `gate` around the conditional write and check only `current()` inside it.
+- [x] Do not call `Jobs` while `gate` or a write transaction is held.
+- [x] Test stale writes after concurrent source edits and stage changes using separate connections.
+- [x] Test a successful retry and rollback after a write error.
+- [x] Preserve the combined waiting-stage and question transaction in `watchlist_jobs.rs`.
+- [x] Reproduce a stale overwrite against the baseline and verify that committed edits survive.
+- [x] Pass `cargo test --locked -p muzik-store -p muzik-runner` and `mise run check`.
 - [ ] Commit: `fix(watchlist): make checked writes atomic across processes`
 
 ## Phase 3: Device sync owns its execution conditions
