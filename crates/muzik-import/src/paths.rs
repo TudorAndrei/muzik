@@ -110,22 +110,18 @@ impl PathSanitizer {
                 if index == last {
                     let stem_limit = limit.saturating_sub(extension.len());
                     let stem = part.strip_suffix(extension).unwrap_or(part);
-                    *part = format!("{}{}", truncate_utf8(stem, stem_limit), extension);
+                    *part = format!(
+                        "{}{}",
+                        &stem[..stem.floor_char_boundary(stem_limit)],
+                        extension
+                    );
                 } else {
-                    *part = truncate_utf8(part, limit).to_string();
+                    *part = part[..part.floor_char_boundary(limit)].to_string();
                 }
             }
         }
         Ok((parts.join("/"), truncated))
     }
-}
-
-fn truncate_utf8(value: &str, limit: usize) -> &str {
-    let mut end = limit.min(value.len());
-    while !value.is_char_boundary(end) {
-        end -= 1;
-    }
-    &value[..end]
 }
 
 fn configured_default_replacements() -> Vec<(Regex, String)> {
