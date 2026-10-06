@@ -1,5 +1,5 @@
 use muzik_core::paths::Paths;
-use muzik_core::{ChoiceError, PreferredAudio, app_config, paths};
+use muzik_core::{PreferredAudio, app_config, paths};
 use muzik_import::beets;
 use muzik_library::Library;
 use muzik_media::quality::{self, MeasuredQuality};
@@ -43,10 +43,6 @@ pub fn check() -> Result<(), String> {
     Ok(())
 }
 
-pub fn parse_prefer(text: &str) -> Result<PreferredAudio, String> {
-    text.parse().map_err(|error: ChoiceError| error.to_string())
-}
-
 pub fn search(
     query: &str,
     prefer: PreferredAudio,
@@ -61,7 +57,7 @@ pub fn search(
 }
 
 pub fn check_library(args: &SoulseekCheckLibrary) -> Result<(), String> {
-    let prefer = parse_prefer(&args.prefer)?;
+    let prefer = args.prefer;
     let (_, paths) = beets::load_paths(args.config.as_deref(), json!({}))?;
     let library = Library::open_read_only(&paths.library)
         .map_err(|error| format!("Could not open the music library: {error}"))?;
@@ -276,8 +272,7 @@ pub fn download(args: &SoulseekDownload) -> Result<(), String> {
     } else {
         let query = args.query.as_deref().ok_or("give a query or --candidate")?;
         let connected = connect(&config)?;
-        let prefer = parse_prefer(&args.prefer)?;
-        let ranked = ranked_search(&connected, &config, query, prefer, args.limit)?;
+        let ranked = ranked_search(&connected, &config, query, args.prefer, args.limit)?;
         if ranked.is_empty() {
             println!("No candidates found.");
             return Ok(());
@@ -513,7 +508,7 @@ mod tests {
         check_library(&SoulseekCheckLibrary {
             query: Some("artist:Mara".into()),
             min_bitrate: 256,
-            prefer: "lossless".into(),
+            prefer: muzik_core::PreferredAudio::default(),
             limit: 20,
             config: Some(config.clone()),
         })?;

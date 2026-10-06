@@ -60,7 +60,7 @@ fn params(args: &Workflow) -> Result<Value, String> {
             "metadata_source": args.metadata_source,
             "quality_policy": args.quality_policy,
             "min_bitrate": args.min_bitrate,
-            "prefer": args.prefer,
+            "prefer": args.prefer.to_string(),
             "fallback": args.fallback,
             "interactive": !args.no_interactive,
         })
@@ -107,7 +107,7 @@ mod tests {
                 metadata_source: muzik_core::MetadataSource::default(),
                 quality_policy: muzik_core::QualityPolicy::default(),
                 min_bitrate: 256,
-                prefer: "lossless".into(),
+                prefer: muzik_core::PreferredAudio::default(),
                 fallback: muzik_core::AudioFallback::default(),
                 no_interactive: true,
                 queue: false,
