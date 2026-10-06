@@ -155,7 +155,7 @@ pub(super) fn local_stage(
             &mut |event| (events.borrow_mut())(event),
             adapter.decide,
         )
-        .map_err(|error| cancel_or(cancelled, error))?;
+        .map_err(|error| cancel_or(cancelled, error.into()))?;
         apply_quality_result(&mut updated, &result);
         return Ok(updated);
     }

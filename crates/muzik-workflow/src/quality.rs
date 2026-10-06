@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::Result;
 use crate::upgrade::{DURATION_TOLERANCE, Wanted, safe_match, tokens};
 
 #[derive(Debug)]
@@ -39,22 +40,22 @@ struct Track {
 }
 
 trait Backend {
-    fn download_dir(&self) -> Result<PathBuf, String>;
-    fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>, String>;
-    fn track(&mut self, path: &Path) -> Result<Option<Track>, String>;
+    fn download_dir(&self) -> Result<PathBuf>;
+    fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>>;
+    fn track(&mut self, path: &Path) -> Result<Option<Track>>;
     fn search(
         &mut self,
         query: &str,
         prefer: PreferredAudio,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<Candidate>, String>;
+    ) -> Result<Vec<Candidate>>;
     fn download(
         &mut self,
         candidate: &Candidate,
         destination: &Path,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<PathBuf>, String>;
-    fn duration(&mut self, path: &Path) -> Result<Option<f64>, String>;
+    ) -> Result<Vec<PathBuf>>;
+    fn duration(&mut self, path: &Path) -> Result<Option<f64>>;
 }
 
 /// Return the original audio if a replacement cannot be verified. The caller
@@ -69,7 +70,7 @@ pub fn check_youtube_quality(
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-) -> Result<QualityUpgradeResult, String> {
+) -> Result<QualityUpgradeResult> {
     let mut backend = SoulseekBackend {
         paths: paths.clone(),
         session: None,
@@ -96,7 +97,7 @@ fn check_with_backend(
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(Value),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-) -> Result<QualityUpgradeResult, String> {
+) -> Result<QualityUpgradeResult> {
     let keep = QualityUpgradeResult::keep(&audio_files);
     if policy == QualityPolicy::Off || audio_files.is_empty() {
         return Ok(keep);
@@ -321,7 +322,7 @@ fn message(text: String, warning: bool) -> Value {
     json!({"event":"message","data":{"message":text,"severity":if warning {"warning"} else {"info"}}})
 }
 
-fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
+fn check_cancelled(cancelled: &AtomicBool) -> Result<()> {
     if cancelled.load(Ordering::SeqCst) {
         Err("quality check cancelled".into())
     } else {
@@ -361,12 +362,11 @@ fn candidate_payload(candidate: &Candidate) -> Value {
     })
 }
 
-fn copy_chapter_sidecars(original: &Path, replacement: &Path) -> Result<(), String> {
+fn copy_chapter_sidecars(original: &Path, replacement: &Path) -> std::io::Result<()> {
     for extension in [".chapters.txt", ".info.json"] {
         let source = sidecar_path(original, extension);
         if source.is_file() {
-            std::fs::copy(&source, sidecar_path(replacement, extension))
-                .map_err(|error| error.to_string())?;
+            std::fs::copy(&source, sidecar_path(replacement, extension))?;
         }
     }
     Ok(())
@@ -378,35 +378,32 @@ struct SoulseekBackend {
 }
 
 impl SoulseekBackend {
-    fn session(&mut self) -> Result<(&Session, Timeouts), String> {
+    fn session(&mut self) -> Result<(&Session, Timeouts)> {
         if self.session.is_none() {
             let config = app_config::load(&self.paths.config_file())?;
             let settings = SessionSettings::configured(&config)
                 .ok_or("Set Soulseek credentials in configuration first.")?;
-            self.session = Some((
-                Session::shared(settings).map_err(|error| error.to_string())?,
-                Timeouts::configured(&config),
-            ));
+            self.session = Some((Session::shared(settings)?, Timeouts::configured(&config)));
         }
         self.session
             .as_ref()
             .map(|(session, timeouts)| (session.as_ref(), *timeouts))
-            .ok_or("Soulseek session is not available".into())
+            .ok_or_else(|| "Soulseek session is not available".into())
     }
 }
 
 impl Backend for SoulseekBackend {
-    fn download_dir(&self) -> Result<PathBuf, String> {
+    fn download_dir(&self) -> Result<PathBuf> {
         let path = self.paths.soulseek();
         std::fs::create_dir_all(&path).map_err(|error| error.to_string())?;
         Ok(path)
     }
 
-    fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>, String> {
-        quality::measure(path)
+    fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>> {
+        Ok(quality::measure(path)?)
     }
 
-    fn track(&mut self, path: &Path) -> Result<Option<Track>, String> {
+    fn track(&mut self, path: &Path) -> Result<Option<Track>> {
         let mut artist = String::new();
         let mut title = String::new();
         for extension in [".muzik.json", ".info.json"] {
@@ -437,9 +434,7 @@ impl Backend for SoulseekBackend {
                 title = tags.fields.get("title").cloned().unwrap_or_default();
             }
         }
-        let duration = muzik_tags::probe(path)
-            .map_err(|error| error.to_string())?
-            .duration_seconds;
+        let duration = muzik_tags::probe(path)?.duration_seconds;
         Ok(duration.map(|duration| Track {
             artist,
             title,
@@ -452,7 +447,7 @@ impl Backend for SoulseekBackend {
         query: &str,
         prefer: PreferredAudio,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<Candidate>, String> {
+    ) -> Result<Vec<Candidate>> {
         let (session, timeouts) = self.session()?;
         Ok(session
             .search(query, prefer, 20, timeouts.search, cancelled)?
@@ -466,15 +461,13 @@ impl Backend for SoulseekBackend {
         candidate: &Candidate,
         destination: &Path,
         cancelled: &AtomicBool,
-    ) -> Result<Vec<PathBuf>, String> {
+    ) -> Result<Vec<PathBuf>> {
         let (session, timeouts) = self.session()?;
-        session.fetch(candidate, destination, timeouts.download, cancelled)
+        Ok(session.fetch(candidate, destination, timeouts.download, cancelled)?)
     }
 
-    fn duration(&mut self, path: &Path) -> Result<Option<f64>, String> {
-        muzik_tags::probe(path)
-            .map(|properties| properties.duration_seconds)
-            .map_err(|error| error.to_string())
+    fn duration(&mut self, path: &Path) -> Result<Option<f64>> {
+        Ok(muzik_tags::probe(path)?.duration_seconds)
     }
 }
 
@@ -513,11 +506,11 @@ mod tests {
     }
 
     impl Backend for FakeBackend {
-        fn download_dir(&self) -> Result<PathBuf, String> {
+        fn download_dir(&self) -> Result<PathBuf> {
             Ok(self.root.path().to_path_buf())
         }
 
-        fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>, String> {
+        fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>> {
             if self.source_error && path.file_name().is_some_and(|name| name == "source.mp3") {
                 return Err("probe failed".into());
             }
@@ -535,7 +528,7 @@ mod tests {
             }))
         }
 
-        fn track(&mut self, _path: &Path) -> Result<Option<Track>, String> {
+        fn track(&mut self, _path: &Path) -> Result<Option<Track>> {
             Ok(Some(Track {
                 artist: "Artist".into(),
                 title: "Album".into(),
@@ -548,7 +541,7 @@ mod tests {
             _query: &str,
             _prefer: PreferredAudio,
             _cancelled: &AtomicBool,
-        ) -> Result<Vec<Candidate>, String> {
+        ) -> Result<Vec<Candidate>> {
             Ok(self.candidates.clone())
         }
 
@@ -557,20 +550,20 @@ mod tests {
             candidate: &Candidate,
             destination: &Path,
             _cancelled: &AtomicBool,
-        ) -> Result<Vec<PathBuf>, String> {
+        ) -> Result<Vec<PathBuf>> {
             if self.download_error {
                 return Err("peer left".into());
             }
             let mut files = Vec::new();
             for file in &candidate.files {
                 let path = destination.join(file.name.rsplit(['/', '\\']).next().unwrap());
-                std::fs::write(&path, b"replacement").map_err(|error| error.to_string())?;
+                std::fs::write(&path, b"replacement")?;
                 files.push(path);
             }
             Ok(files)
         }
 
-        fn duration(&mut self, _path: &Path) -> Result<Option<f64>, String> {
+        fn duration(&mut self, _path: &Path) -> Result<Option<f64>> {
             Ok(Some(3600.0))
         }
     }
@@ -660,6 +653,6 @@ mod tests {
             &mut |_, _| Ok(json!(true)),
         )
         .unwrap_err();
-        assert_eq!(error, "quality check cancelled");
+        assert_eq!(error.to_string(), "quality check cancelled");
     }
 }

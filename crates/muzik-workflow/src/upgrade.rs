@@ -1,3 +1,4 @@
+use crate::Result;
 use muzik_core::PreferredAudio;
 use muzik_core::audio::AudioFormat;
 use muzik_library::{Item, SqlValue, path_from_sql, scalar_text};
@@ -31,7 +32,7 @@ pub fn scan_library(
     directory: &Path,
     min_bitrate: u32,
     mut measure: impl FnMut(&Path) -> Result<Option<MeasuredQuality>, String>,
-) -> Result<(usize, Vec<FlaggedTrack>), String> {
+) -> Result<(usize, Vec<FlaggedTrack>)> {
     let mut scanned = 0_usize;
     let mut flagged = Vec::new();
     for item in items {
@@ -293,28 +294,29 @@ fn quality_score(
     score
 }
 
-pub fn candidate_id(candidate: &Candidate) -> Result<String, String> {
-    let bytes = serde_json::to_vec(candidate).map_err(|error| error.to_string())?;
+pub fn candidate_id(candidate: &Candidate) -> Result<String> {
+    let bytes = serde_json::to_vec(candidate)?;
     let digest = Sha256::digest(bytes);
     let hex = format!("{digest:x}");
     Ok(hex.get(..16).unwrap_or(&hex).to_owned())
 }
 
-fn cache_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+fn cache_path(root: &Path, id: &str) -> Result<PathBuf> {
     if id.len() != 16 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("candidate ID must contain 16 hexadecimal digits".into());
     }
     Ok(root.join(format!("soulseek_{id}.json")))
 }
 
-pub fn save_candidate(root: &Path, id: &str, candidate: &CachedCandidate) -> Result<(), String> {
+pub fn save_candidate(root: &Path, id: &str, candidate: &CachedCandidate) -> Result<()> {
     let path = cache_path(root, id)?;
     fs::create_dir_all(root).map_err(|error| error.to_string())?;
-    let bytes = serde_json::to_vec_pretty(candidate).map_err(|error| error.to_string())?;
-    fs::write(&path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))
+    let bytes = serde_json::to_vec_pretty(candidate)?;
+    fs::write(&path, bytes).map_err(|error| format!("cannot write {}: {error}", path.display()))?;
+    Ok(())
 }
 
-pub fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate, String> {
+pub fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate> {
     let path = cache_path(root, id)?;
     let bytes =
         fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?;

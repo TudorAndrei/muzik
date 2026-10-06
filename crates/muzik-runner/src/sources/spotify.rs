@@ -111,7 +111,7 @@ fn import_file(
     cancelled: &AtomicBool,
 ) -> Result<WatchItem, JobError> {
     let track = item.track.clone().unwrap_or(Value::Null);
-    write_spotify_tags(&file, &tags(&track)).map_err(JobError::Operation)?;
+    write_spotify_tags(&file, &tags(&track)).map_err(|error| JobError::Operation(error.into()))?;
     let mut options = adapter.prepared.settings.options.clone();
     options.no_split = true;
     options.interactive = false;

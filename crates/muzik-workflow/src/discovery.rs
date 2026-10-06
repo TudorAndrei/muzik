@@ -1,5 +1,6 @@
 //! Chapter lookup after local sidecars have no usable chapters.
 
+use crate::Result;
 use crate::ytdlp::YtDlp;
 use muzik_core::MetadataSource;
 use muzik_core::chapters::{self, Chapter};
@@ -15,7 +16,7 @@ pub fn discover(
     source: &Path,
     selected: MetadataSource,
     cancelled: &AtomicBool,
-) -> Result<Vec<Chapter>, String> {
+) -> Result<Vec<Chapter>> {
     if cancelled.load(Ordering::SeqCst) {
         return Err("cancelled".into());
     }
@@ -44,12 +45,12 @@ pub fn discover(
     Ok(Vec::new())
 }
 
-fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, String> {
+fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
     let path = chapters::sidecar_path(source, ".info.json");
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(Vec::new());
     };
-    let metadata: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+    let metadata: Value = serde_json::from_str(&text)?;
     let from_description = metadata
         .get("description")
         .and_then(Value::as_str)
@@ -73,13 +74,11 @@ fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, String
     let Some(url) = url else {
         return Ok(Vec::new());
     };
-    let comments = YtDlp::default()
-        .video(url, true, cancelled)
-        .map_err(|error| error.to_string())?;
+    let comments = YtDlp::default().video(url, true, cancelled)?;
     Ok(chapters::best_comment_tracklist(&comments))
 }
 
-fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, String> {
+fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
     let tags = muzik_tags::read(source, &[]).unwrap_or_default();
     let info = fs::read_to_string(chapters::sidecar_path(source, ".info.json"))
         .ok()
@@ -105,35 +104,25 @@ fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>, St
     }
     let client = MetadataClient::new("muzik/0.1.0 (https://github.com/tudor-d/muzik)");
     let release = if let Some(id) = release_id {
-        Some(
-            client
-                .lookup_release(id)
-                .map_err(|error| error.to_string())?,
-        )
+        Some(client.lookup_release(id)?)
     } else if let Some(album) = album {
         if cancelled.load(Ordering::SeqCst) {
             return Err("cancelled".into());
         }
-        let hits = client
-            .search_releases(
-                &ReleaseSearch {
-                    release: album.to_owned(),
-                    artist: artist.map(str::to_owned),
-                    ..ReleaseSearch::default()
-                },
-                3,
-            )
-            .map_err(|error| error.to_string())?;
+        let hits = client.search_releases(
+            &ReleaseSearch {
+                release: album.to_owned(),
+                artist: artist.map(str::to_owned),
+                ..ReleaseSearch::default()
+            },
+            3,
+        )?;
         let strong = hits
             .into_iter()
             .filter(|hit| hit.score.is_some_and(|score| score >= 95))
             .collect::<Vec<_>>();
         if strong.len() == 1 {
-            Some(
-                client
-                    .lookup_release(&strong[0].id.0)
-                    .map_err(|error| error.to_string())?,
-            )
+            Some(client.lookup_release(&strong[0].id.0)?)
         } else {
             None
         }
