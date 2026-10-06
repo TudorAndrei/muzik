@@ -98,14 +98,14 @@ jobs:
           persist-credentials: false
       - name: Install GPUI Linux libraries
         if: runner.os == 'Linux'
-        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9
         timeout-minutes: 10
-        with:
-          packages: >-
-            libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev
-            libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+            install -y --no-install-recommends \
+            libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev \
+            libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev \
             vulkan-validationlayers libvulkan1
-          version: "1"
       - uses: jdx/mise-action@v4
         with:
           install_args: rust mr-boxington
