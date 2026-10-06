@@ -1,4 +1,5 @@
 tag_prefix = "v"
+ignore_merge_commits = true
 branch_whitelist = ["main"]
 pre_bump_hooks = ["cargo run --locked -p muzik-release -- {{version}}"]
 post_bump_hooks = ["git push origin HEAD:main", "git push origin {{version_tag}}"]
