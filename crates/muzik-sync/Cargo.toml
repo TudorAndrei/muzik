@@ -12,7 +12,6 @@ muzik-library = { path = "../muzik-library" }
 muzik-media = { path = "../muzik-media" }
 muzik-store = { path = "../muzik-store" }
 muzik-tags = { path = "../muzik-tags" }
-rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 
 [target.'cfg(unix)'.dependencies]

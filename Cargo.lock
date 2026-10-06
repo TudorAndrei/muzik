@@ -4622,7 +4622,6 @@ dependencies = [
  "muzik-media",
  "muzik-store",
  "muzik-tags",
- "rusqlite",
  "rustix",
  "serde_json",
  "tempfile",

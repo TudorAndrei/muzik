@@ -4,7 +4,7 @@ use crate::{
 };
 use muzik_library::{path_from_sql, Item, Library};
 use muzik_media::quality::MeasuredQuality;
-use rusqlite::Connection;
+use muzik_store::Connection;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,8 +1,8 @@
 use muzik_core::SyncPreset;
 use muzik_library::{Fields, Library, SqlValue};
 use muzik_media::quality::MeasuredQuality;
+use muzik_store::Connection;
 use muzik_sync::{Options, Plan, Prepared, Selection, Target};
-use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};

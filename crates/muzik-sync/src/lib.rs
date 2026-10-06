@@ -3,7 +3,7 @@
 use muzik_core::{app_config, paths, SyncPreset};
 use muzik_media::ffmpeg::{Convert, Ffmpeg};
 use muzik_media::quality::MeasuredQuality;
-use rusqlite::Connection;
+use muzik_store::{sync_files, Connection};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
@@ -463,46 +463,24 @@ pub fn encodings(
     connection: &Connection,
     root: &Path,
 ) -> Result<BTreeMap<PathBuf, Encoding>, String> {
-    let mut statement = connection
-        .prepare("SELECT destination, encoding FROM sync_files")
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    Ok(sync_files::load(connection, root)?
+        .into_iter()
+        .filter_map(|(destination, text)| {
+            serde_json::from_str(&text)
+                .ok()
+                .map(|encoding| (destination, encoding))
         })
-        .map_err(|error| error.to_string())?;
-    let mut encodings = BTreeMap::new();
-    for row in rows {
-        let (destination, encoding) = row.map_err(|error| error.to_string())?;
-        let destination = PathBuf::from(destination);
-        if let (true, Ok(encoding)) = (
-            destination.starts_with(root),
-            serde_json::from_str(&encoding),
-        ) {
-            encodings.insert(destination, encoding);
-        }
-    }
-    Ok(encodings)
+        .collect())
 }
 
 pub fn record(connection: &Connection, transfer: &Transfer) -> Result<(), String> {
-    let destination = transfer.destination.to_string_lossy();
-    match &transfer.action {
-        Action::Copy => connection.execute(
-            "DELETE FROM sync_files WHERE destination = ?1",
-            [destination],
-        ),
-        Action::Convert(encoding) => connection.execute(
-            "INSERT INTO sync_files (destination, encoding) VALUES (?1, ?2)
-             ON CONFLICT (destination) DO UPDATE SET encoding = excluded.encoding",
-            (
-                destination,
-                serde_json::to_string(encoding).map_err(|error| error.to_string())?,
-            ),
-        ),
-    }
-    .map(drop)
-    .map_err(|error| error.to_string())
+    let encoding = match &transfer.action {
+        Action::Copy => None,
+        Action::Convert(encoding) => {
+            Some(serde_json::to_string(encoding).map_err(|error| error.to_string())?)
+        }
+    };
+    sync_files::save(connection, &transfer.destination, encoding.as_deref())
 }
 
 pub fn run(
