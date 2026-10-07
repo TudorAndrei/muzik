@@ -728,12 +728,26 @@ fn extract(archive: &Path, destination: &Path) -> Result<()> {
     let file = fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?;
+    let mut files = std::collections::HashSet::new();
     for index in 0..zip.len() {
         let entry = zip
             .by_index_raw(index)
             .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))?;
         if entry.is_symlink() {
             return Err(format!("The Bandcamp ZIP file contains a link: {}", entry.name()).into());
+        }
+        if !entry.is_dir()
+            && !files.insert(
+                entry
+                    .enclosed_name()
+                    .unwrap_or_else(|| PathBuf::from(entry.name())),
+            )
+        {
+            return Err(format!(
+                "The Bandcamp ZIP file contains the same file twice: {}",
+                entry.name()
+            )
+            .into());
         }
     }
     zip.extract(destination)
@@ -1019,6 +1033,9 @@ mod tests {
         let linked_destination = directory.path().join("linked");
         assert!(extract(&linked, &linked_destination).is_err());
         assert!(!linked_destination.join("Album").exists());
+
+        let twice = write("twice.zip", &["Album/01 Song.flac", "Album//01 Song.flac"]).unwrap();
+        assert!(extract(&twice, &directory.path().join("twice")).is_err());
     }
 
     fn lexical(path: &Path) -> PathBuf {
