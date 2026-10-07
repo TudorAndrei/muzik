@@ -94,8 +94,9 @@ pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
     if kind != DecisionKind::ImportMatch {
         return None;
     }
-    let best = payload["task"]["matches"]
-        .as_array()?
+    let best = payload
+        .pointer("/task/matches")
+        .and_then(Value::as_array)?
         .iter()
         .filter_map(|item| Some((item, item["distance"].as_f64()?)))
         .min_by(|left, right| left.1.total_cmp(&right.1))?;
@@ -109,8 +110,9 @@ pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
 
 pub fn options(kind: DecisionKind, payload: &Value) -> Vec<(String, Value)> {
     match kind {
-        DecisionKind::ImportMatch => payload["task"]["matches"]
-            .as_array()
+        DecisionKind::ImportMatch => payload
+            .pointer("/task/matches")
+            .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter(|item| item["candidate_id"].is_string())
@@ -169,8 +171,8 @@ pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) 
                     .unwrap_or_default();
                 let _ = writeln!(text, "- {name}");
             }
-            if paths.len() > MAX_FILES {
-                let _ = writeln!(text, "- and {} more", paths.len() - MAX_FILES);
+            if let Some(more) = paths.len().checked_sub(MAX_FILES).filter(|more| *more > 0) {
+                let _ = writeln!(text, "- and {more} more");
             }
             let _ = writeln!(
                 text,
@@ -209,7 +211,10 @@ pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) 
                     text,
                     "[{index}] {} · {} · {} files · user {} · score {:.0}",
                     text_or(&item["path"], item["title"].as_str().unwrap_or("")),
-                    text_or(&item["quality"]["format"], "unknown format"),
+                    text_or(
+                        item.pointer("/quality/format").unwrap_or(&Value::Null),
+                        "unknown format"
+                    ),
                     item["files"].as_array().map_or(0, Vec::len),
                     text_or(&item["user"], "unknown"),
                     item["score"].as_f64().unwrap_or(0.0)
@@ -240,17 +245,15 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
     let action = answer["action"]
         .as_str()
         .and_then(|action| action.parse::<Action>().ok());
-    match (action, index) {
-        (Some(Action::Pick), Some(index)) if confident => {
-            let (label, value) = &options[index];
-            Outcome::Decided(Choice {
-                value: value.clone(),
-                label: label.clone(),
-                confidence,
-                reason,
-            })
-        }
-        (Some(Action::Keep), _) if confident && kind == DecisionKind::ImportMatch => {
+    let picked = index.and_then(|index| options.get(index));
+    match (action, index, picked) {
+        (Some(Action::Pick), _, Some((label, value))) if confident => Outcome::Decided(Choice {
+            value: value.clone(),
+            label: label.clone(),
+            confidence,
+            reason,
+        }),
+        (Some(Action::Keep), _, _) if confident && kind == DecisionKind::ImportMatch => {
             Outcome::Decided(Choice {
                 value: json!("as_is"),
                 label: "Keep current tags".into(),
@@ -258,12 +261,12 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
                 reason,
             })
         }
-        (Some(Action::Pick), suggestion) => Outcome::Unsure {
+        (Some(Action::Pick), suggestion, _) => Outcome::Unsure {
             suggestion,
             confidence,
             reason,
         },
-        (Some(Action::Keep | Action::Ask) | None, _) => Outcome::Unsure {
+        (Some(Action::Keep | Action::Ask) | None, _, _) => Outcome::Unsure {
             suggestion: None,
             confidence,
             reason,
