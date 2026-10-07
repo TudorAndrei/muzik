@@ -13,6 +13,7 @@ mr-boxington = "1.19.0"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-edit" = "0.13.13"
 "cargo:cargo-auditable" = "0.7.7"
+"cargo:cargo-bolero" = "0.13.5"
 cocogitto = "7"
 
 [env]
@@ -45,6 +46,16 @@ run = """
 TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HOME="$HOME" -f scripts/test-scope.sb \
   cargo test --workspace --locked --offline -- \
   --skip background_command_runs_the_program_at_lower_priority
+"""
+
+[tasks.fuzz]
+description = "Run each bolero harness under libFuzzer on stable Rust"
+usage = 'arg "[seconds]" default="300"'
+run = """
+cargo bolero test -p muzik-soulseek --sanitizer NONE -T "${usage_seconds}s" \
+  fetch::tests::local_files_stay_directly_inside_the_root_for_any_peer_names
+cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
+  tests::any_archive_writes_only_inside_the_destination
 """
 
 [tasks.check-release]
