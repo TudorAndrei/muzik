@@ -1,4 +1,4 @@
-use super::{check_cancelled, mark_full, organize, required, safe_name, Source};
+use super::{Source, check_cancelled, mark_full, organize, required, safe_name};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_bandcamp as bandcamp;
@@ -6,7 +6,7 @@ use muzik_core::paths::Paths;
 use muzik_core::{JobEvent, Task};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{
-    bandcamp_source, ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem,
+    ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem, bandcamp_source,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,10 +140,9 @@ impl Source for Bandcamp {
 fn items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
     let items = purchases
         .iter()
-        .enumerate()
-        .map(|(index, purchase)| {
-            let mut item =
-                WatchItem::new(index as u64 + 1, &purchase.label(), SourceKind::Bandcamp);
+        .zip(1_u64..)
+        .map(|(purchase, position)| {
+            let mut item = WatchItem::new(position, &purchase.label(), SourceKind::Bandcamp);
             item.video_id = Some(purchase.key.clone());
             item.entry_id = Some(purchase.key.clone());
             item.video_url = Some(
@@ -152,7 +151,7 @@ fn items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
                     .clone()
                     .unwrap_or_else(|| purchase.download_page.clone()),
             );
-            item.thumbnail_url = purchase.art_url.clone();
+            item.thumbnail_url.clone_from(&purchase.art_url);
             item.track = Some(json!({
                 "artist": purchase.artist,
                 "title": purchase.title,

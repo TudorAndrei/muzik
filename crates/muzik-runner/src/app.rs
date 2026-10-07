@@ -2,7 +2,7 @@
 
 use crate::agent::Chooser;
 use crate::events::AppEvent;
-use crate::queue::{job_id, parse_job_id, EnqueueError, Jobs};
+use crate::queue::{EnqueueError, Jobs, job_id, parse_job_id};
 use crate::runner::{Options, Prompt, Runner, Sink};
 use crate::settings::Settings;
 use crate::{gates, watchlist};
@@ -12,11 +12,11 @@ use muzik_store::watchlist::{
     self as saved, CheckedWrite, ItemAction, ItemId, Playlist, Repository,
 };
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 
 type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
@@ -42,6 +42,8 @@ pub struct App {
 }
 
 impl App {
+    /// # Errors
+    /// Returns an error when the job queue cannot be opened or the runner cannot start.
     pub fn start(options: AppOptions) -> crate::Result<Self> {
         let jobs = Arc::new(if options.in_memory {
             Jobs::in_memory(&options.paths)?
@@ -60,7 +62,7 @@ impl App {
                     workers: options.workers,
                     sink: Arc::clone(&options.sink),
                     ask: Arc::new(move |prompt| {
-                        let number = asked.fetch_add(1, Ordering::SeqCst) + 1;
+                        let number = asked.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
                         ask(&sink, &pending, &prompt, number)
                     }),
                     chooser: options.chooser,
@@ -86,25 +88,34 @@ impl App {
         })
     }
 
-    pub fn paths(&self) -> &Paths {
+    #[must_use]
+    pub const fn paths(&self) -> &Paths {
         &self.paths
     }
 
+    #[must_use]
     pub fn repository(&self) -> Repository {
         Repository::open(&self.paths)
     }
 
+    #[must_use]
     pub fn jobs(&self) -> Value {
         let mut snapshot = self.jobs.snapshot();
-        snapshot["gates"] = gates::snapshot();
-        snapshot["runner"] = json!(self.runner.is_some());
+        if let Some(fields) = snapshot.as_object_mut() {
+            fields.insert("gates".into(), gates::snapshot());
+            fields.insert("runner".into(), json!(self.runner.is_some()));
+        }
         snapshot
     }
 
+    /// # Errors
+    /// Returns an error when the job cannot be added to the queue.
     pub fn start_workflow(&self, params: &Value) -> Result<String, EnqueueError> {
         self.queued(self.jobs.workflow(params))
     }
 
+    /// # Errors
+    /// Returns an error when the job cannot be added to the queue.
     pub fn refresh(&self, source: Option<(&str, &str)>) -> Result<String, EnqueueError> {
         let params = match source {
             Some((id, title)) => json!({"playlist_id": id, "playlist_title": title}),
@@ -113,6 +124,8 @@ impl App {
         self.queued(self.jobs.refresh(&params))
     }
 
+    /// # Errors
+    /// Returns an error when the job cannot be added to the queue.
     pub fn run_item(
         &self,
         id: &ItemId,
@@ -124,12 +137,16 @@ impl App {
         self.queued(self.jobs.item(&params))
     }
 
+    /// # Errors
+    /// Returns an error when the answer cannot be saved in the job queue.
     pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
         let answered = self.jobs.answer(id, value)?;
         self.changed();
         Ok(answered)
     }
 
+    /// # Errors
+    /// Returns an error when the job queue cannot record the cancel request.
     pub fn cancel(&self, job: &str) -> crate::Result<bool> {
         if self
             .runner
@@ -155,6 +172,7 @@ impl App {
         })
     }
 
+    #[must_use]
     pub fn reply(&self, decision_id: &str, value: Value) -> bool {
         self.decisions
             .lock()
@@ -162,22 +180,32 @@ impl App {
             .is_some_and(|reply| reply.send(value).is_ok())
     }
 
+    /// # Errors
+    /// Returns an error when the URL is not a valid source or the watchlist cannot be saved.
     pub fn add_source(&self, url: &str) -> crate::Result<Playlist> {
         self.edit(|repository| Ok(repository.add(url)?))
     }
 
+    /// # Errors
+    /// Returns an error when the watchlist cannot be saved.
     pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
         self.edit(|repository| Ok(repository.rename(playlist_id, title)?))
     }
 
+    /// # Errors
+    /// Returns an error when the watchlist cannot be saved.
     pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
         self.edit(|repository| Ok(repository.remove(playlist_id)?))
     }
 
+    /// # Errors
+    /// Returns an error when the settings or the saved watchlist cannot be read.
     pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
         let generation = {
             let _gate = self.gate.lock();
-            self.generation.fetch_add(1, Ordering::SeqCst) + 1
+            self.generation
+                .fetch_add(1, Ordering::SeqCst)
+                .wrapping_add(1)
         };
         let repository = self.repository();
         if let Err(error) = watchlist::ensure_sources(&self.paths) {
@@ -239,10 +267,10 @@ pub struct WatchlistCheck {
 
 impl WatchlistCheck {
     pub fn run(self) {
-        if let Err(error) = self.check() {
-            if self.current() {
-                (self.sink)(AppEvent::WatchlistError(error.to_string()));
-            }
+        if let Err(error) = self.check()
+            && self.current()
+        {
+            (self.sink)(AppEvent::WatchlistError(error.to_string()));
         }
     }
 
@@ -317,7 +345,7 @@ fn ask(
             Ok(value) => break Ok(value),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                break Err("The decision is not pending.".to_owned())
+                break Err("The decision is not pending.".to_owned());
             }
         }
     };
@@ -332,8 +360,8 @@ mod tests {
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
-    use std::sync::mpsc::{self, Receiver};
     use std::sync::Arc;
+    use std::sync::mpsc::{self, Receiver};
     use std::time::Duration;
 
     fn app(root: &std::path::Path, run: bool) -> Result<(App, Receiver<AppEvent>), String> {
@@ -352,40 +380,37 @@ mod tests {
     }
 
     #[test]
-    fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let (app, events) = app(dir.path(), false)?;
-        app.add_source("https://www.youtube.com/playlist?list=PLnative123")?;
-        let (saved, check) = app.load_watchlist(Arc::new(|| false))?;
+    fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, events) = app(dir.path(), false).unwrap();
+        app.add_source("https://www.youtube.com/playlist?list=PLnative123")
+            .unwrap();
+        let (saved, check) = app.load_watchlist(Arc::new(|| false)).unwrap();
         assert_eq!(saved["playlists"][0]["playlist_id"], "PLnative123");
         check.run();
         let checked = loop {
-            match events.recv_timeout(Duration::from_secs(5))? {
+            match events.recv_timeout(Duration::from_secs(5)).unwrap() {
                 AppEvent::WatchlistUpdated(watchlist) => break watchlist,
-                AppEvent::WatchlistError(message) => return Err(message.into()),
+                AppEvent::WatchlistError(message) => panic!("{message}"),
                 _ => {}
             }
         };
         assert_eq!(checked["playlists"][0]["playlist_id"], "PLnative123");
-        Ok(())
     }
 
     #[test]
-    fn an_item_has_one_open_job_and_a_cancel_removes_it() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
-        let (app, _) = app(dir.path(), false)?;
+    fn an_item_has_one_open_job_and_a_cancel_removes_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (app, _) = app(dir.path(), false).unwrap();
         let id = ItemId::new("PL1", 2, Some("abcdefghijk"));
-        let job = app.run_item(&id, "Song", ItemAction::Run)?;
+        let job = app.run_item(&id, "Song", ItemAction::Run).unwrap();
         assert!(app.run_item(&id, "Song", ItemAction::Run).is_err());
         assert_eq!(app.jobs()["open"][0]["job_id"], job);
         assert_eq!(app.jobs()["open"][0]["item"], "PL1:2:abcdefghijk");
         assert_eq!(app.jobs()["runner"], false);
-        assert!(app.cancel(&job)?);
+        assert!(app.cancel(&job).unwrap());
         assert_eq!(app.jobs()["open"], json!([]));
-        assert!(!app.cancel("queue-999")?);
+        assert!(!app.cancel("queue-999").unwrap());
         assert!(!app.reply("missing", json!("as_is")));
-        Ok(())
     }
 }

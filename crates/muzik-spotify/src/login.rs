@@ -1,8 +1,8 @@
 //! Spotify browser login with PKCE and one loopback callback.
 
-use super::{account_name, request_token, save_token, settings, Client, Error, Result, Settings};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use super::{Client, Error, Result, Settings, account_name, request_token, save_token, settings};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -15,6 +15,8 @@ const AUTHORIZE_URL: &str = "https://accounts.spotify.com/authorize";
 const SCOPES: &str = "playlist-read-private playlist-read-collaborative user-library-read";
 const SUCCESS_PAGE: &str = "<html><body><h3>muzik is connected to Spotify.</h3><p>You can close this tab.</p></body></html>";
 
+/// # Errors
+/// Returns an error when the settings are not valid, the login is cancelled or refused, or the token cannot be saved.
 pub fn login(
     config_path: &Path,
     token_path: &Path,
@@ -137,7 +139,7 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String> {
     let fields = url
         .query_pairs()
         .collect::<std::collections::HashMap<_, _>>();
-    if fields.get("state").map(|value| value.as_ref()) != Some(expected_state) {
+    if fields.get("state").map(AsRef::as_ref) != Some(expected_state) {
         return Err("Spotify returned the wrong login state".into());
     }
     if let Some(error) = fields.get("error") {
@@ -146,7 +148,7 @@ fn callback_result(url: &Url, expected_state: &str) -> Result<String> {
     fields
         .get("code")
         .filter(|code| !code.is_empty())
-        .map(|code| code.to_string())
+        .map(ToString::to_string)
         .ok_or_else(|| "Spotify sent no authorization code".into())
 }
 
@@ -169,7 +171,7 @@ mod tests {
     use url::Url;
 
     #[test]
-    fn authorize_url_has_the_expected_pkce_fields() -> Result<(), Box<dyn std::error::Error>> {
+    fn authorize_url_has_the_expected_pkce_fields() {
         let settings = Settings {
             client_id: "my-client".into(),
             redirect_port: 8888,
@@ -178,11 +180,12 @@ mod tests {
             &settings,
             "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             "state",
-        )?;
+        )
+        .unwrap();
         let params = url
             .query_pairs()
             .collect::<std::collections::HashMap<_, _>>();
-        let param = |key: &str| params.get(key).map(|value| value.to_string());
+        let param = |key: &str| params.get(key).map(ToString::to_string);
         assert_eq!(param("response_type").as_deref(), Some("code"));
         assert_eq!(param("code_challenge_method").as_deref(), Some("S256"));
         assert_eq!(
@@ -195,27 +198,24 @@ mod tests {
             Some("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM")
         );
         assert!(param("scope").is_some_and(|scopes| scopes.contains("user-library-read")));
-        Ok(())
     }
 
     #[test]
-    fn callback_accepts_only_the_current_login_state() -> Result<(), Box<dyn std::error::Error>> {
-        let good = Url::parse("http://127.0.0.1/callback?code=answer&state=expected")?;
-        assert_eq!(callback_result(&good, "expected")?, "answer");
+    fn callback_accepts_only_the_current_login_state() {
+        let good = Url::parse("http://127.0.0.1/callback?code=answer&state=expected").unwrap();
+        assert_eq!(callback_result(&good, "expected").unwrap(), "answer");
         assert!(callback_result(&good, "other").is_err());
-        Ok(())
     }
 
     #[test]
-    fn loopback_callback_returns_the_code_and_an_http_answer(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn loopback_callback_returns_the_code_and_an_http_answer() {
         let listener = match TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
-            Err(error) => return Err(error.into()),
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("{error}"),
         };
-        listener.set_nonblocking(true)?;
-        let address = listener.local_addr()?;
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
         let browser = std::thread::spawn(move || -> std::io::Result<String> {
             let mut stream = TcpStream::connect(address)?;
             stream.write_all(
@@ -230,10 +230,10 @@ mod tests {
             "expected",
             &AtomicBool::new(false),
             Duration::from_secs(2),
-        )?;
+        )
+        .unwrap();
         assert_eq!(code, "answer");
-        let response = browser.join().map_err(|_| "browser thread failed")??;
+        let response = browser.join().unwrap().unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK"));
-        Ok(())
     }
 }

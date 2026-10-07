@@ -17,6 +17,8 @@ pub struct ReconcileOptions<'a> {
     pub quality_policy: QualityPolicy,
 }
 
+/// # Errors
+/// Returns an error if the updated watchlist is not valid.
 pub fn reconcile(document: &mut Watchlist, options: ReconcileOptions<'_>) -> Result<()> {
     let music_library = MusicLibrary::open(options.config);
     let audio = AudioIndex::scan(options.output);

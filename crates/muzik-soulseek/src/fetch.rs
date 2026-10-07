@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,8 +11,8 @@ use serde_json::Value;
 use soulseek_rs::DownloadStatus;
 
 use crate::error::{BridgeError, Result};
-use crate::ranking::{format, rank, search_query, RankedCandidate};
-use crate::session::{setting, Session};
+use crate::ranking::{RankedCandidate, format, rank, search_query};
+use crate::session::{Session, setting};
 use crate::types::Candidate;
 
 const POLL: Duration = Duration::from_millis(100);
@@ -33,6 +33,7 @@ impl Default for Timeouts {
 }
 
 impl Timeouts {
+    #[must_use]
     pub fn configured(config: &Value) -> Self {
         let read = |environment, key, default, maximum| {
             setting(config, environment, key)
@@ -59,6 +60,7 @@ impl Timeouts {
 }
 
 impl Candidate {
+    #[must_use]
     pub fn audio_only(&self, limit: usize) -> Self {
         Self {
             files: self
@@ -73,6 +75,8 @@ impl Candidate {
     }
 }
 
+/// # Errors
+/// Returns an error when the username is invalid or a file name is missing, unsafe, or duplicated.
 pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>> {
     if candidate.username.trim().is_empty() || candidate.username.chars().any(char::is_control) {
         return Err("Soulseek result has an invalid username.".into());
@@ -83,7 +87,7 @@ pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>> {
         .iter()
         .map(|remote| {
             let name = remote.name.rsplit(['/', '\\']).next().unwrap_or("");
-            if name.is_empty()
+            if matches!(name, "" | "." | "..")
                 || name.chars().any(char::is_control)
                 || !names.insert(name.to_ascii_lowercase())
             {
@@ -95,6 +99,8 @@ pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 impl Session {
+    /// # Errors
+    /// Returns an error when the query is invalid, the search is cancelled, or the search fails.
     pub fn search(
         &self,
         query: &str,
@@ -134,13 +140,15 @@ impl Session {
                 limit,
             )),
             Ok(Err(error)) => {
-                Session::forget_shared();
+                Self::forget_shared();
                 Err(format!("Soulseek search failed: {}", BridgeError::from(error)).into())
             }
             Err(_) => Err("Soulseek search failed: the search thread stopped".into()),
         }
     }
 
+    /// # Errors
+    /// Returns an error when the file names are unsafe, the destination cannot be created, or a download fails, times out, or is cancelled.
     pub fn fetch(
         &self,
         candidate: &Candidate,
@@ -162,8 +170,11 @@ impl Session {
                 .map_err(|error| {
                     format!("Soulseek download failed: {}", BridgeError::from(error))
                 })?;
-            let deadline = Instant::now() + seconds(timeout) + Duration::from_secs(5);
-            if let Err(error) = finish(&receiver, deadline, cancelled) {
+            let finished = Instant::now()
+                .checked_add(seconds(timeout).saturating_add(Duration::from_secs(5)))
+                .ok_or_else(|| BridgeError::from("Soulseek download timeout is too long."))
+                .and_then(|deadline| finish(&receiver, deadline, cancelled));
+            if let Err(error) = finished {
                 let _ = self
                     .client
                     .cancel_download(&download.username, &download.filename);
@@ -227,7 +238,7 @@ fn finish(
 
 #[cfg(test)]
 mod tests {
-    use super::{finish, local_files, Timeouts};
+    use super::{Timeouts, finish, local_files};
     use crate::types::{Candidate, FileEntry};
     use serde_json::json;
     use soulseek_rs::DownloadStatus;
@@ -257,18 +268,48 @@ mod tests {
     }
 
     #[test]
-    fn local_files_keep_the_last_name_and_refuse_duplicates() -> Result<(), String> {
+    fn local_files_keep_the_last_name_and_refuse_duplicates() {
         let root = Path::new("/music");
         assert_eq!(
-            local_files(&candidate(&["Album\\01 Song.flac"]), root)?,
+            local_files(&candidate(&["Album\\01 Song.flac"]), root).unwrap(),
             [root.join("01 Song.flac")]
         );
         assert!(local_files(&candidate(&["A\\Song.flac", "B/song.FLAC"]), root).is_err());
         assert!(local_files(&candidate(&["Album\\"]), root).is_err());
+        assert!(local_files(&candidate(&["Album\\.."]), root).is_err());
+        assert!(local_files(&candidate(&["Album/."]), root).is_err());
         let mut nameless = candidate(&["Song.flac"]);
         nameless.username = " ".into();
         assert!(local_files(&nameless, root).is_err());
-        Ok(())
+    }
+
+    #[test]
+    fn local_files_stay_directly_inside_the_root_for_any_peer_names() {
+        let root = Path::new("/music");
+        bolero::check!()
+            .with_type::<(String, Vec<Vec<u8>>)>()
+            .for_each(|(username, raw)| {
+                let names: Vec<String> = raw
+                    .iter()
+                    .map(|bytes| {
+                        bytes
+                            .iter()
+                            .map(|byte| {
+                                ['a', '.', '/', '\\', ' ', '\0', 'é'][usize::from(*byte) % 7]
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let mut peer = candidate(&names.iter().map(String::as_str).collect::<Vec<_>>());
+                peer.username.clone_from(username);
+                if let Ok(paths) = local_files(&peer, root) {
+                    assert_eq!(paths.len(), names.len());
+                    for path in paths {
+                        assert_eq!(path.parent(), Some(root), "{path:?}");
+                        assert!(path.file_name().is_some(), "{path:?}");
+                    }
+                }
+            });
     }
 
     #[test]
@@ -279,22 +320,18 @@ mod tests {
     }
 
     #[test]
-    fn finish_waits_for_a_final_status_or_stops_on_cancel() -> Result<(), String> {
+    fn finish_waits_for_a_final_status_or_stops_on_cancel() {
         let deadline = Instant::now() + Duration::from_secs(5);
         let running = AtomicBool::new(false);
         let (sender, receiver) = mpsc::channel();
-        sender
-            .send(DownloadStatus::Queued)
-            .map_err(|e| e.to_string())?;
-        sender
-            .send(DownloadStatus::Completed)
-            .map_err(|e| e.to_string())?;
-        finish(&receiver, deadline, &running)?;
+        sender.send(DownloadStatus::Queued).unwrap();
+        sender.send(DownloadStatus::Completed).unwrap();
+        finish(&receiver, deadline, &running).unwrap();
 
         let (sender, receiver) = mpsc::channel();
         sender
             .send(DownloadStatus::Failed(Some("peer went offline".into())))
-            .map_err(|e| e.to_string())?;
+            .unwrap();
         assert_eq!(
             finish(&receiver, deadline, &running).map_err(String::from),
             Err("Soulseek download failed: peer went offline".into())
@@ -311,7 +348,6 @@ mod tests {
         let (sender, receiver) = mpsc::channel::<DownloadStatus>();
         drop(sender);
         assert!(finish(&receiver, deadline, &running).is_err());
-        Ok(())
     }
 
     #[test]

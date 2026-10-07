@@ -16,6 +16,7 @@ struct Case {
 }
 
 #[test]
+#[expect(clippy::float_cmp, reason = "beets parity needs exact float equality")]
 fn matches_beets_string_distance() {
     let fixture: Fixture = serde_json::from_str(include_str!("fixtures/string_distance.json"))
         .expect("valid fixture JSON");

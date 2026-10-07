@@ -14,6 +14,7 @@ build/
 .DS_Store
 .rumdl_cache/
 muzik/bin/muzik-gpui
+__fuzz__/
 
 # Old local Python artifacts
 __pycache__/

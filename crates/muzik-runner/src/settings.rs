@@ -1,6 +1,6 @@
 use crate::Result;
-use muzik_core::paths::{expand_home, Paths};
-use muzik_core::{app_config, ChoiceError};
+use muzik_core::paths::{Paths, expand_home};
+use muzik_core::{ChoiceError, app_config};
 use muzik_store::watchlist::ReconcileOptions;
 use muzik_workflow::{WorkflowOptions, WorkflowRequest};
 use serde_json::Value;
@@ -15,6 +15,8 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// # Errors
+    /// Returns an error when the saved defaults or the request params are not valid settings.
     pub fn resolve(paths: &Paths, params: &Value) -> Result<Self> {
         let mut merged = serde_json::to_value(app_config::load_gui_defaults(paths))?;
         merged
@@ -29,7 +31,7 @@ impl Settings {
         Self::parse(paths, &merged)
     }
 
-    pub fn parse(paths: &Paths, values: &Value) -> Result<Self> {
+    pub(crate) fn parse(paths: &Paths, values: &Value) -> Result<Self> {
         let mut options = WorkflowOptions::default();
         for (key, target) in [
             ("review", &mut options.review),
@@ -108,6 +110,7 @@ impl Settings {
         })
     }
 
+    #[must_use]
     pub fn reconcile(&self) -> ReconcileOptions<'_> {
         ReconcileOptions {
             output: &self.request.output,
@@ -145,26 +148,26 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn resolve_merges_saved_defaults_under_the_request() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn resolve_merges_saved_defaults_under_the_request() {
+        let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
-        fs::create_dir_all(&paths.config)?;
+        fs::create_dir_all(&paths.config).unwrap();
         fs::write(
             paths.config_file(),
             "native_gui:\n  prefer: mp3\n  audio_source: soulseek\n  auto_decide: false\n",
-        )?;
-        let settings = Settings::resolve(&paths, &json!({"raw":" song ","prefer":"flac"}))?;
+        )
+        .unwrap();
+        let settings = Settings::resolve(&paths, &json!({"raw":" song ","prefer":"flac"})).unwrap();
         assert_eq!(settings.request.raw, "song");
         assert_eq!(settings.request.output, paths.downloads());
         assert_eq!(settings.request.splits, paths.splits());
         assert_eq!(settings.options.prefer.to_string(), "flac");
         assert_eq!(settings.options.audio_source.as_str(), "soulseek");
         assert_eq!(settings.agent_model, None);
-        Ok(())
     }
 
     #[test]
-    fn parse_reads_every_choice_and_expands_paths() -> Result<(), Box<dyn std::error::Error>> {
+    fn parse_reads_every_choice_and_expands_paths() {
         let paths = Paths::under(std::path::Path::new("/state"));
         let settings = Settings::parse(
             &paths,
@@ -181,7 +184,8 @@ mod tests {
                 "auto_decide":true,
                 "agent_model":" "
             }),
-        )?;
+        )
+        .unwrap();
         assert_eq!(settings.options.fallback.as_str(), "none");
         assert_eq!(settings.options.metadata_source.as_str(), "musicbrainz");
         assert_eq!(settings.options.quality_policy.as_str(), "ask");
@@ -195,6 +199,5 @@ mod tests {
         );
         assert!(Settings::parse(&paths, &json!({"duplicates":"merge"})).is_err());
         assert!(Settings::parse(&paths, &json!({"force":"yes"})).is_err());
-        Ok(())
     }
 }

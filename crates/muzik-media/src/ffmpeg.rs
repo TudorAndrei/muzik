@@ -1,6 +1,6 @@
 //! Typed ffmpeg commands for splitting and converting audio.
 
-use crate::process::{self, background_command, Stopped};
+use crate::process::{self, Stopped, background_command};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,8 @@ pub enum Encoding {
 }
 
 impl Encoding {
-    pub fn extension(&self) -> &'static str {
+    #[must_use]
+    pub const fn extension(&self) -> &'static str {
         match self {
             Self::Mp3 { .. } => "mp3",
             Self::Opus { .. } => "opus",
@@ -78,7 +79,7 @@ impl Ffmpeg {
     }
 
     /// Stop ffmpeg and remove the partial file when `cancelled` becomes true.
-    pub fn cut(&self, cut: &Cut<'_>, cancelled: &AtomicBool) -> Result<(), Error> {
+    pub(crate) fn cut(&self, cut: &Cut<'_>, cancelled: &AtomicBool) -> Result<(), Error> {
         let mut command = background_command(&self.executable);
         command
             .arg("-i")
@@ -113,6 +114,8 @@ impl Ffmpeg {
         }
     }
 
+    /// # Errors
+    /// Returns an error when ffmpeg cannot run or exits with a failure.
     pub fn convert(&self, convert: &Convert<'_>) -> Result<(), Error> {
         let mut command = background_command(&self.executable);
         command
@@ -184,8 +187,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn convert_reencodes_audio_and_keeps_the_title() -> Result<(), Box<dyn std::error::Error>> {
-        let temp = tempfile::tempdir()?;
+    fn convert_reencodes_audio_and_keeps_the_title() {
+        let temp = tempfile::tempdir().unwrap();
         let ffmpeg = Ffmpeg::default();
         let sources = [("flac", false), ("opus", true)];
         for (format, tags_in_stream) in sources {
@@ -194,7 +197,8 @@ mod tests {
                 .args(["-v", "error", "-f", "lavfi", "-i", "sine=duration=1"])
                 .args(["-metadata", "title=Song", "-y"])
                 .arg(&source)
-                .output()?;
+                .output()
+                .unwrap();
             assert!(made.status.success());
             for encoding in [
                 Encoding::Mp3 { kbps: 128 },
@@ -207,17 +211,18 @@ mod tests {
                 let destination = temp
                     .path()
                     .join(format!("{format}-to.{}", encoding.extension()));
-                ffmpeg.convert(&Convert {
-                    source: &source,
-                    destination: &destination,
-                    encoding: &encoding,
-                    tags_in_stream,
-                })?;
-                let tags = muzik_tags::read(&destination, &[])?;
+                ffmpeg
+                    .convert(&Convert {
+                        source: &source,
+                        destination: &destination,
+                        encoding: &encoding,
+                        tags_in_stream,
+                    })
+                    .unwrap();
+                let tags = muzik_tags::read(&destination, &[]).unwrap();
                 assert_eq!(tags.fields.get("title").map(String::as_str), Some("Song"));
             }
         }
-        Ok(())
     }
 
     #[test]

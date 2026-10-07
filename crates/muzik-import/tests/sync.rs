@@ -15,11 +15,13 @@ impl ReleaseProvider for FixtureProvider {
         _: &ReleaseSearch,
         _: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        assert_eq!(id, "release-1");
+        if id != "release-1" {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(ReleaseCandidate {
             id: ReleaseId(id.into()),
             title: "New Album Title".into(),
@@ -58,7 +60,9 @@ impl ReleaseProvider for FixtureProvider {
     }
 
     fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        assert_eq!(id, "recording-singleton");
+        if id != "recording-singleton" {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(TrackCandidate {
             recording_id: Some(RecordingId(id.into())),
             release_track_id: None,

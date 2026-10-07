@@ -1,5 +1,5 @@
-use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
+use muzik_core::audio::Codec;
 use muzik_media::quality::MeasuredQuality;
 use muzik_sync::{self as sync, Action, Encoding, Target};
 use std::collections::{BTreeMap, BTreeSet};
@@ -73,18 +73,18 @@ fn mp3_converts_everything_except_mp3() {
 }
 
 #[test]
-fn targets_round_trip_through_the_config_file() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn targets_round_trip_through_the_config_file() {
+    let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.yaml");
-    fs::write(&config, "spotify:\n  client_id: kept\n")?;
+    fs::write(&config, "spotify:\n  client_id: kept\n").unwrap();
     let phone = Target {
         bitrate: Some(160),
         covers: false,
         ..target(&dir.path().join("phone"), SyncPreset::Opus)
     };
-    phone.save(&config, "phone")?;
-    let loaded = muzik_core::app_config::load(&config)?;
-    assert_eq!(Target::load(&loaded, "phone")?, phone);
+    phone.save(&config, "phone").unwrap();
+    let loaded = muzik_core::app_config::load(&config).unwrap();
+    assert_eq!(Target::load(&loaded, "phone").unwrap(), phone);
     assert_eq!(loaded["spotify"]["client_id"], "kept");
     assert!(
         Target::load(&loaded, "snowsky").is_err_and(|error| error.to_string().contains("phone"))
@@ -94,22 +94,21 @@ fn targets_round_trip_through_the_config_file() -> Result<(), Box<dyn std::error
         ..phone
     };
     assert!(loud.save(&config, "phone").is_err());
-    Ok(())
 }
 
 #[test]
-fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn plan_skips_fresh_files_and_names_safe_destinations() {
+    let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     let card = dir.path().join("card");
     let album = library.join("Artist/Album: Live?");
-    fs::create_dir_all(&album)?;
-    fs::create_dir_all(&card)?;
+    fs::create_dir_all(&album).unwrap();
+    fs::create_dir_all(&card).unwrap();
     let flac = album.join("01 Song.flac");
     let opus = album.join("02 Song.opus");
     let cover = album.join("cover.jpg");
     for path in [&flac, &opus, &cover] {
-        fs::write(path, b"audio")?;
+        fs::write(path, b"audio").unwrap();
     }
     let outside = dir.path().join("elsewhere.mp3");
     let echo = target(&card, SyncPreset::EchoMini);
@@ -123,7 +122,7 @@ fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn st
             ..audio(format, 44_100, Some(16))
         }))
     };
-    let tracks = vec![flac.clone(), opus.clone(), outside.clone()];
+    let tracks = vec![flac, opus, outside.clone()];
     let none = BTreeMap::new();
     let plan = sync::plan(&echo, &library, &tracks, &[cover], &none, 2, &probe);
     let destinations: Vec<PathBuf> = plan
@@ -145,21 +144,20 @@ fn plan_skips_fresh_files_and_names_safe_destinations() -> Result<(), Box<dyn st
 
     for transfer in &plan.pending {
         if transfer.action == Action::Copy {
-            sync::transfer(transfer)?;
+            sync::transfer(transfer).unwrap();
         }
     }
     let again = sync::plan(&echo, &library, &tracks, &[], &none, 2, &probe);
     assert_eq!(again.fresh, 1);
     assert_eq!(again.pending.len(), 1);
-    Ok(())
 }
 
 #[test]
-fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn plan_writes_one_track_per_device_file_name() {
+    let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     let album = library.join("Album");
-    fs::create_dir_all(&album)?;
+    fs::create_dir_all(&album).unwrap();
     let tracks = vec![
         album.join("01 Song.flac"),
         album.join("01 Song.opus"),
@@ -167,7 +165,7 @@ fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error
         album.join("02 Other.flac"),
     ];
     for path in &tracks {
-        fs::write(path, b"audio")?;
+        fs::write(path, b"audio").unwrap();
     }
     let probe = |path: &Path| -> Result<Option<MeasuredQuality>, String> {
         let format = path
@@ -185,22 +183,20 @@ fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error
         .collect();
     assert_eq!(sources, vec![tracks[0].as_path(), tracks[3].as_path()]);
     assert_eq!(plan.duplicates, vec![tracks[1].clone(), tracks[2].clone()]);
-    Ok(())
 }
 
 #[test]
-fn a_converted_file_is_current_only_with_the_recorded_encoding(
-) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn a_converted_file_is_current_only_with_the_recorded_encoding() {
+    let dir = tempfile::tempdir().unwrap();
     let library = dir.path().join("library");
     let card = dir.path().join("card");
-    fs::create_dir_all(library.join("Album"))?;
+    fs::create_dir_all(library.join("Album")).unwrap();
     let tracks = vec![library.join("Album/01 Song.flac")];
-    fs::write(&tracks[0], b"audio")?;
+    fs::write(&tracks[0], b"audio").unwrap();
     let probe = |_: &Path| -> Result<Option<MeasuredQuality>, String> {
         Ok(Some(audio("flac", 44_100, Some(16))))
     };
-    let connection = muzik_store::db::open_in_memory()?;
+    let connection = muzik_store::db::open_in_memory().unwrap();
     let mp3 = target(&card, SyncPreset::Mp3);
     let plan_with = |target: &Target| -> Result<sync::Plan, String> {
         let encodings = sync::encodings(&connection, &card)?;
@@ -215,20 +211,20 @@ fn a_converted_file_is_current_only_with_the_recorded_encoding(
         ))
     };
 
-    let first = plan_with(&mp3)?;
+    let first = plan_with(&mp3).unwrap();
     let transfer = &first.pending[0];
-    fs::create_dir_all(card.join("Album"))?;
-    fs::write(&transfer.destination, b"converted")?;
-    assert_eq!(plan_with(&mp3)?.fresh, 0);
+    fs::create_dir_all(card.join("Album")).unwrap();
+    fs::write(&transfer.destination, b"converted").unwrap();
+    assert_eq!(plan_with(&mp3).unwrap().fresh, 0);
 
-    sync::record(&connection, transfer)?;
-    assert_eq!(plan_with(&mp3)?.fresh, 1);
+    sync::record(&connection, transfer).unwrap();
+    assert_eq!(plan_with(&mp3).unwrap().fresh, 1);
     let lower = Target {
         bitrate: Some(128),
-        ..mp3.clone()
+        ..mp3
     };
     assert_eq!(
-        plan_with(&lower)?.pending[0].action,
+        plan_with(&lower).unwrap().pending[0].action,
         Action::Convert(Encoding::Mp3 { kbps: 128 })
     );
 
@@ -238,17 +234,16 @@ fn a_converted_file_is_current_only_with_the_recorded_encoding(
             action: Action::Copy,
             ..transfer.clone()
         },
-    )?;
-    assert!(sync::encodings(&connection, &card)?.is_empty());
-    Ok(())
+    )
+    .unwrap();
+    assert!(sync::encodings(&connection, &card).unwrap().is_empty());
 }
 
 #[test]
-fn stale_files_lists_unplanned_media_and_macos_leftovers() -> Result<(), Box<dyn std::error::Error>>
-{
-    let dir = tempfile::tempdir()?;
+fn stale_files_lists_unplanned_media_and_macos_leftovers() {
+    let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
-    fs::create_dir_all(root.join("Album"))?;
+    fs::create_dir_all(root.join("Album")).unwrap();
     let kept = root.join("Album/01.mp3");
     for name in [
         "Album/01.mp3",
@@ -257,16 +252,15 @@ fn stale_files_lists_unplanned_media_and_macos_leftovers() -> Result<(), Box<dyn
         "Album/.03.muzik-part.mp3",
         "Album/notes.txt",
     ] {
-        fs::write(root.join(name), b"x")?;
+        fs::write(root.join(name), b"x").unwrap();
     }
     let planned = BTreeSet::from([kept]);
     assert_eq!(
-        sync::stale_files(root, &planned)?,
+        sync::stale_files(root, &planned).unwrap(),
         vec![
             root.join("Album/.03.muzik-part.mp3"),
             root.join("Album/._01.mp3"),
             root.join("Album/02.flac"),
         ]
     );
-    Ok(())
 }

@@ -3,7 +3,7 @@ use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
 use crate::Result;
 use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
@@ -34,6 +34,7 @@ pub enum Summary {
 impl Summary {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
+    #[must_use]
     pub fn of(item: &WatchItem) -> Self {
         let statuses: Vec<StageStatus> = item.statuses().collect();
         if item.is_unavailable() {
@@ -52,15 +53,19 @@ impl Summary {
     }
 }
 
+/// # Errors
+/// Returns an error if the serialized watchlist does not have the expected shape.
 pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value> {
     let index = AudioIndex::scan(output);
     let mut value = document.to_value();
-    let playlists = value["playlists"]
-        .as_array_mut()
+    let playlists = value
+        .get_mut("playlists")
+        .and_then(Value::as_array_mut)
         .ok_or("watchlist playlists are missing")?;
     for (playlist, saved) in playlists.iter_mut().zip(&document.playlists) {
-        let items = playlist["items"]
-            .as_array_mut()
+        let items = playlist
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
             .ok_or("playlist items are missing")?;
         for (card, item) in items.iter_mut().zip(&saved.items) {
             enrich(card, item, &index, cache)?;

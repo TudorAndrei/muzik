@@ -1,7 +1,7 @@
 //! Shared values for the workflow settings stored in config files.
 
 use crate::audio::AudioFormat;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
@@ -32,6 +32,7 @@ impl PreferredAudio {
         &["lossless", "best", "mp3", "flac", "mp3-320", "any"];
 
     /// Search term to add to a Soulseek query, unless the query already has it.
+    #[must_use]
     pub fn search_suffix(self, tokens: &HashSet<String>) -> Option<String> {
         match self {
             Self::Lossless => (!tokens.contains("flac") && !tokens.contains("lossless"))
@@ -44,6 +45,7 @@ impl PreferredAudio {
         }
     }
 
+    #[must_use]
     pub fn bonus(self, format: Option<AudioFormat>, lossless: bool, bitrate: Option<u32>) -> bool {
         match self {
             Self::Lossless => lossless,
@@ -311,7 +313,8 @@ config_choice!(DuplicatePolicy, "duplicate policy", duplicate_policy_error);
     parse_err_fn = sync_preset_error
 )]
 pub enum SyncPreset {
-    /// Highest quality that the FiiO Snowsky Echo Mini plays.
+    /// Highest quality that the `FiiO` Snowsky Echo Mini plays.
+    #[usage(help = "Highest quality that the FiiO Snowsky Echo Mini plays.")]
     #[default]
     EchoMini,
     /// MP3 for all audio; MP3 files unchanged.
@@ -332,17 +335,16 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
-    fn preferred_audio_choices_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+    fn preferred_audio_choices_round_trip() {
         for &value in PreferredAudio::CHOICES {
-            let parsed: PreferredAudio = value.parse()?;
+            let parsed: PreferredAudio = value.parse().unwrap();
             assert_eq!(parsed.to_string(), value);
-            assert_eq!(serde_json::to_value(parsed)?, value);
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
             assert_eq!(
-                serde_json::from_value::<PreferredAudio>(serde_json::json!(value))?,
+                serde_json::from_value::<PreferredAudio>(serde_json::json!(value)).unwrap(),
                 parsed
             );
         }
-        Ok(())
     }
 
     #[test]
@@ -377,16 +379,16 @@ mod tests {
     }
 
     #[test]
-    fn choices_parse_and_serialize_as_config_strings() -> Result<(), Box<dyn std::error::Error>> {
+    fn choices_parse_and_serialize_as_config_strings() {
         macro_rules! check {
             ($type:ty) => {
                 for &value in <$type>::CHOICES {
-                    let parsed: $type = value.parse()?;
+                    let parsed: $type = value.parse().unwrap();
                     assert_eq!(parsed.to_string(), value);
                     assert_eq!(parsed.as_ref(), value);
-                    assert_eq!(serde_json::to_value(parsed)?, value);
+                    assert_eq!(serde_json::to_value(parsed).unwrap(), value);
                     assert_eq!(
-                        serde_json::from_value::<$type>(serde_json::json!(value))?,
+                        serde_json::from_value::<$type>(serde_json::json!(value)).unwrap(),
                         parsed
                     );
                 }
@@ -406,7 +408,6 @@ mod tests {
                 value: "lossy".into(),
             })
         );
-        Ok(())
     }
 
     #[test]

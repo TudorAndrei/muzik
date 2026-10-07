@@ -1,0 +1,5 @@
+[settings]
+experimental = true
+
+[tools]
+"conda:ffmpeg" = "9.0.2"

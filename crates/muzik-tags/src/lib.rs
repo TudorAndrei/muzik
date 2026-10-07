@@ -3,7 +3,7 @@
 pub mod cover;
 pub mod probe;
 pub use cover::{embed_cover, find_cover, front_cover, has_front_cover};
-pub use probe::{probe, AudioProperties};
+pub use probe::{AudioProperties, probe};
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -16,10 +16,10 @@ use lofty::id3::v2::Id3v2Tag;
 use lofty::mp4::Mp4File;
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::mpeg::MpegFile;
-use lofty::ogg::tag::VorbisComments;
 use lofty::ogg::OggPictureStorage;
 use lofty::ogg::OpusFile;
 use lofty::ogg::VorbisFile;
+use lofty::ogg::tag::VorbisComments;
 use lofty::tag::{ItemKey, ItemValue, Tag, TagExt, TagItem, TagType};
 use thiserror::Error;
 use tracing::debug;
@@ -166,6 +166,10 @@ pub enum TagsError {
 }
 
 /// Read known mediafile fields and the named custom keys.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read.
 pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, TagsError> {
     let path = path.as_ref();
     let file = lofty::read_from_path(path)?;
@@ -177,10 +181,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
                 data.fields.insert(field.name.into(), value.into());
             }
         }
-        if !data.fields.contains_key("label") {
-            if let Some(value) = tag.get_string(ItemKey::Publisher) {
-                data.fields.insert("label".into(), value.into());
-            }
+        if !data.fields.contains_key("label")
+            && let Some(value) = tag.get_string(ItemKey::Publisher)
+        {
+            data.fields.insert("label".into(), value.into());
         }
         for (name, key) in [
             ("artists", ItemKey::TrackArtists),
@@ -197,10 +201,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
             keys.push(key);
         }
         data.custom = read_customs(path, file.file_type(), &keys)?;
-        if let Some(key) = disambig_key {
-            if let Some(value) = data.custom.remove(key) {
-                data.fields.insert("albumdisambig".into(), value);
-            }
+        if let Some(key) = disambig_key
+            && let Some(value) = data.custom.remove(key)
+        {
+            data.fields.insert("albumdisambig".into(), value);
         }
     }
     debug!(path = %path.display(), count = data.fields.len(), "read audio tags");
@@ -208,6 +212,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
 }
 
 /// Write the supplied fields while keeping tags that are not supplied.
+///
+/// # Errors
+///
+/// Returns an error when the format is not supported, a field is unknown, or the file cannot be read or written.
 pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     let path = path.as_ref();
     let file = lofty::read_from_path(path)?;
@@ -224,11 +232,11 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
         .unwrap_or_else(|| Tag::new(tag_type));
     let mut custom = data.custom.clone();
     for (name, value) in &data.fields {
-        if name == "albumdisambig" {
-            if let Some(key) = album_disambig_key(kind) {
-                custom.insert(key.into(), value.clone());
-                continue;
-            }
+        if name == "albumdisambig"
+            && let Some(key) = album_disambig_key(kind)
+        {
+            custom.insert(key.into(), value.clone());
+            continue;
         }
         let field = FIELDS
             .iter()
@@ -274,7 +282,7 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
             }
             native.save_to_path(path, WriteOptions::default())?;
         }
-        _ => unreachable!(),
+        _ => return Err(TagsError::Unsupported(kind)),
     }
     debug!(path = %path.display(), count = data.fields.len(), "wrote audio tags");
     Ok(())
@@ -354,7 +362,7 @@ fn read_customs(
     Ok(result)
 }
 
-fn album_disambig_key(kind: FileType) -> Option<&'static str> {
+const fn album_disambig_key(kind: FileType) -> Option<&'static str> {
     match kind {
         FileType::Mpeg | FileType::Mp4 => Some("MusicBrainz Album Comment"),
         FileType::Flac | FileType::Opus | FileType::Vorbis => Some("MUSICBRAINZ_ALBUMCOMMENT"),

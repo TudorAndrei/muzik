@@ -10,7 +10,7 @@ use muzik_import::history::IncrementalHistory;
 use muzik_import::plan::{
     Duplicate, DuplicateReason, ImportMode, ImportPlanner, PlanOptions, ReleaseProvider,
 };
-use muzik_library::{Library, SqlValue};
+use muzik_library::{Fields, Library, SqlValue};
 use muzik_match::MatchConfig;
 use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
 
@@ -22,8 +22,9 @@ impl ReleaseProvider for FixtureProvider {
         criteria: &ReleaseSearch,
         _limit: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        assert_eq!(criteria.release, "Night Lines");
-        assert_eq!(criteria.artist.as_deref(), Some("Mara Vale"));
+        if criteria.release != "Night Lines" || criteria.artist.as_deref() != Some("Mara Vale") {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(vec![ReleaseSearchHit {
             id: ReleaseId("new-release".into()),
             title: "Night Lines".into(),
@@ -59,41 +60,57 @@ impl ReleaseProvider for FixtureProvider {
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 }
 
-fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf, PathBuf, BeetsConfig) {
-    let temp = tempfile::tempdir().unwrap();
+type Fixture = (tempfile::TempDir, PathBuf, PathBuf, PathBuf, BeetsConfig);
+
+fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .unwrap()
+        .ok_or("the crate directory has no parent")?
         .to_owned();
     let source_dir = temp.path().join("incoming");
-    fs::create_dir(&source_dir).unwrap();
+    fs::create_dir(&source_dir)?;
     let source = source_dir.join("02 Song.flac");
-    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source).unwrap();
+    fs::copy(crates.join("muzik-tags/tests/fixtures/blank.flac"), &source)?;
     fs::copy(
         crates.join("muzik-tags/tests/fixtures/cover.png"),
         source_dir.join("cover.png"),
-    )
-    .unwrap();
-    fs::write(source_dir.join("02 Song.muzik.json"), r#"{"source_id":"video-123","resolved":{"title":"Song","artist":"Mara Vale","album":"Night Lines","year":"2021"}}"#).unwrap();
+    )?;
+    fs::write(
+        source_dir.join("02 Song.muzik.json"),
+        r#"{"source_id":"video-123","resolved":{"title":"Song","artist":"Mara Vale","album":"Night Lines","year":"2021"}}"#,
+    )?;
     let database = temp.path().join("library.db");
     fs::copy(
         crates.join("muzik-library/tests/fixtures/library.db"),
         &database,
-    )
-    .unwrap();
+    )?;
     let root = temp.path().join("music");
-    fs::create_dir(&root).unwrap();
-    let config = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
-    (temp, source, database, root, config)
+    fs::create_dir(&root)?;
+    let config = BeetsConfig::from_layers("", serde_json::json!({}))?;
+    Ok((temp, source, database, root, config))
 }
 
 #[test]
 fn cancellation_during_placement_restores_files_and_keeps_database() {
-    let (_temp, source, database, root, config) = fixture();
+    fn files_under(path: &std::path::Path) -> usize {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    files_under(&entry.path())
+                } else {
+                    1
+                }
+            })
+            .sum()
+    }
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let second = source.with_file_name("03 Other.flac");
     fs::copy(&source, &second).unwrap();
     fs::write(
@@ -138,25 +155,12 @@ fn cancellation_during_placement_restores_files_and_keeps_database() {
     assert!(second.exists());
     assert_eq!(library.items().unwrap().len(), old_items);
     assert_eq!(library.albums().unwrap().len(), old_albums);
-    fn files_under(path: &std::path::Path) -> usize {
-        fs::read_dir(path)
-            .unwrap()
-            .map(|entry| {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    files_under(&entry.path())
-                } else {
-                    1
-                }
-            })
-            .sum()
-    }
     assert_eq!(files_under(&root), 0);
 }
 
 #[test]
 fn cancellation_before_apply_keeps_source_and_database() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let old_items = library.items().unwrap().len();
     let match_config = MatchConfig::from_beets(&config).unwrap();
@@ -188,7 +192,7 @@ fn cancellation_before_apply_keeps_source_and_database() {
 
 #[test]
 fn singleton_mode_uses_singleton_path_without_an_album_row() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
@@ -222,7 +226,7 @@ fn singleton_mode_uses_singleton_path_without_an_album_row() {
 
 #[test]
 fn move_import_removes_source_after_the_database_write() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
@@ -254,7 +258,7 @@ fn move_import_removes_source_after_the_database_write() {
 
 #[test]
 fn successful_import_records_incremental_history() {
-    let (temp, source, database, root, config) = fixture();
+    let (temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let history = IncrementalHistory::open_or_seed(&temp.path().join("state.pickle"), &[]).unwrap();
@@ -296,7 +300,7 @@ fn successful_import_records_incremental_history() {
 
 #[test]
 fn skipped_import_respects_incremental_skip_later() {
-    let (temp, source, database, root, config) = fixture();
+    let (temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     for skip_later in [false, true] {
@@ -345,7 +349,7 @@ fn skipped_import_respects_incremental_skip_later() {
 
 #[test]
 fn dry_run_does_not_write_incremental_history() {
-    let (temp, source, database, root, config) = fixture();
+    let (temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let statefile = temp.path().join("state.pickle");
@@ -384,7 +388,7 @@ fn dry_run_does_not_write_incremental_history() {
 
 #[test]
 fn real_run_saves_seed_when_all_groups_were_already_imported() {
-    let (temp, source, database, root, config) = fixture();
+    let (temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let statefile = temp.path().join("state.pickle");
@@ -418,7 +422,7 @@ fn real_run_saves_seed_when_all_groups_were_already_imported() {
 
 #[test]
 fn custom_replace_rule_changes_import_destination() {
-    let (_temp, source, database, root, _) = fixture();
+    let (_temp, source, database, root, _) = fixture().unwrap();
     let config = BeetsConfig::from_layers(
         "",
         serde_json::json!({
@@ -453,7 +457,7 @@ fn custom_replace_rule_changes_import_destination() {
 
 #[test]
 fn applies_candidate_with_tags_art_source_id_and_ftclean() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
@@ -505,7 +509,7 @@ fn applies_candidate_with_tags_art_source_id_and_ftclean() {
 
 #[test]
 fn dry_run_and_duplicate_skip_do_not_write() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
@@ -558,7 +562,7 @@ fn dry_run_and_duplicate_skip_do_not_write() {
 
 #[test]
 fn an_album_whose_files_are_in_the_library_is_skipped_as_a_duplicate() {
-    let (temp, source, database, root, _) = fixture();
+    let (temp, source, database, root, _) = fixture().unwrap();
     let config = BeetsConfig::from_layers(
         "paths:\n  default: $albumartist/$album/$title\n",
         serde_json::json!({}),
@@ -623,13 +627,13 @@ fn an_album_whose_files_are_in_the_library_is_skipped_as_a_duplicate() {
 
 #[test]
 fn replace_removes_selected_duplicate_rows() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let mut fields = muzik_library::Fields::new();
     fields.insert("album".into(), SqlValue::Text("Night Lines".into()));
     fields.insert("albumartist".into(), SqlValue::Text("Mara Vale".into()));
     fields.insert("mb_albumid".into(), SqlValue::Text("new-release".into()));
-    let old_id = library.insert_album(&fields, &Default::default()).unwrap();
+    let old_id = library.insert_album(&fields, &Fields::new()).unwrap();
     let mut item_fields = muzik_library::Fields::new();
     item_fields.insert("album_id".into(), SqlValue::Integer(old_id));
     item_fields.insert(
@@ -641,9 +645,7 @@ fn replace_removes_selected_duplicate_rows() {
                 .to_vec(),
         ),
     );
-    let old_item_id = library
-        .insert_item(&item_fields, &Default::default())
-        .unwrap();
+    let old_item_id = library.insert_item(&item_fields, &Fields::new()).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
         provider: &FixtureProvider,
@@ -681,7 +683,7 @@ fn replace_removes_selected_duplicate_rows() {
         ),
     );
     library
-        .update_item(old_item_id, &old_path, &Default::default())
+        .update_item(old_item_id, &old_path, &Fields::new())
         .unwrap();
 
     let result = apply::apply(
@@ -714,13 +716,13 @@ fn replace_removes_selected_duplicate_rows() {
 
 #[test]
 fn replace_keeps_album_from_unselected_release() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let mut fields = muzik_library::Fields::new();
     fields.insert("album".into(), SqlValue::Text("Night Lines".into()));
     fields.insert("albumartist".into(), SqlValue::Text("Mara Vale".into()));
     fields.insert("mb_albumid".into(), SqlValue::Text("other-release".into()));
-    let other_id = library.insert_album(&fields, &Default::default()).unwrap();
+    let other_id = library.insert_album(&fields, &Fields::new()).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
         provider: &FixtureProvider,
@@ -752,7 +754,7 @@ fn replace_keeps_album_from_unselected_release() {
 
 #[test]
 fn replace_can_use_an_occupied_old_destination() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let mut options = ApplyOptions::from_beets(&config, root).unwrap();
@@ -815,7 +817,7 @@ fn replace_can_use_an_occupied_old_destination() {
 
 #[test]
 fn failed_replace_restores_occupied_old_destination() {
-    let (_temp, source, database, root, config) = fixture();
+    let (_temp, source, database, root, config) = fixture().unwrap();
     let mut library = Library::open_read_write(&database).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let mut options = ApplyOptions::from_beets(&config, root).unwrap();

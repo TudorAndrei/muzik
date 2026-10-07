@@ -103,18 +103,19 @@ fn sql_text(value: &SqlValue) -> Option<&str> {
 }
 
 fn expand_path(raw: &str, config: &Path) -> PathBuf {
-    let path = if let Some(rest) = raw.strip_prefix("~/") {
-        env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default()
-            .join(rest)
-    } else {
-        PathBuf::from(raw)
-    };
+    let path = raw.strip_prefix("~/").map_or_else(
+        || PathBuf::from(raw),
+        |rest| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(rest)
+        },
+    );
     if path.is_absolute() {
         path
     } else {
-        config.parent().unwrap_or(Path::new("")).join(path)
+        config.parent().unwrap_or_else(|| Path::new("")).join(path)
     }
 }
 
@@ -126,7 +127,7 @@ fn parse_title(title: &str) -> Option<(String, String)> {
         .as_ref()?;
     let noise = NOISE.get_or_init(|| Regex::new(r"(?i)\s*[\(\[]\s*(?:full\s+album|complete\s+album|full\s+lp|official\s+album|remaster(?:ed)?|deluxe(?:\s+edition)?|bonus\s+tracks?)\s*[\)\]]").ok()).as_ref()?;
     let title = if let Some(found) = year.find(title) {
-        title[..found.start()].trim_end()
+        title.get(..found.start())?.trim_end()
     } else {
         title
     };

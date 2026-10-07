@@ -20,21 +20,21 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut valid = 0;
-    let mut warnings = 0;
-    let mut invalid = 0;
+    let mut valid = 0_usize;
+    let mut warnings = 0_usize;
+    let mut invalid = 0_usize;
     for path in &files {
         let name = path.strip_prefix(&args.path).unwrap_or(path);
         let name = if name.as_os_str().is_empty() {
-            path.file_name().map(Path::new).unwrap_or(path)
+            path.file_name().map_or(path.as_path(), Path::new)
         } else {
             name
         };
         match check(path) {
             Ok((file_kind, details, file_warnings)) => {
-                valid += 1;
+                valid = valid.saturating_add(1);
                 if !file_warnings.is_empty() {
-                    warnings += 1;
+                    warnings = warnings.saturating_add(1);
                 }
                 let status = if file_warnings.is_empty() {
                     "OK"
@@ -55,7 +55,7 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
                 }
             }
             Err(error) => {
-                invalid += 1;
+                invalid = invalid.saturating_add(1);
                 println!("{}\tFAIL\t{}", name.display(), crate::describe(&error));
             }
         }
@@ -66,9 +66,8 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
     );
     if invalid > 0 {
         bail!("{invalid} files failed validation")
-    } else {
-        Ok(())
     }
+    Ok(())
 }
 
 fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
@@ -234,12 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn metadata_sidecar_reports_missing_source_and_tracks() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn metadata_sidecar_reports_missing_source_and_tracks() {
+        let dir = tempfile::tempdir().unwrap();
         let sidecar = dir.path().join(".muzik.json");
-        fs::write(&sidecar, r#"{"candidate":{"files":[{},{}]}}"#)?;
-        let (_, _, warnings) = check(&sidecar)?;
+        fs::write(&sidecar, r#"{"candidate":{"files":[{},{}]}}"#).unwrap();
+        let (_, _, warnings) = check(&sidecar).unwrap();
         assert!(warnings.iter().any(|item| item == "missing source"));
         assert!(warnings.iter().any(|item| item == "missing source_id"));
         assert!(
@@ -247,6 +245,5 @@ mod tests {
                 .iter()
                 .any(|item| item == "album appears incomplete (0/2 audio files)")
         );
-        Ok(())
     }
 }

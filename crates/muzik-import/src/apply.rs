@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::files::{self, Placement};
 use crate::ftclean;
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
-use crate::plan::{AlbumPlan, ImportMode, ImportPlan};
+use crate::plan::{AlbumPlan, ImportMode, ImportPlan, PlanItem, PlannedCandidate};
 use muzik_core::BeetsConfig;
 use muzik_library::{Fields as LibraryFields, Library, SqlValue, path_from_sql, path_to_sql};
 use muzik_tags::TagData;
@@ -52,6 +52,8 @@ pub struct ApplyOptions {
 }
 
 impl ApplyOptions {
+    /// # Errors
+    /// Returns an error when a `replace` rule in the config is not a valid regex.
     pub fn from_beets(config: &BeetsConfig, library_root: PathBuf) -> Result<Self, ApplyError> {
         let text = |path: &[&str], fallback: &str| {
             config
@@ -63,7 +65,7 @@ impl ApplyOptions {
         let flag = |name: &str| {
             config
                 .get(&["import", name])
-                .and_then(|value| value.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false)
         };
         let placement = if flag("move") {
@@ -151,6 +153,8 @@ struct PreparedAlbum {
     occupied_paths: Vec<PathBuf>,
 }
 
+/// # Errors
+/// Returns an error when the decisions do not fit the plan, or a file, tag, or library write fails.
 pub fn apply(
     library: &mut Library,
     plan: &ImportPlan,
@@ -162,6 +166,10 @@ pub fn apply(
 
 /// Stop before a new album starts or before its database write. A committed
 /// album remains imported if cancellation arrives after that write.
+///
+/// # Errors
+/// Returns an error when the import is cancelled, the decisions do not fit the plan, or a file,
+/// tag, or library write fails.
 pub fn apply_with_cancel(
     library: &mut Library,
     plan: &ImportPlan,
@@ -190,26 +198,38 @@ pub fn apply_with_cancel(
     let mut reserved = BTreeSet::new();
     for (album, decision) in plan.albums.iter().zip(decisions) {
         check_cancelled(cancelled)?;
-        if decision.choice == MatchDecision::Skip
-            || (!album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip))
-        {
-            result.skipped_albums += 1;
+        let skip_duplicate =
+            !album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
+        let candidate_index = match decision.choice {
+            MatchDecision::Candidate(index) if !skip_duplicate => Some(Some(index)),
+            MatchDecision::AsIs if !skip_duplicate => Some(None),
+            MatchDecision::Candidate(_) | MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
+        let Some(candidate_index) = candidate_index else {
+            result.skipped_albums = result.skipped_albums.saturating_add(1);
             if !options.dry_run && !plan.incremental_skip_later {
                 record_history(plan, album, &mut result);
             }
             continue;
-        }
+        };
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
         let reserved_before = reserved.clone();
-        let prepared = match prepare(library, album, *decision, options, &mut reserved) {
+        let prepared = match prepare(
+            library,
+            album,
+            candidate_index,
+            decision.duplicate,
+            options,
+            &mut reserved,
+        ) {
             Err(ApplyError::AlreadyInLibrary(_))
                 if decision.duplicate == Some(DuplicateDecision::Skip) =>
             {
                 reserved = reserved_before;
-                result.skipped_albums += 1;
-                result.already_in_library += 1;
+                result.skipped_albums = result.skipped_albums.saturating_add(1);
+                result.already_in_library = result.already_in_library.saturating_add(1);
                 if !options.dry_run && !plan.incremental_skip_later {
                     record_history(plan, album, &mut result);
                 }
@@ -224,127 +244,152 @@ pub fn apply_with_cancel(
                 .extend(prepared.items.into_iter().map(|item| item.destination));
             continue;
         }
-        let staged = StagedReplacement::new(&prepared.occupied_paths, &options.library_root)?;
-        let mut created = Vec::new();
-        let placed = (|| -> Result<(), ApplyError> {
-            for item in &prepared.items {
-                check_cancelled(cancelled)?;
-                let source = staged.source_for(&item.source);
-                let mode = if options.placement == Placement::Move
-                    || (options.placement == Placement::Symlink && source != item.source)
-                {
-                    Placement::Copy
-                } else {
-                    options.placement
-                };
-                files::place(source, &item.destination, mode)?;
-                created.push(item.destination.clone());
-                if options.write_tags {
-                    muzik_tags::write(&item.destination, &item.tags)?;
-                }
-            }
-            if let Some((source, destination)) = &prepared.cover {
-                check_cancelled(cancelled)?;
-                files::place(source, destination, Placement::Copy)?;
-                created.push(destination.clone());
-                if options.embed_art {
-                    let bytes = fs::read(source)?;
-                    let mime = if source
-                        .extension()
-                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-                    {
-                        "image/png"
-                    } else {
-                        "image/jpeg"
-                    };
-                    for item in &prepared.items {
-                        check_cancelled(cancelled)?;
-                        muzik_tags::embed_cover(&item.destination, &bytes, mime)?;
-                    }
-                }
-            }
-            Ok(())
-        })();
-        if let Err(error) = placed {
-            staged.restore(&created)?;
-            return Err(error);
-        }
-        let item_fields = prepared
-            .items
-            .iter()
-            .map(|item| {
-                muzik_tags::probe(&item.destination).map(|properties| {
-                    item_fields(&item.tags, item.compilation, &item.destination, &properties)
-                })
-            })
-            .collect::<Result<Vec<_>, _>>();
-        let item_fields = match item_fields {
-            Ok(fields) => fields,
-            Err(error) => {
-                staged.restore(&created)?;
-                return Err(error.into());
-            }
-        };
-        if let Err(error) = check_cancelled(cancelled) {
-            staged.restore(&created)?;
-            return Err(error);
-        }
-        let database = library.transaction(|writer| {
-            for id in &prepared.replace_ids {
-                writer.remove_album(*id)?;
-            }
-            let album_id = if prepared.kind == ImportMode::Album {
-                Some(writer.insert_album(&prepared.album_fields, &LibraryFields::new())?)
-            } else {
-                None
-            };
-            let mut item_ids = Vec::new();
-            for (item, mut fields) in prepared.items.iter().zip(item_fields) {
-                if let Some(album_id) = album_id {
-                    fields.insert("album_id".into(), SqlValue::Integer(album_id));
-                }
-                let mut attributes = LibraryFields::new();
-                if let Some(source_id) = &item.source_id {
-                    attributes.insert("muzik_source_id".into(), SqlValue::Text(source_id.clone()));
-                }
-                item_ids.push(writer.insert_item(&fields, &attributes)?);
-            }
-            Ok((album_id, item_ids))
-        });
-        let (album_id, item_ids) = match database {
-            Ok(value) => value,
-            Err(error) => {
-                staged.restore(&created)?;
-                return Err(error.into());
-            }
-        };
-        if options.placement == Placement::Move {
-            result.source_cleanup_failed.extend(cleanup_sources(
-                &prepared
-                    .items
-                    .iter()
-                    .map(|item| item.source.clone())
-                    .filter(|source| !created.contains(source))
-                    .collect::<Vec<_>>(),
-                |path| fs::remove_file(path),
-            ));
-        }
-        result
-            .cleanup_failed
-            .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
-        result.cleanup_failed.extend(staged.cleanup());
-        if let Some(album_id) = album_id {
-            result.album_ids.push(album_id);
-        }
-        result.item_ids.extend(item_ids);
-        result.destinations.extend(
-            created
-                .into_iter()
-                .filter(|path| prepared.items.iter().any(|item| item.destination == *path)),
-        );
+        commit_album(library, &prepared, options, cancelled, &mut result)?;
         record_history(plan, album, &mut result);
     }
     Ok(result)
+}
+
+fn commit_album(
+    library: &mut Library,
+    prepared: &PreparedAlbum,
+    options: &ApplyOptions,
+    cancelled: &dyn Fn() -> bool,
+    result: &mut ApplyResult,
+) -> Result<(), ApplyError> {
+    let staged = StagedReplacement::new(&prepared.occupied_paths, &options.library_root)?;
+    let mut created = Vec::new();
+    if let Err(error) = place_album(prepared, &staged, options, cancelled, &mut created) {
+        staged.restore(&created)?;
+        return Err(error);
+    }
+    let item_fields = prepared
+        .items
+        .iter()
+        .map(|item| {
+            muzik_tags::probe(&item.destination).map(|properties| {
+                item_fields(&item.tags, item.compilation, &item.destination, &properties)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>();
+    let item_fields = match item_fields {
+        Ok(fields) => fields,
+        Err(error) => {
+            staged.restore(&created)?;
+            return Err(error.into());
+        }
+    };
+    if let Err(error) = check_cancelled(cancelled) {
+        staged.restore(&created)?;
+        return Err(error);
+    }
+    let (album_id, item_ids) = match write_album(library, prepared, item_fields) {
+        Ok(value) => value,
+        Err(error) => {
+            staged.restore(&created)?;
+            return Err(error.into());
+        }
+    };
+    if options.placement == Placement::Move {
+        result.source_cleanup_failed.extend(cleanup_sources(
+            &prepared
+                .items
+                .iter()
+                .map(|item| item.source.clone())
+                .filter(|source| !created.contains(source))
+                .collect::<Vec<_>>(),
+            |path| fs::remove_file(path),
+        ));
+    }
+    result
+        .cleanup_failed
+        .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
+    result.cleanup_failed.extend(staged.cleanup());
+    if let Some(album_id) = album_id {
+        result.album_ids.push(album_id);
+    }
+    result.item_ids.extend(item_ids);
+    result.destinations.extend(
+        created
+            .into_iter()
+            .filter(|path| prepared.items.iter().any(|item| item.destination == *path)),
+    );
+    Ok(())
+}
+
+fn place_album(
+    prepared: &PreparedAlbum,
+    staged: &StagedReplacement,
+    options: &ApplyOptions,
+    cancelled: &dyn Fn() -> bool,
+    created: &mut Vec<PathBuf>,
+) -> Result<(), ApplyError> {
+    for item in &prepared.items {
+        check_cancelled(cancelled)?;
+        let source = staged.source_for(&item.source);
+        let mode = if options.placement == Placement::Move
+            || (options.placement == Placement::Symlink && source != item.source)
+        {
+            Placement::Copy
+        } else {
+            options.placement
+        };
+        files::place(source, &item.destination, mode)?;
+        created.push(item.destination.clone());
+        if options.write_tags {
+            muzik_tags::write(&item.destination, &item.tags)?;
+        }
+    }
+    if let Some((source, destination)) = &prepared.cover {
+        check_cancelled(cancelled)?;
+        files::place(source, destination, Placement::Copy)?;
+        created.push(destination.clone());
+        if options.embed_art {
+            let bytes = fs::read(source)?;
+            let mime = if source
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+            {
+                "image/png"
+            } else {
+                "image/jpeg"
+            };
+            for item in &prepared.items {
+                check_cancelled(cancelled)?;
+                muzik_tags::embed_cover(&item.destination, &bytes, mime)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_album(
+    library: &mut Library,
+    prepared: &PreparedAlbum,
+    item_fields: Vec<LibraryFields>,
+) -> Result<(Option<i64>, Vec<i64>), muzik_library::Error> {
+    library.transaction(|writer| {
+        for id in &prepared.replace_ids {
+            writer.remove_album(*id)?;
+        }
+        let album_id = if prepared.kind == ImportMode::Album {
+            Some(writer.insert_album(&prepared.album_fields, &LibraryFields::new())?)
+        } else {
+            None
+        };
+        let mut item_ids = Vec::new();
+        for (item, mut fields) in prepared.items.iter().zip(item_fields) {
+            if let Some(album_id) = album_id {
+                fields.insert("album_id".into(), SqlValue::Integer(album_id));
+            }
+            let mut attributes = LibraryFields::new();
+            if let Some(source_id) = &item.source_id {
+                attributes.insert("muzik_source_id".into(), SqlValue::Text(source_id.clone()));
+            }
+            item_ids.push(writer.insert_item(&fields, &attributes)?);
+        }
+        Ok((album_id, item_ids))
+    })
 }
 
 fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), ApplyError> {
@@ -373,28 +418,21 @@ fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult
 fn prepare(
     library: &Library,
     album: &AlbumPlan,
-    decision: AlbumDecision,
+    candidate_index: Option<usize>,
+    duplicate: Option<DuplicateDecision>,
     options: &ApplyOptions,
     reserved: &mut BTreeSet<PathBuf>,
 ) -> Result<PreparedAlbum, ApplyError> {
-    let candidate = match decision.choice {
-        MatchDecision::Candidate(index) => Some(
+    let candidate = candidate_index
+        .map(|index| {
             album
                 .candidates
                 .get(index)
-                .ok_or(ApplyError::CandidateIndex { index })?,
-        ),
-        MatchDecision::AsIs => None,
-        MatchDecision::Skip => unreachable!(),
-    };
-    let compilation = candidate.is_some_and(|candidate| candidate.release.is_various_artists)
-        || (candidate.is_none()
-            && album
-                .items
-                .iter()
-                .skip(1)
-                .any(|item| item.match_item.artist != album.items[0].match_item.artist));
-    let replace_ids = if decision.duplicate == Some(DuplicateDecision::Replace) {
+                .ok_or(ApplyError::CandidateIndex { index })
+        })
+        .transpose()?;
+    let compilation = is_compilation(album, candidate);
+    let replace_ids = if duplicate == Some(DuplicateDecision::Replace) {
         selected_replacements(library, album, candidate)?
     } else {
         Vec::new()
@@ -404,8 +442,85 @@ fn prepare(
     let mut album_fields = LibraryFields::new();
     let mut prepared = Vec::new();
     let albums = library.albums()?;
-    let next_id = albums.iter().map(|album| album.id).max().unwrap_or(0) + 1;
-    let mut known: Vec<AlbumFields> = albums
+    let next_id = albums
+        .iter()
+        .map(|album| album.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or("album id space is exhausted")?;
+    let mut known = known_albums(&albums);
+    for (index, item) in album.items.iter().enumerate() {
+        let tags = item_tags(item, candidate, index, compilation);
+        let mut path_fields = path_fields(&tags);
+        path_fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
+        if index == 0 && album.kind == ImportMode::Album {
+            album_fields.extend(album_scalars(&path_fields));
+            known.push(AlbumFields {
+                id: next_id,
+                fields: path_fields.clone(),
+            });
+            insert_dates(&mut album_fields, &tags);
+        }
+        let kind = path_kind(album.kind, compilation);
+        let context = TemplateContext {
+            fields: path_fields,
+            album_id: (album.kind == ImportMode::Album).then_some(next_id),
+            albums: known.clone(),
+            aunique_keys: options.aunique_keys.clone(),
+            aunique_disambiguators: options.aunique_disambiguators.clone(),
+            aunique_bracket: options.aunique_bracket.clone(),
+        };
+        let destination = item_destination(options, kind, &context, &item.source)?;
+        claim_destination(
+            library,
+            &destination,
+            options,
+            &old_paths,
+            &mut occupied_paths,
+            reserved,
+        )?;
+        prepared.push(PreparedItem {
+            source: item.source.clone(),
+            destination,
+            tags,
+            compilation,
+            source_id: item.source_id.clone(),
+        });
+    }
+    let cover = album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved)?;
+    if let Some((_, destination)) = &cover {
+        album_fields.insert("artpath".into(), path_to_sql(destination));
+    }
+    old_paths.retain(|old| {
+        !(prepared.iter().any(|item| item.destination == *old)
+            || cover
+                .as_ref()
+                .is_some_and(|(_, destination)| destination == old))
+    });
+    album_fields.insert("added".into(), SqlValue::Real(now()));
+    Ok(PreparedAlbum {
+        kind: album.kind,
+        items: prepared,
+        album_fields,
+        cover,
+        replace_ids,
+        old_paths,
+        occupied_paths,
+    })
+}
+
+fn is_compilation(album: &AlbumPlan, candidate: Option<&PlannedCandidate>) -> bool {
+    candidate.is_some_and(|candidate| candidate.release.is_various_artists)
+        || (candidate.is_none()
+            && album.items.split_first().is_some_and(|(first, rest)| {
+                rest.iter()
+                    .any(|item| item.match_item.artist != first.match_item.artist)
+            }))
+}
+
+fn known_albums(albums: &[muzik_library::Album]) -> Vec<AlbumFields> {
+    albums
         .iter()
         .map(|album| AlbumFields {
             id: album.id,
@@ -419,150 +534,175 @@ fn prepare(
                 })
                 .collect(),
         })
-        .collect();
-    for (index, item) in album.items.iter().enumerate() {
-        let mut tags = item.tags.clone();
-        for (name, value) in [
-            ("title", &item.match_item.title),
-            ("artist", &item.match_item.artist),
-            ("album", &item.match_item.album),
-            ("albumartist", &item.match_item.album_artist),
-        ] {
-            if !value.is_empty() {
-                tags.fields
-                    .entry(name.into())
-                    .or_insert_with(|| value.clone());
-            }
-        }
-        if tags.fields.get("albumartist").is_none_or(String::is_empty)
-            && let Some(artist) = tags.fields.get("artist").cloned()
-        {
-            tags.fields.insert("albumartist".into(), artist);
-        }
-        if let Some(candidate) = candidate {
-            let release = &candidate.release;
-            for (name, value) in [
-                ("album", Some(release.title.as_str())),
-                ("albumartist", Some(release.artist.as_str())),
-                ("mb_albumid", Some(release.id.0.as_str())),
-                ("mb_releasegroupid", release.release_group_id.as_deref()),
-                ("country", release.country.as_deref()),
-                ("media", release.media.as_deref()),
-                ("label", release.label.as_deref()),
-                ("catalognum", release.catalog_number.as_deref()),
-                ("albumdisambig", release.disambiguation.as_deref()),
-            ] {
-                if let Some(value) = value {
-                    tags.fields.insert(name.into(), value.into());
-                }
-            }
-            if let Some(year) = release.year {
-                tags.fields.insert("date".into(), year.to_string());
-            }
+        .collect()
+}
+
+fn item_tags(
+    item: &PlanItem,
+    candidate: Option<&PlannedCandidate>,
+    index: usize,
+    compilation: bool,
+) -> TagData {
+    let mut tags = item.tags.clone();
+    for (name, value) in [
+        ("title", &item.match_item.title),
+        ("artist", &item.match_item.artist),
+        ("album", &item.match_item.album),
+        ("albumartist", &item.match_item.album_artist),
+    ] {
+        if !value.is_empty() {
             tags.fields
-                .insert("comp".into(), if compilation { "1" } else { "0" }.into());
-            if let Some((_, track_index)) = candidate
-                .assignment
-                .pairs
-                .iter()
-                .find(|(source, _)| *source == index)
-                && let Some(track) = release.tracks.get(*track_index)
-            {
-                tags.fields.insert("title".into(), track.title.clone());
-                tags.fields.insert("artist".into(), track.artist.clone());
-                tags.fields
-                    .insert("track".into(), track.medium_index.to_string());
-                tags.fields.insert("disc".into(), track.medium.to_string());
-                if let Some(id) = &track.recording_id {
-                    tags.fields.insert("mb_trackid".into(), id.0.clone());
-                }
-                if let Some(id) = &track.release_track_id {
-                    tags.fields.insert("mb_releasetrackid".into(), id.clone());
-                }
-            }
+                .entry(name.into())
+                .or_insert_with(|| value.clone());
         }
-        let title = tags.fields.get("title").cloned().unwrap_or_default();
-        let artist = tags.fields.get("artist").cloned().unwrap_or_default();
-        let (title, artist) = ftclean::clean(&title, &artist);
-        tags.fields.insert("title".into(), title);
-        tags.fields.insert("artist".into(), artist);
-        let mut path_fields = path_fields(&tags);
-        path_fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
-        if index == 0 && album.kind == ImportMode::Album {
-            for key in [
-                "album",
-                "albumartist",
-                "mb_albumid",
-                "mb_releasegroupid",
-                "year",
-                "label",
-                "catalognum",
-                "country",
-                "albumdisambig",
-                "comp",
-            ] {
-                if let Some(value) = path_fields.get(key) {
-                    album_fields.insert(key.into(), sql_scalar(key, value));
-                }
-            }
-            known.push(AlbumFields {
-                id: next_id,
-                fields: path_fields.clone(),
-            });
-            insert_dates(&mut album_fields, &tags);
-        }
-        let kind = if album.kind == ImportMode::Singleton {
-            PathKind::Singleton
-        } else if compilation {
-            PathKind::Compilation
-        } else {
-            PathKind::Album
-        };
-        let context = TemplateContext {
-            fields: path_fields,
-            album_id: (album.kind == ImportMode::Album).then_some(next_id),
-            albums: known.clone(),
-            aunique_keys: options.aunique_keys.clone(),
-            aunique_disambiguators: options.aunique_disambiguators.clone(),
-            aunique_bracket: options.aunique_bracket.clone(),
-        };
-        let extension = item
-            .source
-            .extension()
-            .map(|value| format!(".{}", value.to_string_lossy()))
-            .unwrap_or_default();
-        let relative = options
-            .paths
-            .destination(kind, &context, &extension, &options.sanitizer)?;
-        if relative.is_empty()
-            || Path::new(&relative).is_absolute()
-            || Path::new(&relative)
-                .components()
-                .any(|part| matches!(part, std::path::Component::ParentDir))
-        {
-            return Err(ApplyError::InvalidDestination);
-        }
-        let destination = options.library_root.join(relative);
-        if destination.symlink_metadata().is_ok() {
-            if old_paths.contains(&destination) {
-                occupied_paths.push(destination.clone());
-            } else if in_library(library, &destination, &options.library_root)? {
-                return Err(ApplyError::AlreadyInLibrary(destination));
-            } else {
-                return Err(ApplyError::DestinationExists(destination));
-            }
-        }
-        if !reserved.insert(destination.clone()) {
-            return Err(ApplyError::DestinationCollision(destination));
-        }
-        prepared.push(PreparedItem {
-            source: item.source.clone(),
-            destination,
-            tags,
-            compilation,
-            source_id: item.source_id.clone(),
-        });
     }
+    if tags.fields.get("albumartist").is_none_or(String::is_empty)
+        && let Some(artist) = tags.fields.get("artist").cloned()
+    {
+        tags.fields.insert("albumartist".into(), artist);
+    }
+    if let Some(candidate) = candidate {
+        apply_candidate_tags(&mut tags, candidate, index, compilation);
+    }
+    let title = tags.fields.get("title").cloned().unwrap_or_default();
+    let artist = tags.fields.get("artist").cloned().unwrap_or_default();
+    let (title, artist) = ftclean::clean(&title, &artist);
+    tags.fields.insert("title".into(), title);
+    tags.fields.insert("artist".into(), artist);
+    tags
+}
+
+fn apply_candidate_tags(
+    tags: &mut TagData,
+    candidate: &PlannedCandidate,
+    index: usize,
+    compilation: bool,
+) {
+    let release = &candidate.release;
+    for (name, value) in [
+        ("album", Some(release.title.as_str())),
+        ("albumartist", Some(release.artist.as_str())),
+        ("mb_albumid", Some(release.id.0.as_str())),
+        ("mb_releasegroupid", release.release_group_id.as_deref()),
+        ("country", release.country.as_deref()),
+        ("media", release.media.as_deref()),
+        ("label", release.label.as_deref()),
+        ("catalognum", release.catalog_number.as_deref()),
+        ("albumdisambig", release.disambiguation.as_deref()),
+    ] {
+        if let Some(value) = value {
+            tags.fields.insert(name.into(), value.into());
+        }
+    }
+    if let Some(year) = release.year {
+        tags.fields.insert("date".into(), year.to_string());
+    }
+    tags.fields
+        .insert("comp".into(), if compilation { "1" } else { "0" }.into());
+    if let Some((_, track_index)) = candidate
+        .assignment
+        .pairs
+        .iter()
+        .find(|(source, _)| *source == index)
+        && let Some(track) = release.tracks.get(*track_index)
+    {
+        tags.fields.insert("title".into(), track.title.clone());
+        tags.fields.insert("artist".into(), track.artist.clone());
+        tags.fields
+            .insert("track".into(), track.medium_index.to_string());
+        tags.fields.insert("disc".into(), track.medium.to_string());
+        if let Some(id) = &track.recording_id {
+            tags.fields.insert("mb_trackid".into(), id.0.clone());
+        }
+        if let Some(id) = &track.release_track_id {
+            tags.fields.insert("mb_releasetrackid".into(), id.clone());
+        }
+    }
+}
+
+fn album_scalars(path_fields: &BTreeMap<String, String>) -> LibraryFields {
+    let mut fields = LibraryFields::new();
+    for key in [
+        "album",
+        "albumartist",
+        "mb_albumid",
+        "mb_releasegroupid",
+        "year",
+        "label",
+        "catalognum",
+        "country",
+        "albumdisambig",
+        "comp",
+    ] {
+        if let Some(value) = path_fields.get(key) {
+            fields.insert(key.into(), sql_scalar(key, value));
+        }
+    }
+    fields
+}
+
+const fn path_kind(mode: ImportMode, compilation: bool) -> PathKind {
+    match mode {
+        ImportMode::Singleton => PathKind::Singleton,
+        ImportMode::Album if compilation => PathKind::Compilation,
+        ImportMode::Album => PathKind::Album,
+    }
+}
+
+fn item_destination(
+    options: &ApplyOptions,
+    kind: PathKind,
+    context: &TemplateContext,
+    source: &Path,
+) -> Result<PathBuf, ApplyError> {
+    let extension = source
+        .extension()
+        .map(|value| format!(".{}", value.to_string_lossy()))
+        .unwrap_or_default();
+    let relative = options
+        .paths
+        .destination(kind, context, &extension, &options.sanitizer)?;
+    if relative.is_empty()
+        || Path::new(&relative).is_absolute()
+        || Path::new(&relative)
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        return Err(ApplyError::InvalidDestination);
+    }
+    Ok(options.library_root.join(relative))
+}
+
+fn claim_destination(
+    library: &Library,
+    destination: &Path,
+    options: &ApplyOptions,
+    old_paths: &[PathBuf],
+    occupied_paths: &mut Vec<PathBuf>,
+    reserved: &mut BTreeSet<PathBuf>,
+) -> Result<(), ApplyError> {
+    if destination.symlink_metadata().is_ok() {
+        if old_paths.iter().any(|old| old == destination) {
+            occupied_paths.push(destination.to_path_buf());
+        } else if in_library(library, destination, &options.library_root)? {
+            return Err(ApplyError::AlreadyInLibrary(destination.to_path_buf()));
+        } else {
+            return Err(ApplyError::DestinationExists(destination.to_path_buf()));
+        }
+    }
+    if !reserved.insert(destination.to_path_buf()) {
+        return Err(ApplyError::DestinationCollision(destination.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn album_cover(
+    album: &AlbumPlan,
+    prepared: &[PreparedItem],
+    old_paths: &[PathBuf],
+    occupied_paths: &mut Vec<PathBuf>,
+    reserved: &mut BTreeSet<PathBuf>,
+) -> Result<Option<(PathBuf, PathBuf)>, ApplyError> {
     let cover = (album.kind == ImportMode::Album)
         .then(|| muzik_tags::find_cover(&album.source_dir))
         .flatten()
@@ -582,30 +722,14 @@ fn prepare(
         if !reserved.insert(destination.clone()) {
             return Err(ApplyError::DestinationCollision(destination.clone()));
         }
-        album_fields.insert("artpath".into(), path_to_sql(destination));
     }
-    old_paths.retain(|old| {
-        !prepared.iter().any(|item| item.destination == *old)
-            && !cover
-                .as_ref()
-                .is_some_and(|(_, destination)| destination == old)
-    });
-    album_fields.insert("added".into(), SqlValue::Real(now()));
-    Ok(PreparedAlbum {
-        kind: album.kind,
-        items: prepared,
-        album_fields,
-        cover,
-        replace_ids,
-        old_paths,
-        occupied_paths,
-    })
+    Ok(cover)
 }
 
 fn selected_replacements(
     library: &Library,
     album: &AlbumPlan,
-    candidate: Option<&crate::plan::PlannedCandidate>,
+    candidate: Option<&PlannedCandidate>,
 ) -> Result<Vec<i64>, ApplyError> {
     let first = &album.items.first().ok_or(ApplyError::NoAudio)?.match_item;
     let selected_id = candidate
@@ -724,7 +848,10 @@ fn item_fields(
         fields.insert("length".into(), SqlValue::Real(value));
     }
     if let Some(value) = properties.bitrate_kbps {
-        fields.insert("bitrate".into(), SqlValue::Integer(i64::from(value) * 1000));
+        fields.insert(
+            "bitrate".into(),
+            SqlValue::Integer(i64::from(value).saturating_mul(1000)),
+        );
     }
     if let Some(value) = properties.sample_rate_hz {
         fields.insert("samplerate".into(), SqlValue::Integer(i64::from(value)));

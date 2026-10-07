@@ -1,13 +1,11 @@
 use muzik_core::QualityPolicy;
 use muzik_store::watchlist::{
-    bandcamp_source, import_cache, reconcile, view, CheckedWrite, ReconcileOptions, Repository,
-    SourceKind, Stage, StageStatus, WatchItem, Watchlist,
+    CheckedWrite, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
+    Watchlist, bandcamp_source, import_cache, reconcile, view,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
-
-type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 fn reconciled(
     document: Value,
@@ -24,13 +22,15 @@ fn imported(
     options: ReconcileOptions<'_>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     repository.save(&Watchlist::from_value(document)?)?;
-    assert!(import_cache(repository, options)?);
+    if !import_cache(repository, options)? {
+        return Err("the cache import did not run".into());
+    }
     let mut document = repository.load()?;
     reconcile(&mut document, options)?;
     Ok(document.to_value())
 }
 
-fn options<'a>(output: &'a Path, splits: &'a Path, cache: &'a Path) -> ReconcileOptions<'a> {
+const fn options<'a>(output: &'a Path, splits: &'a Path, cache: &'a Path) -> ReconcileOptions<'a> {
     ReconcileOptions {
         output,
         splits,
@@ -43,16 +43,16 @@ fn options<'a>(output: &'a Path, splits: &'a Path, cache: &'a Path) -> Reconcile
 }
 
 #[test]
-fn reconcile_fills_finished_stages_and_keeps_the_waiting_one() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn reconcile_fills_finished_stages_and_keeps_the_waiting_one() {
+    let directory = tempfile::tempdir().unwrap();
     let cache = directory.path().join("cache");
     let output = directory.path().join("downloads");
     let splits = directory.path().join("splits");
-    fs::create_dir(&cache)?;
-    fs::create_dir(&output)?;
-    fs::create_dir(&splits)?;
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir(&output).unwrap();
+    fs::create_dir(&splits).unwrap();
     let split = splits.join("Song [abcdefghijk]");
-    fs::create_dir(&split)?;
+    fs::create_dir(&split).unwrap();
     let question = json!({"kind": "import_match", "payload": {"task": {}}});
     let document = json!({"version": 3, "playlists": [{
         "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
@@ -65,22 +65,23 @@ fn reconcile_fills_finished_stages_and_keeps_the_waiting_one() -> TestResult {
         cache.join("playlist_PL1.json"),
         serde_json::to_vec(&json!({"videos": {"abcdefghijk": {
             "status": "split", "audio_file": output.join("Song.flac"), "split_dir": split
-        }}}))?,
-    )?;
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
     let repository = Repository::new(directory.path().join("muzik.db"));
-    let document = imported(&repository, document, options(&output, &splits, &cache))?;
+    let document = imported(&repository, document, options(&output, &splits, &cache)).unwrap();
     let stages = &document["playlists"][0]["items"][0]["stages"];
     assert_eq!(stages["download"]["status"], "complete");
     assert_eq!(stages["split"]["status"], "complete");
     assert_eq!(stages["organize"]["status"], "waiting");
     assert_eq!(stages["organize"]["question"], question);
     assert_eq!(document["playlists"][0]["processed_video_ids"], json!([]));
-    Ok(())
 }
 
 #[test]
-fn imports_old_watchlist_file_and_preserves_saved_item_state() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn imports_old_watchlist_file_and_preserves_saved_item_state() {
+    let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("watchlist.json");
     let backup = directory.path().join("watchlist.json.migrated");
     let old = json!({
@@ -102,10 +103,10 @@ fn imports_old_watchlist_file_and_preserves_saved_item_state() -> TestResult {
             "processed_video_ids": ["abcdefghijk", "abcdefghijk"]
         }]
     });
-    fs::write(&path, serde_json::to_vec(&old)?)?;
+    fs::write(&path, serde_json::to_vec(&old).unwrap()).unwrap();
     let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
-    let loaded = repository.load()?;
+    let loaded = repository.load().unwrap();
     let value = loaded.to_value();
     let item = &value["playlists"][0]["items"][0];
     assert_eq!(value["version"], 3);
@@ -118,104 +119,114 @@ fn imports_old_watchlist_file_and_preserves_saved_item_state() -> TestResult {
         json!(["abcdefghijk"])
     );
     assert!(!path.exists());
-    assert_eq!(serde_json::from_slice::<Value>(&fs::read(&backup)?)?, old);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&backup).unwrap()).unwrap(),
+        old
+    );
 
-    let revision = repository.revision()?;
-    repository.save(&loaded)?;
-    assert_eq!(repository.revision()?, revision);
-    assert_eq!(repository.load()?, loaded);
-    Ok(())
+    let revision = repository.revision().unwrap();
+    repository.save(&loaded).unwrap();
+    assert_eq!(repository.revision().unwrap(), revision);
+    assert_eq!(repository.load().unwrap(), loaded);
 }
 
 #[test]
-fn the_bandcamp_collection_is_added_once() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn the_bandcamp_collection_is_added_once() {
+    let directory = tempfile::tempdir().unwrap();
     let repository = Repository::new(directory.path().join("muzik.db"));
     let source = bandcamp_source("listener");
-    assert!(repository.ensure(&source)?);
-    let revision = repository.revision()?;
-    assert!(!repository.ensure(&source)?);
-    assert_eq!(repository.revision()?, revision);
-    let saved = repository.load()?.to_value();
+    assert!(repository.ensure(&source).unwrap());
+    let revision = repository.revision().unwrap();
+    assert!(!repository.ensure(&source).unwrap());
+    assert_eq!(repository.revision().unwrap(), revision);
+    let saved = repository.load().unwrap().to_value();
     assert_eq!(saved["playlists"].as_array().map(Vec::len), Some(1));
     assert_eq!(saved["playlists"][0]["kind"], "bandcamp");
     assert_eq!(
         saved["playlists"][0]["url"],
         "https://bandcamp.com/listener"
     );
-    Ok(())
 }
 
 #[test]
-fn edits_saved_sources_without_losing_item_state() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn edits_saved_sources_without_losing_item_state() {
+    let directory = tempfile::tempdir().unwrap();
     let repository = Repository::new(directory.path().join("config/muzik.db"));
-    let added = repository.add("https://www.youtube.com/watch?v=abcdefghijk&list=PL_ONE")?;
+    let added = repository
+        .add("https://www.youtube.com/watch?v=abcdefghijk&list=PL_ONE")
+        .unwrap();
     assert_eq!(added.playlist_id, "PL_ONE");
     assert_eq!(added.url, "https://www.youtube.com/playlist?list=PL_ONE");
-    assert!(repository
-        .add("https://youtube.com/playlist?list=PL_ONE")
-        .is_err());
+    assert!(
+        repository
+            .add("https://youtube.com/playlist?list=PL_ONE")
+            .is_err()
+    );
 
-    let mut saved = repository.load()?.to_value();
+    let mut saved = repository.load().unwrap().to_value();
     saved["playlists"][0]["items"] = json!([{
         "position": 1,
         "title": "Song",
         "stages": {"download": {"status": "complete", "path": "/music/song.flac"}}
     }]);
-    repository.save(&Watchlist::from_value(saved)?)?;
-    assert!(repository.rename("PL_ONE", " Jazz albums ")?);
-    let saved = repository.load()?.to_value();
+    repository
+        .save(&Watchlist::from_value(saved).unwrap())
+        .unwrap();
+    assert!(repository.rename("PL_ONE", " Jazz albums ").unwrap());
+    let saved = repository.load().unwrap().to_value();
     assert_eq!(saved["playlists"][0]["title"], "Jazz albums");
     assert_eq!(
         saved["playlists"][0]["items"][0]["stages"]["download"]["path"],
         "/music/song.flac"
     );
 
-    let liked = repository.add("liked")?;
+    let liked = repository.add("liked").unwrap();
     assert_eq!(liked.playlist_id, "spotify:liked");
     assert_eq!(liked.title.as_deref(), Some("Liked Songs"));
-    let spotify =
-        repository.add("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1")?;
+    let spotify = repository
+        .add("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=1")
+        .unwrap();
     assert_eq!(
         spotify.playlist_id,
         "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"
     );
-    assert!(repository.remove("spotify:liked")?);
-    assert_eq!(repository.load()?.playlists.len(), 2);
-    Ok(())
+    assert!(repository.remove("spotify:liked").unwrap());
+    assert_eq!(repository.load().unwrap().playlists.len(), 2);
 }
 
 #[test]
-fn rejects_an_invalid_old_file_without_moving_it() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn rejects_an_invalid_old_file_without_moving_it() {
+    let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("watchlist.json");
     let invalid = r#"{"version":99,"playlists":[]}"#;
-    fs::write(&path, invalid)?;
+    fs::write(&path, invalid).unwrap();
     let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
-    assert!(repository
-        .add("https://youtube.com/playlist?list=PL_NEW")
-        .is_err());
-    assert_eq!(fs::read_to_string(path)?, invalid);
-    Ok(())
+    assert!(
+        repository
+            .add("https://youtube.com/playlist?list=PL_NEW")
+            .is_err()
+    );
+    assert_eq!(fs::read_to_string(path).unwrap(), invalid);
 }
 
 #[test]
-fn view_adds_card_actions_and_cached_thumbnail_without_saving() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn view_adds_card_actions_and_cached_thumbnail_without_saving() {
+    let directory = tempfile::tempdir().unwrap();
     let repository = Repository::new(directory.path().join("muzik.db"));
     let cache = directory.path().join("cache");
-    fs::create_dir(&cache)?;
-    fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"image")?;
+    fs::create_dir(&cache).unwrap();
+    fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"image").unwrap();
     let document = json!({"version": 3, "playlists": [{
         "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
         "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
             "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}]
     }]});
-    repository.save(&Watchlist::from_value(document)?)?;
-    let saved = (repository.revision()?, repository.load()?);
-    let cards = view(&repository.load()?, directory.path(), &cache)?;
+    repository
+        .save(&Watchlist::from_value(document).unwrap())
+        .unwrap();
+    let saved = (repository.revision().unwrap(), repository.load().unwrap());
+    let cards = view(&repository.load().unwrap(), directory.path(), &cache).unwrap();
     let item = &cards["playlists"][0]["items"][0];
     assert_eq!(item["summary"], "Pending");
     assert_eq!(
@@ -234,21 +245,23 @@ fn view_adds_card_actions_and_cached_thumbnail_without_saving() -> TestResult {
             .to_string_lossy()
             .as_ref()
     );
-    assert_eq!((repository.revision()?, repository.load()?), saved);
-    Ok(())
+    assert_eq!(
+        (repository.revision().unwrap(), repository.load().unwrap()),
+        saved
+    );
 }
 
 #[test]
-fn the_cache_import_marks_a_remaining_import_failed_once() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn the_cache_import_marks_a_remaining_import_failed_once() {
+    let directory = tempfile::tempdir().unwrap();
     let cache = directory.path().join("cache");
     let output = directory.path().join("downloads");
     let splits = directory.path().join("splits");
-    fs::create_dir(&cache)?;
-    fs::create_dir(&output)?;
-    fs::create_dir(&splits)?;
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir(&output).unwrap();
+    fs::create_dir(&splits).unwrap();
     let audio = output.join("Song [abcdefghijk].flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let document = json!({"version": 3, "playlists": [{
         "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
         "processed_video_ids": ["abcdefghijk"],
@@ -259,10 +272,12 @@ fn the_cache_import_marks_a_remaining_import_failed_once() -> TestResult {
         cache.join("playlist_PL1.json"),
         serde_json::to_vec(&json!({
             "videos": {"abcdefghijk": {"status": "organized", "audio_file": audio}}
-        }))?,
-    )?;
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let repository = Repository::new(directory.path().join("muzik.db"));
-    let document = imported(&repository, document, options(&output, &splits, &cache))?;
+    let document = imported(&repository, document, options(&output, &splits, &cache)).unwrap();
     let playlist = &document["playlists"][0];
     assert_eq!(playlist["processed_video_ids"], json!([]));
     assert_eq!(
@@ -270,51 +285,52 @@ fn the_cache_import_marks_a_remaining_import_failed_once() -> TestResult {
         "failed"
     );
     assert_eq!(playlist["items"][0]["last_action"], "refresh");
-    fs::remove_file(audio)?;
-    assert!(!import_cache(
-        &repository,
-        options(&output, &splits, &cache)
-    )?);
-    let saved = repository.load()?.to_value();
+    fs::remove_file(audio).unwrap();
+    assert!(!import_cache(&repository, options(&output, &splits, &cache)).unwrap());
+    let saved = repository.load().unwrap().to_value();
     assert_eq!(
         saved["playlists"][0]["items"][0]["stages"]["organize"]["status"],
         "failed"
     );
-    Ok(())
 }
 
 #[test]
-fn a_second_reconcile_changes_no_rows() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn a_second_reconcile_changes_no_rows() {
+    let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("downloads");
-    fs::create_dir(&output)?;
-    fs::write(output.join("Song [bcdefghijkl].flac"), b"audio")?;
+    fs::create_dir(&output).unwrap();
+    fs::write(output.join("Song [bcdefghijkl].flac"), b"audio").unwrap();
     let repository = Repository::new(directory.path().join("muzik.db"));
-    repository.save(&Watchlist::from_value(json!({"version": 3, "playlists": [
-        {"playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
-         "processed_video_ids": ["abcdefghijk"],
-         "items": [
-            {"position": 1, "title": "Done", "video_id": "abcdefghijk", "video_url": "u",
-             "stages": {"download": {"status": "running"}}},
-            {"position": 2, "title": "Downloaded", "video_id": "bcdefghijkl", "video_url": "u"}
-         ]},
-        {"playlist_id": "spotify:liked", "url": "https://open.spotify.com/collection/tracks",
-         "kind": "spotify", "items": [
-            {"position": 1, "title": "Track", "video_id": "t1", "entry_id": "t1#0", "kind": "spotify"}
-         ]}
-    ]}))?)?;
+    repository
+        .save(
+            &Watchlist::from_value(json!({"version": 3, "playlists": [
+                {"playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+                 "processed_video_ids": ["abcdefghijk"],
+                 "items": [
+                    {"position": 1, "title": "Done", "video_id": "abcdefghijk", "video_url": "u",
+                     "stages": {"download": {"status": "running"}}},
+                    {"position": 2, "title": "Downloaded", "video_id": "bcdefghijkl", "video_url": "u"}
+                 ]},
+                {"playlist_id": "spotify:liked", "url": "https://open.spotify.com/collection/tracks",
+                 "kind": "spotify", "items": [
+                    {"position": 1, "title": "Track", "video_id": "t1", "entry_id": "t1#0", "kind": "spotify"}
+                 ]}
+            ]}))
+            .unwrap(),
+        )
+        .unwrap();
     let options = options(&output, directory.path(), directory.path());
     for _ in 0..2 {
-        let mut document = repository.load()?;
-        reconcile(&mut document, options)?;
-        repository.save(&document)?;
+        let mut document = repository.load().unwrap();
+        reconcile(&mut document, options).unwrap();
+        repository.save(&document).unwrap();
     }
-    let revision = repository.revision()?;
-    let mut document = repository.load()?;
-    reconcile(&mut document, options)?;
-    repository.save(&document)?;
-    assert_eq!(repository.revision()?, revision);
-    let saved = repository.load()?.to_value();
+    let revision = repository.revision().unwrap();
+    let mut document = repository.load().unwrap();
+    reconcile(&mut document, options).unwrap();
+    repository.save(&document).unwrap();
+    assert_eq!(repository.revision().unwrap(), revision);
+    let saved = repository.load().unwrap().to_value();
     assert_eq!(
         saved["playlists"][0]["items"][1]["stages"]["download"]["status"],
         "complete"
@@ -323,25 +339,26 @@ fn a_second_reconcile_changes_no_rows() -> TestResult {
         saved["playlists"][1]["items"][0]["stages"]["quality"]["status"],
         "skipped"
     );
-    Ok(())
 }
 
 #[test]
-fn retained_source_with_empty_split_dir_keeps_processed_state() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn retained_source_with_empty_split_dir_keeps_processed_state() {
+    let directory = tempfile::tempdir().unwrap();
     let cache = directory.path().join("cache");
     let splits = directory.path().join("splits");
     let empty_split = splits.join("Song [abcdefghijk]");
-    fs::create_dir(&cache)?;
-    fs::create_dir_all(&empty_split)?;
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir_all(&empty_split).unwrap();
     let audio = directory.path().join("Song [abcdefghijk].flac");
-    fs::write(&audio, b"retained source")?;
+    fs::write(&audio, b"retained source").unwrap();
     fs::write(
         cache.join("playlist_PL1.json"),
         serde_json::to_vec(&json!({"videos": {"abcdefghijk": {
             "status": "organized", "audio_file": audio, "split_dir": empty_split
-        }}}))?,
-    )?;
+        }}}))
+        .unwrap(),
+    )
+    .unwrap();
     let document = json!({"version":3,"playlists":[{
         "playlist_id":"PL1","url":"https://www.youtube.com/playlist?list=PL1",
         "processed_video_ids":["abcdefghijk"],
@@ -352,7 +369,8 @@ fn retained_source_with_empty_split_dir_keeps_processed_state() -> TestResult {
         &repository,
         document,
         options(directory.path(), &splits, &cache),
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         document["playlists"][0]["processed_video_ids"],
         json!(["abcdefghijk"])
@@ -361,17 +379,16 @@ fn retained_source_with_empty_split_dir_keeps_processed_state() -> TestResult {
         document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
         "complete"
     );
-    Ok(())
 }
 
 #[test]
-fn reconcile_finds_existing_source_id_in_beets_library() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn reconcile_finds_existing_source_id_in_beets_library() {
+    let directory = tempfile::tempdir().unwrap();
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../muzik-library/tests/fixtures/library.db");
-    fs::copy(fixture, directory.path().join("library.db"))?;
+    fs::copy(fixture, directory.path().join("library.db")).unwrap();
     let config = directory.path().join("config.yaml");
-    fs::write(&config, "library: library.db\ndirectory: .\n")?;
+    fs::write(&config, "library: library.db\ndirectory: .\n").unwrap();
     let document = json!({"version": 3, "playlists": [{
         "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
         "items": [
@@ -390,7 +407,8 @@ fn reconcile_finds_existing_source_id_in_beets_library() -> TestResult {
             config: Some(&config),
             ..options(&downloads, &splits, &cache)
         },
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         document["playlists"][0]["processed_video_ids"],
         json!(["video-123", "other-video"])
@@ -403,29 +421,31 @@ fn reconcile_finds_existing_source_id_in_beets_library() -> TestResult {
         document["playlists"][0]["items"][0]["stages"]["organize"]["status"],
         "complete"
     );
-    Ok(())
 }
 
 #[test]
-fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn reconcile_reads_legacy_audio_and_spotify_track_cache() {
+    let directory = tempfile::tempdir().unwrap();
     let cache = directory.path().join("cache");
     let output = directory.path().join("downloads");
     let splits = directory.path().join("splits");
-    fs::create_dir(&cache)?;
-    fs::create_dir(&output)?;
+    fs::create_dir(&cache).unwrap();
+    fs::create_dir(&output).unwrap();
     let audio = output.join("legacy.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     fs::write(
         cache.join("yt_abcdefghijk.txt"),
         audio.to_string_lossy().as_bytes(),
-    )?;
+    )
+    .unwrap();
     fs::write(
         cache.join("playlist_spotify_TEST.json"),
         serde_json::to_vec(&json!({
             "videos": {"track-1": {"status": "downloaded", "files": [audio]}}
-        }))?,
-    )?;
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let document = json!({"version": 3, "playlists": [
         {"playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1", "items": [
             {"position": 1, "title": "Legacy", "video_id": "abcdefghijk", "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}
@@ -442,7 +462,8 @@ fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> TestResult {
             no_organize: true,
             ..options(&output, &splits, &cache)
         },
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         document["playlists"][0]["items"][0]["stages"]["download"]["status"],
         "complete"
@@ -459,12 +480,11 @@ fn reconcile_reads_legacy_audio_and_spotify_track_cache() -> TestResult {
         document["playlists"][1]["items"][0]["stages"]["organize"]["status"],
         "skipped"
     );
-    Ok(())
 }
 
 #[test]
-fn removed_and_private_videos_leave_the_failed_list() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn removed_and_private_videos_leave_the_failed_list() {
+    let directory = tempfile::tempdir().unwrap();
     let failed = |id: &str, error: &str| {
         json!({"position": 1, "title": id, "video_id": id,
             "video_url": format!("https://www.youtube.com/watch?v={id}"),
@@ -478,8 +498,9 @@ fn removed_and_private_videos_leave_the_failed_list() -> TestResult {
             failed("bbbbbbbbbbb", "yt-dlp failed: WARNING: [youtube] unable to extract yt initial data\nERROR: [youtube] bbbbbbbbbbb: Video unavailable"),
             failed("ccccccccccc", "yt-dlp failed: ERROR: unable to download video data: HTTP Error 403: Forbidden")
         ]
-    }]}))?;
-    let cards = view(&document, directory.path(), directory.path())?;
+    }]}))
+    .unwrap();
+    let cards = view(&document, directory.path(), directory.path()).unwrap();
     let items = &cards["playlists"][0]["items"];
     for gone in [&items[0], &items[1]] {
         assert_eq!(gone["summary"], "Unavailable");
@@ -488,7 +509,6 @@ fn removed_and_private_videos_leave_the_failed_list() -> TestResult {
     }
     assert_eq!(items[2]["summary"], "Failed");
     assert_eq!(items[2]["primary_action"]["action"], "retry");
-    Ok(())
 }
 
 #[test]
@@ -522,87 +542,101 @@ fn source_with_item(path: &Path) -> Result<Repository, Box<dyn std::error::Error
     let repository = Repository::new(path.to_path_buf());
     repository.add("https://www.youtube.com/playlist?list=PL1")?;
     repository.update(|document| {
-        document.playlists[0].items = vec![WatchItem::new(1, "Song", SourceKind::Youtube)];
+        document
+            .playlists
+            .first_mut()
+            .ok_or("the watchlist has no playlist")?
+            .items = vec![WatchItem::new(1, "Song", SourceKind::Youtube)];
         Ok(())
     })?;
     Ok(repository)
 }
 
 #[test]
-fn a_checked_write_keeps_a_concurrent_source_edit_and_succeeds_on_retry() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn a_checked_write_keeps_a_concurrent_source_edit_and_succeeds_on_retry() {
+    let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("muzik.db");
-    let check = source_with_item(&path)?;
+    let check = source_with_item(&path).unwrap();
     let editor = Repository::new(path);
-    let (mut stale, revision) = check.load_revision()?;
-    assert_eq!(revision, check.revision()?);
-    editor.rename("PL1", "Edited")?;
+    let (mut stale, revision) = check.load_revision().unwrap();
+    assert_eq!(revision, check.revision().unwrap());
+    editor.rename("PL1", "Edited").unwrap();
     stale.playlists[0].items[0].title = "Checked".into();
-    assert_eq!(check.save_at(revision, &stale)?, CheckedWrite::Conflict);
-    let saved = editor.load()?;
+    assert_eq!(
+        check.save_at(revision, &stale).unwrap(),
+        CheckedWrite::Conflict
+    );
+    let saved = editor.load().unwrap();
     assert_eq!(saved.playlists[0].title.as_deref(), Some("Edited"));
     assert_eq!(saved.playlists[0].items[0].title, "Song");
-    let (mut fresh, revision) = check.load_revision()?;
+    let (mut fresh, revision) = check.load_revision().unwrap();
     fresh.playlists[0].items[0].title = "Checked".into();
-    assert_eq!(check.save_at(revision, &fresh)?, CheckedWrite::Written);
-    let saved = editor.load()?;
-    assert_eq!(saved.playlists[0].title.as_deref(), Some("Edited"));
-    assert_eq!(saved.playlists[0].items[0].title, "Checked");
-    assert_eq!(editor.revision()?, revision + 1);
-    Ok(())
-}
-
-#[test]
-fn a_checked_write_keeps_a_concurrent_stage_change() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let path = directory.path().join("muzik.db");
-    let check = source_with_item(&path)?;
-    let runner = Repository::new(path);
-    let (stale, revision) = check.load_revision()?;
-    runner.update(|document| {
-        document.playlists[0].items[0].complete(Stage::Download, None);
-        Ok(())
-    })?;
-    assert_eq!(check.save_at(revision, &stale)?, CheckedWrite::Conflict);
     assert_eq!(
-        runner.load()?.playlists[0].items[0].status(Stage::Download),
-        StageStatus::Complete
-    );
-    Ok(())
-}
-
-#[test]
-fn a_checked_write_of_an_unchanged_document_keeps_the_revision() -> TestResult {
-    let directory = tempfile::tempdir()?;
-    let repository = source_with_item(&directory.path().join("muzik.db"))?;
-    let (document, revision) = repository.load_revision()?;
-    assert_eq!(
-        repository.save_at(revision, &document)?,
+        check.save_at(revision, &fresh).unwrap(),
         CheckedWrite::Written
     );
-    assert_eq!(repository.revision()?, revision);
-    assert_eq!(repository.load()?, document);
-    Ok(())
+    let saved = editor.load().unwrap();
+    assert_eq!(saved.playlists[0].title.as_deref(), Some("Edited"));
+    assert_eq!(saved.playlists[0].items[0].title, "Checked");
+    assert_eq!(editor.revision().unwrap(), revision + 1);
 }
 
 #[test]
-fn a_failed_checked_write_changes_nothing() -> TestResult {
-    let directory = tempfile::tempdir()?;
+fn a_checked_write_keeps_a_concurrent_stage_change() {
+    let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("muzik.db");
-    let repository = source_with_item(&path)?;
-    let (mut document, revision) = repository.load_revision()?;
-    rusqlite::Connection::open(&path)?.execute_batch(
-        "CREATE TRIGGER refuse BEFORE INSERT ON watchlist_items
+    let check = source_with_item(&path).unwrap();
+    let runner = Repository::new(path);
+    let (stale, revision) = check.load_revision().unwrap();
+    runner
+        .update(|document| {
+            document.playlists[0].items[0].complete(Stage::Download, None);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        check.save_at(revision, &stale).unwrap(),
+        CheckedWrite::Conflict
+    );
+    assert_eq!(
+        runner.load().unwrap().playlists[0].items[0].status(Stage::Download),
+        StageStatus::Complete
+    );
+}
+
+#[test]
+fn a_checked_write_of_an_unchanged_document_keeps_the_revision() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = source_with_item(&directory.path().join("muzik.db")).unwrap();
+    let (document, revision) = repository.load_revision().unwrap();
+    assert_eq!(
+        repository.save_at(revision, &document).unwrap(),
+        CheckedWrite::Written
+    );
+    assert_eq!(repository.revision().unwrap(), revision);
+    assert_eq!(repository.load().unwrap(), document);
+}
+
+#[test]
+fn a_failed_checked_write_changes_nothing() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("muzik.db");
+    let repository = source_with_item(&path).unwrap();
+    let (mut document, revision) = repository.load_revision().unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON watchlist_items
          BEGIN SELECT RAISE(ABORT, 'refused'); END;",
-    )?;
+        )
+        .unwrap();
     document.playlists[0].title = Some("Renamed".into());
     document.playlists[0]
         .items
         .push(WatchItem::new(2, "New", SourceKind::Youtube));
     assert!(repository.save_at(revision, &document).is_err());
-    let saved = repository.load()?;
+    let saved = repository.load().unwrap();
     assert_eq!(saved.playlists[0].title, None);
     assert_eq!(saved.playlists[0].items.len(), 1);
-    assert_eq!(repository.revision()?, revision);
-    Ok(())
+    assert_eq!(repository.revision().unwrap(), revision);
 }

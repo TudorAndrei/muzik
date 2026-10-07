@@ -1,14 +1,13 @@
 [package]
 name = "muzik-agent"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 license-file = "../../LICENSE"
 
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 muzik-core = { path = "../muzik-core" }

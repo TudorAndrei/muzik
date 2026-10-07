@@ -35,6 +35,8 @@ pub struct Query {
 }
 
 impl Query {
+    /// # Errors
+    /// Returns an error if the query has an unclosed quote, a bad regex, or a bad numeric range.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let parts = shlex::split(text)
             .ok_or_else(|| Error::InvalidQuery("unclosed quote or escape".into()))?;
@@ -42,11 +44,9 @@ impl Query {
         let mut group = Vec::new();
         let mut sorts = Vec::new();
         for part in parts {
-            let (part, end_group) = if let Some(stripped) = part.strip_suffix(',') {
-                (stripped, true)
-            } else {
-                (part.as_str(), false)
-            };
+            let (part, end_group) = part
+                .strip_suffix(',')
+                .map_or((part.as_str(), false), |stripped| (stripped, true));
             if !part.is_empty() {
                 if let Some(sort) = parse_sort(part) {
                     sorts.push(sort);
@@ -62,10 +62,12 @@ impl Query {
         Ok(Self { groups, sorts })
     }
 
+    #[must_use]
     pub fn matches_item(&self, item: &Item) -> bool {
         self.matches(&item.fields, &item.attributes, ITEM_SEARCH_FIELDS)
     }
 
+    #[must_use]
     pub fn matches_album(&self, album: &Album) -> bool {
         self.matches(&album.fields, &album.attributes, ALBUM_SEARCH_FIELDS)
     }
@@ -114,14 +116,18 @@ impl Query {
     fn matches(&self, fields: &Fields, attributes: &Fields, search_fields: &[&str]) -> bool {
         self.groups.iter().any(|group| {
             group.iter().all(|term| {
-                let found = match &term.field {
-                    Some(name) => value(fields, attributes, name)
-                        .is_some_and(|value| term_matches(term, value)),
-                    None => search_fields.iter().any(|name| {
+                let found = term.field.as_ref().map_or_else(
+                    || {
+                        search_fields.iter().any(|name| {
+                            value(fields, attributes, name)
+                                .is_some_and(|value| term_matches(term, value))
+                        })
+                    },
+                    |name| {
                         value(fields, attributes, name)
                             .is_some_and(|value| term_matches(term, value))
-                    }),
-                };
+                    },
+                );
                 found != term.negated
             })
         })
@@ -163,25 +169,14 @@ fn parse_sort(part: &str) -> Option<Sort> {
 }
 
 fn parse_term(part: &str) -> Result<Term, Error> {
-    let (negated, part) = match part.as_bytes().first() {
-        Some(b'-' | b'^') => (true, &part[1..]),
-        _ => (false, part),
-    };
-    let (field, pattern) = match part.find(':') {
-        Some(index) if index > 0 => (Some(part[..index].to_lowercase()), &part[index + 1..]),
+    let (negated, part) = part
+        .strip_prefix(['-', '^'])
+        .map_or((false, part), |rest| (true, rest));
+    let (field, pattern) = match part.split_once(':') {
+        Some((field, pattern)) if !field.is_empty() => (Some(field.to_lowercase()), pattern),
         _ => (None, part),
     };
-    let (kind, pattern) = if let Some(pattern) = pattern.strip_prefix(':') {
-        (Kind::Regexp, pattern)
-    } else if let Some(pattern) = pattern.strip_prefix("=~") {
-        (Kind::String, pattern)
-    } else if let Some(pattern) = pattern.strip_prefix('=') {
-        (Kind::Exact, pattern)
-    } else if field.as_deref().is_some_and(is_numeric_field) {
-        (Kind::Numeric, pattern)
-    } else {
-        (Kind::Substring, pattern)
-    };
+    let (kind, pattern) = term_kind(pattern, field.as_deref());
     if kind == Kind::Regexp {
         Regex::new(pattern).map_err(|error| Error::InvalidQuery(error.to_string()))?;
     }
@@ -194,6 +189,23 @@ fn parse_term(part: &str) -> Result<Term, Error> {
         kind,
         negated,
     })
+}
+
+fn term_kind<'a>(pattern: &'a str, field: Option<&str>) -> (Kind, &'a str) {
+    if let Some(pattern) = pattern.strip_prefix(':') {
+        return (Kind::Regexp, pattern);
+    }
+    if let Some(pattern) = pattern.strip_prefix("=~") {
+        return (Kind::String, pattern);
+    }
+    if let Some(pattern) = pattern.strip_prefix('=') {
+        return (Kind::Exact, pattern);
+    }
+    if field.is_some_and(is_numeric_field) {
+        (Kind::Numeric, pattern)
+    } else {
+        (Kind::Substring, pattern)
+    }
 }
 
 fn is_numeric_field(field: &str) -> bool {
@@ -228,7 +240,7 @@ fn term_matches(term: &Term, value: &Value) -> bool {
     match term.kind {
         Kind::Numeric => {
             let number = match value {
-                Value::Integer(number) => *number as f64,
+                Value::Integer(number) => integer_to_f64(*number),
                 Value::Real(number) => *number,
                 Value::Text(number) => match number.parse::<f64>() {
                     Ok(number) => number,
@@ -236,8 +248,11 @@ fn term_matches(term: &Term, value: &Value) -> bool {
                 },
                 _ => return false,
             };
-            let (min, max) = parse_range(&term.pattern, term.field.as_deref() == Some("length"))
-                .expect("numeric pattern validated");
+            let Ok((min, max)) =
+                parse_range(&term.pattern, term.field.as_deref() == Some("length"))
+            else {
+                return false;
+            };
             min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
         }
         Kind::Regexp => {
@@ -299,7 +314,16 @@ fn parse_duration(text: &str) -> Option<f64> {
     if seconds >= 60 {
         return None;
     }
-    Some(minutes.parse::<u32>().ok()? as f64 * 60.0 + seconds as f64)
+    Some(f64::from(minutes.parse::<u32>().ok()?).mul_add(60.0, f64::from(seconds)))
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "std has no From<i64> for f64; numeric queries compare as floats like beets"
+)]
+const fn integer_to_f64(number: i64) -> f64 {
+    number as f64
 }
 
 fn compare_rows(
@@ -327,10 +351,10 @@ fn compare_rows(
 fn sort_value<'a>(fields: &'a Fields, attributes: &'a Fields, field: &str) -> Option<&'a Value> {
     if field == "artist" || field == "albumartist" {
         let sort_field = format!("{field}_sort");
-        if let Some(value @ Value::Text(text)) = fields.get(&sort_field) {
-            if !text.is_empty() {
-                return Some(value);
-            }
+        if let Some(value @ Value::Text(text)) = fields.get(&sort_field)
+            && !text.is_empty()
+        {
+            return Some(value);
         }
     }
     value(fields, attributes, field)

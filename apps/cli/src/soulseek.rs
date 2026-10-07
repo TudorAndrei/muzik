@@ -15,7 +15,7 @@ use muzik_workflow::upgrade::{
 };
 use serde_json::{Value, json};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use crate::{Import, SoulseekCheckLibrary, SoulseekDownload, import};
@@ -32,8 +32,7 @@ pub fn check() -> anyhow::Result<()> {
         .unwrap_or_else(|| DEFAULT_SERVER_HOST.into());
     let port = settings.server_port.unwrap_or(DEFAULT_SERVER_PORT);
     let download_dir = setting(&config, "MUZIK_SOULSEEK_DOWNLOAD_DIR", "download_dir")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| Paths::user().soulseek());
+        .map_or_else(|| Paths::user().soulseek(), PathBuf::from);
     let _session = Session::connect(settings).context("Soulseek check failed")?;
     println!("Soulseek reachable");
     println!("  Username: {username}");
@@ -78,7 +77,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
         return Ok(());
     }
     let selected = flagged.len().min(args.limit);
-    let skipped = flagged.len() - selected;
+    let skipped = flagged.len().saturating_sub(selected);
     println!("Artist\tTitle\tCurrent\tStatus\tSuggested\tCandidate ID");
     let config = app_config::load(&app_config::path())?;
     let session = if selected > 0 {
@@ -132,7 +131,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
                         suggested,
                         id
                     );
-                    found += 1;
+                    found = found.saturating_add(1);
                 }
             },
         }
@@ -226,7 +225,7 @@ fn show_candidates(
         for (index, row) in rows.iter().enumerate() {
             println!(
                 "{}\t{}\t{:.1}\t{}\t{}\t{}\t{}",
-                index + 1,
+                index.saturating_add(1),
                 row["id"].as_str().unwrap_or(""),
                 row["score"].as_f64().unwrap_or(0.0),
                 row["format"].as_str().unwrap_or("?"),
@@ -250,8 +249,7 @@ fn candidate_row(item: &RankedCandidate, id: &str) -> Value {
         .candidate
         .files
         .first()
-        .map(|file| file.name.as_str())
-        .unwrap_or("");
+        .map_or("", |file| file.name.as_str());
     json!({"id": id, "score": item.score, "format": format,
         "file_count": item.candidate.files.len(), "username": item.candidate.username,
         "path": path})
@@ -262,35 +260,9 @@ pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
         bail!("give a query or --candidate, not both");
     }
     let config = app_config::load(&app_config::path())?;
-    let mut session = None;
-    let (id, saved) = if let Some(id) = &args.candidate {
-        (id.clone(), load_candidate(&paths::cache_dir(), id)?)
-    } else {
-        let query = args
-            .query
-            .as_deref()
-            .context("give a query or --candidate")?;
-        let connected = connect(&config)?;
-        let ranked = ranked_search(&connected, &config, query, args.prefer, args.limit)?;
-        if ranked.is_empty() {
-            println!("No candidates found.");
-            return Ok(());
-        }
-        show_candidates(&ranked, query, false)?;
-        let index = choose_index(ranked.len(), args.no_interactive)?;
-        let selected = ranked
-            .get(index)
-            .context("candidate number is out of range")?;
-        let id = candidate_id(&selected.candidate)?;
-        session = Some(connected);
-        (
-            id,
-            CachedCandidate {
-                query: query.to_owned(),
-                score: selected.score,
-                candidate: selected.candidate.clone(),
-            },
-        )
+    let Some((id, saved, session)) = select_candidate(args, &config)? else {
+        println!("No candidates found.");
+        return Ok(());
     };
     if saved.candidate.files.is_empty() || saved.candidate.username.trim().is_empty() {
         bail!("selected Soulseek result has no user or files");
@@ -342,6 +314,63 @@ pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
     )? {
         println!("Downloaded {}", local.display());
     }
+    write_sidecar(&root, &saved)?;
+    if !args.no_organize {
+        let import_args = Import {
+            directory: Some(root),
+            library: None,
+            copy: false,
+            link: false,
+            nowrite: false,
+            quiet: false,
+            dry_run: false,
+            no_prune: true,
+            duplicates: muzik_core::DuplicatePolicy::default(),
+            config: None,
+        };
+        import::run(&import_args)?;
+    }
+    Ok(())
+}
+
+fn select_candidate(
+    args: &SoulseekDownload,
+    config: &Value,
+) -> anyhow::Result<Option<(String, CachedCandidate, Option<Session>)>> {
+    if let Some(id) = &args.candidate {
+        return Ok(Some((
+            id.clone(),
+            load_candidate(&paths::cache_dir(), id)?,
+            None,
+        )));
+    }
+    let query = args
+        .query
+        .as_deref()
+        .context("give a query or --candidate")?;
+    let connected = connect(config)?;
+    let ranked = ranked_search(&connected, config, query, args.prefer, args.limit)?;
+    if ranked.is_empty() {
+        return Ok(None);
+    }
+    show_candidates(&ranked, query, false)?;
+    let index = choose_index(ranked.len(), args.no_interactive)?;
+    let selected = ranked
+        .get(index)
+        .context("candidate number is out of range")?;
+    let id = candidate_id(&selected.candidate)?;
+    Ok(Some((
+        id,
+        CachedCandidate {
+            query: query.to_owned(),
+            score: selected.score,
+            candidate: selected.candidate.clone(),
+        },
+        Some(connected),
+    )))
+}
+
+fn write_sidecar(root: &Path, saved: &CachedCandidate) -> anyhow::Result<()> {
     let sidecar = root.join(".muzik.json");
     let title = saved
         .candidate
@@ -372,21 +401,6 @@ pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
     bytes.push(b'\n');
     fs::write(&sidecar, bytes).with_context(|| format!("cannot write {}", sidecar.display()))?;
     println!("Metadata: {}", sidecar.display());
-    if !args.no_organize {
-        let import_args = Import {
-            directory: Some(root),
-            library: None,
-            copy: false,
-            link: false,
-            nowrite: false,
-            quiet: false,
-            dry_run: false,
-            no_prune: true,
-            duplicates: muzik_core::DuplicatePolicy::default(),
-            config: None,
-        };
-        import::run(&import_args)?;
-    }
     Ok(())
 }
 
@@ -408,7 +422,7 @@ fn choose_index(count: usize, no_interactive: bool) -> anyhow::Result<usize> {
         .map_err(|_| {
             anyhow!("no candidate was selected; use --no-interactive to select the first result")
         })?;
-    Ok(number - 1)
+    Ok(number.saturating_sub(1))
 }
 
 fn safe_display(value: &str) -> String {
@@ -425,9 +439,9 @@ fn safe_display(value: &str) -> String {
 }
 
 fn remote_parent(path: &str) -> &str {
-    path.rsplit_once(['/', '\\'])
-        .map(|(parent, _)| parent.rsplit(['/', '\\']).next().unwrap_or(parent))
-        .unwrap_or("")
+    path.rsplit_once(['/', '\\']).map_or("", |(parent, _)| {
+        parent.rsplit(['/', '\\']).next().unwrap_or(parent)
+    })
 }
 
 #[cfg(test)]
@@ -475,11 +489,10 @@ mod tests {
     }
 
     #[test]
-    fn check_library_keeps_existing_beets_files_unchanged() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn check_library_keeps_existing_beets_files_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
         let database = dir.path().join("library.db");
-        Library::open_or_create(&database)?;
+        Library::open_or_create(&database).unwrap();
         let config = dir.path().join("config.yaml");
         fs::write(
             &config,
@@ -489,18 +502,19 @@ mod tests {
                 database.display(),
                 dir.path().join("state.pickle").display()
             ),
-        )?;
-        let database_before = fs::read(&database)?;
-        let config_before = fs::read(&config)?;
+        )
+        .unwrap();
+        let database_before = fs::read(&database).unwrap();
+        let config_before = fs::read(&config).unwrap();
         check_library(&SoulseekCheckLibrary {
             query: Some("artist:Mara".into()),
             min_bitrate: 256,
             prefer: muzik_core::PreferredAudio::default(),
             limit: 20,
             config: Some(config.clone()),
-        })?;
-        assert_eq!(fs::read(&database)?, database_before);
-        assert_eq!(fs::read(&config)?, config_before);
-        Ok(())
+        })
+        .unwrap();
+        assert_eq!(fs::read(&database).unwrap(), database_before);
+        assert_eq!(fs::read(&config).unwrap(), config_before);
     }
 }

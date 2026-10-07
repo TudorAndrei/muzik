@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 use rusqlite::{Connection, TransactionBehavior};
-use rusqlite_migration::{MigrationDefinitionError, Migrations, M};
+use rusqlite_migration::{M, MigrationDefinitionError, Migrations};
 use std::path::Path;
 use std::time::Duration;
 
@@ -51,6 +51,8 @@ const MIGRATIONS: &[&str] = &[
     ) WITHOUT ROWID;",
 ];
 
+/// # Errors
+/// Returns an error if the directory or database cannot be created, opened, or migrated.
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -60,6 +62,8 @@ pub fn open(path: &Path) -> Result<Connection> {
     prepare(connection)
 }
 
+/// # Errors
+/// Returns an error if the in-memory database cannot be opened or migrated.
 pub fn open_in_memory() -> Result<Connection> {
     prepare(Connection::open_in_memory()?)
 }
@@ -95,67 +99,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_applies_every_migration_once() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn open_applies_every_migration_once() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state/muzik.db");
-        drop(open(&path)?);
-        let connection = open(&path)?;
-        let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        assert_eq!(usize::try_from(version)?, MIGRATIONS.len());
-        Ok(())
+        drop(open(&path).unwrap());
+        let connection = open(&path).unwrap();
+        let version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(usize::try_from(version).unwrap(), MIGRATIONS.len());
     }
 
     #[test]
-    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         {
-            let connection = Connection::open(&path)?;
-            connection.execute_batch(MIGRATIONS[0])?;
-            connection.execute(
-                "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}')",
-                [],
-            )?;
-            connection.pragma_update(None, "user_version", 1)?;
+            let connection = Connection::open(&path).unwrap();
+            connection.execute_batch(MIGRATIONS[0]).unwrap();
+            connection
+                .execute(
+                    "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}')",
+                    [],
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 1).unwrap();
         }
-        let connection = open(&path)?;
-        let playlists: i64 =
-            connection.query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
+        let connection = open(&path).unwrap();
+        let playlists: i64 = connection
+            .query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
                 row.get(0)
-            })?;
-        let jobs: i64 = connection.query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))?;
+            })
+            .unwrap();
+        let jobs: i64 = connection
+            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
+            .unwrap();
         assert_eq!((playlists, jobs), (1, 0));
-        Ok(())
     }
 
     #[test]
-    fn several_openers_can_migrate_the_database_at_once() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let directory = tempfile::tempdir()?;
+    fn several_openers_can_migrate_the_database_at_once() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
-        Connection::open(&path)?.pragma_update(None, "journal_mode", "WAL")?;
-        let opened = std::thread::scope(|scope| {
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "journal_mode", "WAL")
+            .unwrap();
+        std::thread::scope(|scope| {
             let openers: Vec<_> = (0..4)
                 .map(|_| scope.spawn(|| open(&path).map(drop)))
                 .collect();
-            openers
-                .into_iter()
-                .map(|opener| opener.join().map_err(|_| "an opener panicked".to_owned()))
-                .collect::<Vec<_>>()
+            for opener in openers {
+                opener.join().unwrap().unwrap();
+            }
         });
-        for result in opened {
-            result??;
-        }
-        Ok(())
     }
 
     #[test]
-    fn open_refuses_a_newer_database() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn open_refuses_a_newer_database() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
-        Connection::open(&path)?.pragma_update(None, "user_version", 99)?;
+        Connection::open(&path)
+            .unwrap()
+            .pragma_update(None, "user_version", 99)
+            .unwrap();
         assert!(open(&path).is_err());
-        Ok(())
     }
 }

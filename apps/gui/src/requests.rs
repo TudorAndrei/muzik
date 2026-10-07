@@ -2,7 +2,7 @@ use super::*;
 use crate::backend::{Backend, ItemRequest, SoulseekForm};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Read {
+pub enum Read {
     Watchlist,
     Library,
     Services,
@@ -11,7 +11,7 @@ pub(crate) enum Read {
 }
 
 impl Read {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             Self::Watchlist => "watchlist.load",
             Self::Library => "library.scan",
@@ -23,14 +23,14 @@ impl Read {
 }
 
 #[derive(Clone)]
-pub(crate) enum Command {
+pub enum Command {
     Cancel(String),
     RemoveSource(String),
     RunItem(ItemRequest),
 }
 
 #[derive(Clone)]
-pub(crate) struct PendingAction {
+pub struct PendingAction {
     pub(crate) title: String,
     pub(crate) description: &'static str,
     pub(crate) confirm: String,
@@ -42,7 +42,7 @@ impl Muzik {
     fn spawn_call<R: Send + 'static>(
         &mut self,
         name: &'static str,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
         work: impl FnOnce(&Backend) -> R + Send + 'static,
         finish: impl FnOnce(&mut Self, R, &mut Window, &mut Context<Self>) + 'static,
     ) {
@@ -68,7 +68,7 @@ impl Muzik {
     fn call<T: Send + 'static>(
         &mut self,
         name: &'static str,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
         work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
@@ -86,7 +86,7 @@ impl Muzik {
     fn read<T: Send + 'static>(
         &mut self,
         read: Read,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
         work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
@@ -94,7 +94,7 @@ impl Muzik {
             self.status = "Backend is not available".into();
             return;
         }
-        self.read_serial += 1;
+        self.read_serial = self.read_serial.wrapping_add(1);
         let serial = self.read_serial;
         self.reads.insert(read, serial);
         self.spawn_call(read.name(), cx, work, move |view, result, window, cx| {
@@ -120,7 +120,7 @@ impl Muzik {
             name,
             "config.save" | "soulseek.save" | "bandcamp.save" | "bandcamp.logout"
         ) {
-            *self.config_status.borrow_mut() = self.status.clone();
+            self.config_status.borrow_mut().clone_from(&self.status);
         }
     }
 
@@ -128,7 +128,7 @@ impl Muzik {
         self.status = format!("{name} complete");
     }
 
-    pub(crate) fn hello(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn hello(&mut self, cx: &Context<Self>) {
         self.call(
             "hello",
             cx,
@@ -140,7 +140,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn load_jobs(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_jobs(&mut self, cx: &Context<Self>) {
         self.call(
             "jobs.list",
             cx,
@@ -148,7 +148,7 @@ impl Muzik {
             |view, jobs, _, cx| {
                 view.apply_jobs(&jobs);
                 view.sync_watch_table(cx);
-                view.gates = jobs["gates"].clone();
+                view.gates = jobs.get("gates").cloned().unwrap_or_default();
             },
         );
     }
@@ -173,7 +173,7 @@ impl Muzik {
                     Ok(defaults) => {
                         view.status = "Config saved".into();
                         view.error = None;
-                        *view.config_status.borrow_mut() = view.status.clone();
+                        view.config_status.borrow_mut().clone_from(&view.status);
                         view.apply_defaults(defaults, cx);
                     }
                     Err(error) => view.failed("config.save", error.to_string()),
@@ -193,19 +193,19 @@ impl Muzik {
         cx.notify();
     }
 
-    fn show_soulseek(&mut self, account: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_soulseek(&self, account: &Value, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_soulseek(account, window, cx));
         }
     }
 
-    fn show_bandcamp(&mut self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_bandcamp(&self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_bandcamp(settings, window, cx));
         }
     }
 
-    pub(crate) fn load_accounts(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_accounts(&mut self, cx: &Context<Self>) {
         self.call(
             "soulseek.get",
             cx,
@@ -249,7 +249,7 @@ impl Muzik {
         cx.notify();
     }
 
-    pub(crate) fn check_services(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn check_services(&mut self, cx: &Context<Self>) {
         self.read(
             Read::Services,
             cx,
@@ -261,7 +261,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn scan_library(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn scan_library(&mut self, cx: &Context<Self>) {
         let output = self
             .defaults
             .as_ref()
@@ -278,7 +278,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn load_watchlist(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_watchlist(&mut self, cx: &Context<Self>) {
         self.read(
             Read::Watchlist,
             cx,
@@ -292,7 +292,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn add_source(&mut self, url: String, cx: &mut Context<Self>) {
+    pub(crate) fn add_source(&mut self, url: String, cx: &Context<Self>) {
         self.call(
             "watchlist.add",
             cx,
@@ -305,12 +305,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn rename_source(
-        &mut self,
-        playlist_id: String,
-        title: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn rename_source(&mut self, playlist_id: String, title: String, cx: &Context<Self>) {
         self.call(
             "watchlist.rename",
             cx,
@@ -319,7 +314,7 @@ impl Muzik {
         );
     }
 
-    fn remove_source(&mut self, playlist_id: String, cx: &mut Context<Self>) {
+    fn remove_source(&mut self, playlist_id: String, cx: &Context<Self>) {
         self.call(
             "watchlist.remove",
             cx,
@@ -364,7 +359,7 @@ impl Muzik {
         });
     }
 
-    pub(crate) fn cancel_job(&mut self, job_id: String, cx: &mut Context<Self>) {
+    pub(crate) fn cancel_job(&mut self, job_id: String, cx: &Context<Self>) {
         self.call(
             "job.cancel",
             cx,
@@ -373,7 +368,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn send_reply(&mut self, decision_id: String, value: Value, cx: &mut Context<Self>) {
+    pub(crate) fn send_reply(&mut self, decision_id: String, value: Value, cx: &Context<Self>) {
         self.call(
             "decision.reply",
             cx,
@@ -382,7 +377,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn send_answer(&mut self, id: Option<i64>, value: Value, cx: &mut Context<Self>) {
+    pub(crate) fn send_answer(&mut self, id: Option<i64>, value: Value, cx: &Context<Self>) {
         let Some(id) = id else {
             self.failed("jobs.answer", "id and value are required.".into());
             return;
@@ -395,7 +390,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn cache_thumbnails(&mut self, video_ids: Vec<String>, cx: &mut Context<Self>) {
+    pub(crate) fn cache_thumbnails(&mut self, video_ids: Vec<String>, cx: &Context<Self>) {
         self.call(
             "thumbnails.cache",
             cx,
@@ -417,7 +412,7 @@ impl Muzik {
         }
     }
 
-    pub(crate) fn spotify_status(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn spotify_status(&mut self, cx: &Context<Self>) {
         self.reads.remove(&Read::SpotifyPlaylists);
         self.read(
             Read::SpotifyStatus,
@@ -425,14 +420,14 @@ impl Muzik {
             Backend::spotify_status,
             |view, status, window, cx| {
                 view.spotify = status;
-                if view.spotify_client_id.read(cx).value().is_empty() {
-                    if let Some(client_id) = view.spotify["client_id"].as_str() {
-                        let client_id = client_id.to_string();
-                        view.spotify_client_id
-                            .update(cx, |state, cx| state.set_value(client_id, window, cx));
-                    }
+                if view.spotify_client_id.read(cx).value().is_empty()
+                    && let Some(client_id) = view.spotify.get("client_id").and_then(Value::as_str)
+                {
+                    let client_id = client_id.to_string();
+                    view.spotify_client_id
+                        .update(cx, |state, cx| state.set_value(client_id, window, cx));
                 }
-                if view.spotify["connected"] == true {
+                if view.spotify.get("connected").and_then(Value::as_bool) == Some(true) {
                     view.spotify_playlists(cx);
                 }
                 view.status = "Spotify ready".into();
@@ -440,21 +435,23 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn spotify_playlists(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn spotify_playlists(&mut self, cx: &Context<Self>) {
         self.read(
             Read::SpotifyPlaylists,
             cx,
             Backend::spotify_playlists,
             |view, playlists, _, _| {
-                if view.spotify["connected"] == true {
-                    view.spotify["playlists"] = playlists;
+                if let Some(spotify) = view.spotify.as_object_mut().filter(|spotify| {
+                    spotify.get("connected").and_then(Value::as_bool) == Some(true)
+                }) {
+                    spotify.insert("playlists".into(), playlists);
                 }
                 view.status = "Spotify ready".into();
             },
         );
     }
 
-    pub(crate) fn set_spotify_client_id(&mut self, client_id: String, cx: &mut Context<Self>) {
+    pub(crate) fn set_spotify_client_id(&mut self, client_id: String, cx: &Context<Self>) {
         self.forget_spotify();
         self.call(
             "spotify.set_client_id",
@@ -467,7 +464,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn spotify_logout(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn spotify_logout(&mut self, cx: &Context<Self>) {
         self.forget_spotify();
         self.call(
             "spotify.logout",

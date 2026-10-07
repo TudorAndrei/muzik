@@ -1,21 +1,27 @@
 //! Read and update the existing muzik config file.
 
+use crate::Result;
 use crate::config_choices::{
     AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
 };
 use crate::paths::{self, Paths};
-use crate::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[must_use]
 pub fn path() -> PathBuf {
     Paths::user().config_file()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "mirrors the flat native_gui config section and GUI form fields"
+)]
 pub struct GuiDefaults {
     pub output: PathBuf,
     pub splits: PathBuf,
@@ -72,6 +78,7 @@ impl Default for GuiDefaults {
 }
 
 impl GuiDefaults {
+    #[must_use]
     pub fn standard(paths: &Paths) -> Self {
         Self {
             output: paths.downloads(),
@@ -100,6 +107,8 @@ impl GuiDefaults {
     }
 }
 
+/// # Errors
+/// Returns an error if the file cannot be read, is not valid YAML, or is not a mapping.
 pub fn load(path: &Path) -> Result<Value> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
@@ -116,6 +125,7 @@ pub fn load(path: &Path) -> Result<Value> {
     Ok(value)
 }
 
+#[must_use]
 pub fn load_gui_defaults(paths: &Paths) -> GuiDefaults {
     load(&paths.config_file())
         .ok()
@@ -125,6 +135,8 @@ pub fn load_gui_defaults(paths: &Paths) -> GuiDefaults {
         .unwrap_or_else(|| GuiDefaults::standard(paths))
 }
 
+/// # Errors
+/// Returns an error if the params are not valid GUI settings or the config file cannot be read or written.
 pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<GuiDefaults> {
     let changes = params
         .as_object()
@@ -144,6 +156,8 @@ pub fn save_gui_defaults(paths: &Paths, params: &Value) -> Result<GuiDefaults> {
     Ok(defaults)
 }
 
+/// # Errors
+/// Returns an error if the value is empty or the config file cannot be read or written.
 pub fn save_section_string(path: &Path, section: &str, key: &str, value: &str) -> Result<()> {
     let value = value.trim();
     if value.is_empty() {
@@ -152,6 +166,8 @@ pub fn save_section_string(path: &Path, section: &str, key: &str, value: &str) -
     save_section_value(path, section, key, json!(value))
 }
 
+/// # Errors
+/// Returns an error if the config file cannot be read, is not a mapping, or cannot be written.
 pub fn save_section_value(path: &Path, section: &str, key: &str, value: Value) -> Result<()> {
     let mut config = load(path)?;
     let root = config
@@ -168,6 +184,8 @@ pub fn save_section_value(path: &Path, section: &str, key: &str, value: Value) -
     write(path, &config)
 }
 
+/// # Errors
+/// Returns an error if the config file cannot be read or written.
 pub fn remove_section_key(path: &Path, section: &str, key: &str) -> Result<()> {
     let mut config = load(path)?;
     let removed = config
@@ -188,7 +206,6 @@ fn write(path: &Path, config: &Value) -> Result<()> {
     let mut temporary = tempfile::Builder::new()
         .prefix(".config.yaml.")
         .tempfile_in(parent)?;
-    use std::io::Write;
     temporary.write_all(yaml.as_bytes())?;
     temporary.flush()?;
     temporary.as_file().sync_all()?;
@@ -205,27 +222,25 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn saves_gui_settings_without_changing_spotify_settings(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn saves_gui_settings_without_changing_spotify_settings() {
+        let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let path = paths.config_file();
-        fs::create_dir_all(&paths.config)?;
-        fs::write(&path, "spotify:\n  client_id: saved\n")?;
-        let saved = save_gui_defaults(&paths, &json!({"jobs": 3, "audio_source": "soulseek"}))
-            .map_err(std::io::Error::other)?;
+        fs::create_dir_all(&paths.config).unwrap();
+        fs::write(&path, "spotify:\n  client_id: saved\n").unwrap();
+        let saved =
+            save_gui_defaults(&paths, &json!({"jobs": 3, "audio_source": "soulseek"})).unwrap();
         assert_eq!(saved.jobs, 3);
         assert_eq!(saved.audio_source, AudioSource::Soulseek);
         assert_eq!(saved.output, paths.downloads());
         assert_eq!(load_gui_defaults(&paths), saved);
-        let text = fs::read_to_string(&path)?;
+        let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("client_id: saved"));
-        Ok(())
     }
 
     #[test]
-    fn rejects_invalid_gui_settings_without_writing() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn rejects_invalid_gui_settings_without_writing() {
+        let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         for value in [
             json!({"raw": "song.flac"}),
@@ -235,37 +250,33 @@ mod tests {
             assert!(save_gui_defaults(&paths, &value).is_err());
             assert!(!paths.config_file().exists());
         }
-        Ok(())
     }
 
     #[test]
-    fn save_keeps_an_unreadable_config_file() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn save_keeps_an_unreadable_config_file() {
+        let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let path = paths.config_file();
-        fs::create_dir_all(&paths.config)?;
-        fs::write(&path, "spotify: [unfinished")?;
+        fs::create_dir_all(&paths.config).unwrap();
+        fs::write(&path, "spotify: [unfinished").unwrap();
         assert!(save_gui_defaults(&paths, &json!({"jobs": 2})).is_err());
-        assert_eq!(fs::read_to_string(path)?, "spotify: [unfinished");
-        Ok(())
+        assert_eq!(fs::read_to_string(path).unwrap(), "spotify: [unfinished");
     }
 
     #[test]
-    fn saves_spotify_client_id_and_keeps_other_settings() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn saves_spotify_client_id_and_keeps_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config/config.yaml");
-        fs::create_dir_all(path.parent().ok_or("config path has no parent")?)?;
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
             &path,
             "spotify:\n  redirect_port: '9000'\nsoulseek:\n  username: user\n",
-        )?;
-        save_section_string(&path, "spotify", "client_id", "  new-id  ")
-            .map_err(std::io::Error::other)?;
-        let config = load(&path).map_err(std::io::Error::other)?;
+        )
+        .unwrap();
+        save_section_string(&path, "spotify", "client_id", "  new-id  ").unwrap();
+        let config = load(&path).unwrap();
         assert_eq!(config["spotify"]["client_id"], "new-id");
         assert_eq!(config["spotify"]["redirect_port"], "9000");
         assert_eq!(config["soulseek"]["username"], "user");
-        Ok(())
     }
 }

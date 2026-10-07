@@ -13,7 +13,7 @@ pub mod paths;
 pub mod thumbnails;
 mod types;
 
-pub use config::{default_config_path, BeetsConfig, Error as ConfigError};
+pub use config::{BeetsConfig, Error as ConfigError, default_config_path};
 pub use config_choices::{
     AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, PreferredAudio,
     QualityPolicy, SyncPreset,

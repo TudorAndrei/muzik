@@ -3,9 +3,9 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use muzik_core::app_config;
 use rspotify_model::{Id, Page, PrivateUser, Token};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use url::Url;
 mod login;
 pub use login::login;
 mod api;
-pub use api::{list_playlists, PlaylistRef};
+pub use api::{PlaylistRef, list_playlists};
 mod reader;
 pub use reader::load_playlist_document;
 
@@ -67,17 +67,22 @@ pub struct Settings {
 }
 
 impl Settings {
+    #[must_use]
     pub fn redirect_uri(&self) -> String {
         format!("http://127.0.0.1:{}/callback", self.redirect_port)
     }
 }
 
+/// # Errors
+/// Returns an error when the config file cannot be read or written.
 pub fn set_client_id(path: &Path, client_id: &str) -> Result<String> {
     let value = client_id.trim();
     app_config::save_section_string(path, "spotify", "client_id", value)?;
     Ok(value.to_owned())
 }
 
+/// # Errors
+/// Returns an error when the token file exists but cannot be removed.
 pub fn clear_tokens(path: &Path) -> Result<bool> {
     match fs::remove_file(path) {
         Ok(()) => Ok(true),
@@ -86,18 +91,21 @@ pub fn clear_tokens(path: &Path) -> Result<bool> {
     }
 }
 
+/// # Errors
+/// Returns an error when the redirect port is not a number from 1 to 65535.
 pub fn settings(path: &Path) -> Result<Settings> {
     let config = app_config::load(path).unwrap_or_else(|_| json!({}));
-    let saved = &config["spotify"];
+    let saved = config.get("spotify");
     let value = |environment: &str, key: &str, fallback: &str| {
         std::env::var(environment)
             .ok()
             .filter(|text| !text.trim().is_empty())
             .or_else(|| {
-                saved[key]
+                let saved = saved.and_then(|saved| saved.get(key))?;
+                saved
                     .as_str()
                     .map(str::to_owned)
-                    .or_else(|| saved[key].as_i64().map(|number| number.to_string()))
+                    .or_else(|| saved.as_i64().map(|number| number.to_string()))
                     .filter(|text| !text.trim().is_empty())
             })
             .unwrap_or_else(|| fallback.to_owned())
@@ -158,6 +166,7 @@ fn load_token(path: &Path) -> Option<Token> {
 }
 
 fn save_token(path: &Path, token: &Token) -> Result<()> {
+    use std::io::Write;
     let mut token = token.clone();
     if token.refresh_token.is_none() {
         token.refresh_token = load_token(path).and_then(|saved| saved.refresh_token);
@@ -168,7 +177,6 @@ fn save_token(path: &Path, token: &Token) -> Result<()> {
         .prefix(".spotify-token.json.")
         .tempfile_in(parent)?;
     serde_json::to_writer_pretty(&mut file, &token)?;
-    use std::io::Write;
     file.write_all(b"\n")?;
     file.flush()?;
     file.as_file().sync_all()?;
@@ -196,6 +204,10 @@ fn request_token(form: &[(&str, &str)]) -> Result<Token> {
 }
 
 struct Client {
+    #[expect(
+        clippy::struct_field_names,
+        reason = "client_id is the Spotify OAuth term"
+    )]
     client_id: String,
     token_path: PathBuf,
     token: Token,
@@ -306,25 +318,28 @@ impl Client {
     }
 }
 
+/// # Errors
+/// Returns an error when the Spotify settings are not valid.
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
     let settings = settings(config_path)?;
-    let mut result = json!({
-        "client_id": settings.client_id,
-        "redirect_uri": settings.redirect_uri(),
-        "connected": false,
-    });
+    let mut result = serde_json::Map::new();
+    result.insert("client_id".into(), json!(settings.client_id));
+    result.insert("redirect_uri".into(), json!(settings.redirect_uri()));
+    result.insert("connected".into(), json!(false));
     if load_token(token_path).is_some() {
         match Client::connect(config_path, token_path)
             .and_then(|mut client| account_name(&mut client))
         {
             Ok(name) => {
-                result["connected"] = json!(true);
-                result["account_name"] = json!(name);
+                result.insert("connected".into(), json!(true));
+                result.insert("account_name".into(), json!(name));
             }
-            Err(error) => result["error"] = json!(error.to_string()),
+            Err(error) => {
+                result.insert("error".into(), json!(error.to_string()));
+            }
         }
     }
-    Ok(result)
+    Ok(Value::Object(result))
 }
 
 fn account_name(client: &mut Client) -> Result<String> {
@@ -341,7 +356,7 @@ fn utc(time: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_tokens, load_token, save_token, status, Client};
+    use super::{Client, clear_tokens, load_token, save_token, status};
     use std::fs;
 
     #[test]
@@ -356,24 +371,24 @@ mod tests {
     }
 
     #[test]
-    fn logout_removes_existing_tokens() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn logout_removes_existing_tokens() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("spotify-token.json");
-        fs::write(&path, "saved tokens")?;
-        assert!(clear_tokens(&path).map_err(std::io::Error::other)?);
-        assert!(!clear_tokens(&path).map_err(std::io::Error::other)?);
-        Ok(())
+        fs::write(&path, "saved tokens").unwrap();
+        assert!(clear_tokens(&path).unwrap());
+        assert!(!clear_tokens(&path).unwrap());
     }
 
     #[test]
-    fn a_saved_token_of_the_earlier_format_still_loads() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn a_saved_token_of_the_earlier_format_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("spotify-token.json");
         fs::write(
             &path,
             r#"{"access_token":"access","refresh_token":"refresh","expires_at":1800000000.0,"scope":"user-library-read"}"#,
-        )?;
-        let token = load_token(&path).ok_or("saved token was not read")?;
+        )
+        .unwrap();
+        let token = load_token(&path).unwrap();
         assert_eq!(token.access_token, "access");
         assert_eq!(token.refresh_token.as_deref(), Some("refresh"));
         assert_eq!(
@@ -387,27 +402,27 @@ mod tests {
             refresh_token: None,
             ..token
         };
-        save_token(&path, &refreshed).map_err(std::io::Error::other)?;
-        let saved = load_token(&path).ok_or("saved token was not read")?;
+        save_token(&path, &refreshed).unwrap();
+        let saved = load_token(&path).unwrap();
         assert_eq!(saved.access_token, "new");
         assert_eq!(saved.refresh_token.as_deref(), Some("refresh"));
-        Ok(())
     }
 
     #[test]
-    fn status_uses_the_saved_config_when_no_token_exists() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn status_uses_the_saved_config_when_no_token_exists() {
+        let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.yaml");
         fs::write(
             &config,
             "spotify:\n  client_id: saved\n  redirect_port: '9123'\n",
-        )?;
-        let result = status(&config, &dir.path().join("spotify-token.json"))?;
+        )
+        .unwrap();
+        let result = status(&config, &dir.path().join("spotify-token.json")).unwrap();
         assert_eq!(result["connected"], false);
-        assert!(result["redirect_uri"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("/callback")));
-        Ok(())
+        assert!(
+            result["redirect_uri"]
+                .as_str()
+                .is_some_and(|value| value.ends_with("/callback"))
+        );
     }
 }

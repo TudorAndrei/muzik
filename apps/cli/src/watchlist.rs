@@ -31,7 +31,8 @@ pub fn list(items: bool) -> anyhow::Result<()> {
         let entries = list_of(playlist, "items");
         let mut counts = BTreeMap::<String, usize>::new();
         for item in &entries {
-            *counts.entry(text(field(item, "summary"))).or_default() += 1;
+            let count = counts.entry(text(field(item, "summary"))).or_default();
+            *count = count.saturating_add(1);
         }
         let summary = Summary::ALL
             .iter()

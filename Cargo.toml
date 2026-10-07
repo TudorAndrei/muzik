@@ -1,12 +1,40 @@
 [workspace]
 members = ["crates/*", "apps/cli", "apps/gui"]
-resolver = "2"
+resolver = "3"
 
 [workspace.package]
 version = "2.12.0"
+edition = "2024"
+rust-version = "1.98"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+panic_in_result_fn = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+unreachable = "deny"
+unimplemented = "deny"
+unchecked_time_subtraction = "deny"
+todo = "deny"
+string_slice = "deny"
+panic = "deny"
+exit = "deny"
+as_conversions = "deny"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
 [profile.release]
 strip = "symbols"
 opt-level = "z"
 lto = true
+codegen-units = 1
+
+[profile.fuzz]
+inherits = "dev"
+opt-level = 3
+incremental = false
 codegen-units = 1

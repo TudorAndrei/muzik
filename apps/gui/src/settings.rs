@@ -22,7 +22,7 @@ const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collect
 5. Paste it below and select Save Bandcamp login. Muzik finds your user name.
 A full Cookie header or a cookies.txt file also works. The cookie stays on this computer. Do not share it.";
 
-pub(crate) struct ConfigView {
+pub struct ConfigView {
     main: WeakEntity<Muzik>,
     defaults: GuiDefaults,
     paths: Vec<Entity<InputState>>,
@@ -101,7 +101,7 @@ fn set_choice(defaults: &mut GuiDefaults, index: usize, value: &str) {
     };
 }
 
-fn flags(defaults: &mut GuiDefaults) -> [(&'static str, &mut bool); 9] {
+const fn flags(defaults: &mut GuiDefaults) -> [(&'static str, &mut bool); 9] {
     [
         ("Review chapters", &mut defaults.review),
         ("No split", &mut defaults.no_split),
@@ -142,13 +142,13 @@ fn input_item(label: &'static str, state: &Entity<InputState>) -> SettingItem {
 
 impl ConfigView {
     pub(crate) fn new(
-        main: Entity<Muzik>,
+        main: &Entity<Muzik>,
         defaults: GuiDefaults,
         status: Rc<RefCell<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        cx.observe(&main, |_, _, cx| cx.notify()).detach();
+        cx.observe(main, |_, _, cx| cx.notify()).detach();
         let paths = [&defaults.output, &defaults.splits, &defaults.config]
             .into_iter()
             .zip(PATHS)
@@ -227,7 +227,7 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn save_bandcamp(&mut self, cx: &mut Context<Self>) {
+    fn save_bandcamp(&self, cx: &mut Context<Self>) {
         let user = self.bandcamp.user.read(cx).value().trim().to_string();
         let cookies = self.bandcamp.cookies.read(cx).value().to_string();
         if let Some(main) = self.main.upgrade() {
@@ -235,9 +235,9 @@ impl ConfigView {
         }
     }
 
-    fn logout_bandcamp(&mut self, cx: &mut Context<Self>) {
+    fn logout_bandcamp(&self, cx: &mut Context<Self>) {
         if let Some(main) = self.main.upgrade() {
-            main.update(cx, |main, cx| main.logout_bandcamp(cx));
+            main.update(cx, Muzik::logout_bandcamp);
         }
     }
 
@@ -283,7 +283,7 @@ impl ConfigView {
         })
     }
 
-    fn pick_path(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_path(index: usize, window: &Window, cx: &Context<Self>) {
         let directories = PATHS.get(index).is_some_and(|(_, _, directory)| *directory);
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: !directories,
@@ -292,22 +292,22 @@ impl ConfigView {
             prompt: Some("Select".into()),
         });
         cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let value = path.to_string_lossy().into_owned();
-                    let _ = view.update_in(cx, |view, window, cx| {
-                        if let Some(state) = view.paths.get(index) {
-                            state.update(cx, |state, cx| state.set_value(value, window, cx));
-                        }
-                        cx.notify();
-                    });
-                }
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let value = path.to_string_lossy().into_owned();
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if let Some(state) = view.paths.get(index) {
+                        state.update(cx, |state, cx| state.set_value(value, window, cx));
+                    }
+                    cx.notify();
+                });
             }
         })
         .detach();
     }
 
-    fn save(&mut self, cx: &mut Context<Self>) {
+    fn save(&self, cx: &mut Context<Self>) {
         let mut defaults = self.defaults.clone();
         for (state, path) in self.paths.iter().zip([
             &mut defaults.output,
@@ -324,9 +324,24 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn workflow_page(&self, cx: &mut Context<Self>) -> SettingPage {
+    fn workflow_page(&self, cx: &Context<Self>) -> SettingPage {
         let view = cx.entity().downgrade();
-        let destinations = SettingGroup::new().title("Destinations").items(
+        SettingPage::new("Workflow")
+            .description("Workflow uses these settings for each run.")
+            .resettable(false)
+            .group(self.destinations_group(&view))
+            .group(self.quality_group(&view))
+            .group(
+                SettingGroup::new()
+                    .title("Processing")
+                    .items(self.number_items(&view))
+                    .items(self.switch_items(&view)),
+            )
+            .group(self.agent_group(&view))
+    }
+
+    fn destinations_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
+        SettingGroup::new().title("Destinations").items(
             self.paths
                 .iter()
                 .zip(PATHS)
@@ -349,8 +364,8 @@ impl ConfigView {
                                         .icon(IconName::FolderOpen)
                                         .label("Choose…")
                                         .on_click(move |_, window, cx| {
-                                            let _ = view.update(cx, |view, cx| {
-                                                view.pick_path(index, window, cx)
+                                            let _ = view.update(cx, |_, cx| {
+                                                Self::pick_path(index, window, cx);
                                             });
                                         }),
                                 )
@@ -358,8 +373,11 @@ impl ConfigView {
                     )
                     .layout(Axis::Vertical)
                 }),
-        );
-        let quality = SettingGroup::new().title("Sources and quality").items(
+        )
+    }
+
+    fn quality_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
+        SettingGroup::new().title("Sources and quality").items(
             choices(&self.defaults).into_iter().enumerate().map(
                 |(index, (label, values, current))| {
                     let view = view.clone();
@@ -374,15 +392,22 @@ impl ConfigView {
                                 .collect(),
                             move |_| current.clone().into(),
                             move |value, cx| {
-                                edit(&view, cx, |defaults| set_choice(defaults, index, &value))
+                                edit(&view, cx, |defaults| set_choice(defaults, index, &value));
                             },
                         ),
                     )
                 },
             ),
-        );
-        let numbers = [
-            ("Jobs", self.defaults.jobs as f64, 1.),
+        )
+    }
+
+    fn number_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
+        [
+            (
+                "Jobs",
+                u64_to_f64(u64::try_from(self.defaults.jobs).unwrap_or(u64::MAX)),
+                1.,
+            ),
             ("Min bitrate", f64::from(self.defaults.min_bitrate), 32.),
         ]
         .into_iter()
@@ -400,15 +425,25 @@ impl ConfigView {
                     move |_| current,
                     move |value, cx| {
                         edit(&view, cx, |defaults| match index {
-                            0 => defaults.jobs = value as usize,
-                            _ => defaults.min_bitrate = value as u32,
-                        })
+                            0 => {
+                                defaults.jobs =
+                                    usize::try_from(f64_to_u64(value)).unwrap_or(usize::MAX);
+                            }
+                            _ => {
+                                defaults.min_bitrate =
+                                    u32::try_from(f64_to_u64(value)).unwrap_or(u32::MAX);
+                            }
+                        });
                     },
                 ),
             )
-        });
+        })
+        .collect()
+    }
+
+    fn switch_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
         let mut current = self.defaults.clone();
-        let switches = flags(&mut current)
+        flags(&mut current)
             .into_iter()
             .enumerate()
             .map(|(index, (label, enabled))| {
@@ -423,15 +458,18 @@ impl ConfigView {
                                 if let Some((_, flag)) = flags(defaults).into_iter().nth(index) {
                                     *flag = checked;
                                 }
-                            })
+                            });
                         },
                     ),
                 )
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn agent_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
         let model = self.defaults.agent_model.clone();
         let auto_decide = self.defaults.auto_decide;
-        let agent = SettingGroup::new()
+        SettingGroup::new()
             .title("AI decisions")
             .description("Muzik asks this Codex model to pick album matches and Soulseek downloads. It asks you when the model is not sure.")
             .item(SettingItem::new(
@@ -447,22 +485,10 @@ impl ConfigView {
                     let view = view.clone();
                     move |checked, cx| edit(&view, cx, |defaults| defaults.auto_decide = checked)
                 }),
-            ));
-        SettingPage::new("Workflow")
-            .description("Workflow uses these settings for each run.")
-            .resettable(false)
-            .group(destinations)
-            .group(quality)
-            .group(
-                SettingGroup::new()
-                    .title("Processing")
-                    .items(numbers)
-                    .items(switches),
-            )
-            .group(agent)
+            ))
     }
 
-    fn accounts_page(&self, cx: &mut Context<Self>) -> SettingPage {
+    fn accounts_page(&self, cx: &Context<Self>) -> SettingPage {
         let view = cx.entity().downgrade();
         let port = self.soulseek.port.clone();
         let soulseek = SettingGroup::new()

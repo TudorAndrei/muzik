@@ -1,5 +1,5 @@
-use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
+use muzik_core::audio::Codec;
 use muzik_library::{Fields, Library, SqlValue};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;
@@ -7,8 +7,6 @@ use muzik_sync::{Error, Options, Prepared, Selection, Target};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-
-type Outcome = Result<(), Box<dyn std::error::Error>>;
 
 struct Layout {
     _dir: tempfile::TempDir,
@@ -37,11 +35,11 @@ fn layout() -> Result<Layout, Box<dyn std::error::Error>> {
     })
 }
 
-fn probe(path: &Path) -> Result<Option<MeasuredQuality>, String> {
+fn probe(path: &Path) -> Option<MeasuredQuality> {
     if path.file_name().is_some_and(|name| name == "broken.mp3") {
-        return Ok(None);
+        return None;
     }
-    Ok(Some(MeasuredQuality {
+    Some(MeasuredQuality {
         format: Codec::Mp3,
         lossless: false,
         bitrate_kbps: Some(128),
@@ -49,7 +47,7 @@ fn probe(path: &Path) -> Result<Option<MeasuredQuality>, String> {
         bit_depth: None,
         channels: Some(2),
         size: Some(5),
-    }))
+    })
 }
 
 fn add_tracks(layout: &Layout, names: &[&str]) -> Result<Selection, Box<dyn std::error::Error>> {
@@ -85,7 +83,7 @@ fn prepare(
         selection,
         connection,
         Options { delete, jobs: 1 },
-        &probe,
+        &|path| Ok(probe(path)),
     )
 }
 
@@ -99,63 +97,61 @@ fn destinations(prepared: &Prepared) -> Vec<PathBuf> {
 }
 
 #[test]
-fn prepare_blocks_delete_when_a_track_cannot_be_read() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3", "broken.mp3"])?;
-    stray(&layout)?;
-    let connection = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &connection, true)?;
+fn prepare_blocks_delete_when_a_track_cannot_be_read() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3", "broken.mp3"]).unwrap();
+    stray(&layout).unwrap();
+    let connection = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &connection, true).unwrap();
     assert!(!prepared.delete());
     assert!(prepared.delete_blocked());
     assert!(prepared.stale().is_empty());
     assert_eq!(prepared.freed(), 0);
-    Ok(())
 }
 
 #[test]
-fn prepare_lists_stale_files_when_delete_is_safe() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3"])?;
-    let old = stray(&layout)?;
-    let connection = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &connection, true)?;
+fn prepare_lists_stale_files_when_delete_is_safe() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3"]).unwrap();
+    let old = stray(&layout).unwrap();
+    let connection = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &connection, true).unwrap();
     assert!(prepared.delete());
     assert!(!prepared.delete_blocked());
     assert_eq!(prepared.stale(), [old]);
     assert_eq!(prepared.freed(), 7);
-    Ok(())
 }
 
 #[test]
-fn apply_refuses_a_target_that_is_gone_before_it_changes_files() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3"])?;
-    stray(&layout)?;
-    let connection = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &connection, true)?;
+fn apply_refuses_a_target_that_is_gone_before_it_changes_files() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3"]).unwrap();
+    stray(&layout).unwrap();
+    let connection = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &connection, true).unwrap();
     let unplugged = layout.card.with_file_name("unplugged");
-    fs::rename(&layout.card, &unplugged)?;
+    fs::rename(&layout.card, &unplugged).unwrap();
     let result = muzik_sync::apply(prepared, connection, &|_| {});
     assert!(matches!(result, Err(Error::TargetMissing(path)) if path == layout.card));
     assert!(unplugged.join("Old/old.mp3").is_file());
     assert!(!layout.card.exists());
-    Ok(())
 }
 
 #[test]
-fn apply_deletes_stale_files_and_copies_pending() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
-    let old = stray(&layout)?;
-    let connection = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &connection, true)?;
+fn apply_deletes_stale_files_and_copies_pending() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"]).unwrap();
+    let old = stray(&layout).unwrap();
+    let connection = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &connection, true).unwrap();
     let destinations = destinations(&prepared);
     let calls = AtomicUsize::new(0);
     let report = muzik_sync::apply(prepared, connection, &|done| {
         assert!(done.result.is_ok());
         assert!(done.record_error.is_none());
         calls.fetch_add(1, Ordering::Relaxed);
-    })?;
+    })
+    .unwrap();
     let pending = destinations.len();
     assert_eq!(pending, 2);
     assert!(!old.exists());
@@ -166,20 +162,19 @@ fn apply_deletes_stale_files_and_copies_pending() -> Outcome {
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);
     assert_eq!(calls.load(Ordering::Relaxed), pending);
-    Ok(())
 }
 
 #[test]
-fn apply_skips_stale_files_that_are_already_gone() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
-    let old = stray(&layout)?;
-    let connection = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &connection, true)?;
+fn apply_skips_stale_files_that_are_already_gone() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"]).unwrap();
+    let old = stray(&layout).unwrap();
+    let connection = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &connection, true).unwrap();
     assert_eq!(prepared.stale(), std::slice::from_ref(&old));
-    fs::remove_file(&old)?;
+    fs::remove_file(&old).unwrap();
     let destinations = destinations(&prepared);
-    let report = muzik_sync::apply(prepared, connection, &|_| {})?;
+    let report = muzik_sync::apply(prepared, connection, &|_| {}).unwrap();
     let pending = destinations.len();
     assert_eq!(pending, 2);
     for destination in &destinations {
@@ -187,16 +182,15 @@ fn apply_skips_stale_files_that_are_already_gone() -> Outcome {
     }
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);
-    Ok(())
 }
 
 #[test]
-fn apply_counts_transfers_whose_encoding_was_not_saved() -> Outcome {
-    let layout = layout()?;
-    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"])?;
-    let migrated = muzik_store::db::open_in_memory()?;
-    let prepared = prepare(&layout, &selection, &migrated, false)?;
-    let bare = Connection::open_in_memory()?;
+fn apply_counts_transfers_whose_encoding_was_not_saved() {
+    let layout = layout().unwrap();
+    let selection = add_tracks(&layout, &["good.mp3", "other.mp3"]).unwrap();
+    let migrated = muzik_store::db::open_in_memory().unwrap();
+    let prepared = prepare(&layout, &selection, &migrated, false).unwrap();
+    let bare = Connection::open_in_memory().unwrap();
     let unsaved = AtomicUsize::new(0);
     let pending = prepared.plan().pending.len();
     let report = muzik_sync::apply(prepared, bare, &|done| {
@@ -204,50 +198,50 @@ fn apply_counts_transfers_whose_encoding_was_not_saved() -> Outcome {
         if done.record_error.is_some() {
             unsaved.fetch_add(1, Ordering::Relaxed);
         }
-    })?;
+    })
+    .unwrap();
     assert_eq!(pending, 2);
     assert_eq!(report.written, pending);
     assert_eq!(report.failed, 0);
     assert_eq!(report.unrecorded, pending);
     assert_eq!(unsaved.load(Ordering::Relaxed), pending);
-    Ok(())
 }
 
 #[test]
-fn select_reads_track_and_cover_paths() -> Outcome {
-    let temp = tempfile::tempdir()?;
+fn select_reads_track_and_cover_paths() {
+    let temp = tempfile::tempdir().unwrap();
     let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .ok_or("no crates folder")?
+        .unwrap()
         .to_owned();
     let database = temp.path().join("library.db");
     fs::copy(
         crates.join("muzik-library/tests/fixtures/library.db"),
         &database,
-    )?;
+    )
+    .unwrap();
     let directory = temp.path().join("music");
-    fs::create_dir_all(&directory)?;
+    fs::create_dir_all(&directory).unwrap();
     let art = directory.join("cover.jpg");
-    fs::write(&art, b"art")?;
+    fs::write(&art, b"art").unwrap();
     let bytes = |path: &Path| SqlValue::Blob(path.as_os_str().as_encoded_bytes().to_vec());
-    let mut library = Library::open_read_write(&database)?;
+    let mut library = Library::open_read_write(&database).unwrap();
     let mut album_fields = Fields::new();
     album_fields.insert("album".into(), SqlValue::Text("SelectRun".into()));
     album_fields.insert("artpath".into(), bytes(&art));
-    let album_id = library.insert_album(&album_fields, &Fields::new())?;
+    let album_id = library.insert_album(&album_fields, &Fields::new()).unwrap();
     let mut item_fields = Fields::new();
     item_fields.insert("album_id".into(), SqlValue::Integer(album_id));
     item_fields.insert("album".into(), SqlValue::Text("SelectRun".into()));
     item_fields.insert("title".into(), SqlValue::Text("Song".into()));
     item_fields.insert("path".into(), bytes(Path::new("Artist/song.mp3")));
-    library.insert_item(&item_fields, &Fields::new())?;
+    library.insert_item(&item_fields, &Fields::new()).unwrap();
     drop(library);
 
-    let library = Library::open_read_only(&database)?;
-    let selection = muzik_sync::select(&library, &directory, "album:SelectRun", true)?;
+    let library = Library::open_read_only(&database).unwrap();
+    let selection = muzik_sync::select(&library, &directory, "album:SelectRun", true).unwrap();
     assert_eq!(selection.tracks, vec![directory.join("Artist/song.mp3")]);
     assert_eq!(selection.covers, vec![art]);
-    let without = muzik_sync::select(&library, &directory, "album:SelectRun", false)?;
+    let without = muzik_sync::select(&library, &directory, "album:SelectRun", false).unwrap();
     assert!(without.covers.is_empty());
-    Ok(())
 }

@@ -1,9 +1,13 @@
 [package]
 name = "muzik-workflow"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
+rust-version.workspace = true
 license = "GPL-3.0-only"
 publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
 csv = "1"

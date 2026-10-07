@@ -1,4 +1,4 @@
-//! Safe quality replacement for a freshly acquired YouTube audio file.
+//! Safe quality replacement for a freshly acquired `YouTube` audio file.
 
 use muzik_core::audio::AudioFormat;
 use muzik_core::chapters::sidecar_path;
@@ -60,7 +60,18 @@ trait Backend {
 
 /// Return the original audio if a replacement cannot be verified. The caller
 /// owns any returned replacement directory and must remove it after import.
-#[allow(clippy::too_many_arguments)]
+///
+/// # Errors
+/// Returns an error when the check is cancelled, the replacement reply is not a boolean, or the
+/// decision callback fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public entry point that takes independent settings and callbacks from callers in other crates"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "muzik-runner passes the files by value; a slice would change its pub signature"
+)]
 pub fn check_youtube_quality(
     paths: &Paths,
     audio_files: Vec<PathBuf>,
@@ -77,7 +88,7 @@ pub fn check_youtube_quality(
     };
     check_with_backend(
         &mut backend,
-        audio_files,
+        &audio_files,
         policy,
         min_bitrate,
         prefer,
@@ -87,10 +98,13 @@ pub fn check_youtube_quality(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "takes the check_youtube_quality arguments plus the backend that tests replace"
+)]
 fn check_with_backend(
     backend: &mut dyn Backend,
-    audio_files: Vec<PathBuf>,
+    audio_files: &[PathBuf],
     policy: QualityPolicy,
     min_bitrate: u32,
     prefer: PreferredAudio,
@@ -98,12 +112,11 @@ fn check_with_backend(
     on_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult> {
-    let keep = QualityUpgradeResult::keep(&audio_files);
-    if policy == QualityPolicy::Off || audio_files.is_empty() {
+    let keep = QualityUpgradeResult::keep(audio_files);
+    let Some(primary) = audio_files.first().filter(|_| policy != QualityPolicy::Off) else {
         return Ok(keep);
-    }
+    };
     check_cancelled(cancelled)?;
-    let primary = &audio_files[0];
     let current = match backend.measure(primary) {
         Ok(Some(current)) => current,
         Ok(None) => return Ok(keep),
@@ -130,55 +143,10 @@ fn check_with_backend(
     if quality_decision == QualityDecision::Keep {
         return Ok(keep);
     }
-    let no_safe = || QualityUpgradeResult::keep(&audio_files);
-    let track = match backend.track(primary) {
-        Ok(Some(track))
-            if !tokens(&track.artist).is_empty() && !tokens(&track.title).is_empty() =>
-        {
-            track
-        }
-        _ => {
-            on_event(message(
-                "Quality check: source artist or title is unknown.".into(),
-                true,
-            ));
-            return Ok(no_safe());
-        }
-    };
-    check_cancelled(cancelled)?;
-    let query = format!("{} {}", track.artist, track.title);
-    let candidates = match backend.search(&query, prefer, cancelled) {
-        Ok(candidates) => candidates,
-        Err(error) if cancelled.load(Ordering::SeqCst) => return Err(error),
-        Err(error) => {
-            on_event(message(
-                format!("Quality check: Soulseek search failed: {error}"),
-                true,
-            ));
-            return Ok(no_safe());
-        }
-    };
-    check_cancelled(cancelled)?;
-    let selected = rank(candidates, &query, prefer, 20)
-        .into_iter()
-        .map(|item| item.candidate)
-        .find(|candidate| {
-            safe_match(
-                candidate,
-                &Wanted {
-                    artist: &track.artist,
-                    title: &track.title,
-                    album: "",
-                    duration: Some(track.duration),
-                },
-            ) && better(candidate, &current)
-        });
-    let Some(candidate) = selected else {
-        on_event(message(
-            "Quality check: no safe, better Soulseek file was found.".into(),
-            false,
-        ));
-        return Ok(no_safe());
+    let Some((track, candidate)) =
+        find_candidate(backend, primary, &current, prefer, cancelled, on_event)?
+    else {
+        return Ok(keep);
     };
     on_event(JobEvent::CandidatesFound {
         source: "soulseek".into(),
@@ -196,6 +164,92 @@ fn check_with_backend(
             None => return Err("Quality replacement needs a boolean reply.".into()),
         }
     }
+    let Some((destination, files)) = download_candidate(backend, &candidate, cancelled, on_event)?
+    else {
+        return Ok(keep);
+    };
+    let accepted = if let [replacement] = files.as_slice() {
+        accept_single(
+            backend,
+            primary,
+            replacement,
+            destination,
+            &current,
+            &track,
+            on_event,
+        )?
+    } else {
+        accept_album(backend, &files, destination, &current, &track, on_event)
+    };
+    Ok(accepted.unwrap_or(keep))
+}
+
+fn find_candidate(
+    backend: &mut dyn Backend,
+    primary: &Path,
+    current: &MeasuredQuality,
+    prefer: PreferredAudio,
+    cancelled: &AtomicBool,
+    on_event: &mut dyn FnMut(JobEvent),
+) -> Result<Option<(Track, Candidate)>> {
+    let track = match backend.track(primary) {
+        Ok(Some(track))
+            if !tokens(&track.artist).is_empty() && !tokens(&track.title).is_empty() =>
+        {
+            track
+        }
+        _ => {
+            on_event(message(
+                "Quality check: source artist or title is unknown.".into(),
+                true,
+            ));
+            return Ok(None);
+        }
+    };
+    check_cancelled(cancelled)?;
+    let query = format!("{} {}", track.artist, track.title);
+    let candidates = match backend.search(&query, prefer, cancelled) {
+        Ok(candidates) => candidates,
+        Err(error) if cancelled.load(Ordering::SeqCst) => return Err(error),
+        Err(error) => {
+            on_event(message(
+                format!("Quality check: Soulseek search failed: {error}"),
+                true,
+            ));
+            return Ok(None);
+        }
+    };
+    check_cancelled(cancelled)?;
+    let selected = rank(candidates, &query, prefer, 20)
+        .into_iter()
+        .map(|item| item.candidate)
+        .find(|candidate| {
+            safe_match(
+                candidate,
+                &Wanted {
+                    artist: &track.artist,
+                    title: &track.title,
+                    album: "",
+                    duration: Some(track.duration),
+                },
+            ) && better(candidate, current)
+        });
+    let Some(candidate) = selected else {
+        on_event(message(
+            "Quality check: no safe, better Soulseek file was found.".into(),
+            false,
+        ));
+        return Ok(None);
+    };
+    Ok(Some((track, candidate)))
+}
+
+fn download_candidate(
+    backend: &mut dyn Backend,
+    candidate: &Candidate,
+    cancelled: &AtomicBool,
+    on_event: &mut dyn FnMut(JobEvent),
+) -> Result<Option<(tempfile::TempDir, Vec<PathBuf>)>> {
     let output = match backend.download_dir() {
         Ok(output) => output,
         Err(error) => {
@@ -203,7 +257,7 @@ fn check_with_backend(
                 format!("Quality check: cannot prepare download: {error}"),
                 true,
             ));
-            return Ok(no_safe());
+            return Ok(None);
         }
     };
     let destination = match tempfile::Builder::new()
@@ -216,10 +270,10 @@ fn check_with_backend(
                 format!("Quality check: cannot prepare download: {error}"),
                 true,
             ));
-            return Ok(no_safe());
+            return Ok(None);
         }
     };
-    let files = match backend.download(&candidate, destination.path(), cancelled) {
+    let files = match backend.download(candidate, destination.path(), cancelled) {
         Ok(files) => files,
         Err(error) if cancelled.load(Ordering::SeqCst) => return Err(error),
         Err(error) => {
@@ -227,7 +281,7 @@ fn check_with_backend(
                 format!("Quality check: Soulseek download failed: {error}"),
                 true,
             ));
-            return Ok(no_safe());
+            return Ok(None);
         }
     };
     check_cancelled(cancelled)?;
@@ -241,45 +295,64 @@ fn check_with_backend(
             "Quality check: Soulseek download is incomplete.".into(),
             true,
         ));
-        return Ok(no_safe());
+        return Ok(None);
     }
-    if files.len() == 1 {
-        let replacement = &files[0];
-        let measured = backend.measure(replacement).ok().flatten();
-        let duration = backend.duration(replacement).ok().flatten();
-        if !measured
-            .as_ref()
-            .is_some_and(|value| measured_better(value, &current))
-            || !duration.is_some_and(|value| (value - track.duration).abs() <= DURATION_TOLERANCE)
-        {
-            on_event(message(
-                "Quality check: downloaded audio failed quality or duration checks.".into(),
-                true,
-            ));
-            return Ok(no_safe());
-        }
-        if let Err(error) = copy_chapter_sidecars(primary, replacement) {
-            on_event(message(
-                format!("Quality check: cannot copy chapters: {error}"),
-                true,
-            ));
-            return Ok(no_safe());
-        }
-        let root = destination.keep();
-        let replacement = root.join(
-            replacement
-                .file_name()
-                .ok_or("Replacement has no file name")?,
-        );
+    Ok(Some((destination, files)))
+}
+
+fn accept_single(
+    backend: &mut dyn Backend,
+    primary: &Path,
+    replacement: &Path,
+    destination: tempfile::TempDir,
+    current: &MeasuredQuality,
+    track: &Track,
+    on_event: &mut dyn FnMut(JobEvent),
+) -> Result<Option<QualityUpgradeResult>> {
+    let measured = backend.measure(replacement).ok().flatten();
+    let duration = backend.duration(replacement).ok().flatten();
+    if !measured
+        .as_ref()
+        .is_some_and(|value| measured_better(value, current))
+        || !duration.is_some_and(|value| (value - track.duration).abs() <= DURATION_TOLERANCE)
+    {
         on_event(message(
-            "Quality check: Soulseek replacement is ready.".into(),
-            false,
+            "Quality check: downloaded audio failed quality or duration checks.".into(),
+            true,
         ));
-        return Ok(QualityUpgradeResult {
-            audio_files: vec![replacement],
-            pre_split_dirs: Vec::new(),
-        });
+        return Ok(None);
     }
+    if let Err(error) = copy_chapter_sidecars(primary, replacement) {
+        on_event(message(
+            format!("Quality check: cannot copy chapters: {error}"),
+            true,
+        ));
+        return Ok(None);
+    }
+    let root = destination.keep();
+    let replacement = root.join(
+        replacement
+            .file_name()
+            .ok_or("Replacement has no file name")?,
+    );
+    on_event(message(
+        "Quality check: Soulseek replacement is ready.".into(),
+        false,
+    ));
+    Ok(Some(QualityUpgradeResult {
+        audio_files: vec![replacement],
+        pre_split_dirs: Vec::new(),
+    }))
+}
+
+fn accept_album(
+    backend: &mut dyn Backend,
+    files: &[PathBuf],
+    destination: tempfile::TempDir,
+    current: &MeasuredQuality,
+    track: &Track,
+    on_event: &mut dyn FnMut(JobEvent),
+) -> Option<QualityUpgradeResult> {
     // Every part of a multi-file album must pass a post-download quality check.
     if files.iter().any(|file| {
         !backend
@@ -287,13 +360,13 @@ fn check_with_backend(
             .ok()
             .flatten()
             .as_ref()
-            .is_some_and(|value| measured_better(value, &current))
+            .is_some_and(|value| measured_better(value, current))
     }) {
         on_event(message(
             "Quality check: an album file failed the quality check.".into(),
             true,
         ));
-        return Ok(no_safe());
+        return None;
     }
     let actual_duration = files
         .iter()
@@ -306,20 +379,20 @@ fn check_with_backend(
             "Quality check: album duration does not match the source.".into(),
             true,
         ));
-        return Ok(no_safe());
+        return None;
     }
     let root = destination.keep();
     on_event(message(
         "Quality check: Soulseek album is ready.".into(),
         false,
     ));
-    Ok(QualityUpgradeResult {
+    Some(QualityUpgradeResult {
         audio_files: Vec::new(),
         pre_split_dirs: vec![root],
     })
 }
 
-fn message(text: String, warning: bool) -> JobEvent {
+const fn message(text: String, warning: bool) -> JobEvent {
     JobEvent::Message {
         message: text,
         severity: if warning {
@@ -354,18 +427,18 @@ fn better(candidate: &Candidate, current: &MeasuredQuality) -> bool {
     })
 }
 
-fn measured_better(new: &MeasuredQuality, current: &MeasuredQuality) -> bool {
+const fn measured_better(new: &MeasuredQuality, current: &MeasuredQuality) -> bool {
     (new.lossless && !current.lossless)
         || (new.lossless == current.lossless
             && matches!((new.bitrate_kbps, current.bitrate_kbps), (Some(new), Some(old)) if new > old))
 }
 
 fn candidate_payload(candidate: &Candidate) -> Value {
-    let first = &candidate.files[0];
+    let first = candidate.files.first();
     json!({
         "username":candidate.username,
-        "title":first.name.rsplit(['/', '\\']).next().unwrap_or("Audio file"),
-        "quality":{"format":file_format(first).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.bitrate_kbps},
+        "title":first.and_then(|file| file.name.rsplit(['/', '\\']).next()).unwrap_or("Audio file"),
+        "quality":{"format":first.and_then(file_format).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.and_then(|file| file.bitrate_kbps)},
         "files":candidate.files,
     })
 }
@@ -419,17 +492,26 @@ impl Backend for SoulseekBackend {
             if let Ok(bytes) = std::fs::read(sidecar)
                 && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
             {
-                let sources = [&value["resolved"], &value["candidate"]["metadata"], &value];
-                for source in sources {
+                let sources = [
+                    value.get("resolved"),
+                    value.pointer("/candidate/metadata"),
+                    Some(&value),
+                ];
+                for source in sources.into_iter().flatten() {
                     if artist.is_empty() {
-                        artist = source["artist"].as_str().unwrap_or("").to_owned();
+                        source
+                            .get("artist")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .clone_into(&mut artist);
                     }
                     if title.is_empty() {
-                        title = source["title"]
-                            .as_str()
-                            .or_else(|| source["track"].as_str())
+                        source
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .or_else(|| source.get("track").and_then(Value::as_str))
                             .unwrap_or("")
-                            .to_owned();
+                            .clone_into(&mut title);
                     }
                 }
             }
@@ -601,7 +683,7 @@ mod tests {
     ) -> QualityUpgradeResult {
         check_with_backend(
             backend,
-            vec![original],
+            &[original],
             policy,
             320,
             PreferredAudio::Lossless,
@@ -652,7 +734,7 @@ mod tests {
         let original = backend.original();
         let error = check_with_backend(
             &mut backend,
-            vec![original],
+            &[original],
             QualityPolicy::Auto,
             320,
             PreferredAudio::Lossless,

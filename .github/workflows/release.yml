@@ -11,12 +11,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   version:
+    name: Version
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: write
+      actions: read # read the Check workflow runs for this commit
+      contents: write # push the version commit and tag
     outputs:
       tag: ${{ steps.tag.outputs.version }}
     steps:
@@ -48,7 +53,7 @@ jobs:
       - uses: jdx/mise-action@v4
         if: inputs.tag == ''
         with:
-          install_args: rust mr-boxington cocogitto hk cargo:cargo-edit
+          install_args: rust mr-boxington cocogitto hk cargo-binstall cargo:cargo-edit
       - run: cargo fetch --locked
         if: inputs.tag == ''
       - name: Set release Git access
@@ -81,6 +86,7 @@ jobs:
         run: echo "version=${EXISTING:-$BUMPED}" >> "$GITHUB_OUTPUT"
 
   build:
+    name: Build ${{ matrix.target }}
     needs: version
     strategy:
       fail-fast: false
@@ -98,23 +104,23 @@ jobs:
           persist-credentials: false
       - name: Install GPUI Linux libraries
         if: runner.os == 'Linux'
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
             install -y --no-install-recommends \
-            libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev \
+            libfontconfig-dev libwayland-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev \
             vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
         with:
-          install_args: rust mr-boxington
+          install_args: rust mr-boxington cargo-binstall cargo:cargo-auditable
       - uses: jdx/mr-boxington-action@v1
         with:
           toolchain: "1.98.1"
           save-on-workflow-dispatch: true
       - name: Build Rust apps
-        run: cargo build --release --locked -p muzik-cli -p muzik-gpui
+        run: cargo auditable build --release --locked -p muzik-cli -p muzik-gpui
       - name: Package the CLI, the desktop app, and license files
         env:
           TAG: ${{ needs.version.outputs.tag }}
@@ -163,10 +169,11 @@ jobs:
           if-no-files-found: error
 
   publish:
+    name: Publish
     needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the GitHub release
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -181,10 +188,12 @@ jobs:
         run: gh release create "$TAG" dist/* --generate-notes --verify-tag
 
   homebrew:
+    name: Homebrew
     needs: [version, publish]
     runs-on: ubuntu-latest
+    environment: homebrew
     permissions:
-      contents: write
+      contents: write # push the cask update to main
     steps:
       - uses: actions/checkout@v7
         with:

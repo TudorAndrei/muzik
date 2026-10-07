@@ -2,35 +2,45 @@ use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 
-pub(crate) type ItemKey = (String, usize, String);
+pub type ItemKey = (String, u64, String);
 
-pub(crate) struct WatchRow {
+pub struct WatchRow {
     pub key: ItemKey,
     pub item: Value,
     pub queued: bool,
 }
 
 impl WatchRow {
+    fn text(&self, key: &str) -> Option<&str> {
+        self.item.get(key).and_then(Value::as_str)
+    }
+
     fn title(&self) -> &str {
-        self.item["title"].as_str().unwrap_or("Untitled")
+        self.text("title").unwrap_or("Untitled")
     }
 
     fn summary(&self) -> &str {
-        self.item["summary"].as_str().unwrap_or("")
+        self.text("summary").unwrap_or("")
     }
 
     fn error(&self) -> &str {
-        self.item["last_error"].as_str().unwrap_or("")
+        self.text("last_error").unwrap_or("")
     }
 
     fn primary(&self) -> Option<(ItemAction, String, bool)> {
-        let action = self.item["primary_action"]["action"]
+        let primary = self.item.get("primary_action")?;
+        let action = primary
+            .get("action")?
             .as_str()?
             .parse::<ItemAction>()
             .ok()?;
-        let label = self.item["primary_action"]["label"].as_str()?.to_string();
-        let enabled = self.item["actions"][action.as_ref()]["enabled"]
-            .as_bool()
+        let label = primary.get("label")?.as_str()?.to_string();
+        let enabled = self
+            .item
+            .get("actions")
+            .and_then(|actions| actions.get(action.as_ref()))
+            .and_then(|availability| availability.get("enabled"))
+            .and_then(Value::as_bool)
             .unwrap_or(true);
         Some((action, label, enabled && !self.queued))
     }
@@ -46,14 +56,14 @@ const COLUMNS: [(&str, &str, f32); 6] = [
 ];
 const SORTABLE: [usize; 3] = [0, 1, 3];
 
-pub(crate) struct WatchTable {
+pub struct WatchTable {
     rows: Vec<WatchRow>,
     sort: Option<(usize, ColumnSort)>,
     view: WeakEntity<Muzik>,
 }
 
 impl WatchTable {
-    pub(crate) fn new(view: WeakEntity<Muzik>) -> Self {
+    pub(crate) const fn new(view: WeakEntity<Muzik>) -> Self {
         Self {
             rows: Vec::new(),
             sort: None,
@@ -96,7 +106,7 @@ fn run_item(view: &WeakEntity<Muzik>, key: &ItemKey, action: ItemAction, cx: &mu
     });
 }
 
-pub(crate) fn open_item(view: &WeakEntity<Muzik>, key: ItemKey, window: &mut Window, cx: &mut App) {
+pub fn open_item(view: &WeakEntity<Muzik>, key: ItemKey, window: &mut Window, cx: &mut App) {
     let _ = view.update(cx, |view, cx| view.open_item_sheet(key, window, cx));
 }
 
@@ -110,7 +120,9 @@ impl TableDelegate for WatchTable {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        let (key, name, width) = COLUMNS[col_ix];
+        let Some(&(key, name, width)) = COLUMNS.get(col_ix) else {
+            return Column::new("", "");
+        };
         let column = Column::new(key, name).width(px(width));
         if SORTABLE.contains(&col_ix) {
             column.sortable()
@@ -194,7 +206,7 @@ impl TableDelegate for WatchTable {
         let details = (key.clone(), view.clone());
         let mut menu = menu.item(
             PopupMenuItem::new("Details").on_click(move |_, window, cx| {
-                open_item(&details.1, details.0.clone(), window, cx)
+                open_item(&details.1, details.0.clone(), window, cx);
             }),
         );
         if let Some((action, label, enabled)) = row.primary() {
@@ -221,7 +233,7 @@ impl TableDelegate for WatchTable {
     }
 }
 
-pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
+pub fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
     let id = watchlist_view::playlist_id(playlist);
     playlist["items"]
         .as_array()
@@ -229,14 +241,13 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
         .flatten()
         .filter(|item| watchlist_view::matches_filter(item, filter))
         .map(|item| {
-            let position = item["position"].as_u64().unwrap_or(0) as usize;
+            let position = item["position"].as_u64().unwrap_or(0);
             let video_id = item["video_id"]
                 .as_str()
                 .or_else(|| item["id"].as_str())
                 .unwrap_or("")
                 .to_string();
-            let queued =
-                queued.contains(&ItemId::new(&id, position as u64, Some(&video_id)).to_string());
+            let queued = queued.contains(&ItemId::new(&id, position, Some(&video_id)).to_string());
             WatchRow {
                 key: (id.clone(), position, video_id),
                 item: item.clone(),
@@ -248,7 +259,7 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{rows, ColumnSort, WatchTable};
+    use super::{ColumnSort, WatchTable, rows};
     use gpui_kit::WeakEntity;
     use muzik_store::watchlist::Summary;
     use serde_json::json;
@@ -297,7 +308,11 @@ mod tests {
         table.sort = Some((1, ColumnSort::Ascending));
         table.apply_sort();
         assert_eq!(
-            table.rows.iter().map(|row| row.title()).collect::<Vec<_>>(),
+            table
+                .rows
+                .iter()
+                .map(super::WatchRow::title)
+                .collect::<Vec<_>>(),
             ["Alpha", "beta", "gamma"]
         );
         table.sort = Some((3, ColumnSort::Descending));

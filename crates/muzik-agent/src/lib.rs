@@ -71,13 +71,16 @@ enum Action {
     Ask,
 }
 
-pub fn supports(kind: DecisionKind) -> bool {
+#[must_use]
+pub const fn supports(kind: DecisionKind) -> bool {
     matches!(
         kind,
         DecisionKind::ImportMatch | DecisionKind::SoulseekCandidate
     )
 }
 
+/// # Errors
+/// Returns an error when there are no candidates, or when Codex cannot run or gives no valid answer.
 pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcome> {
     if let Some(choice) = strong_match(kind, payload) {
         return Ok(Outcome::Decided(choice));
@@ -94,8 +97,9 @@ pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
     if kind != DecisionKind::ImportMatch {
         return None;
     }
-    let best = payload["task"]["matches"]
-        .as_array()?
+    let best = payload
+        .pointer("/task/matches")
+        .and_then(Value::as_array)?
         .iter()
         .filter_map(|item| Some((item, item["distance"].as_f64()?)))
         .min_by(|left, right| left.1.total_cmp(&right.1))?;
@@ -109,8 +113,9 @@ pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
 
 pub fn options(kind: DecisionKind, payload: &Value) -> Vec<(String, Value)> {
     match kind {
-        DecisionKind::ImportMatch => payload["task"]["matches"]
-            .as_array()
+        DecisionKind::ImportMatch => payload
+            .pointer("/task/matches")
+            .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter(|item| item["candidate_id"].is_string())
@@ -134,92 +139,92 @@ pub fn options(kind: DecisionKind, payload: &Value) -> Vec<(String, Value)> {
 
 pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) -> String {
     let mut text = String::new();
-    match kind {
-        DecisionKind::ImportMatch => {
-            let task = &payload["task"];
-            let paths: Vec<&str> = task["paths"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            let folder = paths
-                .first()
-                .and_then(|path| Path::new(path).parent())
-                .and_then(Path::file_name)
-                .map(|name| name.to_string_lossy().into_owned())
+    if kind == DecisionKind::ImportMatch {
+        let task = &payload["task"];
+        let paths: Vec<&str> = task["paths"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let folder = paths
+            .first()
+            .and_then(|path| Path::new(path).parent())
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let _ = writeln!(
+            text,
+            "You choose the release for one album in a music tagging tool."
+        );
+        let _ = writeln!(text, "Source folder: {folder}");
+        let _ = writeln!(
+            text,
+            "Current tags: {} · {} · {}",
+            text_or(&task["current_artist"], "unknown artist"),
+            text_or(&task["current_album"], "unknown album"),
+            text_or(&task["current_year"], "unknown year")
+        );
+        let _ = writeln!(text, "Files ({}):", paths.len());
+        for path in paths.iter().take(MAX_FILES) {
+            let name = Path::new(path)
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let _ = writeln!(text, "- {name}");
+        }
+        if let Some(more) = paths.len().checked_sub(MAX_FILES).filter(|more| *more > 0) {
+            let _ = writeln!(text, "- and {more} more");
+        }
+        let _ = writeln!(
+            text,
+            "Candidates (distance 0.0 is a perfect match, 1.0 is a poor match):"
+        );
+        for (index, item) in task["matches"].as_array().into_iter().flatten().enumerate() {
             let _ = writeln!(
                 text,
-                "You choose the release for one album in a music tagging tool."
-            );
-            let _ = writeln!(text, "Source folder: {folder}");
-            let _ = writeln!(
-                text,
-                "Current tags: {} · {} · {}",
-                text_or(&task["current_artist"], "unknown artist"),
-                text_or(&task["current_album"], "unknown album"),
-                text_or(&task["current_year"], "unknown year")
-            );
-            let _ = writeln!(text, "Files ({}):", paths.len());
-            for path in paths.iter().take(MAX_FILES) {
-                let name = Path::new(path)
-                    .file_stem()
-                    .map(|stem| stem.to_string_lossy().into_owned())
-                    .unwrap_or_default();
-                let _ = writeln!(text, "- {name}");
-            }
-            if paths.len() > MAX_FILES {
-                let _ = writeln!(text, "- and {} more", paths.len() - MAX_FILES);
-            }
-            let _ = writeln!(
-                text,
-                "Candidates (distance 0.0 is a perfect match, 1.0 is a poor match):"
-            );
-            for (index, item) in task["matches"].as_array().into_iter().flatten().enumerate() {
-                let _ = writeln!(
-                    text,
-                    "[{index}] {} · distance {:.3}",
-                    release_details(item),
-                    item["distance"].as_f64().unwrap_or(1.0)
-                );
-            }
-            let _ = writeln!(
-                text,
-                "Use action \"pick\" with the index of the candidate that is the same release. Use \"keep\" when no candidate fits and the current tags are right. Use \"ask\" when you are not sure."
+                "[{index}] {} · distance {:.3}",
+                release_details(item),
+                item["distance"].as_f64().unwrap_or(1.0)
             );
         }
-        _ => {
+        let _ = writeln!(
+            text,
+            "Use action \"pick\" with the index of the candidate that is the same release. Use \"keep\" when no candidate fits and the current tags are right. Use \"ask\" when you are not sure."
+        );
+    } else {
+        let _ = writeln!(
+            text,
+            "You choose one Soulseek download for a music tool. The wanted music is: {}",
+            text_or(&payload["query"], "unknown")
+        );
+        let _ = writeln!(
+            text,
+            "Candidates (a higher score is a better match; prefer lossless and complete albums):"
+        );
+        for (index, item) in payload["candidates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
             let _ = writeln!(
                 text,
-                "You choose one Soulseek download for a music tool. The wanted music is: {}",
-                text_or(&payload["query"], "unknown")
-            );
-            let _ = writeln!(
-                text,
-                "Candidates (a higher score is a better match; prefer lossless and complete albums):"
-            );
-            for (index, item) in payload["candidates"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .enumerate()
-            {
-                let _ = writeln!(
-                    text,
-                    "[{index}] {} · {} · {} files · user {} · score {:.0}",
-                    text_or(&item["path"], item["title"].as_str().unwrap_or("")),
-                    text_or(&item["quality"]["format"], "unknown format"),
-                    item["files"].as_array().map_or(0, Vec::len),
-                    text_or(&item["user"], "unknown"),
-                    item["score"].as_f64().unwrap_or(0.0)
-                );
-            }
-            let _ = writeln!(
-                text,
-                "Use action \"pick\" with the index of the best download for the wanted music. Use \"ask\" when none fits or you are not sure."
+                "[{index}] {} · {} · {} files · user {} · score {:.0}",
+                text_or(&item["path"], item["title"].as_str().unwrap_or("")),
+                text_or(
+                    item.pointer("/quality/format").unwrap_or(&Value::Null),
+                    "unknown format"
+                ),
+                item["files"].as_array().map_or(0, Vec::len),
+                text_or(&item["user"], "unknown"),
+                item["score"].as_f64().unwrap_or(0.0)
             );
         }
+        let _ = writeln!(
+            text,
+            "Use action \"pick\" with the index of the best download for the wanted music. Use \"ask\" when none fits or you are not sure."
+        );
     }
     let _ = writeln!(
         text,
@@ -229,6 +234,7 @@ pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) 
     text
 }
 
+#[must_use]
 pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]) -> Outcome {
     let confidence = answer["confidence"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
     let reason = answer["reason"].as_str().unwrap_or("").trim().to_owned();
@@ -240,17 +246,15 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
     let action = answer["action"]
         .as_str()
         .and_then(|action| action.parse::<Action>().ok());
-    match (action, index) {
-        (Some(Action::Pick), Some(index)) if confident => {
-            let (label, value) = &options[index];
-            Outcome::Decided(Choice {
-                value: value.clone(),
-                label: label.clone(),
-                confidence,
-                reason,
-            })
-        }
-        (Some(Action::Keep), _) if confident && kind == DecisionKind::ImportMatch => {
+    let picked = index.and_then(|index| options.get(index));
+    match (action, index, picked) {
+        (Some(Action::Pick), _, Some((label, value))) if confident => Outcome::Decided(Choice {
+            value: value.clone(),
+            label: label.clone(),
+            confidence,
+            reason,
+        }),
+        (Some(Action::Keep), _, _) if confident && kind == DecisionKind::ImportMatch => {
             Outcome::Decided(Choice {
                 value: json!("as_is"),
                 label: "Keep current tags".into(),
@@ -258,12 +262,12 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
                 reason,
             })
         }
-        (Some(Action::Pick), suggestion) => Outcome::Unsure {
+        (Some(Action::Pick), suggestion, _) => Outcome::Unsure {
             suggestion,
             confidence,
             reason,
         },
-        (Some(Action::Keep | Action::Ask) | None, _) => Outcome::Unsure {
+        (Some(Action::Keep | Action::Ask) | None, _, _) => Outcome::Unsure {
             suggestion: None,
             confidence,
             reason,
@@ -378,13 +382,13 @@ mod tests {
 
     #[test]
     #[ignore = "calls the real Codex CLI and uses the account quota"]
-    fn live_codex_picks_the_same_release() -> super::Result<()> {
-        let outcome = super::decide(DecisionKind::ImportMatch, &album(), super::DEFAULT_MODEL)?;
+    fn live_codex_picks_the_same_release() {
+        let outcome =
+            super::decide(DecisionKind::ImportMatch, &album(), super::DEFAULT_MODEL).unwrap();
         assert!(
             matches!(&outcome, Outcome::Decided(choice) if choice.value == json!("m0")),
             "{outcome:?}"
         );
-        Ok(())
     }
 
     #[test]

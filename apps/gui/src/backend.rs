@@ -1,5 +1,5 @@
 use crate::thumbnails;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_channel::Receiver;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
@@ -9,15 +9,15 @@ use muzik_core::downloads::scan;
 use muzik_core::paths::Paths;
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::app::WatchlistCheck;
-use muzik_runner::{setup, App, AppEvent, AppOptions};
+use muzik_runner::{App, AppEvent, AppOptions, setup};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::{ItemAction, ItemId, Playlist};
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const WORKERS: usize = 5;
 
@@ -101,7 +101,7 @@ impl Backend {
             workers: WORKERS,
             run,
             in_memory: cfg!(test),
-            chooser: (!cfg!(test)).then(|| Arc::new(Codex) as Arc<dyn Chooser>),
+            chooser: (!cfg!(test)).then(|| -> Arc<dyn Chooser> { Arc::new(Codex) }),
             sink: Arc::new(move |event| {
                 let _ = sender.try_send(event);
             }),
@@ -116,7 +116,7 @@ impl Backend {
         Ok((backend, events))
     }
 
-    fn paths(&self) -> &Paths {
+    const fn paths(&self) -> &Paths {
         self.app.paths()
     }
 
@@ -211,9 +211,11 @@ impl Backend {
             return None;
         }
         let data = thumbnails::cache_requested(&fresh, &self.app.repository(), &self.paths().cache);
-        let mut pending = self.thumbnails.lock();
-        for id in &fresh {
-            pending.remove(id);
+        {
+            let mut pending = self.thumbnails.lock();
+            for id in &fresh {
+                pending.remove(id);
+            }
         }
         Some(data)
     }
@@ -299,13 +301,14 @@ impl Backend {
         if slot.is_some() {
             bail!("A Spotify login is already active.");
         }
-        let number = self.logins.fetch_add(1, Ordering::Relaxed) + 1;
+        let number = self.logins.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let job_id = format!("spotify-login-{number}");
         let cancel = Arc::new(AtomicBool::new(false));
         *slot = Some(ActiveLogin {
             job_id: job_id.clone(),
             cancel: Arc::clone(&cancel),
         });
+        drop(slot);
         Ok(SpotifyLogin {
             job_id,
             cancel,
@@ -357,11 +360,9 @@ mod tests {
     use std::collections::{HashSet, VecDeque};
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
-
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     struct Events {
         receiver: Receiver<AppEvent>,
@@ -374,12 +375,14 @@ mod tests {
             timeout: Duration,
             wanted: impl Fn(&AppEvent) -> bool,
         ) -> Result<AppEvent, Box<dyn std::error::Error>> {
-            if let Some(index) = self.skipped.iter().position(&wanted) {
-                if let Some(event) = self.skipped.remove(index) {
-                    return Ok(event);
-                }
+            if let Some(index) = self.skipped.iter().position(&wanted)
+                && let Some(event) = self.skipped.remove(index)
+            {
+                return Ok(event);
             }
-            let deadline = Instant::now() + timeout;
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .ok_or("timeout is too long")?;
             while Instant::now() < deadline {
                 match self.receiver.try_recv() {
                     Ok(event) if wanted(&event) => return Ok(event),
@@ -441,69 +444,75 @@ mod tests {
     }
 
     #[test]
-    fn library_scan_reports_existing_audio() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
-        let (_state, backend, _) = started(true)?;
-        let result = backend.library_scan(dir.path())?;
+    fn library_scan_reports_existing_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio").unwrap();
+        let (_state, backend, _) = started(true).unwrap();
+        let result = backend.library_scan(dir.path()).unwrap();
         assert_eq!(result["total_size"], "5 B");
         assert_eq!(result["items"][0]["title"], "Track");
         assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");
-        assert!(result["items"][0]["modified"]
-            .as_str()
-            .is_some_and(|date| !date.is_empty()));
-        Ok(())
+        assert!(
+            result["items"][0]["modified"]
+                .as_str()
+                .is_some_and(|date| !date.is_empty())
+        );
     }
 
     #[test]
-    fn invalid_requests_are_rejected() -> TestResult {
-        let (_state, backend, _) = started(true)?;
+    fn invalid_requests_are_rejected() {
+        let (_state, backend, _) = started(true).unwrap();
         assert!(backend.start_workflow(&json!({"raw":"  "})).is_err());
         assert!(backend.reply("", json!("as_is")).is_err());
         assert!(backend.reply("missing", json!("as_is")).is_err());
         assert!(backend.cancel("").is_err());
         assert!(backend.cancel("queue-999").is_err());
-        Ok(())
     }
 
     #[test]
-    fn local_workflow_runs_as_a_queue_job() -> TestResult {
-        let dir = tempfile::tempdir()?;
+    fn local_workflow_runs_as_a_queue_job() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("track.flac");
-        fs::write(&audio, b"audio")?;
-        let (_state, backend, mut events) = started(true)?;
-        let job = backend.start_workflow(
-            &json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}),
-        )?;
+        fs::write(&audio, b"audio").unwrap();
+        let (_state, backend, mut events) = started(true).unwrap();
+        let job = backend
+            .start_workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
+            .unwrap();
         assert!(job.starts_with("queue-"));
-        events.job(&job, |event| matches!(event, AppEvent::JobStarted { .. }))?;
-        let AppEvent::JobCompleted { result, .. } =
-            events.job(&job, |event| matches!(event, AppEvent::JobCompleted { .. }))?
+        events
+            .job(&job, |event| matches!(event, AppEvent::JobStarted { .. }))
+            .unwrap();
+        let AppEvent::JobCompleted { result, .. } = events
+            .job(&job, |event| matches!(event, AppEvent::JobCompleted { .. }))
+            .unwrap()
         else {
-            return Err("the job did not complete".into());
+            panic!("the job did not complete");
         };
         assert_eq!(result["singles"], 1);
         assert!(audio.exists());
-        Ok(())
     }
 
     #[test]
-    fn two_workflow_runs_share_the_import_gate() -> TestResult {
-        let first = tempfile::tempdir()?;
-        let second = tempfile::tempdir()?;
-        let (audio_one, database_one, config_one) = fixture_import(first.path())?;
-        let (audio_two, database_two, config_two) = fixture_import(second.path())?;
-        let (_state, backend, mut events) = started(true)?;
+    fn two_workflow_runs_share_the_import_gate() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (audio_one, database_one, config_one) = fixture_import(first.path()).unwrap();
+        let (audio_two, database_two, config_two) = fixture_import(second.path()).unwrap();
+        let (_state, backend, mut events) = started(true).unwrap();
         let mut jobs = Vec::new();
         for (audio, config) in [(&audio_one, &config_one), (&audio_two, &config_two)] {
-            jobs.push(backend.start_workflow(
-                &json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
-            )?);
+            jobs.push(
+                backend
+                    .start_workflow(
+                        &json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
+                    )
+                    .unwrap(),
+            );
         }
         let mut asked = HashSet::new();
         let mut done = 0;
         while done < 2 {
-            match events.next(Duration::from_secs(20), |_| true)? {
+            match events.next(Duration::from_secs(20), |_| true).unwrap() {
                 AppEvent::DecisionRequest {
                     job_id,
                     decision_id,
@@ -512,11 +521,11 @@ mod tests {
                 } => {
                     assert_eq!(kind, muzik_core::DecisionKind::ImportMatch);
                     asked.insert(job_id);
-                    backend.reply(&decision_id, json!("as_is"))?;
+                    backend.reply(&decision_id, json!("as_is")).unwrap();
                 }
                 AppEvent::JobCompleted { job_id, .. } if jobs.contains(&job_id) => done += 1,
                 AppEvent::JobFailed { message, .. } => {
-                    return Err(format!("job failed: {message}").into())
+                    panic!("job failed: {message}");
                 }
                 _ => {}
             }
@@ -524,97 +533,104 @@ mod tests {
         assert_eq!(asked.len(), 2);
         assert!(database_one.exists() && database_two.exists());
         assert!(!audio_one.exists() && !audio_two.exists());
-        Ok(())
     }
 
     #[test]
-    fn cancel_ends_a_pending_local_import_decision() -> TestResult {
-        let dir = tempfile::tempdir()?;
-        let (audio, database, config) = fixture_import(dir.path())?;
-        let (_state, backend, mut events) = started(true)?;
-        let job = backend.start_workflow(&json!({"raw":audio,"config":config,"no_split":true}))?;
-        let AppEvent::DecisionRequest { decision_id, .. } = events.job(&job, |event| {
-            matches!(event, AppEvent::DecisionRequest { .. })
-        })?
+    fn cancel_ends_a_pending_local_import_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let (audio, database, config) = fixture_import(dir.path()).unwrap();
+        let (_state, backend, mut events) = started(true).unwrap();
+        let job = backend
+            .start_workflow(&json!({"raw":audio,"config":config,"no_split":true}))
+            .unwrap();
+        let AppEvent::DecisionRequest { decision_id, .. } = events
+            .job(&job, |event| {
+                matches!(event, AppEvent::DecisionRequest { .. })
+            })
+            .unwrap()
         else {
-            return Err("no decision request".into());
+            panic!("no decision request");
         };
-        backend.cancel(&job)?;
-        events.job(&job, |event| matches!(event, AppEvent::JobCancelled { .. }))?;
+        backend.cancel(&job).unwrap();
+        events
+            .job(&job, |event| matches!(event, AppEvent::JobCancelled { .. }))
+            .unwrap();
         assert!(audio.exists());
         assert!(!database.exists());
         assert!(backend.reply(&decision_id, json!("as_is")).is_err());
-        Ok(())
     }
 
     #[test]
-    fn cancel_removes_a_queued_item_job() -> TestResult {
-        let (_state, backend, _) = started(false)?;
+    fn cancel_removes_a_queued_item_job() {
+        let (_state, backend, _) = started(false).unwrap();
         let item = ItemRequest {
             id: ItemId::new("PL1", 2, Some("abcdefghijk")),
             title: "Song".into(),
             action: ItemAction::Run,
         };
-        let job = backend.run_item(&item)?;
+        let job = backend.run_item(&item).unwrap();
         assert!(backend.run_item(&item).is_err());
         let listed = backend.jobs();
         assert_eq!(listed["open"][0]["job_id"], job);
         assert_eq!(listed["runner"], false);
-        backend.cancel(&job)?;
+        backend.cancel(&job).unwrap();
         assert_eq!(backend.jobs()["open"], json!([]));
-        Ok(())
     }
 
     #[test]
-    fn thumbnails_already_in_progress_are_not_fetched_again() -> TestResult {
-        let (_state, backend, _) = started(true)?;
+    fn thumbnails_already_in_progress_are_not_fetched_again() {
+        let (_state, backend, _) = started(true).unwrap();
         assert!(backend.cache_thumbnails(Vec::new()).is_none());
         backend.thumbnails.lock().insert("abcdefghijk".into());
-        assert!(backend
-            .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
-            .is_none());
-        Ok(())
+        assert!(
+            backend
+                .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
+                .is_none()
+        );
     }
 
     #[test]
-    fn spotify_login_uses_its_own_slot() -> TestResult {
-        let (_state, backend, _) = started(true)?;
+    fn spotify_login_uses_its_own_slot() {
+        let (_state, backend, _) = started(true).unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
         *backend.login.lock() = Some(ActiveLogin {
             job_id: "spotify-login-test".into(),
             cancel: Arc::clone(&cancel),
         });
         assert!(backend.spotify_login().is_err());
-        backend.cancel("spotify-login-test")?;
+        backend.cancel("spotify-login-test").unwrap();
         assert!(cancel.load(Ordering::Relaxed));
-        Ok(())
     }
 
     #[test]
-    fn watchlist_load_returns_saved_cards_before_local_check() -> TestResult {
-        let (_state, backend, mut events) = started(true)?;
-        let playlist = backend.add_source("https://www.youtube.com/playlist?list=PLnative123")?;
+    fn watchlist_load_returns_saved_cards_before_local_check() {
+        let (_state, backend, mut events) = started(true).unwrap();
+        let playlist = backend
+            .add_source("https://www.youtube.com/playlist?list=PLnative123")
+            .unwrap();
         assert_eq!(playlist.playlist_id, "PLnative123");
-        let (saved, check) = backend.load_watchlist()?;
+        let (saved, check) = backend.load_watchlist().unwrap();
         assert_eq!(saved["playlists"][0]["playlist_id"], "PLnative123");
         check.run();
-        let AppEvent::WatchlistUpdated(checked) = events.next(Duration::from_secs(5), |event| {
-            matches!(event, AppEvent::WatchlistUpdated(_))
-        })?
+        let AppEvent::WatchlistUpdated(checked) = events
+            .next(Duration::from_secs(5), |event| {
+                matches!(event, AppEvent::WatchlistUpdated(_))
+            })
+            .unwrap()
         else {
-            return Err("no checked watchlist".into());
+            panic!("no checked watchlist");
         };
         assert_eq!(checked["playlists"][0]["playlist_id"], "PLnative123");
-        Ok(())
     }
 
     #[test]
-    fn watchlist_edits_go_through_the_app() -> TestResult {
-        let (_state, backend, _) = started(true)?;
-        backend.add_source("https://www.youtube.com/playlist?list=PL123")?;
-        assert!(backend.rename_source("PL123", "  New name  ")?);
+    fn watchlist_edits_go_through_the_app() {
+        let (_state, backend, _) = started(true).unwrap();
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        assert!(backend.rename_source("PL123", "  New name  ").unwrap());
         assert!(backend.rename_source("PL123", "").is_err());
-        assert!(backend.remove_source("PL123")?);
-        Ok(())
+        assert!(backend.remove_source("PL123").unwrap());
     }
 }

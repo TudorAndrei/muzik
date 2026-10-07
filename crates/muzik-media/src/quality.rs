@@ -1,7 +1,7 @@
 //! Measured audio quality for library scans and workflow decisions.
 
-use muzik_core::audio::{AudioFormat, Codec};
 use muzik_core::QualityPolicy;
+use muzik_core::audio::{AudioFormat, Codec};
 use muzik_tags::AudioProperties;
 use std::path::Path;
 
@@ -23,6 +23,8 @@ pub enum QualityDecision {
     Replace,
 }
 
+/// # Errors
+/// Never returns an error now; an unknown or unreadable file gives `Ok(None)`.
 pub fn measure(path: &Path) -> Result<Option<MeasuredQuality>, String> {
     if let Ok(properties) = muzik_tags::probe(path) {
         return Ok(Some(MeasuredQuality::from(properties)));
@@ -81,6 +83,7 @@ impl From<AudioProperties> for MeasuredQuality {
     }
 }
 
+#[must_use]
 pub fn decide(
     quality: &MeasuredQuality,
     policy: QualityPolicy,
@@ -103,9 +106,9 @@ pub fn decide(
 
 #[cfg(test)]
 mod tests {
-    use super::{decide, measure, MeasuredQuality, QualityDecision};
-    use muzik_core::audio::{AudioFormat, Codec};
+    use super::{MeasuredQuality, QualityDecision, decide, measure};
     use muzik_core::QualityPolicy;
+    use muzik_core::audio::{AudioFormat, Codec};
     use muzik_tags::AudioProperties;
 
     fn properties(format: AudioFormat, codec: Option<Codec>) -> AudioProperties {
@@ -160,17 +163,16 @@ mod tests {
     }
 
     #[test]
-    fn formats_lofty_cannot_read_are_named_from_the_extension() -> Result<(), String> {
-        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    fn formats_lofty_cannot_read_are_named_from_the_extension() {
+        let directory = tempfile::tempdir().unwrap();
         let dsd = directory.path().join("track.DSF");
-        std::fs::write(&dsd, b"not audio").map_err(|error| error.to_string())?;
-        let measured = measure(&dsd)?.ok_or("a DSF file must have a quality")?;
+        std::fs::write(&dsd, b"not audio").unwrap();
+        let measured = measure(&dsd).unwrap().unwrap();
         assert!(measured.lossless);
         assert_eq!(measured.size, Some(9));
 
         let broken = directory.path().join("track.mp3");
-        std::fs::write(&broken, b"not audio").map_err(|error| error.to_string())?;
-        assert_eq!(measure(&broken)?, None);
-        Ok(())
+        std::fs::write(&broken, b"not audio").unwrap();
+        assert_eq!(measure(&broken).unwrap(), None);
     }
 }

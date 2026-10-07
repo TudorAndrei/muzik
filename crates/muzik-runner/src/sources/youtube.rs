@@ -1,16 +1,16 @@
 use super::{
-    at, cancel_or, check_cancelled, mark_full, organize, required, workflow_error, Source,
+    Source, at, cancel_or, check_cancelled, mark_full, organize, required, workflow_error,
 };
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::{chapters, ChapterAnswer, DecisionKind};
+use muzik_core::{ChapterAnswer, DecisionKind, chapters};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
-use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
-use muzik_workflow::ytdlp::{is_video_id, YtDlp};
-use muzik_workflow::{classify_input, WorkflowInput, WorkflowOperations};
-use serde_json::{json, Value};
+use muzik_workflow::quality::{QualityUpgradeResult, check_youtube_quality};
+use muzik_workflow::ytdlp::{YtDlp, is_video_id};
+use muzik_workflow::{WorkflowInput, WorkflowOperations, classify_input};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -86,8 +86,9 @@ impl Source for Youtube {
             updated.set(Stage::Download, StageStatus::Complete);
             updated.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         } else {
-            let split = result["split_dirs"]
-                .as_array()
+            let split = result
+                .get("split_dirs")
+                .and_then(Value::as_array)
                 .is_some_and(|dirs| !dirs.is_empty());
             mark_full(&mut updated, &adapter.prepared.settings.options, split);
         }
@@ -220,12 +221,12 @@ fn apply_quality_result(item: &mut WatchItem, result: &QualityUpgradeResult) {
         item.set(Stage::Parse, StageStatus::Skipped);
         item.set(Stage::Split, StageStatus::Complete);
         item.invalidate(&[Stage::Organize]);
-    } else if let Some(replacement) = result.audio_files.first() {
-        if item.path(Stage::Download) != Some(replacement.as_path()) {
-            item.set_path(Stage::Download, Some(replacement.clone()));
-            item.set_path(Stage::Quality, Some(replacement.clone()));
-            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
-        }
+    } else if let Some(replacement) = result.audio_files.first()
+        && item.path(Stage::Download) != Some(replacement.as_path())
+    {
+        item.set_path(Stage::Download, Some(replacement.clone()));
+        item.set_path(Stage::Quality, Some(replacement.clone()));
+        item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
     }
 }
 
@@ -256,8 +257,9 @@ fn refresh_chapters_with(
     let mut found = chapters::parse_info_json(&metadata.to_string())
         .map_err(|error| JobError::Operation(error.to_string()))?;
     if found.is_empty() {
-        found = metadata["description"]
-            .as_str()
+        found = metadata
+            .get("description")
+            .and_then(Value::as_str)
             .map(chapters::parse_tracklist)
             .unwrap_or_default();
     }
@@ -291,7 +293,7 @@ fn refresh_chapters_with(
         Some(ChapterAnswer::Reject) => {
             return Err(JobError::Operation(
                 "YouTube chapters were not accepted.".into(),
-            ))
+            ));
         }
         None => return Err(JobError::Operation("Select a chapter action.".into())),
     }
@@ -367,15 +369,15 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
         .as_array()
         .into_iter()
         .flatten()
-        .enumerate()
-        .filter_map(|(index, entry)| {
+        .zip(1_u64..)
+        .filter_map(|(entry, position)| {
             let id = entry["id"].as_str().or_else(|| entry["url"].as_str())?;
             if !is_video_id(id) {
                 return None;
             }
             let saved = old.get(id).copied();
             let listed_title = entry["title"].as_str().filter(|title| {
-                !title.is_empty() && !(title.starts_with('[') && title.ends_with(" video]"))
+                !title.is_empty() && (!title.starts_with('[') || !title.ends_with(" video]"))
             });
             let unavailable = listed_title.is_none() && entry["duration"].is_null();
             let title = listed_title
@@ -391,7 +393,7 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
                 })
                 .map(str::to_owned)
                 .or_else(|| saved.and_then(|item| item.thumbnail_url.clone()));
-            let mut item = WatchItem::new(index as u64 + 1, title, SourceKind::Youtube);
+            let mut item = WatchItem::new(position, title, SourceKind::Youtube);
             item.video_id = Some(id.to_owned());
             item.video_url = Some(format!("https://www.youtube.com/watch?v={id}"));
             item.thumbnail_url = thumbnail;
@@ -421,16 +423,15 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     #[test]
-    fn saved_output_paths_resolve_new_and_existing_audio() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let directory = tempfile::tempdir()?;
+    fn saved_output_paths_resolve_new_and_existing_audio() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("Song [abcdefghijk].flac");
         let split = directory.path().join("split");
-        fs::write(&audio, [])?;
-        fs::create_dir(&split)?;
-        let settings = settings(directory.path(), &json!({"output":directory.path()}))?;
+        fs::write(&audio, []).unwrap();
+        fs::create_dir(&split).unwrap();
+        let settings = settings(directory.path(), &json!({"output":directory.path()})).unwrap();
         let replacement = directory.path().join("replacement.flac");
-        fs::write(&replacement, [])?;
+        fs::write(&replacement, []).unwrap();
         with_adapter(&settings, |adapter, _| {
             let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
             item.video_id = Some("abcdefghijk".into());
@@ -444,18 +445,16 @@ mod tests {
             );
             assert_eq!(adapter.prepared.audio(&item), Some(replacement.clone()));
         });
-        Ok(())
     }
 
     #[test]
-    fn multi_file_quality_replacement_imports_as_a_ready_album(
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn multi_file_quality_replacement_imports_as_a_ready_album() {
+        let directory = tempfile::tempdir().unwrap();
         let original = directory.path().join("Album [abcdefghijk].flac");
         let album = directory.path().join("replacement");
-        fs::create_dir(&album)?;
+        fs::create_dir(&album).unwrap();
         for path in [&original, &album.join("one.flac"), &album.join("two.flac")] {
-            fs::copy(fixture(), path)?;
+            fs::copy(fixture(), path).unwrap();
         }
         let mut item = WatchItem::new(1, "Album", SourceKind::Youtube);
         item.video_id = Some("abcdefghijk".into());
@@ -469,27 +468,30 @@ mod tests {
             },
         );
         assert_eq!(item.path(Stage::Download), Some(original.as_path()));
-        assert_eq!(ready_quality_directory(&item), Some(album.clone()));
+        assert_eq!(ready_quality_directory(&item), Some(album));
         assert_eq!(item.status(Stage::Parse), StageStatus::Skipped);
         assert_eq!(item.status(Stage::Split), StageStatus::Complete);
         assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
-        let config = library_config(directory.path())?;
+        let config = library_config(directory.path()).unwrap();
         let settings = settings(
             directory.path(),
             &json!({"output":directory.path(),"config":config,"interactive":false,"quality_policy":"auto"}),
-        )?;
+        )
+        .unwrap();
         let result = with_adapter(&settings, |adapter, cancelled| {
             of(SourceKind::Youtube).process(adapter, &item, ItemAction::Retry, cancelled)
-        })?;
+        })
+        .unwrap();
         assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
         assert_eq!(
-            muzik_library::Library::open_read_only(&directory.path().join("library.db"))?
-                .items()?
+            muzik_library::Library::open_read_only(&directory.path().join("library.db"))
+                .unwrap()
+                .items()
+                .unwrap()
                 .len(),
             2
         );
         assert!(original.is_file());
-        Ok(())
     }
 
     #[test]
@@ -541,7 +543,9 @@ mod tests {
 
     #[test]
     fn description_tracklist_orders_times_and_keeps_titles() {
-        let chapters = muzik_core::chapters::parse_tracklist("Track list:\n2. Song Two (04:10 - 08:00)\n[0:00] First Song\n4:10 Duplicate\n8:00 - Final Song\n");
+        let chapters = muzik_core::chapters::parse_tracklist(
+            "Track list:\n2. Song Two (04:10 - 08:00)\n[0:00] First Song\n4:10 Duplicate\n8:00 - Final Song\n",
+        );
         assert_eq!(chapters.len(), 3);
         assert_eq!(chapters[0].title, "First Song");
         assert_eq!(chapters[0].end, Some(250));
@@ -563,11 +567,11 @@ mod tests {
     }
 
     #[test]
-    fn refreshed_chapters_replace_sidecar_after_review() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn refreshed_chapters_replace_sidecar_after_review() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("Album.flac");
-        fs::write(&audio, [])?;
-        fs::write(directory.path().join("Album.chapters.txt"), "00:00 Old\n")?;
+        fs::write(&audio, []).unwrap();
+        fs::write(directory.path().join("Album.chapters.txt"), "00:00 Old\n").unwrap();
         let mut asked = false;
         let path = refresh_chapters_with(
             &audio,
@@ -584,10 +588,17 @@ mod tests {
                     {"start_time":125,"title":"Second"}
                 ]}))
             },
-        )?;
+        )
+        .unwrap();
         assert!(asked);
-        assert_eq!(fs::read_to_string(path)?, "00:00 First\n02:05 Second\n");
-        assert!(fs::read_to_string(directory.path().join("Album.info.json"))?.contains("Second"));
-        Ok(())
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "00:00 First\n02:05 Second\n"
+        );
+        assert!(
+            fs::read_to_string(directory.path().join("Album.info.json"))
+                .unwrap()
+                .contains("Second")
+        );
     }
 }

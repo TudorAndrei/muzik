@@ -19,6 +19,7 @@ pub const DEFAULT_SERVER_PORT: u16 = 2416;
 const KEYCHAIN_SERVICE: &str = "com.tudorandrei.muzik";
 const KEYCHAIN_ACCOUNT: &str = "soulseek";
 
+#[must_use]
 pub fn saved_password() -> Option<String> {
     keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
         .and_then(|entry| entry.get_password())
@@ -26,6 +27,8 @@ pub fn saved_password() -> Option<String> {
         .filter(|password| !password.is_empty())
 }
 
+/// # Errors
+/// Returns an error when the keychain entry cannot be opened or written.
 pub fn save_password(password: &str) -> Result<(), keyring_core::Error> {
     keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?.set_password(password)
 }
@@ -68,6 +71,7 @@ impl SessionSettings {
     }
 }
 
+#[must_use]
 pub fn setting(config: &Value, environment: &str, key: &str) -> Option<String> {
     env::var(environment)
         .ok()
@@ -95,15 +99,18 @@ type Shared = Option<(SessionSettings, Arc<Session>)>;
 static SHARED: Mutex<Shared> = Mutex::new(None);
 
 impl Session {
+    /// # Errors
+    /// Returns an error when a new connection or login to the Soulseek server fails.
     pub fn shared(settings: SessionSettings) -> Result<Arc<Self>, BridgeError> {
         let mut shared = SHARED.lock();
-        if let Some((current, session)) = shared.as_ref() {
-            if *current == settings {
-                return Ok(Arc::clone(session));
-            }
+        if let Some((current, session)) = shared.as_ref()
+            && *current == settings
+        {
+            return Ok(Arc::clone(session));
         }
         let session = Arc::new(Self::connect(settings.clone())?);
         *shared = Some((settings, Arc::clone(&session)));
+        drop(shared);
         Ok(session)
     }
 
@@ -111,6 +118,8 @@ impl Session {
         SHARED.lock().take();
     }
 
+    /// # Errors
+    /// Returns an error when the connection or login to the Soulseek server fails.
     pub fn connect(settings: SessionSettings) -> Result<Self, BridgeError> {
         tracing::debug!("connect to Soulseek server");
         let mut client_settings = ClientSettings::new(settings.username, settings.password);

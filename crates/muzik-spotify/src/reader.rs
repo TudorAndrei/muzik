@@ -1,12 +1,12 @@
 //! Read Spotify track metadata into the existing version 1 export format.
 
-use super::{utc, Client, Result};
+use super::{Client, Result, utc};
 use chrono::{DateTime, Utc};
 use rspotify_model::{
     AlbumId, FullAlbum, FullPlaylist, FullTrack, Id, Image, PlayableItem, PlaylistId, PlaylistItem,
     SavedTrack, SimplifiedArtist, SimplifiedTrack,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::Path;
 use url::Url;
 
@@ -24,6 +24,10 @@ struct Track<'a> {
     url: Option<&'a String>,
     duration_ms: i64,
     disc_number: i32,
+    #[expect(
+        clippy::struct_field_names,
+        reason = "mirrors the Spotify API field name"
+    )]
     track_number: u32,
     isrc: Option<&'a String>,
     is_local: bool,
@@ -36,13 +40,15 @@ struct Album<'a> {
     artists: &'a [SimplifiedArtist],
 }
 
+/// # Errors
+/// Returns an error when the URI is not a Spotify playlist, album, or Liked Songs, or when a Spotify request fails.
 pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) -> Result<Value> {
     let reference = parse_reference(uri)?;
     let mut spotify = Client::connect(config_path, token_path)?;
     let mut entries = Vec::new();
     let mut push = |entry: Option<Map<String, Value>>| {
         if let Some(mut entry) = entry {
-            entry.insert("index".into(), json!(entries.len() + 1));
+            entry.insert("index".into(), json!(entries.len().saturating_add(1)));
             entries.push(Value::Object(entry));
         }
     };
@@ -91,8 +97,8 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
         "title": title,
         "entries": entries,
     });
-    if let Some(snapshot) = snapshot {
-        document["snapshot_id"] = json!(snapshot);
+    if let (Some(snapshot), Value::Object(document)) = (snapshot, &mut document) {
+        document.insert("snapshot_id".into(), json!(snapshot));
     }
     Ok(document)
 }
@@ -126,10 +132,10 @@ fn parse_reference(uri: &str) -> Result<Reference> {
             _ => return Err(unreadable().into()),
         }
     };
-    if let Reference::Playlist(id) | Reference::Album(id) = &reference {
-        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
-            return Err("Spotify ID must contain only letters and numbers".into());
-        }
+    if let Reference::Playlist(id) | Reference::Album(id) = &reference
+        && (id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    {
+        return Err("Spotify ID must contain only letters and numbers".into());
     }
     Ok(reference)
 }
@@ -193,10 +199,12 @@ fn entry(
     );
     entry.insert(
         "source_url".into(),
-        json!(track.url.cloned().or_else(|| track
-            .id
-            .as_ref()
-            .map(|id| format!("https://open.spotify.com/track/{id}")))),
+        json!(track.url.cloned().or_else(|| {
+            track
+                .id
+                .as_ref()
+                .map(|id| format!("https://open.spotify.com/track/{id}"))
+        })),
     );
     for (key, value) in [
         ("album", Some(album.name)),
@@ -232,7 +240,7 @@ fn names(artists: &[SimplifiedArtist]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{entry, parse_reference, Album, Reference, Track};
+    use super::{Album, Reference, Track, entry, parse_reference};
     use chrono::{TimeZone, Utc};
     use rspotify_model::{Image, SimplifiedArtist};
     use std::collections::HashMap;
@@ -261,8 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_uses_the_album_artist_and_image_when_the_track_has_none(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn an_entry_uses_the_album_artist_and_image_when_the_track_has_none() {
         let album_artists = [artist("Alex")];
         let images = [Image {
             height: None,
@@ -276,7 +283,7 @@ mod tests {
             artists: &album_artists,
         };
         let added = Utc.with_ymd_and_hms(2026, 1, 2, 3, 4, 5).single();
-        let entry = entry(&track("One", &[]), &album, added).ok_or("no entry")?;
+        let entry = entry(&track("One", &[]), &album, added).unwrap();
         assert_eq!(entry["artists"][0], "Alex");
         assert_eq!(entry["source_id"], "spotify:track:t1");
         assert_eq!(entry["source_url"], "https://open.spotify.com/track/t1");
@@ -286,7 +293,6 @@ mod tests {
         );
         assert_eq!(entry["added_at"], "2026-01-02T03:04:05Z");
         assert_eq!(entry["duration_ms"], 120_000);
-        Ok(())
     }
 
     #[test]
@@ -306,22 +312,21 @@ mod tests {
     }
 
     #[test]
-    fn references_accept_uris_links_and_liked_songs() -> crate::Result<()> {
-        assert_eq!(parse_reference("Liked Songs")?, Reference::Liked);
+    fn references_accept_uris_links_and_liked_songs() {
+        assert_eq!(parse_reference("Liked Songs").unwrap(), Reference::Liked);
         assert_eq!(
-            parse_reference("https://open.spotify.com/collection/tracks")?,
+            parse_reference("https://open.spotify.com/collection/tracks").unwrap(),
             Reference::Liked
         );
         assert_eq!(
-            parse_reference("https://open.spotify.com/intl-de/playlist/PL1?si=abc")?,
+            parse_reference("https://open.spotify.com/intl-de/playlist/PL1?si=abc").unwrap(),
             Reference::Playlist("PL1".into())
         );
         assert_eq!(
-            parse_reference("spotify:album:AL1")?,
+            parse_reference("spotify:album:AL1").unwrap(),
             Reference::Album("AL1".into())
         );
         assert!(parse_reference("https://example.test/playlist/PL1").is_err());
         assert!(parse_reference("spotify:playlist:../x").is_err());
-        Ok(())
     }
 }

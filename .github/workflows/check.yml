@@ -2,6 +2,7 @@ name: Check
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   commits:
+    name: Commits
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -25,27 +27,33 @@ jobs:
       - run: cog check --from-latest-tag
 
   check:
+    name: Check
     runs-on: ubuntu-latest
+    env:
+      MISE_ENV: ci
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Install GPUI Linux libraries
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
             install -y --no-install-recommends \
-            ffmpeg libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev \
+            libfontconfig-dev libwayland-dev \
             libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev \
             vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
+        with:
+          install_args: rust mr-boxington hk zizmor cargo-binstall cargo:cargo-deny conda:ffmpeg
       - uses: jdx/mr-boxington-action@v1
         with:
           toolchain: "1.98.1"
-      - run: mise run check
+      - run: mise run --skip-tools check
 
   gpui-macos:
+    name: GPUI on macOS
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7

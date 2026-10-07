@@ -1,7 +1,7 @@
 use muzik_core::BeetsConfig;
 use muzik_match::{
-    assign_items, rank_albums, track_distance, Error, MatchAlbum, MatchConfig, MatchItem,
-    MatchTrack, Recommendation,
+    Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack, Recommendation, assign_items,
+    rank_albums, track_distance,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -45,6 +45,7 @@ struct ExpectedRanking {
 }
 
 #[test]
+#[expect(clippy::float_cmp, reason = "beets parity needs exact float equality")]
 fn matches_beets_assignment_and_ranking() {
     let fixture: Fixture = serde_json::from_str(include_str!("fixtures/ranking.json")).unwrap();
     assert_eq!(fixture.beets_version, "2.13.1");

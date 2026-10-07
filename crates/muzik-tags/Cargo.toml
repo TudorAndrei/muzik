@@ -1,10 +1,14 @@
 [package]
 name = "muzik-tags"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Beets-compatible audio tag read and write support"
+
+[lints]
+workspace = true
 
 [dependencies]
 lofty = "0.25"

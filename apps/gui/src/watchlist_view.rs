@@ -1,4 +1,5 @@
 use super::*;
+use crate::watch_table::ItemKey;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle};
@@ -10,9 +11,11 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::table::DataTable;
 
 impl Muzik {
-    pub(crate) fn watchlist(&self, cx: &mut Context<Self>) -> AnyElement {
-        let playlists = self.watchlist["playlists"]
-            .as_array()
+    pub(crate) fn watchlist(&self, cx: &Context<Self>) -> AnyElement {
+        let playlists = self
+            .watchlist
+            .get("playlists")
+            .and_then(Value::as_array)
             .or_else(|| self.watchlist.as_array());
         let has_playlists = playlists.is_some_and(|all| !all.is_empty());
         let loading = self.reading(Read::Watchlist);
@@ -52,7 +55,7 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn watchlist_header(&self, has_playlists: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn watchlist_header(&self, has_playlists: bool, cx: &Context<Self>) -> AnyElement {
         let refresh = Button::new("watch-refresh")
             .icon(IconName::RefreshCw)
             .label("Refresh all")
@@ -90,7 +93,7 @@ impl Muzik {
         &self,
         playlists: Option<&Vec<Value>>,
         has_playlists: bool,
-        cx: &mut Context<Self>,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let items: Vec<SidebarMenuItem> = playlists
             .into_iter()
@@ -101,7 +104,7 @@ impl Muzik {
                 let item = SidebarMenuItem::new(playlist_title(playlist).to_string())
                     .active(index == self.selected_playlist)
                     .on_click(cx.listener(move |view, _, window, cx| {
-                        view.select_playlist(index, rename_title.clone(), window, cx)
+                        view.select_playlist(index, rename_title.clone(), window, cx);
                     }));
                 if playlist["last_error"].is_string() {
                     item.icon(IconName::TriangleAlert)
@@ -148,14 +151,12 @@ impl Muzik {
         self.selected_playlist = index;
         self.playlist_name
             .update(cx, |state, cx| state.set_value(title, window, cx));
-        self.watch_table
-            .update(cx, |state, cx| state.clear_selection(cx));
+        self.watch_table.update(cx, TableState::clear_selection);
         self.sync_watch_table(cx);
         cx.notify();
     }
 
-    fn playlist_view(&self, playlist: &Value, cx: &mut Context<Self>) -> AnyElement {
-        let id = playlist_id(playlist);
+    fn playlist_view(&self, playlist: &Value, cx: &Context<Self>) -> AnyElement {
         let title = playlist_title(playlist).to_string();
         let items = playlist["items"].as_array();
         let facts = format!(
@@ -166,8 +167,87 @@ impl Muzik {
                 .as_str()
                 .map_or_else(|| "not checked".to_string(), |at| format!("checked {at}"))
         );
+        let tools = self.playlist_tools(playlist, &title, items, cx);
+        let mut section = div().v_flex().gap_4().flex_1().min_h_0().child(
+            div()
+                .v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_3()
+                        .child(style::section_title(title).min_w_0().truncate())
+                        .child(tools),
+                )
+                .child(style::meta(facts, cx)),
+        );
+        if let Some(error) = playlist["last_error"].as_str() {
+            section = section.child(Alert::error("playlist-error", error.to_string()));
+        }
+        section = section.child(self.filter_tabs(cx));
+        let Some(items) = items else {
+            return section.into_any_element();
+        };
+        if !items.iter().any(|item| matches_filter(item, self.filter)) {
+            return section
+                .child(empty_state(
+                    "Nothing here",
+                    self.empty_filter_message(playlist, items),
+                    false,
+                ))
+                .into_any_element();
+        }
+        section
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(320.))
+                    .child(DataTable::new(&self.watch_table).stripe(true)),
+            )
+            .into_any_element()
+    }
+
+    fn filter_tabs(&self, cx: &Context<Self>) -> TabBar {
+        TabBar::new("filters")
+            .pill()
+            .small()
+            .selected_index(self.filter)
+            .children((0..=Summary::ALL.len()).map(|filter| Tab::new().label(filter_label(filter))))
+            .on_click(cx.listener(|view, index: &usize, _, cx| {
+                view.filter = *index;
+                view.watch_table.update(cx, TableState::clear_selection);
+                view.sync_watch_table(cx);
+                cx.notify();
+            }))
+    }
+
+    fn empty_filter_message(&self, playlist: &Value, items: &[Value]) -> String {
+        if SourceKind::of(playlist) == SourceKind::Spotify && items.is_empty() {
+            "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Settings to get audio.".to_string()
+        } else if items.is_empty() && playlist["last_checked_at"].is_null() {
+            "This playlist has not been checked. Select Refresh to read it.".to_string()
+        } else if items.is_empty() {
+            "This playlist has no videos. Refresh it to check again.".to_string()
+        } else {
+            format!(
+                "No items have the {} status. Select All to see every item.",
+                filter_label(self.filter)
+            )
+        }
+    }
+
+    fn playlist_tools(
+        &self,
+        playlist: &Value,
+        title: &str,
+        items: Option<&Vec<Value>>,
+        cx: &Context<Self>,
+    ) -> Div {
+        let id = playlist_id(playlist);
         let source_url = playlist["url"].as_str().unwrap_or("").to_string();
-        let refresh_source = (id.clone(), title.clone());
+        let refresh_source = (id.clone(), title.to_string());
         let mut tools = div().flex().items_center().gap_1().child(
             Button::new("refresh-source")
                 .ghost()
@@ -176,7 +256,7 @@ impl Muzik {
                 .label("Refresh")
                 .disabled(self.has_run(RunKind::Refresh))
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    view.refresh(Some(refresh_source.clone()), cx)
+                    view.refresh(Some(refresh_source.clone()), cx);
                 })),
         );
         if !source_url.is_empty() {
@@ -226,16 +306,16 @@ impl Muzik {
             );
         }
         let rename_id = id.clone();
-        let remove_id = id.clone();
-        let remove_title = title.clone();
-        tools = tools
+        let remove_id = id;
+        let remove_title = title.to_string();
+        tools
             .child(
                 Button::new("rename-playlist")
                     .ghost()
                     .small()
                     .label("Rename")
                     .on_click(cx.listener(move |view, _, window, cx| {
-                        view.open_rename(rename_id.clone(), window, cx)
+                        view.open_rename(rename_id.clone(), window, cx);
                     })),
             )
             .child(
@@ -244,8 +324,8 @@ impl Muzik {
                     .small()
                     .label("Remove")
                     .text_color(cx.theme().danger)
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.request_action(
+                    .on_click(cx.listener(move |_, _, window, cx| {
+                        Self::request_action(
                             PendingAction {
                                 title: format!("Remove “{remove_title}”?"),
                                 description: "The playlist leaves the watchlist.",
@@ -257,76 +337,10 @@ impl Muzik {
                             cx,
                         );
                     })),
-            );
-        let mut section = div().v_flex().gap_4().flex_1().min_h_0().child(
-            div()
-                .v_flex()
-                .gap_1()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap_3()
-                        .child(style::section_title(title).min_w_0().truncate())
-                        .child(tools),
-                )
-                .child(style::meta(facts, cx)),
-        );
-        if let Some(error) = playlist["last_error"].as_str() {
-            section = section.child(Alert::error("playlist-error", error.to_string()));
-        }
-        section = section.child(
-            TabBar::new("filters")
-                .pill()
-                .small()
-                .selected_index(self.filter)
-                .children(
-                    (0..=Summary::ALL.len()).map(|filter| Tab::new().label(filter_label(filter))),
-                )
-                .on_click(cx.listener(|view, index: &usize, _, cx| {
-                    view.filter = *index;
-                    view.watch_table
-                        .update(cx, |state, cx| state.clear_selection(cx));
-                    view.sync_watch_table(cx);
-                    cx.notify();
-                })),
-        );
-        let Some(items) = items else {
-            return section.into_any_element();
-        };
-        let filtered: Vec<&Value> = items
-            .iter()
-            .filter(|item| matches_filter(item, self.filter))
-            .collect();
-        if filtered.is_empty() {
-            let message = if SourceKind::of(playlist) == SourceKind::Spotify && items.is_empty() {
-                "This Spotify source has no tracks. Refresh it to read track names. Set Audio source to Soulseek in Settings to get audio.".to_string()
-            } else if items.is_empty() && playlist["last_checked_at"].is_null() {
-                "This playlist has not been checked. Select Refresh to read it.".to_string()
-            } else if items.is_empty() {
-                "This playlist has no videos. Refresh it to check again.".to_string()
-            } else {
-                format!(
-                    "No items have the {} status. Select All to see every item.",
-                    filter_label(self.filter)
-                )
-            };
-            return section
-                .child(empty_state("Nothing here", message, false))
-                .into_any_element();
-        }
-        section
-            .child(
-                div()
-                    .flex_1()
-                    .min_h(px(320.))
-                    .child(DataTable::new(&self.watch_table).stripe(true)),
             )
-            .into_any_element()
     }
 
-    fn open_rename(&mut self, playlist_id: String, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_rename(&self, playlist_id: String, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         let name = self.playlist_name.clone();
         window.open_alert_dialog(cx, move |dialog, _, _| {
@@ -352,46 +366,44 @@ impl Muzik {
         });
     }
 
-    fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
+    fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
         self.queued_items
-            .contains(&ItemId::new(playlist_id, position as u64, Some(video_id)).to_string())
+            .contains(&ItemId::new(playlist_id, position, Some(video_id)).to_string())
     }
 
     pub(crate) fn item_request(
         &self,
         playlist_id: &str,
-        position: usize,
+        position: u64,
         video_id: &str,
         action: ItemAction,
     ) -> ItemRequest {
         let title = self
             .find_item(&(playlist_id.to_owned(), position, video_id.to_owned()))
-            .and_then(|item| item["title"].as_str().map(str::to_owned))
+            .and_then(|item| item.get("title").and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_else(|| video_id.to_owned());
         ItemRequest {
-            id: ItemId::new(playlist_id, position as u64, Some(video_id)),
+            id: ItemId::new(playlist_id, position, Some(video_id)),
             title,
             action,
         }
     }
 
-    fn find_item(&self, key: &(String, usize, String)) -> Option<Value> {
-        let playlists = self.watchlist["playlists"].as_array()?;
+    fn find_item(&self, key: &ItemKey) -> Option<Value> {
+        let playlists = self.watchlist.get("playlists")?.as_array()?;
         let playlist = playlists
             .iter()
             .find(|playlist| playlist_id(playlist) == key.0)?;
         playlist["items"]
             .as_array()?
             .iter()
-            .find(|item| {
-                item["position"].as_u64() == Some(key.1 as u64) && item_video_id(item) == key.2
-            })
+            .find(|item| item["position"].as_u64() == Some(key.1) && item_video_id(item) == key.2)
             .cloned()
     }
 
     pub(crate) fn open_item_sheet(
         &mut self,
-        key: (String, usize, String),
+        key: ItemKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -413,7 +425,7 @@ impl Muzik {
 fn item_sheet(
     sheet: Sheet,
     item: &Value,
-    key: &(String, usize, String),
+    key: &ItemKey,
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Sheet {
@@ -468,6 +480,21 @@ fn item_sheet(
     let Some(entity) = view.upgrade() else {
         return sheet.title(title).child(body);
     };
+    let commands = item_commands(item, key, &title, &entity, view, cx);
+    sheet
+        .title(title)
+        .size(px(420.))
+        .child(body.child(commands).overflow_y_scrollbar())
+}
+
+fn item_commands(
+    item: &Value,
+    key: &ItemKey,
+    title: &str,
+    entity: &Entity<Muzik>,
+    view: &WeakEntity<Muzik>,
+    cx: &App,
+) -> Div {
     let mut commands = div()
         .v_flex()
         .gap_3()
@@ -476,11 +503,14 @@ fn item_sheet(
         .border_color(cx.theme().border)
         .child(style::overline("COMMANDS", cx));
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
-        let availability = &item["actions"][action.as_ref()];
+        let availability = item
+            .get("actions")
+            .and_then(|actions| actions.get(action.as_ref()))
+            .unwrap_or(&Value::Null);
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
         let request = entity.read(cx).item_request(&key.0, key.1, &key.2, action);
         let label = action_label(action);
-        let item_title = title.clone();
+        let item_title = title.to_string();
         let view = view.clone();
         let mut row = div().v_flex().gap_1().child(
             Button::new(("item-action", index))
@@ -493,7 +523,7 @@ fn item_sheet(
                     let item_title = item_title.clone();
                     let _ = view.update(cx, |view, cx| {
                         if action.replaces_files() {
-                            view.request_action(
+                            Muzik::request_action(
                                 PendingAction {
                                     title: format!("{label} for “{item_title}”?"),
                                     description: REPLACE_WARNING,
@@ -510,20 +540,15 @@ fn item_sheet(
                     });
                 }),
         );
-        if !enabled {
-            if let Some(reason) = availability["reason"].as_str() {
-                row = row.child(style::meta(reason.to_string(), cx));
-            }
+        if !enabled && let Some(reason) = availability["reason"].as_str() {
+            row = row.child(style::meta(reason.to_string(), cx));
         }
         commands = commands.child(row);
     }
-    sheet
-        .title(title)
-        .size(px(420.))
-        .child(body.child(commands).overflow_y_scrollbar())
+    commands
 }
 
-pub(crate) fn empty_state(
+pub fn empty_state(
     title: impl Into<SharedString>,
     description: impl Into<SharedString>,
     loading: bool,
@@ -541,7 +566,7 @@ pub(crate) fn empty_state(
     }
 }
 
-pub(crate) fn playlist_id(playlist: &Value) -> String {
+pub fn playlist_id(playlist: &Value) -> String {
     playlist["id"]
         .as_str()
         .or_else(|| playlist["playlist_id"].as_str())
@@ -556,15 +581,21 @@ fn playlist_title(playlist: &Value) -> &str {
         .unwrap_or("Playlist")
 }
 
-fn item_position(item: &Value) -> usize {
-    item["position"].as_u64().unwrap_or(0) as usize
+fn item_position(item: &Value) -> u64 {
+    item["position"].as_u64().unwrap_or(0)
 }
 
 fn retryable(item: &Value) -> bool {
     item["summary"].as_str() == Some(Summary::Failed.as_ref())
-        && item["primary_action"]["action"].as_str() == Some(ItemAction::Retry.as_ref())
-        && item["actions"][ItemAction::Retry.as_ref()]["enabled"]
-            .as_bool()
+        && item
+            .pointer("/primary_action/action")
+            .and_then(Value::as_str)
+            == Some(ItemAction::Retry.as_ref())
+        && item
+            .get("actions")
+            .and_then(|actions| actions.get(ItemAction::Retry.as_ref()))
+            .and_then(|retry| retry.get("enabled"))
+            .and_then(Value::as_bool)
             .unwrap_or(true)
 }
 
@@ -576,14 +607,14 @@ fn item_video_id(item: &Value) -> String {
         .to_string()
 }
 
-pub(crate) fn matches_filter(item: &Value, filter: usize) -> bool {
+pub fn matches_filter(item: &Value, filter: usize) -> bool {
     let summary = item["summary"]
         .as_str()
         .and_then(|summary| summary.parse::<Summary>().ok());
-    match filter_summary(filter) {
-        Some(wanted) => summary == Some(wanted),
-        None => summary != Some(Summary::Unavailable),
-    }
+    filter_summary(filter).map_or_else(
+        || summary != Some(Summary::Unavailable),
+        |wanted| summary == Some(wanted),
+    )
 }
 
 #[cfg(test)]

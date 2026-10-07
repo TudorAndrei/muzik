@@ -1,15 +1,14 @@
 [package]
 name = "muzik-store"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "The muzik.db state database: job queue, watchlist, and sync records"
 
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 muzik-core = { path = "../muzik-core" }

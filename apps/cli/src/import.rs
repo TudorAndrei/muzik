@@ -38,8 +38,7 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
             let title = album
                 .items
                 .first()
-                .map(|item| item.match_item.album.as_str())
-                .unwrap_or("");
+                .map_or("", |item| item.match_item.album.as_str());
             println!("Album: {} ({title})", album.source_dir.display());
             if args.quiet {
                 Ok(AlbumDecision {
@@ -67,7 +66,10 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
             .planned_albums
             .saturating_sub(result.apply.skipped_albums),
         result.apply.destinations.len(),
-        result.apply.skipped_albums + result.apply.skipped_incremental
+        result
+            .apply
+            .skipped_albums
+            .saturating_add(result.apply.skipped_incremental)
     );
     if !result.apply.cleanup_failed.is_empty()
         || !result.apply.source_cleanup_failed.is_empty()

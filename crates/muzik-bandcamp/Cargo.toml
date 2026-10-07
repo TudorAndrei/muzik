@@ -1,10 +1,14 @@
 [package]
 name = "muzik-bandcamp"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Read a Bandcamp collection and download purchases"
+
+[lints]
+workspace = true
 
 [dependencies]
 html-escape = "0.2"
@@ -20,4 +24,5 @@ usage = { package = "usage-rs", version = "6.11.1" }
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
+bolero = "0.13"
 tempfile = "3"

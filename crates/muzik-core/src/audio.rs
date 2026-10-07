@@ -65,6 +65,7 @@ pub enum AudioFormat {
 }
 
 impl AudioFormat {
+    #[must_use]
     pub fn from_extension(extension: &str) -> Option<Self> {
         extension.parse().ok()
     }
@@ -75,7 +76,8 @@ impl AudioFormat {
             .and_then(Self::from_extension)
     }
 
-    pub fn is_lossless(self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(self) -> bool {
         matches!(
             self,
             Self::Flac | Self::Alac | Self::Wav | Self::Aiff | Self::Ape | Self::WavPack
@@ -83,6 +85,7 @@ impl AudioFormat {
     }
 }
 
+#[must_use]
 pub fn is_audio(path: &Path) -> bool {
     AudioFormat::from_path(path).is_some()
 }
@@ -106,6 +109,7 @@ pub enum Codec {
 }
 
 impl Codec {
+    #[must_use]
     pub fn from_ffprobe(name: &str) -> Self {
         match name {
             "mp3" => Self::Mp3,
@@ -125,7 +129,8 @@ impl Codec {
         }
     }
 
-    pub fn is_lossless(&self) -> bool {
+    #[must_use]
+    pub const fn is_lossless(&self) -> bool {
         matches!(
             self,
             Self::Flac
@@ -138,7 +143,8 @@ impl Codec {
         )
     }
 
-    pub fn audio_format(&self) -> Option<AudioFormat> {
+    #[must_use]
+    pub const fn audio_format(&self) -> Option<AudioFormat> {
         match self {
             Self::Mp3 => Some(AudioFormat::Mp3),
             Self::Aac => Some(AudioFormat::Aac),
@@ -194,18 +200,20 @@ mod tests {
     }
 
     #[test]
-    fn formats_round_trip_through_text_and_serde() -> Result<(), Box<dyn std::error::Error>> {
+    fn formats_round_trip_through_text_and_serde() {
         for &format in AudioFormat::VARIANTS {
             let text = format.to_string();
-            assert_eq!(text.parse::<AudioFormat>()?, format);
-            assert_eq!(serde_json::to_value(format)?, text);
-            assert_eq!(serde_json::from_value::<AudioFormat>(text.into())?, format);
+            assert_eq!(text.parse::<AudioFormat>().unwrap(), format);
+            assert_eq!(serde_json::to_value(format).unwrap(), text);
+            assert_eq!(
+                serde_json::from_value::<AudioFormat>(text.into()).unwrap(),
+                format
+            );
         }
         assert_eq!(
-            serde_json::from_value::<AudioFormat>("aif".into())?,
+            serde_json::from_value::<AudioFormat>("aif".into()).unwrap(),
             AudioFormat::Aiff
         );
-        Ok(())
     }
 
     #[test]

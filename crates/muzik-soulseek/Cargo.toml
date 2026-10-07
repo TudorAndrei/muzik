@@ -1,10 +1,14 @@
 [package]
 name = "muzik-soulseek"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Blocking Soulseek search and download client for muzik"
+
+[lints]
+workspace = true
 
 [dependencies]
 keyring-core = "1.0"
@@ -15,3 +19,6 @@ thiserror = "2"
 tracing = "0.1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+bolero = "0.13"

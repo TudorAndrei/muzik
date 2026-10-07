@@ -1,12 +1,12 @@
 use super::{
-    at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube, Source,
+    Source, at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube,
 };
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
-use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
+use muzik_workflow::playlist::{SpotifyTags, write_spotify_tags};
 use muzik_workflow::process_audio_plan_with_events;
 use serde_json::Value;
 use std::cell::Cell;
@@ -51,10 +51,8 @@ impl Source for Spotify {
             )));
         }
         let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
-        if !fresh {
-            if let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
-                return import_file(adapter, item, file.to_path_buf(), cancelled);
-            }
+        if !fresh && let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
+            return import_file(adapter, item, file.to_path_buf(), cancelled);
         }
         let track = item
             .track
@@ -165,14 +163,13 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
         .ok_or_else(|| JobError::Operation("Spotify source has no entries.".into()))?;
     let mut occurrences = HashMap::<String, usize>::new();
     let mut items = Vec::new();
-    for (index, track) in entries.iter().enumerate() {
+    for (track, position) in entries.iter().zip(1_u64..) {
         let source = track["source_id"]
             .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("spotify:{}", index + 1));
+            .map_or_else(|| format!("spotify:{position}"), str::to_owned);
         let occurrence = occurrences.entry(source.clone()).or_default();
         let entry_id = format!("{source}#{occurrence}");
-        *occurrence += 1;
+        *occurrence = occurrence.saturating_add(1);
         let artists = track["artists"]
             .as_array()
             .map(|values| {
@@ -189,11 +186,12 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
         } else {
             format!("{artists} - {title}")
         };
-        let mut item = WatchItem::new(index as u64 + 1, &label, SourceKind::Spotify);
+        let mut item = WatchItem::new(position, &label, SourceKind::Spotify);
         item.video_id = Some(source.rsplit(':').next().unwrap_or("").to_owned());
         item.video_url = track["source_url"].as_str().map(str::to_owned);
-        item.thumbnail_url = track["source_metadata"]["image"]
-            .as_str()
+        item.thumbnail_url = track
+            .pointer("/source_metadata/image")
+            .and_then(Value::as_str)
             .map(str::to_owned);
         item.entry_id = Some(entry_id);
         item.track = Some(track.clone());
@@ -215,15 +213,16 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn organize_again_imports_saved_audio() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn organize_again_imports_saved_audio() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("track.flac");
-        fs::copy(fixture(), &audio)?;
-        let config = library_config(directory.path())?;
+        fs::copy(fixture(), &audio).unwrap();
+        let config = library_config(directory.path()).unwrap();
         let settings = settings(
             directory.path(),
             &json!({"output":directory.path(),"config":config,"interactive":true,"quality_policy":"off"}),
-        )?;
+        )
+        .unwrap();
         let mut item = WatchItem::new(1, "Warhaus - Love's a Stranger", SourceKind::Spotify);
         item.set_path(Stage::Download, Some(audio));
         item.track = Some(json!({
@@ -232,11 +231,13 @@ mod tests {
         }));
         let result = with_adapter(&settings, |adapter, cancelled| {
             of(SourceKind::Spotify).process(adapter, &item, ItemAction::OrganizeAgain, cancelled)
-        })?;
+        })
+        .unwrap();
         assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
-        let imported =
-            muzik_library::Library::open_read_only(&directory.path().join("library.db"))?
-                .items()?;
+        let imported = muzik_library::Library::open_read_only(&directory.path().join("library.db"))
+            .unwrap()
+            .items()
+            .unwrap();
         assert_eq!(imported.len(), 1);
         let text = |name: &str| match imported[0].field(name) {
             Some(muzik_library::SqlValue::Text(text)) => text.clone(),
@@ -245,15 +246,15 @@ mod tests {
         assert_eq!(text("album"), "Warhaus");
         assert_eq!(text("title"), "Love's a Stranger");
         assert_eq!(text("albumartist"), "Warhaus");
-        Ok(())
     }
 
     #[test]
-    fn repeated_tracks_keep_separate_state_keys() -> Result<(), Box<dyn std::error::Error>> {
+    fn repeated_tracks_keep_separate_state_keys() {
         let loaded = items(&json!({"title":"Album","entries":[
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"},
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"}
-        ]}))?;
+        ]}))
+        .unwrap();
         assert_eq!(
             loaded.items[0].entry_id.as_deref(),
             Some("spotify:track:t1#0")
@@ -263,6 +264,5 @@ mod tests {
             Some("spotify:track:t1#1")
         );
         assert_eq!(loaded.items[0].title, "Alex - One");
-        Ok(())
     }
 }

@@ -5,26 +5,41 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 static FEATURED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?ix)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+(.+)$)").unwrap()
+    literal(
+        r"(?ix)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+(.+)$)",
+    )
 });
-static SPLIT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*").unwrap());
+static SPLIT: LazyLock<Regex> = LazyLock::new(|| literal(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*"));
+
+#[expect(
+    clippy::unwrap_used,
+    reason = "the patterns are string literals that the unit tests compile"
+)]
+fn literal(pattern: &str) -> Regex {
+    Regex::new(pattern).unwrap()
+}
 
 pub fn clean(title: &str, artist: &str) -> (String, String) {
+    let unchanged = || (title.trim().to_owned(), artist.to_owned());
     let Some(found) = FEATURED.captures(title) else {
-        return (title.trim().to_owned(), artist.to_owned());
+        return unchanged();
     };
-    let whole = found.get(0).unwrap();
-    let names = found.get(1).or_else(|| found.get(2)).unwrap().as_str();
+    let whole = found.get_match();
+    let Some(names) = found.get(1).or_else(|| found.get(2)) else {
+        return unchanged();
+    };
     let featured: Vec<_> = SPLIT
-        .split(names)
+        .split(names.as_str())
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .collect();
     if featured.is_empty() {
-        return (title.trim().to_owned(), artist.to_owned());
+        return unchanged();
     }
-    let clean = format!("{}{}", &title[..whole.start()], &title[whole.end()..]);
+    let (Some(before), Some(after)) = (title.get(..whole.start()), title.get(whole.end()..)) else {
+        return unchanged();
+    };
+    let clean = format!("{before}{after}");
     let title = if clean.trim().is_empty() {
         title.trim().to_owned()
     } else {

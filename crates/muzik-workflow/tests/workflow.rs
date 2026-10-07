@@ -5,15 +5,15 @@ use muzik_workflow::{
 };
 
 #[test]
-fn workflow_uses_selected_youtube_description_for_chapter_plan()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn workflow_uses_selected_youtube_description_for_chapter_plan() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.opus");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     fs::write(
         dir.path().join("album.info.json"),
         r#"{"description":"0:00 Opening\n3:12 Closing"}"#,
-    )?;
+    )
+    .unwrap();
     let mut operations = RecordingOperations::default();
     let result = muzik_workflow::process_audio_plan(
         std::slice::from_ref(&audio),
@@ -26,11 +26,11 @@ fn workflow_uses_selected_youtube_description_for_chapter_plan()
         },
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(result.plan.albums.len(), 1);
     assert_eq!(result.plan.albums[0].chapters[1].title, "Closing");
     assert_eq!(operations.split_sources, [audio]);
-    Ok(())
 }
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -102,7 +102,11 @@ impl WorkflowOperations for RecordingOperations {
         on_progress(SplitProgress {
             completed: 1,
             total: task.chapters.len(),
-            chapter_index: task.chapters[0].index,
+            chapter_index: task
+                .chapters
+                .first()
+                .ok_or("the task has no chapters")?
+                .index,
         });
         Ok(())
     }
@@ -113,7 +117,7 @@ impl WorkflowOperations for RecordingOperations {
         _: &WorkflowOptions,
         _: &AtomicBool,
     ) -> Result<QualityCheckedAudio, String> {
-        self.quality_calls += 1;
+        self.quality_calls = self.quality_calls.saturating_add(1);
         Ok(self
             .quality_result
             .clone()
@@ -125,13 +129,12 @@ impl WorkflowOperations for RecordingOperations {
 }
 
 #[test]
-fn quality_replacement_album_is_organized_without_chapter_split()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn quality_replacement_album_is_organized_without_chapter_split() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("source.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let replacement = dir.path().join("replacement-album");
-    fs::create_dir(&replacement)?;
+    fs::create_dir(&replacement).unwrap();
     let mut operations = RecordingOperations {
         quality_result: Some(QualityCheckedAudio {
             audio_files: Vec::new(),
@@ -144,7 +147,8 @@ fn quality_replacement_album_is_organized_without_chapter_split()
         &WorkflowOptions::default(),
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(operations.quality_calls, 1);
     assert!(operations.split_sources.is_empty());
     assert_eq!(
@@ -153,18 +157,18 @@ fn quality_replacement_album_is_organized_without_chapter_split()
     );
     assert_eq!(result.split_dirs, [replacement]);
     assert!(audio.exists());
-    Ok(())
 }
 
 #[test]
-fn rejected_chapters_make_the_source_a_single() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn rejected_chapters_make_the_source_a_single() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     fs::write(
         dir.path().join("album.chapters.txt"),
         "0:00 First\n1:00 Second\n",
-    )?;
+    )
+    .unwrap();
     let mut operations = RecordingOperations {
         review_decision: Some(ChapterReview::Reject),
         ..Default::default()
@@ -178,24 +182,25 @@ fn rejected_chapters_make_the_source_a_single() -> Result<(), Box<dyn std::error
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert!(result.plan.albums.is_empty());
     assert_eq!(result.plan.singles.as_slice(), std::slice::from_ref(&audio));
     assert_eq!(operations.reviewed.as_slice(), std::slice::from_ref(&audio));
     assert!(operations.split_sources.is_empty());
     assert_eq!(operations.organized, [audio]);
-    Ok(())
 }
 
 #[test]
-fn edited_chapters_reach_the_split_task() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn edited_chapters_reach_the_split_task() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     fs::write(
         dir.path().join("album.chapters.txt"),
         "0:00 First\n1:00 Second\n",
-    )?;
+    )
+    .unwrap();
     let edited = vec![muzik_core::chapters::Chapter {
         index: 1,
         start: 0,
@@ -215,10 +220,10 @@ fn edited_chapters_reach_the_split_task() -> Result<(), Box<dyn std::error::Erro
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(result.plan.albums[0].chapters, edited);
     assert_eq!(operations.split_chapters, [edited]);
-    Ok(())
 }
 
 fn request(raw: String, root: &Path) -> WorkflowRequest {
@@ -230,11 +235,10 @@ fn request(raw: String, root: &Path) -> WorkflowRequest {
 }
 
 #[test]
-fn classifies_playlist_before_video_and_reads_local_exports()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn classifies_playlist_before_video_and_reads_local_exports() {
+    let dir = tempfile::tempdir().unwrap();
     let export = dir.path().join("spotify.csv");
-    fs::write(&export, "Track Name,Artist Name\n")?;
+    fs::write(&export, "Track Name,Artist Name\n").unwrap();
     assert_eq!(
         classify_input(&export.to_string_lossy()),
         WorkflowInput::SpotifyExport(export)
@@ -247,34 +251,34 @@ fn classifies_playlist_before_video_and_reads_local_exports()
         classify_input("https://youtu.be/dQw4w9WgXcQ"),
         WorkflowInput::YoutubeVideo { video_id, .. } if video_id == "dQw4w9WgXcQ"
     ));
-    Ok(())
 }
 
 #[test]
-fn local_album_splits_then_organizes_split_dir() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn local_album_splits_then_organizes_split_dir() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     fs::write(
         dir.path().join("album.chapters.txt"),
         "0:00 First\n1:00 Second\n",
-    )?;
+    )
+    .unwrap();
     let mut operations = RecordingOperations::default();
     let result = run_workflow(
         &request(audio.to_string_lossy().into_owned(), dir.path()),
         &WorkflowOptions::default(),
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(result.plan.albums.len(), 1);
     assert_eq!(operations.split_sources, vec![audio]);
     assert_eq!(operations.organized, vec![dir.path().join("splits/album")]);
-    Ok(())
 }
 
 #[test]
-fn dry_run_plans_without_download_or_file_changes() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn dry_run_plans_without_download_or_file_changes() {
+    let dir = tempfile::tempdir().unwrap();
     let mut operations = RecordingOperations::default();
     let options = WorkflowOptions {
         dry_run: true,
@@ -285,38 +289,38 @@ fn dry_run_plans_without_download_or_file_changes() -> Result<(), Box<dyn std::e
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert!(operations.downloads.is_empty());
     assert!(operations.organized.is_empty());
     assert!(result.organize_targets.is_empty());
-    Ok(())
 }
 
 #[test]
-fn video_reuses_existing_file_and_groups_singles() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn video_reuses_existing_file_and_groups_singles() {
+    let dir = tempfile::tempdir().unwrap();
     let downloads = dir.path().join("downloads");
-    fs::create_dir_all(&downloads)?;
+    fs::create_dir_all(&downloads).unwrap();
     let audio = downloads.join("Track [dQw4w9WgXcQ].mp3");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let mut operations = RecordingOperations::default();
     let result = run_workflow(
         &request("https://youtu.be/dQw4w9WgXcQ".into(), dir.path()),
         &WorkflowOptions::default(),
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert!(operations.downloads.is_empty());
     assert_eq!(result.plan.singles, vec![audio.clone()]);
     assert_eq!(operations.organized, vec![audio]);
-    Ok(())
 }
 
 #[test]
-fn soulseek_source_and_cancellation_stop_before_import() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn soulseek_source_and_cancellation_stop_before_import() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("song.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let mut operations = RecordingOperations {
         soulseek_files: vec![audio.clone()],
         ..RecordingOperations::default()
@@ -330,7 +334,8 @@ fn soulseek_source_and_cancellation_stop_before_import() -> Result<(), Box<dyn s
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(result.organize_targets, vec![audio.clone()]);
     assert!(operations.downloads.is_empty());
 
@@ -345,14 +350,13 @@ fn soulseek_source_and_cancellation_stop_before_import() -> Result<(), Box<dyn s
     assert!(matches!(failure, Err(Error::Cancelled)));
     assert!(operations.organized.is_empty());
     cancelled.store(false, Ordering::SeqCst);
-    Ok(())
 }
 
 #[test]
-fn video_honors_soulseek_then_youtube_fallback() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn video_honors_soulseek_then_youtube_fallback() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("song.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let url = "https://youtu.be/dQw4w9WgXcQ";
     let mut operations = RecordingOperations {
         soulseek_files: vec![audio.clone()],
@@ -370,7 +374,8 @@ fn video_honors_soulseek_then_youtube_fallback() -> Result<(), Box<dyn std::erro
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(operations.soulseek_queries, [url]);
     assert!(operations.downloads.is_empty());
 
@@ -380,17 +385,17 @@ fn video_honors_soulseek_then_youtube_fallback() -> Result<(), Box<dyn std::erro
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(operations.soulseek_queries, [url, url]);
     assert_eq!(operations.downloads, [url]);
-    Ok(())
 }
 
 #[test]
-fn search_falls_back_to_youtube_when_soulseek_is_empty() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn search_falls_back_to_youtube_when_soulseek_is_empty() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("song.flac");
-    fs::write(&audio, b"audio")?;
+    fs::write(&audio, b"audio").unwrap();
     let mut operations = RecordingOperations {
         downloaded_files: vec![audio],
         ..RecordingOperations::default()
@@ -406,31 +411,29 @@ fn search_falls_back_to_youtube_when_soulseek_is_empty() -> Result<(), Box<dyn s
         &options,
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(operations.soulseek_queries, ["Artist - Song"]);
     assert_eq!(operations.downloads, ["Artist - Song"]);
-    Ok(())
 }
 
 #[test]
-fn no_split_keeps_chaptered_audio_as_one_import_target() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn no_split_keeps_chaptered_audio_as_one_import_target() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
-    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
-    let plan = plan_audio_processing(std::slice::from_ref(&audio), &[], true)?;
+    fs::write(&audio, b"audio").unwrap();
+    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
+    let plan = plan_audio_processing(std::slice::from_ref(&audio), &[], true).unwrap();
     assert!(plan.albums.is_empty());
     assert_eq!(plan.singles, vec![audio]);
-    Ok(())
 }
 
 #[test]
-fn events_report_work_and_callback_can_cancel_before_split()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn events_report_work_and_callback_can_cancel_before_split() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
-    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+    fs::write(&audio, b"audio").unwrap();
+    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
     let cancelled = AtomicBool::new(false);
     let mut operations = RecordingOperations::default();
     let mut events = Vec::new();
@@ -459,15 +462,14 @@ fn events_report_work_and_callback_can_cancel_before_split()
         }
     )));
     assert!(operations.split_sources.is_empty());
-    Ok(())
 }
 
 #[test]
-fn events_include_track_progress_and_completion() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn events_include_track_progress_and_completion() {
+    let dir = tempfile::tempdir().unwrap();
     let audio = dir.path().join("album.flac");
-    fs::write(&audio, b"audio")?;
-    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+    fs::write(&audio, b"audio").unwrap();
+    fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
     let mut events = Vec::new();
     run_workflow_with_events(
         &request(audio.to_string_lossy().into_owned(), dir.path()),
@@ -475,7 +477,8 @@ fn events_include_track_progress_and_completion() -> Result<(), Box<dyn std::err
         &mut RecordingOperations::default(),
         &AtomicBool::new(false),
         &mut |event| events.push(event),
-    )?;
+    )
+    .unwrap();
     assert!(events.iter().any(|event| matches!(
         event,
         WorkflowEvent::SplitProgress {
@@ -488,5 +491,4 @@ fn events_include_track_progress_and_completion() -> Result<(), Box<dyn std::err
         }
     )));
     assert!(matches!(events.last(), Some(WorkflowEvent::Completed)));
-    Ok(())
 }

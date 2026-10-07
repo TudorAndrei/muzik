@@ -1,8 +1,8 @@
 use crate::{
-    available_bytes, encodings, plan, record, remove_empty_folders, run as transfer_all,
-    stale_files, Error, Plan, Result, Target, Transfer,
+    Error, Plan, Result, Target, Transfer, available_bytes, encodings, plan, record,
+    remove_empty_folders, run as transfer_all, stale_files,
 };
-use muzik_library::{path_from_sql, Item, Library};
+use muzik_library::{Item, Library, path_from_sql};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;
 use parking_lot::Mutex;
@@ -54,34 +54,42 @@ pub struct Report {
 }
 
 impl Prepared {
-    pub fn plan(&self) -> &Plan {
+    #[must_use]
+    pub const fn plan(&self) -> &Plan {
         &self.plan
     }
 
-    pub fn target(&self) -> &Target {
+    #[must_use]
+    pub const fn target(&self) -> &Target {
         &self.target
     }
 
-    pub fn delete(&self) -> bool {
+    #[must_use]
+    pub const fn delete(&self) -> bool {
         self.options.delete
     }
 
-    pub fn delete_blocked(&self) -> bool {
+    #[must_use]
+    pub const fn delete_blocked(&self) -> bool {
         self.delete_blocked
     }
 
+    #[must_use]
     pub fn stale(&self) -> &[PathBuf] {
         &self.stale
     }
 
-    pub fn freed(&self) -> u64 {
+    #[must_use]
+    pub const fn freed(&self) -> u64 {
         self.freed
     }
 
-    pub fn needed(&self) -> u64 {
+    #[must_use]
+    pub const fn needed(&self) -> u64 {
         self.needed
     }
 
+    #[must_use]
     pub fn shortfall(&self) -> Option<Shortfall> {
         shortfall(self.needed, self.freed, self.available)
     }
@@ -100,6 +108,8 @@ fn size(paths: &[PathBuf]) -> u64 {
         .sum()
 }
 
+/// # Errors
+/// Returns an error if the query is invalid or the library cannot be read.
 pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) -> Result<Selection> {
     let items = library.query_items(query)?;
     let tracks: Vec<PathBuf> = items
@@ -131,6 +141,8 @@ pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) ->
     })
 }
 
+/// # Errors
+/// Returns an error if the sync records or the target folder cannot be read.
 pub fn prepare(
     target: &Target,
     directory: &Path,
@@ -172,6 +184,8 @@ pub fn prepare(
     })
 }
 
+/// # Errors
+/// Returns an error if the target is missing, has too little space, or stale files cannot be removed.
 pub fn apply(
     prepared: Prepared,
     connection: Connection,
@@ -210,7 +224,7 @@ pub fn apply(
     let unrecorded = AtomicUsize::new(0);
     let connection = Mutex::new(connection);
     let finished = |transfer: &Transfer, result: &Result<()>| {
-        let index = count.fetch_add(1, Ordering::Relaxed) + 1;
+        let index = count.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let record_error = match result {
             Ok(()) => record(&connection.lock(), transfer).err(),
             Err(_) => None,
@@ -244,7 +258,7 @@ fn absolute(directory: &Path, path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{shortfall, Shortfall};
+    use super::{Shortfall, shortfall};
 
     #[test]
     fn freed_space_counts_toward_the_available_space() {

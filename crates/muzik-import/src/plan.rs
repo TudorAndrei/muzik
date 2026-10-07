@@ -1,4 +1,4 @@
-//! Album groups, MusicBrainz candidates, and duplicate checks before import.
+//! Album groups, `MusicBrainz` candidates, and duplicate checks before import.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -16,12 +16,18 @@ use muzik_tags::TagData;
 use walkdir::WalkDir;
 
 pub trait ReleaseProvider {
+    /// # Errors
+    /// Returns an error when the release search fails.
     fn search_releases(
         &self,
         criteria: &ReleaseSearch,
         limit: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error>;
+    /// # Errors
+    /// Returns an error when the release cannot be fetched.
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error>;
+    /// # Errors
+    /// Returns an error when the recording cannot be fetched.
     fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error>;
 }
 
@@ -119,15 +125,22 @@ pub struct ImportPlanner<'a, P: ReleaseProvider> {
 }
 
 impl<P: ReleaseProvider> ImportPlanner<'_, P> {
+    /// # Errors
+    /// Returns an error when no audio is found or a file, tag, library, or match step fails.
     pub fn plan(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
         self.plan_with_options(paths, ImportMode::Album, PlanOptions::default())
     }
 
     /// Plan each audio file as an item without an album row.
+    ///
+    /// # Errors
+    /// Returns an error when no audio is found or a file, tag, library, or match step fails.
     pub fn plan_singletons(&self, paths: &[PathBuf]) -> Result<ImportPlan, ImportError> {
         self.plan_with_options(paths, ImportMode::Singleton, PlanOptions::default())
     }
 
+    /// # Errors
+    /// Returns an error when no audio is found or a file, tag, library, or match step fails.
     pub fn plan_with_options(
         &self,
         paths: &[PathBuf],
@@ -137,6 +150,9 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         self.plan_with_options_and_cancel(paths, mode, options, &|| false)
     }
 
+    /// # Errors
+    /// Returns an error when the plan is cancelled, no audio is found, or a file, tag, library,
+    /// or match step fails.
     pub fn plan_with_options_and_cancel(
         &self,
         paths: &[PathBuf],
@@ -172,76 +188,16 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             if let Some(history) = &options.history
                 && history.contains(&history_key)?
             {
-                skipped_incremental += 1;
+                skipped_incremental = usize::saturating_add(skipped_incremental, 1);
                 continue;
             }
-            let mut items = Vec::new();
-            for source in paths {
-                check_cancelled(cancelled)?;
-                let tags = muzik_tags::read(&source, &[])?;
-                let sidecar = read_sidecar(&source)?;
-                let mut match_item = match_item(&tags);
-                match_item.length = muzik_tags::probe(&source)?.duration_seconds.unwrap_or(0.0);
-                fill_from_sidecar(&mut match_item, sidecar.as_ref(), &source);
-                let source_id = sidecar
-                    .as_ref()
-                    .and_then(|data| data.get("source_id"))
-                    .and_then(|value| value.as_str())
-                    .map(str::to_owned);
-                items.push(PlanItem {
-                    source,
-                    tags,
-                    match_item,
-                    source_id,
-                });
-            }
+            let items = plan_items(paths, cancelled)?;
             let current: Vec<_> = items.iter().map(|item| item.match_item.clone()).collect();
-            let title = plurality(&current, |item| item.album.as_str());
-            let album_artist = plurality(&current, |item| item.album_artist.as_str());
-            let artist = if !album_artist.is_empty() {
-                album_artist
+            let releases = if options.autotag && mode == ImportMode::Album {
+                self.find_releases(&current, &source_dir, cancelled)?
             } else {
-                plurality(&current, |item| item.artist.as_str())
+                Vec::new()
             };
-            let various_artists = current.iter().any(|item| item.compilation)
-                || current.iter().any(|item| item.artist != current[0].artist)
-                || ["", "various artists", "various", "va", "unknown"]
-                    .contains(&artist.to_lowercase().as_str());
-            let mut releases = Vec::new();
-            if options.autotag && mode == ImportMode::Album && !title.is_empty() {
-                let criteria = ReleaseSearch {
-                    release: title.to_owned(),
-                    artist: (!artist.is_empty()).then(|| artist.to_owned()),
-                    various_artists,
-                    tracks: Some(items.len() as u32),
-                    ..ReleaseSearch::default()
-                };
-                let hits = match self.provider.search_releases(&criteria, self.search_limit) {
-                    Ok(hits) => hits,
-                    Err(error) => {
-                        tracing::warn!(path = %source_dir.display(), %error, "MusicBrainz search failed; import can continue as-is");
-                        Vec::new()
-                    }
-                };
-                check_cancelled(cancelled)?;
-                for hit in hits {
-                    check_cancelled(cancelled)?;
-                    let release = match self.provider.lookup_release(&hit.id.0) {
-                        Ok(release) => release,
-                        Err(error) => {
-                            tracing::warn!(id = %hit.id.0, %error, "MusicBrainz release lookup failed; skip candidate");
-                            continue;
-                        }
-                    };
-                    check_cancelled(cancelled)?;
-                    if !releases
-                        .iter()
-                        .any(|known: &ReleaseCandidate| known.id == release.id)
-                    {
-                        releases.push(release);
-                    }
-                }
-            }
             check_cancelled(cancelled)?;
             let candidates_for_match: Vec<_> = releases.iter().map(match_album).collect();
             let ranked = rank_albums(&current, &candidates_for_match, self.match_config)?;
@@ -249,13 +205,17 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 .candidates
                 .into_iter()
                 .map(|ranked| {
+                    let index = ranked.input_index;
                     Ok(PlannedCandidate {
-                        release: releases[ranked.input_index].clone(),
+                        release: releases
+                            .get(index)
+                            .ok_or(ImportError::CandidateIndex { index })?
+                            .clone(),
                         distance: ranked.distance.score(self.match_config)?,
                         assignment: ranked.assignment,
                     })
                 })
-                .collect::<Result<Vec<_>, muzik_match::Error>>()?;
+                .collect::<Result<Vec<_>, ImportError>>()?;
             let duplicates = if mode == ImportMode::Album {
                 find_duplicates(&items, &releases, &library_albums, &library_items)
             } else {
@@ -279,6 +239,91 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             skipped_incremental,
         })
     }
+
+    fn find_releases(
+        &self,
+        current: &[MatchItem],
+        source_dir: &Path,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<Vec<ReleaseCandidate>, ImportError> {
+        let title = plurality(current, |item| item.album.as_str());
+        if title.is_empty() {
+            return Ok(Vec::new());
+        }
+        let album_artist = plurality(current, |item| item.album_artist.as_str());
+        let artist = if album_artist.is_empty() {
+            plurality(current, |item| item.artist.as_str())
+        } else {
+            album_artist
+        };
+        let various_artists = current.iter().any(|item| item.compilation)
+            || current
+                .split_first()
+                .is_some_and(|(first, rest)| rest.iter().any(|item| item.artist != first.artist))
+            || ["", "various artists", "various", "va", "unknown"]
+                .contains(&artist.to_lowercase().as_str());
+        let criteria = ReleaseSearch {
+            release: title.to_owned(),
+            artist: (!artist.is_empty()).then(|| artist.to_owned()),
+            various_artists,
+            tracks: u32::try_from(current.len()).ok(),
+            ..ReleaseSearch::default()
+        };
+        let hits = match self.provider.search_releases(&criteria, self.search_limit) {
+            Ok(hits) => hits,
+            Err(error) => {
+                tracing::warn!(path = %source_dir.display(), %error, "MusicBrainz search failed; import can continue as-is");
+                Vec::new()
+            }
+        };
+        check_cancelled(cancelled)?;
+        let mut releases = Vec::new();
+        for hit in hits {
+            check_cancelled(cancelled)?;
+            let release = match self.provider.lookup_release(&hit.id.0) {
+                Ok(release) => release,
+                Err(error) => {
+                    tracing::warn!(id = %hit.id.0, %error, "MusicBrainz release lookup failed; skip candidate");
+                    continue;
+                }
+            };
+            check_cancelled(cancelled)?;
+            if !releases
+                .iter()
+                .any(|known: &ReleaseCandidate| known.id == release.id)
+            {
+                releases.push(release);
+            }
+        }
+        Ok(releases)
+    }
+}
+
+fn plan_items(
+    paths: Vec<PathBuf>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<PlanItem>, ImportError> {
+    let mut items = Vec::new();
+    for source in paths {
+        check_cancelled(cancelled)?;
+        let tags = muzik_tags::read(&source, &[])?;
+        let sidecar = read_sidecar(&source)?;
+        let mut match_item = match_item(&tags);
+        match_item.length = muzik_tags::probe(&source)?.duration_seconds.unwrap_or(0.0);
+        fill_from_sidecar(&mut match_item, sidecar.as_ref(), &source);
+        let source_id = sidecar
+            .as_ref()
+            .and_then(|data| data.get("source_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned);
+        items.push(PlanItem {
+            source,
+            tags,
+            match_item,
+            source_id,
+        });
+    }
+    Ok(items)
 }
 
 fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<(), ImportError> {
@@ -401,7 +446,9 @@ fn plurality<'a>(items: &'a [MatchItem], get: impl Fn(&'a MatchItem) -> &'a str)
 fn read_sidecar(path: &Path) -> Result<Option<serde_json::Value>, ImportError> {
     for candidate in [
         path.with_extension("muzik.json"),
-        path.parent().unwrap_or(Path::new(".")).join(".muzik.json"),
+        path.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".muzik.json"),
     ] {
         let contents = match fs::read_to_string(candidate) {
             Ok(contents) => contents,
@@ -446,19 +493,21 @@ fn sidecar_field<'a>(data: &'a serde_json::Value, key: &str) -> Option<&'a str> 
 fn fill_from_sidecar(item: &mut MatchItem, sidecar: Option<&serde_json::Value>, path: &Path) {
     if let Some(data) = sidecar {
         if item.title.is_empty() {
-            item.title = sidecar_field(data, "title")
+            sidecar_field(data, "title")
                 .or_else(|| sidecar_field(data, "track"))
                 .unwrap_or_default()
-                .to_owned();
+                .clone_into(&mut item.title);
         }
         if item.artist.is_empty() {
-            item.artist = sidecar_field(data, "artist")
+            sidecar_field(data, "artist")
                 .or_else(|| sidecar_field(data, "uploader"))
                 .unwrap_or_default()
-                .to_owned();
+                .clone_into(&mut item.artist);
         }
         if item.album.is_empty() {
-            item.album = sidecar_field(data, "album").unwrap_or_default().to_owned();
+            sidecar_field(data, "album")
+                .unwrap_or_default()
+                .clone_into(&mut item.album);
         }
         if item.year == 0 {
             item.year = sidecar_value(data, "year")
@@ -474,7 +523,7 @@ fn fill_from_sidecar(item: &mut MatchItem, sidecar: Option<&serde_json::Value>, 
             item.length = data
                 .get("resolved")
                 .and_then(|value| value.get("duration"))
-                .and_then(|value| value.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .unwrap_or(0.0);
         }
     }

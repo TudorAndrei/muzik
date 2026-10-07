@@ -1,7 +1,7 @@
 //! Transactional writes to the existing beets schema.
 
 use crate::{Entity, Error, Fields, Library, Value};
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -11,6 +11,9 @@ pub struct LibraryWrite<'a> {
 
 impl Library {
     /// Open a library for writes, creating a beets-compatible database if needed.
+    ///
+    /// # Errors
+    /// Returns an error if the folder or database cannot be created or opened.
     pub fn open_or_create(path: &Path) -> Result<Self, Error> {
         if path.exists() {
             return Self::open_read_write(path);
@@ -35,6 +38,9 @@ impl Library {
     }
 
     /// Open an existing database for writes. A backup is made before the first write.
+    ///
+    /// # Errors
+    /// Returns an error if the database cannot be opened.
     pub fn open_read_write(path: &Path) -> Result<Self, Error> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         crate::register_functions(&connection)?;
@@ -46,6 +52,9 @@ impl Library {
     }
 
     /// Run all writes in one transaction. An error rolls back every write.
+    ///
+    /// # Errors
+    /// Returns an error if the library is read only, the backup fails, or a write fails.
     pub fn transaction<T>(
         &mut self,
         operation: impl FnOnce(&mut LibraryWrite<'_>) -> Result<T, Error>,
@@ -61,14 +70,20 @@ impl Library {
         Ok(value)
     }
 
+    /// # Errors
+    /// Returns an error if a field is invalid or the write fails.
     pub fn insert_album(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
         self.transaction(|writer| writer.insert_album(fields, attributes))
     }
 
+    /// # Errors
+    /// Returns an error if a field is invalid or the write fails.
     pub fn insert_item(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
         self.transaction(|writer| writer.insert_item(fields, attributes))
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist, a field is invalid, or the write fails.
     pub fn update_album(
         &mut self,
         id: i64,
@@ -78,6 +93,8 @@ impl Library {
         self.transaction(|writer| writer.update_album(id, fields, attributes))
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist, a field is invalid, or the write fails.
     pub fn update_item(
         &mut self,
         id: i64,
@@ -87,15 +104,22 @@ impl Library {
         self.transaction(|writer| writer.update_item(id, fields, attributes))
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist or the write fails.
     pub fn remove_album(&mut self, id: i64) -> Result<(), Error> {
         self.transaction(|writer| writer.remove_album(id))
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist or the write fails.
     pub fn remove_item(&mut self, id: i64) -> Result<(), Error> {
         self.transaction(|writer| writer.remove_item(id))
     }
 
     /// Remove missing item records after checking the fraction. Files stay in place.
+    ///
+    /// # Errors
+    /// Returns an error if the fraction is invalid, too many items are missing, or a write fails.
     pub fn prune_missing_items(
         &mut self,
         directory: &Path,
@@ -123,7 +147,9 @@ impl Library {
                 (!path.exists()).then_some(item.id)
             })
             .collect();
-        if !items.is_empty() && (missing.len() as f64) > (items.len() as f64) * safety_fraction {
+        if !items.is_empty()
+            && count_to_f64(missing.len()) > count_to_f64(items.len()) * safety_fraction
+        {
             return Err(Error::PruneAborted {
                 missing: missing.len(),
                 total: items.len(),
@@ -158,14 +184,20 @@ impl Library {
 }
 
 impl LibraryWrite<'_> {
+    /// # Errors
+    /// Returns an error if a field is invalid or the write fails.
     pub fn insert_album(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
         insert(&self.transaction, Entity::Album, fields, attributes)
     }
 
+    /// # Errors
+    /// Returns an error if a field is invalid or the write fails.
     pub fn insert_item(&mut self, fields: &Fields, attributes: &Fields) -> Result<i64, Error> {
         insert(&self.transaction, Entity::Item, fields, attributes)
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist, a field is invalid, or the write fails.
     pub fn update_album(
         &mut self,
         id: i64,
@@ -175,6 +207,8 @@ impl LibraryWrite<'_> {
         update(&self.transaction, Entity::Album, id, fields, attributes)
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist, a field is invalid, or the write fails.
     pub fn update_item(
         &mut self,
         id: i64,
@@ -184,6 +218,8 @@ impl LibraryWrite<'_> {
         update(&self.transaction, Entity::Item, id, fields, attributes)
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist or the write fails.
     pub fn remove_album(&mut self, id: i64) -> Result<(), Error> {
         let mut statement = self
             .transaction
@@ -198,6 +234,8 @@ impl LibraryWrite<'_> {
         remove(&self.transaction, Entity::Album, id)
     }
 
+    /// # Errors
+    /// Returns an error if the row does not exist or the write fails.
     pub fn remove_item(&mut self, id: i64) -> Result<(), Error> {
         let album_id: Option<i64> = self
             .transaction
@@ -327,6 +365,15 @@ fn put_attributes(
         )?;
     }
     Ok(())
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "std has no From<usize> for f64; counts compare against a float fraction"
+)]
+const fn count_to_f64(count: usize) -> f64 {
+    count as f64
 }
 
 #[cfg(unix)]

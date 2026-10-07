@@ -1,6 +1,7 @@
 use crate::SqlValue;
 use std::path::{Path, PathBuf};
 
+#[must_use]
 pub fn path_from_sql(value: &SqlValue) -> Option<PathBuf> {
     match value {
         SqlValue::Blob(bytes) => {
@@ -19,6 +20,7 @@ pub fn path_from_sql(value: &SqlValue) -> Option<PathBuf> {
     }
 }
 
+#[must_use]
 pub fn path_to_sql(path: &Path) -> SqlValue {
     #[cfg(unix)]
     {
@@ -31,6 +33,7 @@ pub fn path_to_sql(path: &Path) -> SqlValue {
     }
 }
 
+#[must_use]
 pub fn scalar_text(value: &SqlValue) -> Option<String> {
     match value {
         SqlValue::Text(text) => Some(text.clone()),

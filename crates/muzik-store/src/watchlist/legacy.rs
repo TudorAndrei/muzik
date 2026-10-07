@@ -1,10 +1,10 @@
 //! A one-time import of the cache files that the Python version wrote.
 
-use super::{now, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist};
+use super::{ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist, now};
 use crate::Result;
 use muzik_core::audio::is_audio;
 use rusqlite::OptionalExtension;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use strum_macros::{AsRefStr, EnumString};
@@ -19,6 +19,8 @@ enum CacheStatus {
     Organized,
 }
 
+/// # Errors
+/// Returns an error if the watchlist or the import marker cannot be read or written.
 pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> Result<bool> {
     repository.update_with(|document, connection| {
         let done: Option<String> = connection
@@ -106,12 +108,12 @@ fn apply_item(
         return;
     };
     let mut entry = entry_of(&video_id);
-    if !options.no_organize {
-        if let Some(target) = remaining_organize_target(&entry, options.splits) {
-            processed.retain(|id| id != &video_id);
-            mark_organize_failed(item, &entry, &target);
-            return;
-        }
+    if !options.no_organize
+        && let Some(target) = remaining_organize_target(&entry, options.splits)
+    {
+        processed.retain(|id| id != &video_id);
+        mark_organize_failed(item, &entry, &target);
+        return;
     }
     if processed.contains(&video_id) {
         return;
@@ -122,14 +124,18 @@ fn apply_item(
     let Some(status) = cache_status(&entry) else {
         return;
     };
-    let path = entry["audio_file"]
-        .as_str()
+    let path = entry
+        .get("audio_file")
+        .and_then(Value::as_str)
         .map(PathBuf::from)
         .or_else(|| first_file(&entry));
     item.complete(Stage::Download, path);
     if matches!(status, CacheStatus::Split | CacheStatus::Organized) {
         item.set(Stage::Parse, StageStatus::Complete);
-        let split = entry["split_dir"].as_str().map(PathBuf::from);
+        let split = entry
+            .get("split_dir")
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
         item.set(
             Stage::Split,
             if split.is_some() {

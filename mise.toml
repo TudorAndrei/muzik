@@ -10,8 +10,11 @@ shellcheck = "latest"
 zizmor = "latest"
 rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], mr_boxington = true }
 mr-boxington = "1.19.0"
+cargo-binstall = "1.25.2"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-edit" = "0.13.13"
+"cargo:cargo-auditable" = "0.7.7"
+"cargo:cargo-bolero" = "0.13.5"
 cocogitto = "7"
 
 [env]
@@ -29,12 +32,13 @@ description = "Build the Rust CLI and desktop app"
 run = "cargo build --locked -p muzik-cli -p muzik-gpui"
 
 [tasks.check]
-description = "Run format, Clippy, tests, and license checks"
+description = "Run format, Clippy, tests, dependency, and workflow checks"
 run = """
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
-cargo deny check licenses
+cargo deny check
+zizmor --persona=auditor .github
 """
 
 [tasks.test-scoped]
@@ -45,7 +49,17 @@ TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HO
   --skip background_command_runs_the_program_at_lower_priority
 """
 
+[tasks.fuzz]
+description = "Run each bolero harness under libFuzzer on stable Rust"
+usage = 'arg "[seconds]" default="300"'
+run = """
+cargo bolero test -p muzik-soulseek --sanitizer NONE -T "${usage_seconds}s" \
+  fetch::tests::local_files_stay_directly_inside_the_root_for_any_peer_names
+cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
+  tests::any_archive_writes_only_inside_the_destination
+"""
+
 [tasks.check-release]
 description = "Run the complete locked verification gate with the release build"
 depends = ["check"]
-run = "cargo build --workspace --release --locked"
+run = "cargo auditable build --workspace --release --locked"

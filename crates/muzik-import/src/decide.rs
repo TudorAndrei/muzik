@@ -12,7 +12,11 @@ pub struct ImportPolicy {
 }
 
 pub trait Ask {
+    /// # Errors
+    /// Returns an error when the user cannot be asked or gives no valid answer.
     fn choose_match(&mut self, album: &AlbumPlan) -> Result<MatchDecision, String>;
+    /// # Errors
+    /// Returns an error when the user cannot be asked or gives no valid answer.
     fn choose_duplicate(&mut self, album: &AlbumPlan) -> Result<DuplicateDecision, String>;
 }
 
@@ -28,6 +32,8 @@ impl Ask for NeverAsk {
     }
 }
 
+/// # Errors
+/// Returns an error when asking for a match or duplicate decision fails.
 pub fn decide_album(
     album: &AlbumPlan,
     policy: ImportPolicy,
@@ -107,7 +113,7 @@ mod tests {
     }
 
     fn decide(
-        duplicated: bool,
+        has_duplicate: bool,
         interactive: bool,
         force: bool,
         duplicates: DuplicatePolicy,
@@ -118,7 +124,7 @@ mod tests {
             asked: Vec::new(),
         };
         let decision = decide_album(
-            &album(duplicated),
+            &album(has_duplicate),
             ImportPolicy {
                 interactive,
                 force,
@@ -130,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_follows_the_policy_and_asks_only_when_it_can() -> Result<(), String> {
+    fn a_duplicate_follows_the_policy_and_asks_only_when_it_can() {
         let cases = [
             (
                 DuplicatePolicy::Skip,
@@ -164,39 +170,36 @@ mod tests {
             ),
         ];
         for (policy, interactive, expected, asked) in cases {
-            let (decision, questions) = decide(true, interactive, false, policy)?;
+            let (decision, questions) = decide(true, interactive, false, policy).unwrap();
             assert_eq!(decision.duplicate, expected, "{policy:?}");
             assert_eq!(questions, asked, "{policy:?}");
         }
-        Ok(())
     }
 
     #[test]
-    fn force_replaces_a_duplicate_and_imports_a_new_album_again() -> Result<(), String> {
-        let (duplicated, _) = decide(true, false, true, DuplicatePolicy::Skip)?;
+    fn force_replaces_a_duplicate_and_imports_a_new_album_again() {
+        let (duplicated, _) = decide(true, false, true, DuplicatePolicy::Skip).unwrap();
         assert_eq!(duplicated.duplicate, Some(DuplicateDecision::Replace));
-        let (fresh, _) = decide(false, false, true, DuplicatePolicy::Skip)?;
+        let (fresh, _) = decide(false, false, true, DuplicatePolicy::Skip).unwrap();
         assert_eq!(fresh.duplicate, None);
-        Ok(())
     }
 
     #[test]
-    fn an_album_without_duplicates_skips_only_if_it_is_in_the_library() -> Result<(), String> {
+    fn an_album_without_duplicates_skips_only_if_it_is_in_the_library() {
         for (policy, expected) in [
             (DuplicatePolicy::Skip, Some(DuplicateDecision::Skip)),
             (DuplicatePolicy::Ask, Some(DuplicateDecision::Skip)),
             (DuplicatePolicy::KeepAll, None),
             (DuplicatePolicy::RemoveOld, None),
         ] {
-            let (decision, _) = decide(false, false, false, policy)?;
+            let (decision, _) = decide(false, false, false, policy).unwrap();
             assert_eq!(decision.choice, MatchDecision::AsIs);
             assert_eq!(decision.duplicate, expected, "{policy:?}");
         }
-        Ok(())
     }
 
     #[test]
-    fn a_skipped_match_needs_no_duplicate_decision() -> Result<(), String> {
+    fn a_skipped_match_needs_no_duplicate_decision() {
         let mut answers = Answers {
             choice: MatchDecision::Skip,
             duplicate: DuplicateDecision::Keep,
@@ -210,9 +213,9 @@ mod tests {
                 duplicates: DuplicatePolicy::Ask,
             },
             &mut answers,
-        )?;
+        )
+        .unwrap();
         assert_eq!(decision.duplicate, None);
         assert_eq!(answers.asked, ["match"]);
-        Ok(())
     }
 }

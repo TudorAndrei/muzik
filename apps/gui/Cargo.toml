@@ -1,9 +1,13 @@
 [package]
 name = "muzik-gpui"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 publish = false
 license = "GPL-3.0-only"
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow = "1"

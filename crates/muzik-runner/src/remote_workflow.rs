@@ -4,23 +4,22 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, chapters::Chapter, DecisionKind, JobEvent, PreferredAudio, Step};
+use muzik_core::{DecisionKind, JobEvent, PreferredAudio, Step, app_config, chapters::Chapter};
 use muzik_soulseek::fetch::Timeouts;
-use muzik_soulseek::session::{setting, Session, SessionSettings};
+use muzik_soulseek::session::{Session, SessionSettings, setting};
 use muzik_soulseek::types::Candidate;
 use muzik_store::watchlist::Stage;
 use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
-    classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,
-    QualityCheckedAudio, SplitProgress, SplitTask, WorkflowEvent, WorkflowInput,
-    WorkflowOperations, WorkflowOptions,
+    AudioFallback, AudioSource, ChapterReview, QualityCheckedAudio, SplitProgress, SplitTask,
+    WorkflowEvent, WorkflowInput, WorkflowOperations, WorkflowOptions, classify_input, playlist,
+    run_workflow_with_events,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     input: WorkflowInput,
     settings: &Settings,
@@ -261,13 +260,12 @@ impl WorkflowOperations for RemoteOperations<'_> {
     }
 }
 
-pub(crate) fn soulseek_ready(paths: &Paths) -> bool {
+pub fn soulseek_ready(paths: &Paths) -> bool {
     app_config::load(&paths.config_file())
-        .ok()
-        .is_some_and(|config| SessionSettings::configured(&config).is_some())
+        .is_ok_and(|config| SessionSettings::configured(&config).is_some())
 }
 
-pub(crate) fn acquire_spotify_audio<S, Y>(
+pub fn acquire_spotify_audio<S, Y>(
     source: AudioSource,
     fallback: AudioFallback,
     soulseek_ready: bool,
@@ -301,8 +299,11 @@ fn event_record(event: WorkflowEvent) -> JobEvent {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn soulseek_download(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three callers each pass a different mix of search options and callbacks"
+)]
+pub fn soulseek_download(
     paths: &Paths,
     query: &str,
     prefer: PreferredAudio,
@@ -375,8 +376,7 @@ fn candidate_row(candidate: &Candidate, score: f64) -> Value {
     let path = candidate
         .files
         .first()
-        .map(|file| file.name.as_str())
-        .unwrap_or("");
+        .map_or("", |file| file.name.as_str());
     let title = path.rsplit(['/', '\\']).next().unwrap_or(path);
     let format = candidate
         .files
@@ -386,7 +386,7 @@ fn candidate_row(candidate: &Candidate, score: f64) -> Value {
     json!({"title":title,"score":score,"user":candidate.username,"quality":{"format":format},"files":candidate.files,"path":path})
 }
 
-pub(crate) fn download(
+pub fn download(
     url: &str,
     output: &Path,
     force: bool,
@@ -404,7 +404,7 @@ mod tests {
     use muzik_soulseek::types::{Candidate, FileEntry};
 
     #[test]
-    fn spotify_youtube_source_does_not_call_soulseek() -> Result<(), String> {
+    fn spotify_youtube_source_does_not_call_soulseek() {
         let audio = std::path::PathBuf::from("youtube-audio.flac");
         let (files, from_youtube) = acquire_spotify_audio(
             AudioSource::Youtube,
@@ -412,14 +412,14 @@ mod tests {
             true,
             || Err("Soulseek must not run".into()),
             || Ok(vec![audio.clone()]),
-        )?;
+        )
+        .unwrap();
         assert_eq!(files, vec![audio]);
         assert!(from_youtube);
-        Ok(())
     }
 
     #[test]
-    fn spotify_soulseek_failure_uses_selected_fallback() -> Result<(), String> {
+    fn spotify_soulseek_failure_uses_selected_fallback() {
         let audio = std::path::PathBuf::from("fallback-audio.flac");
         let (files, from_youtube) = acquire_spotify_audio(
             AudioSource::Soulseek,
@@ -427,7 +427,8 @@ mod tests {
             true,
             || Err("Soulseek is unavailable".into()),
             || Ok(vec![audio.clone()]),
-        )?;
+        )
+        .unwrap();
         assert_eq!(files, vec![audio]);
         assert!(from_youtube);
         let error = acquire_spotify_audio(
@@ -437,10 +438,8 @@ mod tests {
             || Err("Soulseek is unavailable".into()),
             || Err("YouTube must not run".into()),
         )
-        .err()
-        .ok_or("Soulseek failure must be returned")?;
+        .unwrap_err();
         assert_eq!(error.to_string(), "Soulseek is unavailable");
-        Ok(())
     }
 
     #[test]

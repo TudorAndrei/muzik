@@ -23,6 +23,9 @@ pub struct AudioProperties {
     pub size_bytes: u64,
 }
 
+/// # Errors
+///
+/// Returns an error when the format is not supported or the file cannot be read.
 pub fn probe(path: impl AsRef<Path>) -> Result<AudioProperties, TagsError> {
     let path = path.as_ref();
     let audio = lofty::read_from_path(path)?;
@@ -63,7 +66,9 @@ pub fn probe(path: impl AsRef<Path>) -> Result<AudioProperties, TagsError> {
         format,
         codec,
         duration_seconds: (duration > 0.0).then_some(duration),
-        bitrate_kbps: properties.audio_bitrate().or(properties.overall_bitrate()),
+        bitrate_kbps: properties
+            .audio_bitrate()
+            .or_else(|| properties.overall_bitrate()),
         sample_rate_hz: properties.sample_rate(),
         bit_depth: properties.bit_depth(),
         channels: properties.channels(),

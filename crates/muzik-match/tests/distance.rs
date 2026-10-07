@@ -1,9 +1,9 @@
 use muzik_core::BeetsConfig;
 use muzik_match::{
-    album_distance, track_distance, Distance, MatchAlbum, MatchConfig, MatchItem, MatchTrack,
+    Distance, MatchAlbum, MatchConfig, MatchItem, MatchTrack, album_distance, track_distance,
 };
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -18,7 +18,7 @@ struct Expected {
     score: f64,
     penalties: Value,
     #[serde(default)]
-    tracks: Vec<Expected>,
+    tracks: Vec<Self>,
 }
 
 #[derive(Deserialize)]
@@ -43,8 +43,8 @@ struct AlbumCase {
 
 fn compare(name: &str, actual: &Distance, expected: &Expected, config: &MatchConfig) {
     assert_eq!(
-        actual.score(config).unwrap(),
-        expected.score,
+        actual.score(config).ok(),
+        Some(expected.score),
         "{name} score"
     );
     let penalties: Value = actual

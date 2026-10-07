@@ -37,6 +37,7 @@ pub enum Error {
 }
 
 /// Parse editable `MM:SS Title` or `HH:MM:SS Title` lines.
+#[must_use]
 pub fn parse_chapters(text: &str) -> Vec<Chapter> {
     let entries: Vec<_> = text
         .lines()
@@ -110,13 +111,13 @@ pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
         .map(|(position, (start, title))| Chapter {
             index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
             start: *start,
-            end: entries.get(position + 1).map(|entry| entry.0),
+            end: entries.get(position.saturating_add(1)).map(|entry| entry.0),
             title: title.clone(),
         })
         .collect()
 }
 
-/// Select a useful track list from YouTube comments, with pinned comments first.
+/// Select a useful track list from `YouTube` comments, with pinned comments first.
 pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
     metadata
         .get("comments")
@@ -126,8 +127,10 @@ pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
         .filter_map(|comment| {
             let chapters = parse_tracklist(comment.get("text")?.as_str()?);
             (chapters.len() >= 2).then_some((
-                u8::from(comment.get("is_pinned") == Some(&Value::Bool(true))) * 2
-                    + u8::from(comment.get("author_is_uploader") == Some(&Value::Bool(true))),
+                (
+                    comment.get("is_pinned") == Some(&Value::Bool(true)),
+                    comment.get("author_is_uploader") == Some(&Value::Bool(true)),
+                ),
                 chapters,
             ))
         })
@@ -136,6 +139,9 @@ pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
 }
 
 /// Parse the `chapters` array in yt-dlp metadata.
+///
+/// # Errors
+/// Returns an error if the text is not JSON or a chapter value is invalid.
 pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
     let data: Value = serde_json::from_str(text)?;
     let Some(raw) = data.get("chapters").filter(|value| {
@@ -217,7 +223,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
                 .map_or("", |capture| capture.as_str())
                 .trim();
             if !parsed.is_empty() {
-                *title = parsed.to_owned();
+                parsed.clone_into(title);
             }
         } else if let Some(captures) = CUE_INDEX
             .as_ref()
@@ -255,11 +261,17 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
 }
 
 /// Find chapters in the configured sidecar order.
+///
+/// # Errors
+/// Returns an error if a sidecar cannot be read or parsed.
 pub fn find_chapters(audio: &Path) -> Result<Vec<Chapter>, Error> {
     find_chapters_with_info(audio, true)
 }
 
 /// Find local text and CUE chapters, with optional yt-dlp metadata.
+///
+/// # Errors
+/// Returns an error if a sidecar cannot be read or parsed.
 pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<Chapter>, Error> {
     let txt = sidecar_path(audio, ".chapters.txt");
     if txt.metadata().is_ok_and(|metadata| metadata.len() > 0) {
@@ -278,10 +290,7 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
     let cue = if cue.exists() {
         Some(cue)
     } else {
-        let parent = match audio.parent() {
-            Some(parent) => parent,
-            None => Path::new("."),
-        };
+        let parent = audio.parent().unwrap_or_else(|| Path::new("."));
         let candidates: Vec<_> = fs::read_dir(parent)
             .ok()
             .into_iter()
@@ -303,12 +312,12 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
     Ok(Vec::new())
 }
 
+#[must_use]
 pub fn sidecar_path(audio: &Path, extension: &str) -> PathBuf {
-    let stem = match audio.file_stem() {
-        Some(stem) => stem,
-        None => std::ffi::OsStr::new(""),
-    }
-    .to_string_lossy();
+    let stem = audio
+        .file_stem()
+        .unwrap_or_else(|| std::ffi::OsStr::new(""))
+        .to_string_lossy();
     audio.with_file_name(format!("{stem}{extension}"))
 }
 
@@ -343,10 +352,18 @@ fn json_seconds(value: Option<&Value>, default: i64) -> Result<i64, Error> {
         _ => None,
     }
     .ok_or(Error::InvalidValue("chapter time"))?;
-    if !number.is_finite() || number < i64::MIN as f64 || number >= i64::MAX as f64 {
-        return Err(Error::InvalidValue("chapter time"));
-    }
-    Ok(number as i64)
+    truncate_to_i64(number).ok_or(Error::InvalidValue("chapter time"))
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "std has no checked f64 to i64 conversion; the range is checked first"
+)]
+fn truncate_to_i64(number: f64) -> Option<i64> {
+    (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0)
+        .contains(&number)
+        .then_some(number as i64)
 }
 
 fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
@@ -362,7 +379,7 @@ fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
         );
         let cleaned = cleaned.trim();
         if !cleaned.is_empty() {
-            chapter.title = cleaned.to_owned();
+            cleaned.clone_into(&mut chapter.title);
         }
     }
     chapters
@@ -417,7 +434,9 @@ mod tests {
 
     #[test]
     fn cue_orders_tracks_and_rounds_frames() {
-        let chapters = parse_cue("TITLE \"Album\"\n TRACK 02 AUDIO\n TITLE \"Two\"\n INDEX 01 03:12:38\n TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n");
+        let chapters = parse_cue(
+            "TITLE \"Album\"\n TRACK 02 AUDIO\n TITLE \"Two\"\n INDEX 01 03:12:38\n TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n",
+        );
         assert_eq!(chapters[0].index, 1);
         assert_eq!(chapters[0].end, Some(193));
         assert_eq!(chapters[1].title, "Two");

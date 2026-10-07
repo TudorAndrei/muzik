@@ -1,5 +1,5 @@
 use muzik_core::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct Choice {
     pub label: String,
@@ -19,11 +19,13 @@ impl Choice {
     }
 }
 
+#[must_use]
 pub fn kind(question: &Value) -> Option<DecisionKind> {
     question["kind"].as_str()?.parse().ok()
 }
 
-pub fn title(kind: Option<DecisionKind>) -> &'static str {
+#[must_use]
+pub const fn title(kind: Option<DecisionKind>) -> &'static str {
     match kind {
         Some(DecisionKind::SoulseekCandidate) => "Choose a Soulseek download",
         Some(DecisionKind::ChapterReview) => "Check the chapters",
@@ -36,8 +38,9 @@ pub fn title(kind: Option<DecisionKind>) -> &'static str {
 }
 
 pub fn note(question: &Value) -> Option<&'static str> {
-    let matches = question["payload"]["task"]["matches"]
-        .as_array()
+    let matches = question
+        .pointer("/payload/task/matches")
+        .and_then(Value::as_array)
         .map_or(0, Vec::len);
     match kind(question)? {
         DecisionKind::ImportMatch if matches == 0 => {
@@ -49,6 +52,7 @@ pub fn note(question: &Value) -> Option<&'static str> {
     }
 }
 
+#[must_use]
 pub fn agent_note(agent: &Value) -> Option<String> {
     let model = agent["model"].as_str().unwrap_or("The assistant");
     if let Some(error) = agent["error"].as_str() {
@@ -56,18 +60,23 @@ pub fn agent_note(agent: &Value) -> Option<String> {
     }
     let reason = agent["reason"].as_str()?;
     let confidence = (agent["confidence"].as_f64().unwrap_or(0.0) * 100.0).round();
-    Some(match agent["suggestion"].as_u64() {
-        Some(index) => format!(
-            "{model} suggests option {} but is only {confidence}% sure. {reason}",
-            index + 1
-        ),
-        None => format!("{model} found no good match. {reason}"),
-    })
+    Some(agent["suggestion"].as_u64().map_or_else(
+        || format!("{model} found no good match. {reason}"),
+        |index| {
+            format!(
+                "{model} suggests option {} but is only {confidence}% sure. {reason}",
+                index.saturating_add(1)
+            )
+        },
+    ))
 }
 
+#[must_use]
 pub fn suggestion(question: &Value) -> Option<usize> {
-    let agent = &question["payload"]["agent"];
-    if agent.is_object() {
+    if let Some(agent) = question
+        .pointer("/payload/agent")
+        .filter(|agent| agent.is_object())
+    {
         return agent["suggestion"]
             .as_u64()
             .and_then(|index| usize::try_from(index).ok());
@@ -85,16 +94,17 @@ pub fn details(question: &Value) -> Vec<String> {
             .as_array()
             .into_iter()
             .flatten()
-            .enumerate()
-            .map(|(index, candidate)| {
+            .zip(1_usize..)
+            .map(|(candidate, number)| {
                 format!(
                     "{}. {} · score {:.0} · {} · {} · {} files · {}",
-                    index + 1,
+                    number,
                     candidate["title"].as_str().unwrap_or("Candidate"),
                     candidate["score"].as_f64().unwrap_or(0.0),
                     candidate["user"].as_str().unwrap_or("Unknown user"),
-                    candidate["quality"]["format"]
-                        .as_str()
+                    candidate
+                        .pointer("/quality/format")
+                        .and_then(Value::as_str)
                         .unwrap_or("Unknown format"),
                     candidate["files"].as_array().map_or(0, Vec::len),
                     candidate["path"]
@@ -131,14 +141,17 @@ pub fn details(question: &Value) -> Vec<String> {
             ),
             format!(
                 "Candidate: {} · {} · {} kbps",
-                payload["candidate"]["title"]
-                    .as_str()
+                payload
+                    .pointer("/candidate/title")
+                    .and_then(Value::as_str)
                     .unwrap_or("Audio file"),
-                payload["candidate"]["quality"]["format"]
-                    .as_str()
+                payload
+                    .pointer("/candidate/quality/format")
+                    .and_then(Value::as_str)
                     .unwrap_or("Unknown format"),
-                payload["candidate"]["quality"]["bitrate"]
-                    .as_u64()
+                payload
+                    .pointer("/candidate/quality/bitrate")
+                    .and_then(Value::as_u64)
                     .map_or_else(|| "?".to_string(), |value| value.to_string())
             ),
         ],
@@ -157,66 +170,31 @@ pub fn details(question: &Value) -> Vec<String> {
                         .filter_map(|path| path.as_str().map(str::to_owned)),
                 );
             }
-            if kind == DecisionKind::ImportDuplicate {
-                if let Some(duplicates) = payload["duplicates"].as_array() {
-                    details.extend(duplicates.iter().map(|duplicate| {
-                        format!(
-                            "Existing: {} · {} · {}",
-                            duplicate["artist"].as_str().unwrap_or("Unknown artist"),
-                            duplicate["album"].as_str().unwrap_or("Unknown album"),
-                            duplicate["path"].as_str().unwrap_or("No path")
-                        )
-                    }));
-                }
+            if kind == DecisionKind::ImportDuplicate
+                && let Some(duplicates) = payload["duplicates"].as_array()
+            {
+                details.extend(duplicates.iter().map(|duplicate| {
+                    format!(
+                        "Existing: {} · {} · {}",
+                        duplicate["artist"].as_str().unwrap_or("Unknown artist"),
+                        duplicate["album"].as_str().unwrap_or("Unknown album"),
+                        duplicate["path"].as_str().unwrap_or("No path")
+                    )
+                }));
             }
             details
         }
     }
 }
 
+#[must_use]
 pub fn choices(question: &Value) -> Vec<Choice> {
     let payload = &question["payload"];
     let Some(kind) = kind(question) else {
         return Vec::new();
     };
     match kind {
-        DecisionKind::SoulseekCandidate => {
-            let candidates: Vec<&Value> = payload["candidates"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .collect();
-            let best = candidates
-                .iter()
-                .filter_map(|candidate| candidate["score"].as_f64())
-                .fold(0.0_f64, f64::max);
-            let mut choices: Vec<Choice> = candidates
-                .iter()
-                .enumerate()
-                .map(|(index, candidate)| Choice {
-                    label: candidate["title"]
-                        .as_str()
-                        .or_else(|| candidate["name"].as_str())
-                        .unwrap_or("Candidate")
-                        .to_owned(),
-                    meta: joined_facts([
-                        fact(&candidate["quality"]["format"]),
-                        format!(
-                            "{} files",
-                            candidate["files"].as_array().map_or(0, Vec::len)
-                        ),
-                        format!("user {}", fact(&candidate["user"])),
-                    ]),
-                    score: candidate["score"]
-                        .as_f64()
-                        .filter(|_| best > 0.0)
-                        .map(|score| ((score / best).clamp(0.0, 1.0) * 100.0).round() as u64),
-                    value: json!(index),
-                })
-                .collect();
-            choices.push(Choice::plain("Skip these downloads", Value::Null));
-            choices
-        }
+        DecisionKind::SoulseekCandidate => soulseek_choices(payload),
         DecisionKind::ChapterReview => vec![
             Choice::plain("Use these chapters", json!(ChapterAnswer::Accept)),
             Choice::plain("Edit the chapters", json!(ChapterAnswer::Edit)),
@@ -230,50 +208,103 @@ pub fn choices(question: &Value) -> Vec<Choice> {
             Choice::plain("Replace file", json!(true)),
             Choice::plain("Keep current file", json!(false)),
         ],
-        DecisionKind::ImportMatch => {
-            let mut choices: Vec<Choice> = payload["task"]["matches"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|candidate| {
-                    let id = candidate["candidate_id"].as_str()?;
-                    Some(Choice {
-                        label: format!(
-                            "{} — {}",
-                            candidate["artist"].as_str().unwrap_or("Unknown artist"),
-                            candidate["album"]
-                                .as_str()
-                                .or_else(|| candidate["title"].as_str())
-                                .unwrap_or("Unknown release")
-                        ),
-                        meta: joined_facts([
-                            fact(&candidate["year"]),
-                            fact(&candidate["country"]),
-                            fact(&candidate["media"]),
-                            fact(&candidate["label"]),
-                            candidate["track_count"]
-                                .as_u64()
-                                .map_or_else(String::new, |count| format!("{count} tracks")),
-                        ]),
-                        score: candidate["score"].as_u64().or_else(|| {
-                            candidate["distance"].as_f64().map(|distance| {
-                                ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
-                            })
-                        }),
-                        value: json!(id),
-                    })
-                })
-                .collect();
-            choices.push(Choice::plain("Keep current tags", json!(KEEP_CURRENT_TAGS)));
-            choices.push(Choice::plain("Skip", Value::Null));
-            choices
-        }
+        DecisionKind::ImportMatch => import_match_choices(payload),
         DecisionKind::ImportDuplicate => vec![
             Choice::plain("Skip the new files", json!(DuplicateAnswer::Skip)),
             Choice::plain("Keep both", json!(DuplicateAnswer::KeepAll)),
             Choice::plain("Replace the old files", json!(DuplicateAnswer::RemoveOld)),
         ],
     }
+}
+
+fn soulseek_choices(payload: &Value) -> Vec<Choice> {
+    let candidates: Vec<&Value> = payload["candidates"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect();
+    let best = candidates
+        .iter()
+        .filter_map(|candidate| candidate["score"].as_f64())
+        .fold(0.0_f64, f64::max);
+    let mut choices: Vec<Choice> = candidates
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| Choice {
+            label: candidate["title"]
+                .as_str()
+                .or_else(|| candidate["name"].as_str())
+                .unwrap_or("Candidate")
+                .to_owned(),
+            meta: joined_facts([
+                candidate
+                    .pointer("/quality/format")
+                    .map_or_else(String::new, fact),
+                format!(
+                    "{} files",
+                    candidate["files"].as_array().map_or(0, Vec::len)
+                ),
+                format!("user {}", fact(&candidate["user"])),
+            ]),
+            score: candidate["score"]
+                .as_f64()
+                .filter(|_| best > 0.0)
+                .map(|score| percent(score / best)),
+            value: json!(index),
+        })
+        .collect();
+    choices.push(Choice::plain("Skip these downloads", Value::Null));
+    choices
+}
+
+fn import_match_choices(payload: &Value) -> Vec<Choice> {
+    let mut choices: Vec<Choice> = payload
+        .pointer("/task/matches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|candidate| {
+            let id = candidate["candidate_id"].as_str()?;
+            Some(Choice {
+                label: format!(
+                    "{} — {}",
+                    candidate["artist"].as_str().unwrap_or("Unknown artist"),
+                    candidate["album"]
+                        .as_str()
+                        .or_else(|| candidate["title"].as_str())
+                        .unwrap_or("Unknown release")
+                ),
+                meta: joined_facts([
+                    fact(&candidate["year"]),
+                    fact(&candidate["country"]),
+                    fact(&candidate["media"]),
+                    fact(&candidate["label"]),
+                    candidate["track_count"]
+                        .as_u64()
+                        .map_or_else(String::new, |count| format!("{count} tracks")),
+                ]),
+                score: candidate["score"].as_u64().or_else(|| {
+                    candidate["distance"]
+                        .as_f64()
+                        .map(|distance| percent(1.0 - distance.clamp(0.0, 1.0)))
+                }),
+                value: json!(id),
+            })
+        })
+        .collect();
+    choices.push(Choice::plain("Keep current tags", json!(KEEP_CURRENT_TAGS)));
+    choices.push(Choice::plain("Skip", Value::Null));
+    choices
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "std has no checked float to integer conversion; the value is clamped to 0..=100"
+)]
+pub(crate) fn percent(fraction: f64) -> u64 {
+    (fraction.clamp(0.0, 1.0) * 100.0).round() as u64
 }
 
 fn joined_facts(parts: impl IntoIterator<Item = String>) -> String {

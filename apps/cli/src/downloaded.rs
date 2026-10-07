@@ -15,7 +15,7 @@ pub fn list(directory: &Path) -> anyhow::Result<()> {
     for item in &items {
         total_bytes = total_bytes.saturating_add(item.size);
         if item.youtube_id.is_some() {
-            with_id += 1;
+            with_id = with_id.saturating_add(1);
         }
         println!(
             "{}\t{}\t{}",

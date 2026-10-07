@@ -1,8 +1,12 @@
 use gpui_kit::component::theme::{Theme, ThemeRegistry};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::*;
-use gpui_kit::*;
-use muzik_store::watchlist::{stage_status, Stage, StageStatus};
+use gpui_kit::component::{ActiveTheme as _, StyledExt as _};
+use gpui_kit::prelude::*;
+use gpui_kit::{
+    AnyElement, App, AssetSource, Div, ElementId, Hsla, Image, ImageFormat, Result, SharedString,
+    div, px,
+};
+use muzik_store::watchlist::{Stage, StageStatus, stage_status};
 use serde_json::Value;
 
 const THEME: &str = include_str!("../themes/muzik.json");
@@ -17,10 +21,10 @@ pub struct AppAssets;
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        match SourceIcons.load(path)? {
-            Some(icon) => Ok(Some(icon)),
-            None => gpui_kit::assets::Assets.load(path),
-        }
+        SourceIcons.load(path)?.map_or_else(
+            || gpui_kit::assets::Assets.load(path),
+            |icon| Ok(Some(icon)),
+        )
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
@@ -115,7 +119,7 @@ pub fn overline(text: impl Into<SharedString>, cx: &App) -> Div {
         .child(text)
 }
 
-pub fn stage_label(stage: Stage) -> &'static str {
+pub const fn stage_label(stage: Stage) -> &'static str {
     match stage {
         Stage::Download => "Download",
         Stage::Quality => "Quality",
@@ -125,7 +129,7 @@ pub fn stage_label(stage: Stage) -> &'static str {
     }
 }
 
-pub fn status_word(status: StageStatus) -> &'static str {
+pub const fn status_word(status: StageStatus) -> &'static str {
     match status {
         StageStatus::NotStarted => "Not started",
         StageStatus::Running => "Running",
@@ -224,13 +228,13 @@ pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyEleme
 
 #[cfg(test)]
 mod tests {
-    use super::{source_icon, stage_headline, stage_states, AppAssets, Tone};
+    use super::{AppAssets, Tone, source_icon, stage_headline, stage_states};
     use gpui_kit::AssetSource;
     use muzik_store::watchlist::{Stage, StageStatus};
     use serde_json::json;
 
     #[test]
-    fn every_source_icon_and_the_default_icons_load() -> gpui_kit::Result<()> {
+    fn every_source_icon_and_the_default_icons_load() {
         for id in [
             "PL123",
             "spotify:liked",
@@ -239,10 +243,12 @@ mod tests {
             "bandcamp:collection",
         ] {
             let path = source_icon(&json!({"playlist_id": id})).path();
-            assert!(AppAssets.load(&path)?.is_some(), "{path} is missing");
+            assert!(
+                AppAssets.load(&path).unwrap().is_some(),
+                "{path} is missing"
+            );
         }
-        assert!(AppAssets.load("icons/plus.svg")?.is_some());
-        Ok(())
+        assert!(AppAssets.load("icons/plus.svg").unwrap().is_some());
     }
 
     #[test]

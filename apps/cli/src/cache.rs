@@ -15,7 +15,7 @@ pub fn list() -> anyhow::Result<()> {
     let mut total = 0_u64;
     for file in &files {
         let metadata = fs::metadata(file)?;
-        total += metadata.len();
+        total = total.saturating_add(metadata.len());
         println!("{}\t{}", file.display(), ByteSize(metadata.len()));
     }
     println!("Total: {} file(s), {}", files.len(), ByteSize(total));
@@ -26,7 +26,7 @@ pub fn size() -> anyhow::Result<()> {
     let files = cache_files()?;
     let mut total = 0_u64;
     for file in &files {
-        total += fs::metadata(file)?.len();
+        total = total.saturating_add(fs::metadata(file)?.len());
     }
     println!(
         "Cache: {}\n  {} file(s), {}",
@@ -111,7 +111,7 @@ pub fn clean(max_age_days: u64) -> anyhow::Result<()> {
         let metadata = fs::metadata(&file)?;
         if metadata.len() == 0 || metadata.modified()? < cutoff {
             fs::remove_file(file)?;
-            removed += 1;
+            removed = removed.saturating_add(1);
         }
     }
     println!("Removed {removed} stale cache entries.");
@@ -134,7 +134,9 @@ fn cache_files() -> io::Result<Vec<PathBuf>> {
 
 fn child_count(directory: &Path) -> io::Result<usize> {
     if directory.exists() {
-        fs::read_dir(directory)?.try_fold(0_usize, |count, entry| entry.map(|_| count + 1))
+        fs::read_dir(directory)?.try_fold(0_usize, |count, entry| {
+            entry.map(|_| count.saturating_add(1))
+        })
     } else {
         Ok(0)
     }

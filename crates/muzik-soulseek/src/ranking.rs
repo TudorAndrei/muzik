@@ -1,8 +1,8 @@
 //! Rank peer results by audio quality and match to the search text.
 
 use crate::types::{Candidate, FileEntry};
-use muzik_core::audio::AudioFormat;
 use muzik_core::PreferredAudio;
+use muzik_core::audio::AudioFormat;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
@@ -22,6 +22,7 @@ pub fn search_query(query: &str, prefer: PreferredAudio) -> String {
         .map_or_else(|| query.to_owned(), |suffix| format!("{query} {suffix}"))
 }
 
+#[must_use]
 pub fn rank(
     candidates: Vec<Candidate>,
     query: &str,
@@ -44,6 +45,7 @@ pub fn rank(
     ranked
 }
 
+#[must_use]
 pub fn format(file: &FileEntry) -> Option<AudioFormat> {
     let (_, extension) = file.name.rsplit_once('.')?;
     AudioFormat::from_extension(extension).filter(|format| {
@@ -162,8 +164,7 @@ fn name(path: &str) -> &str {
 
 fn parent(path: &str) -> &str {
     path.rsplit_once(['/', '\\'])
-        .map(|(parent, _)| parent)
-        .unwrap_or("")
+        .map_or("", |(parent, _)| parent)
 }
 
 fn numbered(value: &str) -> bool {
@@ -171,10 +172,10 @@ fn numbered(value: &str) -> bool {
         .chars()
         .skip_while(|character| !character.is_ascii_digit())
         .peekable();
-    let mut digits = 0;
+    let mut digits = 0_u32;
     while characters.peek().is_some_and(char::is_ascii_digit) {
         let _ = characters.next();
-        digits += 1;
+        digits = digits.saturating_add(1);
     }
     (1..=2).contains(&digits)
         && characters

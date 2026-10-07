@@ -1,6 +1,6 @@
 //! Versioned watchlist data shared with the existing application.
 
-use crate::{db, Result};
+use crate::{Result, db};
 use muzik_core::paths::Paths;
 use parking_lot::Mutex;
 use rusqlite::{Connection, TransactionBehavior};
@@ -19,10 +19,10 @@ mod reconcile;
 pub mod source;
 mod view;
 
-pub use item::{now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist};
+pub use item::{AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
-pub use reconcile::{reconcile, ReconcileOptions};
-pub use view::{view, Summary};
+pub use reconcile::{ReconcileOptions, reconcile};
+pub use view::{Summary, view};
 
 #[derive(
     Clone,
@@ -52,7 +52,8 @@ pub enum Stage {
 impl Stage {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn of_decision(kind: muzik_core::DecisionKind) -> Self {
+    #[must_use]
+    pub const fn of_decision(kind: muzik_core::DecisionKind) -> Self {
         match kind {
             muzik_core::DecisionKind::ImportMatch | muzik_core::DecisionKind::ImportDuplicate => {
                 Self::Organize
@@ -65,7 +66,8 @@ impl Stage {
         }
     }
 
-    pub fn resume_action(self) -> ItemAction {
+    #[must_use]
+    pub const fn resume_action(self) -> ItemAction {
         match self {
             Self::Organize => ItemAction::OrganizeAgain,
             Self::Parse => ItemAction::ParseAgain,
@@ -104,7 +106,8 @@ pub enum StageStatus {
 }
 
 impl StageStatus {
-    pub fn is_done(self) -> bool {
+    #[must_use]
+    pub const fn is_done(self) -> bool {
         matches!(self, Self::Complete | Self::Skipped)
     }
 }
@@ -140,7 +143,8 @@ pub enum ItemAction {
 impl ItemAction {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn stage(self) -> Stage {
+    #[must_use]
+    pub const fn stage(self) -> Stage {
         match self {
             Self::CheckQualityAgain => Stage::Quality,
             Self::ParseAgain => Stage::Parse,
@@ -150,7 +154,8 @@ impl ItemAction {
         }
     }
 
-    pub fn replaces_files(self) -> bool {
+    #[must_use]
+    pub const fn replaces_files(self) -> bool {
         matches!(
             self,
             Self::DownloadAgain
@@ -187,6 +192,7 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    #[must_use]
     pub fn of(value: &Value) -> Self {
         value["kind"]
             .as_str()
@@ -194,6 +200,7 @@ impl SourceKind {
             .unwrap_or_default()
     }
 
+    #[must_use]
     pub fn is_youtube(self) -> bool {
         self == Self::Youtube
     }
@@ -201,6 +208,7 @@ impl SourceKind {
 
 pub const BANDCAMP_PLAYLIST_ID: &str = "bandcamp:collection";
 
+#[must_use]
 pub fn bandcamp_source(user: &str) -> Playlist {
     Playlist::new(
         BANDCAMP_PLAYLIST_ID,
@@ -210,8 +218,11 @@ pub fn bandcamp_source(user: &str) -> Playlist {
     )
 }
 
+#[must_use]
 pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
-    item["stages"][stage.as_ref()]["status"]
+    item.get("stages")?
+        .get(stage.as_ref())?
+        .get("status")?
         .as_str()?
         .parse()
         .ok()
@@ -231,37 +242,43 @@ pub struct Repository {
 static WRITER: Mutex<()> = Mutex::new(());
 
 impl Repository {
+    #[must_use]
     pub fn open(paths: &Paths) -> Self {
         Self::new(paths.database()).with_legacy(paths.config.join("watchlist.json"))
     }
 
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
         Self { path, legacy: None }
     }
 
+    #[must_use]
     pub fn with_legacy(mut self, legacy: PathBuf) -> Self {
         self.legacy = Some(legacy);
         self
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
+    fn locked<T>(work: impl FnOnce() -> T) -> T {
         let _writer = WRITER.lock();
         work()
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or written, or if `change` fails.
     pub fn update<T>(&self, change: impl FnOnce(&mut Watchlist) -> Result<T>) -> Result<T> {
         self.update_with(|document, _| change(document))
     }
 
-    pub fn update_with<T>(
+    pub(crate) fn update_with<T>(
         &self,
         change: impl FnOnce(&mut Watchlist, &Connection) -> Result<T>,
     ) -> Result<T> {
-        self.locked(|| {
+        Self::locked(|| {
             let mut connection = self.connect()?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -274,10 +291,14 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
     pub fn load(&self) -> Result<Watchlist> {
         read_document(&self.connect()?)
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist is invalid or the database cannot be written.
     pub fn save(&self, value: &Watchlist) -> Result<()> {
         let value = value.clone().normalized()?;
         let mut connection = self.connect()?;
@@ -287,10 +308,14 @@ impl Repository {
         Ok(transaction.commit()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or read.
     pub fn revision(&self) -> Result<i64> {
         read_revision(&self.connect()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
     pub fn load_revision(&self) -> Result<(Watchlist, i64)> {
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
@@ -300,9 +325,11 @@ impl Repository {
         Ok((document, revision))
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist is invalid or the database cannot be written.
     pub fn save_at(&self, revision: i64, value: &Watchlist) -> Result<CheckedWrite> {
         let value = value.clone().normalized()?;
-        self.locked(|| {
+        Self::locked(|| {
             let mut connection = self.connect()?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -316,6 +343,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn ensure(&self, source: &Playlist) -> Result<bool> {
         if self.load()?.playlist(&source.playlist_id).is_some() {
             return Ok(false);
@@ -329,6 +358,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if `input` is not a known source, the source is already present, or the write fails.
     pub fn add(&self, input: &str) -> Result<Playlist> {
         let source = parse_source(input)?;
         self.update(|document| {
@@ -340,6 +371,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool> {
         self.update(|document| {
             let Some(playlist) = document.playlist_mut(playlist_id) else {
@@ -351,6 +384,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn remove(&self, playlist_id: &str) -> Result<bool> {
         self.update(|document| {
             let before = document.playlists.len();
@@ -428,7 +463,11 @@ fn read_document(connection: &Connection) -> Result<Watchlist> {
         let index = *positions
             .get(&id)
             .ok_or_else(|| format!("item belongs to missing playlist {id}"))?;
-        playlists[index].items.push(item);
+        playlists
+            .get_mut(index)
+            .ok_or_else(|| format!("item belongs to missing playlist {id}"))?
+            .items
+            .push(item);
     }
     Watchlist {
         playlists,
@@ -514,6 +553,8 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if `input` is not a `YouTube` playlist, Spotify playlist or album, or liked songs.
 pub fn parse_source(input: &str) -> Result<Playlist> {
     let text = input.trim();
     let lower = text.to_ascii_lowercase();
@@ -528,21 +569,19 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
             Some("Liked Songs"),
         ));
     }
-    if let Some((_, query)) = text.split_once('?') {
-        if let Some(id) = query.split('&').find_map(|pair| pair.strip_prefix("list=")) {
-            if !id.is_empty()
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
-                return Ok(Playlist::new(
-                    id,
-                    &format!("https://www.youtube.com/playlist?list={id}"),
-                    SourceKind::Youtube,
-                    None,
-                ));
-            }
-        }
+    if let Some((_, query)) = text.split_once('?')
+        && let Some(id) = query.split('&').find_map(|pair| pair.strip_prefix("list="))
+        && !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Ok(Playlist::new(
+            id,
+            &format!("https://www.youtube.com/playlist?list={id}"),
+            SourceKind::Youtube,
+            None,
+        ));
     }
     let spotify = text
         .strip_prefix("spotify:playlist:")
@@ -557,18 +596,17 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
             let (kind, id) = rest.split_once('/')?;
             Some((kind, id.split(['?', '/']).next()?))
         });
-    if let Some((kind, id)) = spotify {
-        if matches!(kind, "playlist" | "album")
-            && id.len() >= 10
-            && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        {
-            return Ok(Playlist::new(
-                &format!("spotify:{kind}:{id}"),
-                &format!("https://open.spotify.com/{kind}/{id}"),
-                SourceKind::Spotify,
-                None,
-            ));
-        }
+    if let Some((kind, id)) = spotify
+        && matches!(kind, "playlist" | "album")
+        && id.len() >= 10
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Ok(Playlist::new(
+            &format!("spotify:{kind}:{id}"),
+            &format!("https://open.spotify.com/{kind}/{id}"),
+            SourceKind::Spotify,
+            None,
+        ));
     }
     Err("enter a YouTube playlist URL, Spotify playlist or album link, or liked".into())
 }

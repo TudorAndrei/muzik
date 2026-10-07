@@ -72,9 +72,8 @@ fn request(root: &Path) -> WorkflowRequest {
 }
 
 #[test]
-fn youtube_playlist_keeps_order_continues_after_failure_and_resumes()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn youtube_playlist_keeps_order_continues_after_failure_and_resumes() {
+    let dir = tempfile::tempdir().unwrap();
     let mut operations = Operations {
         playlist_ids: vec!["first".into(), "second".into(), "third".into()],
         fail_video: Some("second".into()),
@@ -91,7 +90,8 @@ fn youtube_playlist_keeps_order_continues_after_failure_and_resumes()
         "PL1",
         "https://youtube.com/playlist?list=PL1",
         &mut |_| {},
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         first
             .items
@@ -121,7 +121,8 @@ fn youtube_playlist_keeps_order_continues_after_failure_and_resumes()
         "PL1",
         "https://youtube.com/playlist?list=PL1",
         &mut |_| {},
-    )?;
+    )
+    .unwrap();
     assert!(second.items.iter().all(|item| item.completed));
     assert_eq!(second.processing.plan.singles.len(), 1);
     assert_eq!(
@@ -133,23 +134,23 @@ fn youtube_playlist_keeps_order_continues_after_failure_and_resumes()
             .collect::<Vec<_>>(),
         vec!["download:second"]
     );
-    Ok(())
 }
 
 #[test]
-fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn spotify_json_processes_repeated_tracks_in_order_and_resumes() {
+    let dir = tempfile::tempdir().unwrap();
     let export = dir.path().join("spotify.json");
     fs::write(
         &export,
         r#"{"version":1,"source":"spotify","type":"playlist","id":"p1","title":"List","entries":[{"title":"One","artist":"A","source_id":"spotify:track:same","index":1},{"title":"Two","artist":"B","source_id":"spotify:track:same","index":2}]}"#,
-    )?;
+    )
+    .unwrap();
     let audio = dir.path().join("song.mp3");
     fs::copy(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../muzik-tags/tests/fixtures/blank.mp3"),
         &audio,
-    )?;
+    )
+    .unwrap();
     let mut operations = Operations {
         spotify_file: Some(audio.clone()),
         ..Operations::default()
@@ -166,7 +167,8 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
         &cancelled,
         &export,
         &mut |_| {},
-    )?;
+    )
+    .unwrap();
     assert_eq!(
         first
             .items
@@ -176,7 +178,7 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
         vec!["spotify:track:same#0", "spotify:track:same#1"]
     );
     assert_eq!(first.processing.plan.singles.len(), 2);
-    let tags = muzik_tags::read(&audio, &[])?;
+    let tags = muzik_tags::read(&audio, &[]).unwrap();
     assert_eq!(tags.fields.get("title").map(String::as_str), Some("Two"));
     assert_eq!(tags.fields.get("artist").map(String::as_str), Some("B"));
     operations.calls.clear();
@@ -187,7 +189,8 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
         &cancelled,
         &export,
         &mut |_| {},
-    )?;
+    )
+    .unwrap();
     assert!(second.processing.plan.singles.is_empty());
     assert!(
         !operations
@@ -195,43 +198,42 @@ fn spotify_json_processes_repeated_tracks_in_order_and_resumes()
             .iter()
             .any(|call| call.starts_with("spotify:"))
     );
-    Ok(())
 }
 
 #[test]
-fn spotify_csv_reads_quoted_names_and_rejects_duplicate_positions()
--> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn spotify_csv_reads_quoted_names_and_rejects_duplicate_positions() {
+    let dir = tempfile::tempdir().unwrap();
     let export = dir.path().join("spotify.csv");
     fs::write(
         &export,
         "track_name,artist_name,spotify_track_id,position\n\"One, Two\",Artist,abc,1\n",
-    )?;
-    let playlist = load_spotify_export(&export)?;
+    )
+    .unwrap();
+    let playlist = load_spotify_export(&export).unwrap();
     assert_eq!(playlist.tracks[0].title, "One, Two");
     fs::write(
         &export,
         "track_name,artist_name,spotify_track_id,position\nOne,Artist,abc,1\nTwo,Artist,def,1\n",
-    )?;
+    )
+    .unwrap();
     assert!(load_spotify_export(&export).is_err());
-    Ok(())
 }
 
 #[test]
-fn spotify_json_rejects_an_invalid_track_position() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn spotify_json_rejects_an_invalid_track_position() {
+    let dir = tempfile::tempdir().unwrap();
     let export = dir.path().join("spotify.json");
     fs::write(
         &export,
         r#"{"version":1,"source":"spotify","type":"playlist","id":"p1","title":"List","entries":[{"title":"One","artist":"A","index":"wrong"}]}"#,
-    )?;
+    )
+    .unwrap();
     assert!(load_spotify_export(&export).is_err());
-    Ok(())
 }
 
 #[test]
-fn main_workflow_routes_a_youtube_playlist() -> Result<(), Box<dyn std::error::Error>> {
-    let dir = tempfile::tempdir()?;
+fn main_workflow_routes_a_youtube_playlist() {
+    let dir = tempfile::tempdir().unwrap();
     let mut request = request(dir.path());
     request.raw = "https://www.youtube.com/playlist?list=PL1".into();
     let mut operations = Operations {
@@ -243,8 +245,8 @@ fn main_workflow_routes_a_youtube_playlist() -> Result<(), Box<dyn std::error::E
         &WorkflowOptions::default(),
         &mut operations,
         &AtomicBool::new(false),
-    )?;
+    )
+    .unwrap();
     assert_eq!(result.plan.singles.len(), 1);
     assert!(operations.calls.contains(&"list".into()));
-    Ok(())
 }

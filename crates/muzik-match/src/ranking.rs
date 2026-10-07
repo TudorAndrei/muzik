@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumString;
 
 use crate::distance::{
-    album_distance, track_distance, AlbumField, Distance, Error, MatchAlbum, MatchConfig,
-    MatchItem, MatchTrack,
+    AlbumField, Distance, Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack, album_distance,
+    track_distance,
 };
 
 /// Track mapping and items left after minimum-cost assignment.
@@ -16,12 +16,14 @@ pub struct Assignment {
     pub extra_tracks: Vec<usize>,
 }
 
+/// # Errors
+/// Returns an error when a distance cannot be computed or the track assignment fails.
 pub fn assign_items(
     items: &[MatchItem],
     tracks: &[MatchTrack],
     config: &MatchConfig,
 ) -> Result<Assignment, Error> {
-    let mut costs = Vec::with_capacity(items.len() * tracks.len());
+    let mut costs = Vec::with_capacity(items.len().saturating_mul(tracks.len()));
     for item in items {
         for track in tracks {
             costs.push(track_distance(item, track, false, config)?.score(config)?);
@@ -33,24 +35,24 @@ pub fn assign_items(
     pairs.sort_by_key(|pair| pair.1);
     let used_items: HashSet<_> = pairs.iter().map(|pair| pair.0).collect();
     let used_tracks: HashSet<_> = pairs.iter().map(|pair| pair.1).collect();
-    let mut extra_items: Vec<_> = (0..items.len())
-        .filter(|index| !used_items.contains(index))
+    let mut extra_items: Vec<_> = items
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !used_items.contains(index))
         .collect();
-    extra_items.sort_by(|&left, &right| {
-        let left_item = &items[left];
-        let right_item = &items[right];
-        (left_item.disc, left_item.track, &left_item.title).cmp(&(
-            right_item.disc,
-            right_item.track,
-            &right_item.title,
-        ))
+    extra_items.sort_by(|(_, left), (_, right)| {
+        (left.disc, left.track, &left.title).cmp(&(right.disc, right.track, &right.title))
     });
-    let mut extra_tracks: Vec<_> = (0..tracks.len())
-        .filter(|index| !used_tracks.contains(index))
+    let extra_items: Vec<_> = extra_items.into_iter().map(|(index, _)| index).collect();
+    let mut extra_tracks: Vec<_> = tracks
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !used_tracks.contains(index))
         .collect();
-    extra_tracks.sort_by(|&left, &right| {
-        (tracks[left].index, &tracks[left].title).cmp(&(tracks[right].index, &tracks[right].title))
+    extra_tracks.sort_by(|(_, left), (_, right)| {
+        (left.index, &left.title).cmp(&(right.index, &right.title))
     });
+    let extra_tracks: Vec<_> = extra_tracks.into_iter().map(|(index, _)| index).collect();
     tracing::debug!(
         assigned = pairs.len(),
         extra_items = extra_items.len(),
@@ -90,7 +92,7 @@ pub struct Ranking {
     pub recommendation: Recommendation,
 }
 
-fn required_field_present(album: &MatchAlbum, field: &AlbumField) -> bool {
+const fn required_field_present(album: &MatchAlbum, field: &AlbumField) -> bool {
     match field {
         AlbumField::Album => !album.title.is_empty(),
         AlbumField::Artist => !album.artist.is_empty(),
@@ -121,8 +123,11 @@ fn recommendation(
         Recommendation::Strong
     } else if score <= config.medium_rec_thresh {
         Recommendation::Medium
-    } else if candidates.len() == 1
-        || candidates[1].distance.score(config)? - score >= config.rec_gap_thresh
+    } else if candidates
+        .get(1)
+        .map(|second| second.distance.score(config))
+        .transpose()?
+        .is_none_or(|second| second - score >= config.rec_gap_thresh)
     {
         Recommendation::Low
     } else {
@@ -141,6 +146,9 @@ fn recommendation(
 }
 
 /// Rank a fixed set of candidate releases with beets' filters and thresholds.
+///
+/// # Errors
+/// Returns an error when a distance cannot be computed or the track assignment fails.
 pub fn rank_albums(
     items: &[MatchItem],
     candidates: &[MatchAlbum],
@@ -169,18 +177,19 @@ pub fn rank_albums(
         if config.ignored.iter().any(|field| active.contains(field)) {
             continue;
         }
-        ranked.push(RankedAlbum {
-            input_index,
-            album: album.clone(),
-            assignment,
-            distance,
-        });
+        let score = distance.score(config)?;
+        ranked.push((
+            score,
+            RankedAlbum {
+                input_index,
+                album: album.clone(),
+                assignment,
+                distance,
+            },
+        ));
     }
-    ranked.sort_by(|left, right| {
-        let left = left.distance.score(config).expect("distance was scored");
-        let right = right.distance.score(config).expect("distance was scored");
-        left.total_cmp(&right)
-    });
+    ranked.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let ranked: Vec<_> = ranked.into_iter().map(|(_, album)| album).collect();
     let recommendation = recommendation(&ranked, config)?;
     tracing::debug!(
         candidates = ranked.len(),

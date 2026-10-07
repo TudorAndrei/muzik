@@ -47,6 +47,7 @@ pub enum AppEvent {
 }
 
 impl AppEvent {
+    #[must_use]
     pub fn job_id(&self) -> Option<&str> {
         match self {
             Self::JobStarted { job_id, .. }

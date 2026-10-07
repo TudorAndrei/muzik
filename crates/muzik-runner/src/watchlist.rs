@@ -3,20 +3,20 @@
 use crate::settings::Settings;
 use crate::sources;
 use muzik_core::{DecisionKind, JobEvent, Task};
-use muzik_store::jobs::{park_on, Kind, NewJob};
+use muzik_store::jobs::{Kind, NewJob, park_on};
 use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
 use muzik_store::watchlist::{
-    import_cache, AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
+    AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem, import_cache,
 };
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub fn sync(
+pub(crate) fn sync(
     settings: &Settings,
     playlist_id: Option<&str>,
     cancelled: &AtomicBool,
@@ -54,11 +54,13 @@ pub fn sync(
     Ok(synced.pending)
 }
 
+/// # Errors
+/// Returns an error when the watchlist sources cannot be read or saved.
 pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> crate::Result<bool> {
     sources::ensure(&Repository::open(paths), paths)
 }
 
-pub fn action(
+pub(crate) fn action(
     settings: &Settings,
     params: &Value,
     cancelled: &AtomicBool,
@@ -184,7 +186,9 @@ impl Operations for Adapter<'_, '_> {
     ) -> muzik_store::Result<()> {
         let mut params = self.params.clone();
         id.write(&mut params);
-        params["action"] = json!(stage.resume_action());
+        if let Some(fields) = params.as_object_mut() {
+            fields.insert("action".into(), json!(stage.resume_action()));
+        }
         park_on(
             connection,
             &NewJob {

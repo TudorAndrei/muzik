@@ -1,6 +1,6 @@
 use crate::Result;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, OptionalExtension, Row, ToSql, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Row, ToSql, TransactionBehavior, params};
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
@@ -37,7 +37,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    pub fn queue(self) -> Queue {
+    #[must_use]
+    pub const fn queue(self) -> Queue {
         match self {
             Self::Refresh => Queue::Sync,
             Self::Workflow => Queue::Workflow,
@@ -64,7 +65,7 @@ macro_rules! sql_text {
 
 sql_text!(Status, Queue, Kind);
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewJob<'a> {
     pub kind: Kind,
     pub item_key: &'a str,
@@ -72,7 +73,7 @@ pub struct NewJob<'a> {
     pub params: &'a Value,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Job {
     pub id: i64,
     pub queue: Queue,
@@ -93,7 +94,8 @@ pub enum Admission {
 }
 
 impl Admission {
-    pub fn id(self) -> i64 {
+    #[must_use]
+    pub const fn id(self) -> i64 {
         match self {
             Self::Inserted(id) | Self::Retained(id) => id,
         }
@@ -112,6 +114,8 @@ pub struct RunnerLock {
 }
 
 impl RunnerLock {
+    /// # Errors
+    /// Returns an error if the lock file cannot be created, opened, or locked.
     pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -134,10 +138,12 @@ pub struct Store {
 }
 
 impl Store {
-    pub fn from_connection(connection: Connection) -> Self {
+    pub const fn from_connection(connection: Connection) -> Self {
         Self { connection }
     }
 
+    /// # Errors
+    /// Returns an error if the old jobs database cannot be read, copied, or renamed.
     pub fn import_legacy(&self, path: &Path) -> Result<usize> {
         if !path.is_file() {
             return Ok(0);
@@ -183,6 +189,8 @@ impl Store {
         Ok(jobs.len())
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn request_cancel(&self, id: i64) -> Result<CancelRequest> {
         if self.cancel_open(id)? {
             return Ok(CancelRequest::Removed);
@@ -199,6 +207,8 @@ impl Store {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn cancel_requests(&self) -> Result<Vec<i64>> {
         let mut statement = self
             .connection
@@ -207,6 +217,8 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn recover(&self) -> Result<usize> {
         Ok(self.connection.execute(
             "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
@@ -214,6 +226,8 @@ impl Store {
         )?)
     }
 
+    /// # Errors
+    /// Returns an error if the database transaction fails.
     pub fn enqueue(&mut self, job: &NewJob<'_>) -> Result<Admission> {
         let transaction = self
             .connection
@@ -234,6 +248,8 @@ impl Store {
         Ok(admission)
     }
 
+    /// # Errors
+    /// Returns an error if the database transaction fails.
     pub fn replace_waiting(&mut self, job: &NewJob<'_>) -> Result<Option<i64>> {
         let transaction = self
             .connection
@@ -257,16 +273,22 @@ impl Store {
         Ok(Some(id))
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn park(&self, job: &NewJob<'_>, question: &Value) -> Result<i64> {
         park_on(&self.connection, job, question)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn claim(&self, queue: Queue) -> Result<Option<Job>> {
         self.claim_any(&[queue])
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn claim_any(&self, queues: &[Queue]) -> Result<Option<Job>> {
-        let names: Vec<&str> = queues.iter().map(|queue| queue.as_ref()).collect();
+        let names: Vec<&str> = queues.iter().map(AsRef::as_ref).collect();
         let names = serde_json::to_string(&names)?;
         Ok(self
             .connection
@@ -283,6 +305,8 @@ impl Store {
             .optional()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn list_open(&self) -> Result<Vec<Job>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {COLUMNS} FROM jobs WHERE status IN ('queued', 'running') ORDER BY id"
@@ -291,7 +315,7 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub fn cancel_open(&self, id: i64) -> Result<bool> {
+    fn cancel_open(&self, id: i64) -> Result<bool> {
         let changed = self.connection.execute(
             "UPDATE jobs SET status = 'cancelled', updated_at = ?1
                  WHERE id = ?2 AND status IN ('queued', 'waiting')",
@@ -300,6 +324,8 @@ impl Store {
         Ok(changed == 1)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn answer(&self, id: i64, answer: &Value) -> Result<bool> {
         let changed = self.connection.execute(
             "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
@@ -309,6 +335,8 @@ impl Store {
         Ok(changed == 1)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn reopen(&self, id: i64) -> Result<()> {
         self.connection.execute(
             "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
@@ -318,18 +346,26 @@ impl Store {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn finish(&self, id: i64) -> Result<()> {
         self.set_status(id, Status::Done, None)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn fail(&self, id: i64, error: &str) -> Result<()> {
         self.set_status(id, Status::Failed, Some(error))
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn cancel(&self, id: i64) -> Result<()> {
         self.set_status(id, Status::Cancelled, None)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn get(&self, id: i64) -> Result<Option<Job>> {
         Ok(self
             .connection
@@ -341,6 +377,8 @@ impl Store {
             .optional()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn list(&self, status: Status) -> Result<Vec<Job>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {COLUMNS} FROM jobs WHERE status = ?1 ORDER BY id"
@@ -349,6 +387,8 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn find_open(&self, kind: Kind, item_key: &str) -> Result<Vec<Job>> {
         let mut statement = self.connection.prepare(&format!(
             "SELECT {COLUMNS} FROM jobs WHERE kind = ?1 AND item_key = ?2
@@ -367,6 +407,8 @@ impl Store {
     }
 }
 
+/// # Errors
+/// Returns an error if the database query fails.
 pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64> {
     let updated = connection
         .query_row(
@@ -383,10 +425,10 @@ pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> R
             |row| row.get(0),
         )
         .optional()?;
-    match updated {
-        Some(id) => Ok(id),
-        None => insert_on(connection, job, Status::Waiting, Some(question)),
-    }
+    updated.map_or_else(
+        || insert_on(connection, job, Status::Waiting, Some(question)),
+        Ok,
+    )
 }
 
 fn insert_on(
@@ -441,8 +483,8 @@ mod tests {
     use super::{Admission, CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
-    fn memory() -> Result<Store, String> {
-        Ok(Store::from_connection(crate::db::open_in_memory()?))
+    fn memory() -> Store {
+        Store::from_connection(crate::db::open_in_memory().unwrap())
     }
 
     fn job<'a>(kind: Kind, item_key: &'a str, params: &'a serde_json::Value) -> NewJob<'a> {
@@ -455,59 +497,70 @@ mod tests {
     }
 
     #[test]
-    fn claim_takes_the_oldest_queued_job_once() -> Result<(), String> {
-        let mut store = memory()?;
+    fn claim_takes_the_oldest_queued_job_once() {
+        let mut store = memory();
         let params = json!({});
-        let first = store.enqueue(&job(Kind::Item, "a", &params))?.id();
-        let second = store.enqueue(&job(Kind::Item, "b", &params))?.id();
+        let first = store.enqueue(&job(Kind::Item, "a", &params)).unwrap().id();
+        let second = store.enqueue(&job(Kind::Item, "b", &params)).unwrap().id();
         assert_eq!(
-            store.enqueue(&job(Kind::Item, "a", &params))?,
+            store.enqueue(&job(Kind::Item, "a", &params)).unwrap(),
             Admission::Retained(first)
         );
-        let claimed = store.claim(Queue::Item)?.ok_or("job was not queued")?;
+        let claimed = store.claim(Queue::Item).unwrap().unwrap();
         assert_eq!(
             (claimed.id, claimed.queue, claimed.kind),
             (first, Queue::Item, Kind::Item)
         );
-        assert_eq!(store.claim(Queue::Item)?.map(|job| job.id), Some(second));
-        assert_eq!(store.claim(Queue::Item)?, None);
-        assert_eq!(store.claim(Queue::Workflow)?, None);
-        Ok(())
+        assert_eq!(
+            store.claim(Queue::Item).unwrap().map(|job| job.id),
+            Some(second)
+        );
+        assert_eq!(store.claim(Queue::Item).unwrap(), None);
+        assert_eq!(store.claim(Queue::Workflow).unwrap(), None);
     }
 
     #[test]
-    fn claim_any_takes_the_oldest_job_of_the_named_queues() -> Result<(), String> {
-        let mut store = memory()?;
+    fn claim_any_takes_the_oldest_job_of_the_named_queues() {
+        let mut store = memory();
         let params = json!({});
-        let first = store.enqueue(&job(Kind::Refresh, "refresh", &params))?.id();
-        let second = store.enqueue(&job(Kind::Item, "a", &params))?.id();
-        let third = store.enqueue(&job(Kind::Item, "b", &params))?.id();
+        let first = store
+            .enqueue(&job(Kind::Refresh, "refresh", &params))
+            .unwrap()
+            .id();
+        let second = store.enqueue(&job(Kind::Item, "a", &params)).unwrap().id();
+        let third = store.enqueue(&job(Kind::Item, "b", &params)).unwrap().id();
         assert_eq!(
             store
-                .list_open()?
+                .list_open()
+                .unwrap()
                 .iter()
                 .map(|job| job.id)
                 .collect::<Vec<_>>(),
             [first, second, third]
         );
-        assert!(store.cancel_open(second)?);
+        assert!(store.cancel_open(second).unwrap());
         assert_eq!(
-            store.claim_any(&[Queue::Item])?.map(|job| job.id),
+            store.claim_any(&[Queue::Item]).unwrap().map(|job| job.id),
             Some(third)
         );
-        assert!(!store.cancel_open(third)?);
+        assert!(!store.cancel_open(third).unwrap());
         assert_eq!(
             store
-                .claim_any(&[Queue::Item, Queue::Sync])?
+                .claim_any(&[Queue::Item, Queue::Sync])
+                .unwrap()
                 .map(|job| job.id),
             Some(first)
         );
-        assert_eq!(store.list_open()?.len(), 2);
-        let older = store.enqueue(&job(Kind::Item, "c", &params))?.id();
-        let newer = store.enqueue(&job(Kind::Refresh, "again", &params))?.id();
+        assert_eq!(store.list_open().unwrap().len(), 2);
+        let older = store.enqueue(&job(Kind::Item, "c", &params)).unwrap().id();
+        let newer = store
+            .enqueue(&job(Kind::Refresh, "again", &params))
+            .unwrap()
+            .id();
         assert_eq!(
             store
-                .find_open(Kind::Item, "c")?
+                .find_open(Kind::Item, "c")
+                .unwrap()
                 .iter()
                 .map(|job| job.id)
                 .collect::<Vec<_>>(),
@@ -515,76 +568,96 @@ mod tests {
         );
         assert_eq!(
             store
-                .claim_any(&[Queue::Sync, Queue::Item])?
+                .claim_any(&[Queue::Sync, Queue::Item])
+                .unwrap()
                 .map(|job| job.id),
             Some(newer)
         );
         assert_eq!(
             store
-                .claim_any(&[Queue::Sync, Queue::Item])?
+                .claim_any(&[Queue::Sync, Queue::Item])
+                .unwrap()
                 .map(|job| job.id),
             Some(older)
         );
-        Ok(())
     }
 
     #[test]
-    fn a_parked_job_waits_until_it_has_an_answer() -> Result<(), String> {
-        let store = memory()?;
+    fn a_parked_job_waits_until_it_has_an_answer() {
+        let store = memory();
         let params = json!({"playlist_id": "PL1", "position": 3});
-        let id = store.park(
-            &job(Kind::Item, "PL1:3", &params),
-            &json!({"kind": "import_match"}),
-        )?;
-        assert_eq!(store.claim(Queue::Item)?, None);
-        assert_eq!(store.list(Status::Waiting)?.len(), 1);
-        let again = store.park(
-            &job(Kind::Item, "PL1:3", &params),
-            &json!({"kind": "chapter_review"}),
-        )?;
+        let id = store
+            .park(
+                &job(Kind::Item, "PL1:3", &params),
+                &json!({"kind": "import_match"}),
+            )
+            .unwrap();
+        assert_eq!(store.claim(Queue::Item).unwrap(), None);
+        assert_eq!(store.list(Status::Waiting).unwrap().len(), 1);
+        let again = store
+            .park(
+                &job(Kind::Item, "PL1:3", &params),
+                &json!({"kind": "chapter_review"}),
+            )
+            .unwrap();
         assert_eq!(again, id);
-        assert!(store.answer(id, &json!("as_is"))?);
-        assert!(!store.answer(id, &json!("skip"))?);
-        let claimed = store.claim(Queue::Item)?.ok_or("job was not queued")?;
+        assert!(store.answer(id, &json!("as_is")).unwrap());
+        assert!(!store.answer(id, &json!("skip")).unwrap());
+        let claimed = store.claim(Queue::Item).unwrap().unwrap();
         assert_eq!(claimed.answer, Some(json!("as_is")));
         assert_eq!(claimed.question, Some(json!({"kind": "chapter_review"})));
         assert_eq!(claimed.params, params);
-        store.reopen(claimed.id)?;
-        let reopened = store.get(id)?.ok_or("job is missing")?;
+        store.reopen(claimed.id).unwrap();
+        let reopened = store.get(id).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Waiting);
         assert_eq!(reopened.answer, None);
-        assert!(store.answer(id, &json!("as_is"))?);
-        store.claim(Queue::Item)?;
-        store.finish(id)?;
-        assert_eq!(store.get(id)?.map(|job| job.status), Some(Status::Done));
-        Ok(())
+        assert!(store.answer(id, &json!("as_is")).unwrap());
+        store.claim(Queue::Item).unwrap();
+        store.finish(id).unwrap();
+        assert_eq!(
+            store.get(id).unwrap().map(|job| job.status),
+            Some(Status::Done)
+        );
     }
 
     #[test]
-    fn a_cancel_removes_a_queued_job_and_flags_a_running_one() -> Result<(), String> {
-        let mut store = memory()?;
+    fn a_cancel_removes_a_queued_job_and_flags_a_running_one() {
+        let mut store = memory();
         let params = json!({});
-        let queued = store.enqueue(&job(Kind::Item, "a", &params))?.id();
-        let running = store.enqueue(&job(Kind::Workflow, "b", &params))?.id();
-        store.claim(Queue::Workflow)?;
-        assert_eq!(store.request_cancel(queued)?, CancelRequest::Removed);
-        assert_eq!(store.request_cancel(running)?, CancelRequest::Requested);
-        assert_eq!(store.cancel_requests()?, [running]);
-        store.cancel(running)?;
-        assert_eq!(store.request_cancel(running)?, CancelRequest::NotOpen);
-        assert!(store.cancel_requests()?.is_empty());
-        Ok(())
+        let queued = store.enqueue(&job(Kind::Item, "a", &params)).unwrap().id();
+        let running = store
+            .enqueue(&job(Kind::Workflow, "b", &params))
+            .unwrap()
+            .id();
+        store.claim(Queue::Workflow).unwrap();
+        assert_eq!(
+            store.request_cancel(queued).unwrap(),
+            CancelRequest::Removed
+        );
+        assert_eq!(
+            store.request_cancel(running).unwrap(),
+            CancelRequest::Requested
+        );
+        assert_eq!(store.cancel_requests().unwrap(), [running]);
+        store.cancel(running).unwrap();
+        assert_eq!(
+            store.request_cancel(running).unwrap(),
+            CancelRequest::NotOpen
+        );
+        assert!(store.cancel_requests().unwrap().is_empty());
     }
 
     #[test]
-    fn competing_admissions_leave_one_open_job() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn competing_admissions_leave_one_open_job() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         let params = json!({});
-        Store::from_connection(crate::db::open(&path)?).park(
-            &job(Kind::Item, "a", &params),
-            &json!({"kind":"import_match"}),
-        )?;
+        Store::from_connection(crate::db::open(&path).unwrap())
+            .park(
+                &job(Kind::Item, "a", &params),
+                &json!({"kind":"import_match"}),
+            )
+            .unwrap();
         let barrier = std::sync::Barrier::new(4);
         let replaced = std::thread::scope(|scope| {
             let admissions: Vec<_> = (0..4)
@@ -611,116 +684,135 @@ mod tests {
                         .map_err(|_| "an admission panicked".to_owned())
                 })
                 .collect::<Result<Vec<_>, _>>()
-        })?;
-        let replaced = replaced.into_iter().collect::<Result<Vec<_>, _>>()?;
+        })
+        .unwrap();
+        let replaced = replaced.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(replaced.iter().filter(|inserted| **inserted).count(), 1);
-        let open = Store::from_connection(crate::db::open(&path)?).find_open(Kind::Item, "a")?;
+        let open = Store::from_connection(crate::db::open(&path).unwrap())
+            .find_open(Kind::Item, "a")
+            .unwrap();
         assert_eq!(
             open.iter().map(|job| job.status).collect::<Vec<_>>(),
             [Status::Queued]
         );
-        Ok(())
     }
 
     #[test]
-    fn a_replacement_touches_only_its_own_item() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn a_replacement_touches_only_its_own_item() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         let params = json!({});
         let question = json!({"kind":"import_match"});
-        let mut first = Store::from_connection(crate::db::open(&path)?);
-        let mut second = Store::from_connection(crate::db::open(&path)?);
-        let busy = first.park(&job(Kind::Item, "a", &params), &question)?;
+        let mut first = Store::from_connection(crate::db::open(&path).unwrap());
+        let mut second = Store::from_connection(crate::db::open(&path).unwrap());
+        let busy = first
+            .park(&job(Kind::Item, "a", &params), &question)
+            .unwrap();
         super::insert_on(
             &second.connection,
             &job(Kind::Item, "a", &params),
             Status::Queued,
             None,
-        )?;
-        let free = first.park(&job(Kind::Item, "b", &params), &question)?;
+        )
+        .unwrap();
+        let free = first
+            .park(&job(Kind::Item, "b", &params), &question)
+            .unwrap();
         assert_eq!(
-            second.replace_waiting(&job(Kind::Item, "a", &params))?,
+            second
+                .replace_waiting(&job(Kind::Item, "a", &params))
+                .unwrap(),
             None
         );
         let inserted = second
-            .replace_waiting(&job(Kind::Item, "b", &params))?
-            .ok_or("the free item was not admitted")?;
+            .replace_waiting(&job(Kind::Item, "b", &params))
+            .unwrap()
+            .unwrap();
         assert_eq!(
-            first.enqueue(&job(Kind::Item, "b", &params))?,
+            first.enqueue(&job(Kind::Item, "b", &params)).unwrap(),
             Admission::Retained(inserted)
         );
         assert!(matches!(
-            first.enqueue(&job(Kind::Item, "c", &params))?,
+            first.enqueue(&job(Kind::Item, "c", &params)).unwrap(),
             Admission::Inserted(_)
         ));
-        let kept = first.get(busy)?.ok_or("job is missing")?;
+        let kept = first.get(busy).unwrap().unwrap();
         assert_eq!(
             (kept.status, kept.question),
             (Status::Waiting, Some(question))
         );
         assert_eq!(
-            first.get(free)?.map(|job| job.status),
+            first.get(free).unwrap().map(|job| job.status),
             Some(Status::Cancelled)
         );
-        Ok(())
     }
 
     #[test]
-    fn a_failed_insertion_keeps_the_waiting_job() -> Result<(), Box<dyn std::error::Error>> {
-        let mut store = memory()?;
+    fn a_failed_insertion_keeps_the_waiting_job() {
+        let mut store = memory();
         let params = json!({});
         let question = json!({"kind":"import_match"});
-        let waiting = store.park(&job(Kind::Item, "a", &params), &question)?;
-        store.connection.execute_batch(
-            "CREATE TRIGGER refuse BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'refused'); END;",
-        )?;
-        assert!(store
-            .replace_waiting(&job(Kind::Item, "a", &params))
-            .is_err());
-        let kept = store.get(waiting)?.ok_or("job is missing")?;
+        let waiting = store
+            .park(&job(Kind::Item, "a", &params), &question)
+            .unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER refuse BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .replace_waiting(&job(Kind::Item, "a", &params))
+                .is_err()
+        );
+        let kept = store.get(waiting).unwrap().unwrap();
         assert_eq!(
             (kept.status, kept.question),
             (Status::Waiting, Some(question))
         );
-        assert_eq!(store.find_open(Kind::Item, "a")?.len(), 1);
-        Ok(())
+        assert_eq!(store.find_open(Kind::Item, "a").unwrap().len(), 1);
     }
 
     #[test]
-    fn one_runner_holds_the_lock() -> Result<(), String> {
-        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    fn one_runner_holds_the_lock() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("jobs.lock");
-        let first = RunnerLock::try_acquire(&path)?;
+        let first = RunnerLock::try_acquire(&path).unwrap();
         assert!(first.is_some());
-        assert!(RunnerLock::try_acquire(&path)?.is_none());
+        assert!(RunnerLock::try_acquire(&path).unwrap().is_none());
         drop(first);
-        assert!(RunnerLock::try_acquire(&path)?.is_some());
-        Ok(())
+        assert!(RunnerLock::try_acquire(&path).unwrap().is_some());
     }
 
     #[test]
-    fn running_jobs_return_to_the_queue_after_a_restart() -> Result<(), String> {
-        let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+    fn running_jobs_return_to_the_queue_after_a_restart() {
+        let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         let params = json!({});
         let id = {
-            let mut store = Store::from_connection(crate::db::open(&path)?);
-            let id = store.enqueue(&job(Kind::Workflow, "a", &params))?.id();
-            store.claim(Queue::Workflow)?;
+            let mut store = Store::from_connection(crate::db::open(&path).unwrap());
+            let id = store
+                .enqueue(&job(Kind::Workflow, "a", &params))
+                .unwrap()
+                .id();
+            store.claim(Queue::Workflow).unwrap();
             id
         };
-        let store = Store::from_connection(crate::db::open(&path)?);
-        assert_eq!(store.recover()?, 1);
-        assert_eq!(store.claim(Queue::Workflow)?.map(|job| job.id), Some(id));
-        Ok(())
+        let store = Store::from_connection(crate::db::open(&path).unwrap());
+        assert_eq!(store.recover().unwrap(), 1);
+        assert_eq!(
+            store.claim(Queue::Workflow).unwrap().map(|job| job.id),
+            Some(id)
+        );
     }
 
     #[test]
-    fn open_jobs_of_the_old_database_move_once() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn open_jobs_of_the_old_database_move_once() {
+        let directory = tempfile::tempdir().unwrap();
         let legacy = directory.path().join("jobs.db");
         {
-            let old = rusqlite::Connection::open(&legacy)?;
+            let old = rusqlite::Connection::open(&legacy).unwrap();
             old.execute_batch(
                 "CREATE TABLE jobs (id INTEGER PRIMARY KEY, queue TEXT NOT NULL, kind TEXT NOT NULL,
                  item_key TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
@@ -730,17 +822,17 @@ mod tests {
                  ('item', 'item', 'PL1:1:a', 'Waiting', 'waiting', '{}', '{\"kind\":\"import_match\"}', 1, 1),
                  ('item', 'item', 'PL1:2:b', 'Running', 'running', '{}', NULL, 1, 1),
                  ('item', 'item', 'PL1:3:c', 'Done', 'done', '{}', NULL, 1, 1);",
-            )?;
+            )
+            .unwrap();
         }
-        let store = memory()?;
-        assert_eq!(store.import_legacy(&legacy)?, 2);
+        let store = memory();
+        assert_eq!(store.import_legacy(&legacy).unwrap(), 2);
         assert!(!legacy.exists());
         assert!(directory.path().join("jobs.db.migrated").is_file());
-        assert_eq!(store.import_legacy(&legacy)?, 0);
-        let waiting = store.list(Status::Waiting)?;
+        assert_eq!(store.import_legacy(&legacy).unwrap(), 0);
+        let waiting = store.list(Status::Waiting).unwrap();
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
-        assert_eq!(store.list(Status::Queued)?[0].item_key, "PL1:2:b");
-        Ok(())
+        assert_eq!(store.list(Status::Queued).unwrap()[0].item_key, "PL1:2:b");
     }
 }

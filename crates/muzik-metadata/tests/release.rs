@@ -1,7 +1,7 @@
 use musicbrainz_rs::entity::release::Release;
 use muzik_core::ReleaseCandidate;
 use muzik_metadata::{
-    recording_candidate, release_candidate, release_candidate_with_options, ReleaseOptions,
+    ReleaseOptions, recording_candidate, release_candidate, release_candidate_with_options,
 };
 use serde::Deserialize;
 
