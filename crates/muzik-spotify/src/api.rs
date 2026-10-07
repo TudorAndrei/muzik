@@ -14,6 +14,8 @@ pub struct PlaylistRef {
     pub image_url: Option<String>,
 }
 
+/// # Errors
+/// Returns an error when muzik is not connected to Spotify or a Spotify request fails.
 pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<PlaylistRef>> {
     let mut spotify = Client::connect(config_path, token_path)?;
     let mut playlists = vec![PlaylistRef {
@@ -53,8 +55,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a_playlist_reference_keeps_its_name_owner_total_and_image()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn a_playlist_reference_keeps_its_name_owner_total_and_image() {
         let playlist: rspotify_model::SimplifiedPlaylist = serde_json::from_value(json!({
             "collaborative": false,
             "external_urls": {},
@@ -66,7 +67,8 @@ mod tests {
             "public": true,
             "snapshot_id": "snap",
             "items": {"href": "https://api.spotify.com/v1/playlists/one/items", "total": 3}
-        }))?;
+        }))
+        .unwrap();
         let reference = PlaylistRef::from(playlist);
         assert_eq!(reference.uri, "spotify:playlist:one");
         assert_eq!(reference.name, "one");
@@ -76,6 +78,5 @@ mod tests {
             reference.image_url.as_deref(),
             Some("https://example.test/art")
         );
-        Ok(())
     }
 }
