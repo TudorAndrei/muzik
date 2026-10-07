@@ -31,6 +31,10 @@ pub struct WorkflowRequest {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool mirrors one workflow flag that other crates set by name"
+)]
 pub struct WorkflowOptions {
     pub review: bool,
     pub no_split: bool,
@@ -88,6 +92,7 @@ pub enum WorkflowInput {
     Search(String),
 }
 
+#[must_use]
 pub fn classify_input(raw: &str) -> WorkflowInput {
     let expanded = muzik_core::paths::expand_home(Path::new(raw));
     if expanded.exists() {
@@ -214,18 +219,29 @@ pub enum WorkflowEvent {
 
 pub trait WorkflowOperations {
     /// Return acquired files. The implementation may use the existing Rust yt-dlp path.
+    ///
+    /// # Errors
+    /// Returns an error when the download fails.
     fn download_youtube(
         &mut self,
         url: &str,
         output: &Path,
         force: bool,
     ) -> Result<Vec<PathBuf>, String>;
+    /// # Errors
+    /// Returns an error when the Soulseek search or download fails.
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String>;
     /// Return video IDs in playlist order.
+    ///
+    /// # Errors
+    /// Returns an error when playlist discovery is not configured or fails.
     fn youtube_playlist_video_ids(&mut self, _url: &str) -> Result<Vec<String>, String> {
         Err("YouTube playlist discovery is not configured".into())
     }
     /// Acquire audio using the metadata of one Spotify track.
+    ///
+    /// # Errors
+    /// Returns an error when no audio can be acquired for the track.
     fn acquire_spotify_track(
         &mut self,
         track: &playlist::SpotifyTrack,
@@ -245,6 +261,9 @@ pub trait WorkflowOperations {
         false
     }
     /// Check newly acquired audio before chapter planning. The default keeps it.
+    ///
+    /// # Errors
+    /// Returns an error when the quality check fails.
     fn check_quality(
         &mut self,
         audio_files: &[PathBuf],
@@ -257,6 +276,9 @@ pub trait WorkflowOperations {
         })
     }
     /// Find chapters from the selected metadata service when no local chapters exist.
+    ///
+    /// # Errors
+    /// Returns an error when the discovery is cancelled or the metadata lookup fails.
     fn discover_chapters(
         &mut self,
         source: &Path,
@@ -267,6 +289,9 @@ pub trait WorkflowOperations {
     }
     /// Ask for a decision when `WorkflowOptions::review` is set.
     /// Returning `Reject` treats the source as one track.
+    ///
+    /// # Errors
+    /// Returns an error when the review cannot be completed.
     fn review_chapters(
         &mut self,
         _source: &Path,
@@ -276,9 +301,17 @@ pub trait WorkflowOperations {
         Ok(ChapterReview::Accept)
     }
     /// Keep Beets configuration, match decisions, and duplicate behavior in the import adapter.
+    ///
+    /// # Errors
+    /// Returns an error when the import of the target fails.
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String>;
+    /// # Errors
+    /// Returns an error when the split fails.
     fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String>;
     /// Override this to pass cancellation and per-track progress to the splitter.
+    ///
+    /// # Errors
+    /// Returns an error when the split fails or is cancelled.
     fn split_with_cancel(
         &mut self,
         task: &SplitTask,
@@ -291,6 +324,9 @@ pub trait WorkflowOperations {
 }
 
 /// Find supported audio below files and directories, with one result per real path.
+///
+/// # Errors
+/// Returns an error when a directory or path cannot be read.
 pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
@@ -313,6 +349,8 @@ pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     Ok(result)
 }
 
+/// # Errors
+/// Returns an error when chapters cannot be read from an audio file.
 pub fn plan_audio_processing(
     audio_files: &[PathBuf],
     pre_split_dirs: &[PathBuf],
@@ -357,6 +395,9 @@ fn plan_audio_processing_with_source(
     })
 }
 
+/// # Errors
+/// Returns an error when the workflow is cancelled, chapters cannot be read, or an operation
+/// fails.
 pub fn process_audio_plan<O: WorkflowOperations>(
     audio_files: &[PathBuf],
     pre_split_dirs: &[PathBuf],
@@ -376,6 +417,9 @@ pub fn process_audio_plan<O: WorkflowOperations>(
     )
 }
 
+/// # Errors
+/// Returns an error when the workflow is cancelled, chapters cannot be read, or an operation
+/// fails.
 pub fn process_audio_plan_with_events<O: WorkflowOperations>(
     audio_files: &[PathBuf],
     pre_split_dirs: &[PathBuf],
@@ -399,44 +443,10 @@ pub fn process_audio_plan_with_events<O: WorkflowOperations>(
         options.metadata_source,
     )?;
     if !options.no_split && options.metadata_source != MetadataSource::None {
-        let mut without_chapters = Vec::new();
-        for source in plan.singles {
-            check_cancelled(cancelled)?;
-            let found = operations
-                .discover_chapters(&source, options.metadata_source, cancelled)
-                .map_err(|error| operation_error(error, cancelled))?;
-            if found.is_empty() {
-                without_chapters.push(source);
-            } else {
-                plan.albums.push(AlbumInput {
-                    source,
-                    chapters: found,
-                });
-            }
-        }
-        plan.singles = without_chapters;
+        discover_missing_chapters(&mut plan, options, operations, cancelled)?;
     }
     if options.review {
-        let mut reviewed = Vec::with_capacity(plan.albums.len());
-        for mut album in plan.albums {
-            check_cancelled(cancelled)?;
-            match operations
-                .review_chapters(&album.source, &album.chapters, cancelled)
-                .map_err(|error| operation_error(error, cancelled))?
-            {
-                ChapterReview::Accept => reviewed.push(album),
-                ChapterReview::Edit(chapters) if chapters.is_empty() => {
-                    return Err(Error::Operation("edited chapters must not be empty".into()));
-                }
-                ChapterReview::Edit(chapters) => {
-                    album.chapters = chapters;
-                    reviewed.push(album);
-                }
-                ChapterReview::Reject => plan.singles.push(album.source),
-            }
-            check_cancelled(cancelled)?;
-        }
-        plan.albums = reviewed;
+        review_albums(&mut plan, operations, cancelled)?;
     }
     on_event(WorkflowEvent::PlanReady {
         albums: plan.albums.len(),
@@ -502,6 +512,60 @@ pub fn process_audio_plan_with_events<O: WorkflowOperations>(
     })
 }
 
+fn discover_missing_chapters<O: WorkflowOperations>(
+    plan: &mut AudioProcessingPlan,
+    options: &WorkflowOptions,
+    operations: &mut O,
+    cancelled: &AtomicBool,
+) -> Result<(), Error> {
+    let mut without_chapters = Vec::new();
+    for source in std::mem::take(&mut plan.singles) {
+        check_cancelled(cancelled)?;
+        let found = operations
+            .discover_chapters(&source, options.metadata_source, cancelled)
+            .map_err(|error| operation_error(error, cancelled))?;
+        if found.is_empty() {
+            without_chapters.push(source);
+        } else {
+            plan.albums.push(AlbumInput {
+                source,
+                chapters: found,
+            });
+        }
+    }
+    plan.singles = without_chapters;
+    Ok(())
+}
+
+fn review_albums<O: WorkflowOperations>(
+    plan: &mut AudioProcessingPlan,
+    operations: &mut O,
+    cancelled: &AtomicBool,
+) -> Result<(), Error> {
+    let albums = std::mem::take(&mut plan.albums);
+    let mut reviewed = Vec::with_capacity(albums.len());
+    for mut album in albums {
+        check_cancelled(cancelled)?;
+        match operations
+            .review_chapters(&album.source, &album.chapters, cancelled)
+            .map_err(|error| operation_error(error, cancelled))?
+        {
+            ChapterReview::Accept => reviewed.push(album),
+            ChapterReview::Edit(chapters) if chapters.is_empty() => {
+                return Err(Error::Operation("edited chapters must not be empty".into()));
+            }
+            ChapterReview::Edit(chapters) => {
+                album.chapters = chapters;
+                reviewed.push(album);
+            }
+            ChapterReview::Reject => plan.singles.push(album.source),
+        }
+        check_cancelled(cancelled)?;
+    }
+    plan.albums = reviewed;
+    Ok(())
+}
+
 pub fn organize_targets_for_singles(singles: &[PathBuf]) -> Vec<PathBuf> {
     if let [first, rest @ ..] = singles
         && !rest.is_empty()
@@ -522,7 +586,10 @@ pub fn organize_targets_for_singles(singles: &[PathBuf]) -> Vec<PathBuf> {
     singles.to_vec()
 }
 
-/// Run one local file, one YouTube video, or one Soulseek search through import.
+/// Run one local file, one `YouTube` video, or one Soulseek search through import.
+///
+/// # Errors
+/// Returns an error when the workflow is cancelled, no audio is found, or an operation fails.
 pub fn run_workflow<O: WorkflowOperations>(
     request: &WorkflowRequest,
     options: &WorkflowOptions,
@@ -532,6 +599,8 @@ pub fn run_workflow<O: WorkflowOperations>(
     run_workflow_with_events(request, options, operations, cancelled, &mut |_| {})
 }
 
+/// # Errors
+/// Returns an error when the workflow is cancelled, no audio is found, or an operation fails.
 pub fn run_workflow_with_events<O: WorkflowOperations>(
     request: &WorkflowRequest,
     options: &WorkflowOptions,

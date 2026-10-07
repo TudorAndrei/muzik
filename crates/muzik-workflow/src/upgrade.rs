@@ -27,6 +27,8 @@ pub struct FlaggedTrack {
     pub quality: MeasuredQuality,
 }
 
+/// # Errors
+/// Returns an error when `measure` fails for a library file.
 pub fn scan_library(
     items: Vec<Item>,
     directory: &Path,
@@ -103,6 +105,7 @@ fn scalar_number(value: &SqlValue) -> Option<f64> {
     }
 }
 
+#[must_use]
 pub fn select_upgrade(
     track: &FlaggedTrack,
     ranked: &[RankedCandidate],
@@ -188,6 +191,7 @@ fn overlap(need: &HashSet<String>, haystack: &HashSet<String>) -> bool {
         && need.intersection(haystack).count().saturating_mul(3) >= need.len().saturating_mul(2)
 }
 
+#[must_use]
 pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
     if candidate.username.trim().is_empty() || candidate.files.is_empty() {
         return false;
@@ -297,6 +301,8 @@ fn quality_score(
     score
 }
 
+/// # Errors
+/// Returns an error when the candidate cannot be serialized.
 pub fn candidate_id(candidate: &Candidate) -> Result<String> {
     let bytes = serde_json::to_vec(candidate)?;
     let digest = Sha256::digest(bytes);
@@ -311,6 +317,8 @@ fn cache_path(root: &Path, id: &str) -> Result<PathBuf> {
     Ok(root.join(format!("soulseek_{id}.json")))
 }
 
+/// # Errors
+/// Returns an error when the ID is not 16 hex digits or the cache file cannot be written.
 pub fn save_candidate(root: &Path, id: &str, candidate: &CachedCandidate) -> Result<()> {
     let path = cache_path(root, id)?;
     fs::create_dir_all(root).map_err(|error| error.to_string())?;
@@ -319,6 +327,9 @@ pub fn save_candidate(root: &Path, id: &str, candidate: &CachedCandidate) -> Res
     Ok(())
 }
 
+/// # Errors
+/// Returns an error when the ID is invalid, the cache file cannot be read or parsed, or its files
+/// do not match the ID.
 pub fn load_candidate(root: &Path, id: &str) -> Result<CachedCandidate> {
     let path = cache_path(root, id)?;
     let bytes =
@@ -367,11 +378,10 @@ mod tests {
     }
 
     #[test]
-    fn saved_candidate_round_trips_and_keeps_its_identity() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn saved_candidate_round_trips_and_keeps_its_identity() {
+        let dir = tempfile::tempdir().unwrap();
         let selected = candidate(&["Album\\01 Song.flac"]);
-        let id = candidate_id(&selected)?;
+        let id = candidate_id(&selected).unwrap();
         save_candidate(
             dir.path(),
             &id,
@@ -380,8 +390,9 @@ mod tests {
                 score: 120.0,
                 candidate: selected,
             },
-        )?;
-        let loaded = load_candidate(dir.path(), &id)?;
+        )
+        .unwrap();
+        let loaded = load_candidate(dir.path(), &id).unwrap();
         assert_eq!(loaded.query, "Artist Song");
         assert_eq!(
             loaded
@@ -392,11 +403,11 @@ mod tests {
             Some("Album\\01 Song.flac")
         );
         let path = dir.path().join(format!("soulseek_{id}.json"));
-        let changed =
-            fs::read_to_string(&path)?.replace("Album\\\\01 Song.flac", "Album\\\\02 Song.flac");
-        fs::write(&path, changed)?;
+        let changed = fs::read_to_string(&path)
+            .unwrap()
+            .replace("Album\\\\01 Song.flac", "Album\\\\02 Song.flac");
+        fs::write(&path, changed).unwrap();
         assert!(load_candidate(dir.path(), &id).is_err());
-        Ok(())
     }
 
     fn low_quality_track() -> FlaggedTrack {
@@ -616,33 +627,32 @@ mod tests {
     }
 
     #[test]
-    fn library_scan_uses_beets_query_and_resolves_relative_paths()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn library_scan_uses_beets_query_and_resolves_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
         let music = dir.path().join("Music");
-        fs::create_dir_all(&music)?;
-        fs::write(music.join("song.mp3"), b"audio")?;
+        fs::create_dir_all(&music).unwrap();
+        fs::write(music.join("song.mp3"), b"audio").unwrap();
         let database = dir.path().join("library.db");
-        let mut library = Library::open_or_create(&database)?;
+        let mut library = Library::open_or_create(&database).unwrap();
         for (artist, title) in [("Mara Vale", "Moon River"), ("Other", "Elsewhere")] {
             let mut fields = Fields::new();
             fields.insert("path".into(), SqlValue::Text("song.mp3".into()));
             fields.insert("artist".into(), SqlValue::Text(artist.into()));
             fields.insert("title".into(), SqlValue::Text(title.into()));
             fields.insert("length".into(), SqlValue::Real(180.0));
-            library.insert_item(&fields, &Fields::new())?;
+            library.insert_item(&fields, &Fields::new()).unwrap();
         }
         drop(library);
-        let library = Library::open_read_only(&database)?;
-        let items = library.query_items("artist:Mara")?;
+        let library = Library::open_read_only(&database).unwrap();
+        let items = library.query_items("artist:Mara").unwrap();
         let (scanned, flagged) = scan_library(items, &music, 256, |path: &Path| {
             assert_eq!(path, music.join("song.mp3"));
             Ok(Some(low_quality_track().quality))
-        })?;
+        })
+        .unwrap();
         assert_eq!(scanned, 1);
         assert_eq!(flagged.len(), 1);
         assert_eq!(flagged[0].artist, "Mara Vale");
         assert_eq!(flagged[0].duration, Some(180.0));
-        Ok(())
     }
 }

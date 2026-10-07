@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Apply the configured metadata source to one audio file.
 /// Local chapter sidecars are read by the caller before this function.
-pub fn discover(
+pub(crate) fn discover(
     source: &Path,
     selected: MetadataSource,
     cancelled: &AtomicBool,
@@ -152,6 +152,7 @@ fn validate_duration(
 ) -> Vec<Chapter> {
     #[expect(
         clippy::as_conversions,
+        clippy::cast_precision_loss,
         reason = "std has no i64 to f64 conversion; release lengths in seconds are far below 2^53"
     )]
     let release_total = release_total as f64;
@@ -196,6 +197,8 @@ fn chapters_from_tracks(tracks: &[muzik_core::TrackCandidate]) -> Vec<Chapter> {
 
 #[expect(
     clippy::as_conversions,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
     reason = "std has no checked f64 to i64 conversion; the range is checked before the cast"
 )]
 fn whole_seconds(length: f64) -> Option<i64> {
@@ -208,18 +211,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn youtube_description_provides_chapters_when_embedded_chapters_are_missing()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn youtube_description_provides_chapters_when_embedded_chapters_are_missing() {
+        let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("album.opus");
         fs::write(
             chapters::sidecar_path(&source, ".info.json"),
             r#"{"description":"0:00 First\n3:04 Second"}"#,
-        )?;
-        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false))?;
+        )
+        .unwrap();
+        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false)).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[1].start, 184);
-        Ok(())
     }
 
     #[test]
@@ -255,9 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn pinned_comment_wins_when_description_has_no_tracklist()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn pinned_comment_wins_when_description_has_no_tracklist() {
+        let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("album.opus");
         fs::write(
             chapters::sidecar_path(&source, ".info.json"),
@@ -268,10 +269,10 @@ mod tests {
                 {"text":"0:00 First\n2:00 Second","is_pinned":true}
             ]
         }"#,
-        )?;
-        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false))?;
+        )
+        .unwrap();
+        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false)).unwrap();
         assert_eq!(found[0].title, "First");
         assert_eq!(found[1].start, 120);
-        Ok(())
     }
 }

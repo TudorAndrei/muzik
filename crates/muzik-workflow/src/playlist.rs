@@ -30,6 +30,8 @@ pub struct SpotifyTags {
     pub date: Option<String>,
 }
 
+/// # Errors
+/// Returns an error when the tags cannot be written to the file.
 pub fn write_spotify_tags(path: &Path, tags: &SpotifyTags) -> Result<(), Error> {
     let mut data = muzik_tags::TagData::default();
     let mut set = |name: &str, value: Option<String>| {
@@ -67,7 +69,11 @@ pub struct PlaylistRunResult {
     pub items: Vec<PlaylistItemResult>,
 }
 
-/// Run an ordered YouTube playlist. A failed item does not stop later items.
+/// Run an ordered `YouTube` playlist. A failed item does not stop later items.
+///
+/// # Errors
+/// Returns an error when the run is cancelled, the playlist is empty or cannot be listed, or the
+/// checkpoint cannot be read.
 pub fn run_youtube_playlist<O: WorkflowOperations>(
     request: &WorkflowRequest,
     options: &WorkflowOptions,
@@ -97,15 +103,15 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
             if !options.force && checkpoint.is_complete(&id, options.no_organize) {
                 return Ok(());
             }
-            let files = if !options.force {
+            let files = if options.force {
+                Vec::new()
+            } else {
                 let saved = checkpoint.cached_files(&id)?;
                 if saved.is_empty() {
                     find_audio_by_id(&request.output, &id)?
                 } else {
                     saved
                 }
-            } else {
-                Vec::new()
             };
             let files = if files.is_empty() {
                 on_event(WorkflowEvent::AcquisitionStarted);
@@ -163,6 +169,10 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
 }
 
 /// Read a Spotify metadata export and acquire each track in file order.
+///
+/// # Errors
+/// Returns an error when the run is cancelled, the export or checkpoint is invalid, or a track
+/// cannot be acquired, tagged, or processed.
 pub fn run_spotify_export<O: WorkflowOperations>(
     request: &WorkflowRequest,
     options: &WorkflowOptions,
@@ -260,7 +270,7 @@ fn process_item<O: WorkflowOperations>(
     )
 }
 
-fn empty_result() -> PlaylistRunResult {
+const fn empty_result() -> PlaylistRunResult {
     PlaylistRunResult {
         processing: AudioProcessingResult {
             plan: AudioProcessingPlan {
@@ -298,10 +308,10 @@ fn find_audio_by_id(directory: &Path, id: &str) -> Result<Vec<PathBuf>, Error> {
 }
 
 fn checkpoint_path(request: &WorkflowRequest, source: &str, id: &str) -> PathBuf {
-    let mut hash = 0xcbf29ce484222325_u64;
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in id.as_bytes() {
         hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+        hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     request
         .output
@@ -386,6 +396,8 @@ impl Checkpoint {
     }
 }
 
+/// # Errors
+/// Returns an error when the file cannot be read, is not JSON or CSV, or has invalid tracks.
 pub fn load_spotify_export(path: &Path) -> Result<SpotifyPlaylist, Error> {
     match path
         .extension()
@@ -449,8 +461,7 @@ fn parse_spotify_json(data: &[u8]) -> Result<SpotifyPlaylist, Error> {
             .get("source_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("spotify:local:{position}"));
+            .map_or_else(|| format!("spotify:local:{position}"), str::to_owned);
         tracks.push(SpotifyTrack {
             source_id,
             title,
@@ -492,8 +503,7 @@ fn parse_spotify_csv(path: &Path) -> Result<SpotifyPlaylist, Error> {
                 .iter()
                 .position(|header| header == name)
                 .and_then(|position| row.get(position))
-                .map(str::trim)
-                .unwrap_or("")
+                .map_or("", str::trim)
         };
         if !field("episode").is_empty() || field("type").eq_ignore_ascii_case("episode") {
             return Err(Error::Operation(format!(

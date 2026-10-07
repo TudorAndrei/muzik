@@ -10,7 +10,7 @@ use std::time::Duration;
 
 const LOOKUP: Duration = Duration::from_secs(600);
 const SHORT_LOOKUP: Duration = Duration::from_secs(120);
-const DOWNLOAD: Duration = Duration::from_secs(24 * 60 * 60);
+const DOWNLOAD: Duration = Duration::from_hours(24);
 
 pub struct Download<'a> {
     pub target: &'a str,
@@ -24,7 +24,8 @@ pub struct Download<'a> {
 }
 
 impl<'a> Download<'a> {
-    pub fn audio(target: &'a str, output: &'a Path, force: bool) -> Self {
+    #[must_use]
+    pub const fn audio(target: &'a str, output: &'a Path, force: bool) -> Self {
         Self {
             target,
             output,
@@ -55,6 +56,8 @@ impl YtDlp {
         }
     }
 
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or no audio file results.
     pub fn download(
         &self,
         request: &Download<'_>,
@@ -119,6 +122,8 @@ impl YtDlp {
         Ok(files)
     }
 
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or returns invalid JSON.
     pub fn playlist(&self, url: &str, cancelled: &AtomicBool) -> Result<Value, Error> {
         self.json(
             &["--flat-playlist", "--dump-single-json", "--quiet", url],
@@ -127,6 +132,9 @@ impl YtDlp {
         )
     }
 
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or the playlist has no
+    /// video IDs.
     pub fn playlist_ids(&self, url: &str, cancelled: &AtomicBool) -> Result<Vec<String>, Error> {
         let printed = self.print(
             vec!["--flat-playlist".to_owned(), url.to_owned()],
@@ -148,6 +156,8 @@ impl YtDlp {
         Ok(ids)
     }
 
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or returns invalid JSON.
     pub fn video(&self, url: &str, comments: bool, cancelled: &AtomicBool) -> Result<Value, Error> {
         let mut args = vec![
             "--no-playlist",
@@ -167,6 +177,8 @@ impl YtDlp {
         self.json(&args, timeout, cancelled)
     }
 
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or prints no value.
     pub fn field(
         &self,
         target: &str,
@@ -261,6 +273,7 @@ impl YtDlp {
     }
 }
 
+#[must_use]
 pub fn is_video_id(id: &str) -> bool {
     id.len() == 11
         && id
@@ -317,11 +330,10 @@ mod tests {
     }
 
     #[test]
-    fn download_returns_the_printed_audio_and_passes_the_options()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn download_returns_the_printed_audio_and_passes_the_options() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("Song [dQw4w9WgXcQ].flac");
-        fs::write(&audio, b"audio")?;
+        fs::write(&audio, b"audio").unwrap();
         let arguments = dir.path().join("arguments");
         let ytdlp = script(
             dir.path(),
@@ -330,16 +342,19 @@ mod tests {
                 arguments.display(),
                 audio.display()
             ),
-        )?;
-        let files = ytdlp.download(
-            &Download {
-                archive: Some(Path::new("archive.txt")),
-                ..Download::audio("artist - song", dir.path(), true)
-            },
-            &AtomicBool::new(false),
-        )?;
+        )
+        .unwrap();
+        let files = ytdlp
+            .download(
+                &Download {
+                    archive: Some(Path::new("archive.txt")),
+                    ..Download::audio("artist - song", dir.path(), true)
+                },
+                &AtomicBool::new(false),
+            )
+            .unwrap();
         assert_eq!(files, [audio]);
-        let passed = fs::read_to_string(arguments)?;
+        let passed = fs::read_to_string(arguments).unwrap();
         for flag in [
             "--extract-audio",
             "--write-info-json",
@@ -350,17 +365,19 @@ mod tests {
         ] {
             assert!(passed.lines().any(|line| line == flag), "{flag} is missing");
         }
-        Ok(())
     }
 
     #[test]
-    fn cancellation_stops_an_active_process() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn cancellation_stops_an_active_process() {
+        let dir = tempfile::tempdir().unwrap();
         let started = dir.path().join("started");
-        let ytdlp = Arc::new(script(
-            dir.path(),
-            &format!("touch '{}'\nsleep 30", started.display()),
-        )?);
+        let ytdlp = Arc::new(
+            script(
+                dir.path(),
+                &format!("touch '{}'\nsleep 30", started.display()),
+            )
+            .unwrap(),
+        );
         let cancelled = Arc::new(AtomicBool::new(false));
         let job = {
             let ytdlp = Arc::clone(&ytdlp);
@@ -373,60 +390,58 @@ mod tests {
         while !started.is_file() {
             if start.elapsed() > Duration::from_secs(3) {
                 cancelled.store(true, Ordering::SeqCst);
-                return Err("yt-dlp test process did not start".into());
+                panic!("yt-dlp test process did not start");
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         cancelled.store(true, Ordering::SeqCst);
-        let result = job.join().map_err(|_| "yt-dlp test thread stopped")?;
+        let result = job.join().expect("yt-dlp test thread stopped");
         assert!(matches!(result, Err(Error::Cancelled)));
         assert!(start.elapsed() < Duration::from_secs(5));
-        Ok(())
     }
 
     #[test]
-    fn a_failed_run_reports_the_error_output() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        let ytdlp = script(dir.path(), "echo 'ERROR: Private video' >&2\nexit 1")?;
+    fn a_failed_run_reports_the_error_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let ytdlp = script(dir.path(), "echo 'ERROR: Private video' >&2\nexit 1").unwrap();
         let error = ytdlp
             .video(
                 "https://youtu.be/dQw4w9WgXcQ",
                 false,
                 &AtomicBool::new(false),
             )
-            .err()
-            .ok_or("the run did not fail")?;
+            .expect_err("the run did not fail");
         assert_eq!(error.to_string(), "yt-dlp failed: ERROR: Private video");
-        Ok(())
     }
 
     #[test]
-    fn playlist_ids_keep_only_video_ids() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn playlist_ids_keep_only_video_ids() {
+        let dir = tempfile::tempdir().unwrap();
         let ytdlp = script(
             dir.path(),
             "while [ \"$1\" != \"--print-to-file\" ]; do shift; done\nprintf 'dQw4w9WgXcQ\\nNA\\nabcdefghijk\\n' >> \"$3\"",
-        )?;
-        let ids = ytdlp.playlist_ids(
-            "https://www.youtube.com/playlist?list=PL1",
-            &AtomicBool::new(false),
-        )?;
+        )
+        .unwrap();
+        let ids = ytdlp
+            .playlist_ids(
+                "https://www.youtube.com/playlist?list=PL1",
+                &AtomicBool::new(false),
+            )
+            .unwrap();
         assert_eq!(ids, ["dQw4w9WgXcQ", "abcdefghijk"]);
-        Ok(())
     }
 
     #[test]
-    fn javascript_runtime_flag_has_one_value() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
-        fs::write(dir.path().join("node"), b"")?;
-        fs::write(dir.path().join("bun"), b"")?;
+    fn javascript_runtime_flag_has_one_value() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("node"), b"").unwrap();
+        fs::write(dir.path().join("bun"), b"").unwrap();
         let args = environment_args(Some(dir.path().as_os_str().to_owned()));
         let at = args
             .iter()
             .position(|arg| arg == "--js-runtimes")
-            .ok_or("runtime flag is missing")?;
+            .expect("runtime flag is missing");
         assert_eq!(args.get(at + 1).map(String::as_str), Some("node"));
         assert_eq!(args.iter().filter(|arg| *arg == "--js-runtimes").count(), 1);
-        Ok(())
     }
 }
