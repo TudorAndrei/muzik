@@ -12,6 +12,7 @@ rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clip
 mr-boxington = "1.19.0"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-edit" = "0.13.13"
+"cargo:cargo-auditable" = "0.7.7"
 cocogitto = "7"
 
 [env]
@@ -49,4 +50,4 @@ TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HO
 [tasks.check-release]
 description = "Run the complete locked verification gate with the release build"
 depends = ["check"]
-run = "cargo build --workspace --release --locked"
+run = "cargo auditable build --workspace --release --locked"
