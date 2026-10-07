@@ -43,8 +43,8 @@ struct AlbumCase {
 
 fn compare(name: &str, actual: &Distance, expected: &Expected, config: &MatchConfig) {
     assert_eq!(
-        actual.score(config).unwrap(),
-        expected.score,
+        actual.score(config).ok(),
+        Some(expected.score),
         "{name} score"
     );
     let penalties: Value = actual

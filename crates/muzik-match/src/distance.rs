@@ -8,6 +8,7 @@ use strum_macros::{Display, EnumString};
 use thiserror::Error;
 
 use crate::string_dist;
+use crate::string_distance::count_to_f64;
 use crate::Recommendation;
 
 const VA_ARTISTS: &[&str] = &["", "various artists", "various", "va", "unknown"];
@@ -354,7 +355,7 @@ impl Distance {
                 .distance_weights
                 .get(key)
                 .ok_or(Error::MissingWeight(*key))?;
-            total += values.len() as f64 * weight;
+            total += count_to_f64(values.len()) * weight;
         }
         Ok(total)
     }
@@ -456,8 +457,8 @@ pub fn track_distance(
     Ok(dist)
 }
 
-fn plurality<T: Eq + Clone>(items: &[MatchItem], get: impl Fn(&MatchItem) -> T) -> T {
-    let mut best = get(&items[0]);
+fn plurality<T: Eq + Clone + Default>(items: &[MatchItem], get: impl Fn(&MatchItem) -> T) -> T {
+    let mut best = T::default();
     let mut best_count = 0;
     for item in items {
         let value = get(item);
@@ -471,7 +472,7 @@ fn plurality<T: Eq + Clone>(items: &[MatchItem], get: impl Fn(&MatchItem) -> T) 
 }
 
 fn preferred_match(value: &str, patterns: &[String], media: bool) -> Result<f64, Error> {
-    let unit = 1.0 / patterns.len().max(1) as f64;
+    let unit = 1.0 / count_to_f64(patterns.len().max(1));
     for (index, pattern) in patterns.iter().enumerate() {
         let expression = if media {
             format!(r"(\d+x)?({pattern})")
@@ -482,7 +483,7 @@ fn preferred_match(value: &str, patterns: &[String], media: bool) -> Result<f64,
             .case_insensitive(true)
             .build()?;
         if regex.find(value).is_some_and(|found| found.start() == 0) {
-            return Ok(index as f64 * unit);
+            return Ok(count_to_f64(index) * unit);
         }
     }
     Ok(1.0)
@@ -540,8 +541,8 @@ pub fn album_distance(
                 .unwrap_or(1889);
             dist.add_ratio(
                 DistanceKey::Year,
-                (album_year - original).abs() as f64,
-                (config.current_year - original).abs() as f64,
+                (f64::from(album_year) - f64::from(original)).abs(),
+                (f64::from(config.current_year) - f64::from(original)).abs(),
             )?;
         } else if year != 0 {
             if year == album_year || album.original_year == Some(year) {
@@ -549,8 +550,8 @@ pub fn album_distance(
             } else if let Some(original) = album.original_year.filter(|year| *year != 0) {
                 dist.add_ratio(
                     DistanceKey::Year,
-                    (year - album_year).abs() as f64,
-                    (config.current_year - original).abs() as f64,
+                    (f64::from(year) - f64::from(album_year)).abs(),
+                    (f64::from(config.current_year) - f64::from(original)).abs(),
                 )?;
             } else {
                 dist.add(DistanceKey::Year, 1.0)?;

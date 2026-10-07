@@ -14,6 +14,10 @@ const SD_PATTERNS: &[(&str, f64)] = &[
     (r"(, )?(pt\.|part) .+", 0.2),
 ];
 
+#[expect(
+    clippy::expect_used,
+    reason = "the patterns are fixed literals covered by tests"
+)]
 static PATTERNS: LazyLock<Vec<(Regex, f64)>> = LazyLock::new(|| {
     SD_PATTERNS
         .iter()
@@ -39,8 +43,16 @@ fn basic_distance(left: &str, right: &str) -> f64 {
     if length == 0 {
         0.0
     } else {
-        strsim::levenshtein(&left, &right) as f64 / length as f64
+        count_to_f64(strsim::levenshtein(&left, &right)) / count_to_f64(length)
     }
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no From<usize> for f64; beets divides counts as floats"
+)]
+pub(crate) fn count_to_f64(count: usize) -> f64 {
+    count as f64
 }
 
 /// Compute beets' normalized string distance, including reduced weights for
