@@ -36,8 +36,9 @@ pub fn title(kind: Option<DecisionKind>) -> &'static str {
 }
 
 pub fn note(question: &Value) -> Option<&'static str> {
-    let matches = question["payload"]["task"]["matches"]
-        .as_array()
+    let matches = question
+        .pointer("/payload/task/matches")
+        .and_then(Value::as_array)
         .map_or(0, Vec::len);
     match kind(question)? {
         DecisionKind::ImportMatch if matches == 0 => {
@@ -59,15 +60,17 @@ pub fn agent_note(agent: &Value) -> Option<String> {
     Some(match agent["suggestion"].as_u64() {
         Some(index) => format!(
             "{model} suggests option {} but is only {confidence}% sure. {reason}",
-            index + 1
+            index.saturating_add(1)
         ),
         None => format!("{model} found no good match. {reason}"),
     })
 }
 
 pub fn suggestion(question: &Value) -> Option<usize> {
-    let agent = &question["payload"]["agent"];
-    if agent.is_object() {
+    if let Some(agent) = question
+        .pointer("/payload/agent")
+        .filter(|agent| agent.is_object())
+    {
         return agent["suggestion"]
             .as_u64()
             .and_then(|index| usize::try_from(index).ok());
@@ -85,16 +88,17 @@ pub fn details(question: &Value) -> Vec<String> {
             .as_array()
             .into_iter()
             .flatten()
-            .enumerate()
-            .map(|(index, candidate)| {
+            .zip(1_usize..)
+            .map(|(candidate, number)| {
                 format!(
                     "{}. {} · score {:.0} · {} · {} · {} files · {}",
-                    index + 1,
+                    number,
                     candidate["title"].as_str().unwrap_or("Candidate"),
                     candidate["score"].as_f64().unwrap_or(0.0),
                     candidate["user"].as_str().unwrap_or("Unknown user"),
-                    candidate["quality"]["format"]
-                        .as_str()
+                    candidate
+                        .pointer("/quality/format")
+                        .and_then(Value::as_str)
                         .unwrap_or("Unknown format"),
                     candidate["files"].as_array().map_or(0, Vec::len),
                     candidate["path"]
@@ -131,14 +135,17 @@ pub fn details(question: &Value) -> Vec<String> {
             ),
             format!(
                 "Candidate: {} · {} · {} kbps",
-                payload["candidate"]["title"]
-                    .as_str()
+                payload
+                    .pointer("/candidate/title")
+                    .and_then(Value::as_str)
                     .unwrap_or("Audio file"),
-                payload["candidate"]["quality"]["format"]
-                    .as_str()
+                payload
+                    .pointer("/candidate/quality/format")
+                    .and_then(Value::as_str)
                     .unwrap_or("Unknown format"),
-                payload["candidate"]["quality"]["bitrate"]
-                    .as_u64()
+                payload
+                    .pointer("/candidate/quality/bitrate")
+                    .and_then(Value::as_u64)
                     .map_or_else(|| "?".to_string(), |value| value.to_string())
             ),
         ],
@@ -200,7 +207,9 @@ pub fn choices(question: &Value) -> Vec<Choice> {
                         .unwrap_or("Candidate")
                         .to_owned(),
                     meta: joined_facts([
-                        fact(&candidate["quality"]["format"]),
+                        candidate
+                            .pointer("/quality/format")
+                            .map_or_else(String::new, fact),
                         format!(
                             "{} files",
                             candidate["files"].as_array().map_or(0, Vec::len)
@@ -210,7 +219,7 @@ pub fn choices(question: &Value) -> Vec<Choice> {
                     score: candidate["score"]
                         .as_f64()
                         .filter(|_| best > 0.0)
-                        .map(|score| ((score / best).clamp(0.0, 1.0) * 100.0).round() as u64),
+                        .map(|score| percent(score / best)),
                     value: json!(index),
                 })
                 .collect();
@@ -231,8 +240,9 @@ pub fn choices(question: &Value) -> Vec<Choice> {
             Choice::plain("Keep current file", json!(false)),
         ],
         DecisionKind::ImportMatch => {
-            let mut choices: Vec<Choice> = payload["task"]["matches"]
-                .as_array()
+            let mut choices: Vec<Choice> = payload
+                .pointer("/task/matches")
+                .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
                 .filter_map(|candidate| {
@@ -256,9 +266,9 @@ pub fn choices(question: &Value) -> Vec<Choice> {
                                 .map_or_else(String::new, |count| format!("{count} tracks")),
                         ]),
                         score: candidate["score"].as_u64().or_else(|| {
-                            candidate["distance"].as_f64().map(|distance| {
-                                ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
-                            })
+                            candidate["distance"]
+                                .as_f64()
+                                .map(|distance| percent(1.0 - distance.clamp(0.0, 1.0)))
                         }),
                         value: json!(id),
                     })
@@ -274,6 +284,14 @@ pub fn choices(question: &Value) -> Vec<Choice> {
             Choice::plain("Replace the old files", json!(DuplicateAnswer::RemoveOld)),
         ],
     }
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no checked float to integer conversion; the value is clamped to 0..=100"
+)]
+pub(crate) fn percent(fraction: f64) -> u64 {
+    (fraction.clamp(0.0, 1.0) * 100.0).round() as u64
 }
 
 fn joined_facts(parts: impl IntoIterator<Item = String>) -> String {

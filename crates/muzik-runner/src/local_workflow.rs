@@ -132,7 +132,7 @@ impl WorkflowOperations for LocalOperations<'_> {
             }
             (self.on_import_event)(JobEvent::message(format!(
                 "Import group {} of {}: {}",
-                index + 1,
+                index.saturating_add(1),
                 preview.plan.albums.len(),
                 album.source_dir.display()
             )));
@@ -337,7 +337,7 @@ fn candidate_id(candidate: &PlannedCandidate) -> String {
 }
 
 fn match_score(distance: f64) -> u64 {
-    ((1.0 - distance.clamp(0.0, 1.0)) * 100.0).round() as u64
+    crate::choices::percent(1.0 - distance.clamp(0.0, 1.0))
 }
 
 pub(crate) fn event_record(event: WorkflowEvent) -> JobEvent {
@@ -351,12 +351,12 @@ pub(crate) fn event_record(event: WorkflowEvent) -> JobEvent {
         WorkflowEvent::SplitStarted(task) => JobEvent::ProgressStarted {
             task: Task::LocalSplit,
             description: format!("Splitting {}", task.source.display()),
-            total: Some(task.chapters.len() as u64),
+            total: u64::try_from(task.chapters.len()).ok(),
         },
         WorkflowEvent::SplitProgress { progress, .. } => JobEvent::ProgressAdvanced {
             task: Task::LocalSplit,
-            completed: Some(progress.completed as u64),
-            total: Some(progress.total as u64),
+            completed: u64::try_from(progress.completed).ok(),
+            total: u64::try_from(progress.total).ok(),
         },
         WorkflowEvent::SplitCompleted { .. } => JobEvent::ProgressFinished {
             task: Task::LocalSplit,

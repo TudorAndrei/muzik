@@ -184,7 +184,9 @@ impl Operations for Adapter<'_, '_> {
     ) -> muzik_store::Result<()> {
         let mut params = self.params.clone();
         id.write(&mut params);
-        params["action"] = json!(stage.resume_action());
+        if let Some(fields) = params.as_object_mut() {
+            fields.insert("action".into(), json!(stage.resume_action()));
+        }
         park_on(
             connection,
             &NewJob {

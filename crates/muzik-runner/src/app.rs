@@ -60,7 +60,7 @@ impl App {
                     workers: options.workers,
                     sink: Arc::clone(&options.sink),
                     ask: Arc::new(move |prompt| {
-                        let number = asked.fetch_add(1, Ordering::SeqCst) + 1;
+                        let number = asked.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
                         ask(&sink, &pending, &prompt, number)
                     }),
                     chooser: options.chooser,
@@ -96,8 +96,10 @@ impl App {
 
     pub fn jobs(&self) -> Value {
         let mut snapshot = self.jobs.snapshot();
-        snapshot["gates"] = gates::snapshot();
-        snapshot["runner"] = json!(self.runner.is_some());
+        if let Some(fields) = snapshot.as_object_mut() {
+            fields.insert("gates".into(), gates::snapshot());
+            fields.insert("runner".into(), json!(self.runner.is_some()));
+        }
         snapshot
     }
 
@@ -177,7 +179,9 @@ impl App {
     pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
         let generation = {
             let _gate = self.gate.lock();
-            self.generation.fetch_add(1, Ordering::SeqCst) + 1
+            self.generation
+                .fetch_add(1, Ordering::SeqCst)
+                .wrapping_add(1)
         };
         let repository = self.repository();
         if let Err(error) = watchlist::ensure_sources(&self.paths) {

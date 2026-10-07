@@ -140,10 +140,9 @@ impl Source for Bandcamp {
 fn items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
     let items = purchases
         .iter()
-        .enumerate()
-        .map(|(index, purchase)| {
-            let mut item =
-                WatchItem::new(index as u64 + 1, &purchase.label(), SourceKind::Bandcamp);
+        .zip(1_u64..)
+        .map(|(purchase, position)| {
+            let mut item = WatchItem::new(position, &purchase.label(), SourceKind::Bandcamp);
             item.video_id = Some(purchase.key.clone());
             item.entry_id = Some(purchase.key.clone());
             item.video_url = Some(

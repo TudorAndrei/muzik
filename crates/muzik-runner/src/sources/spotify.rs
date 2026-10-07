@@ -165,14 +165,14 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
         .ok_or_else(|| JobError::Operation("Spotify source has no entries.".into()))?;
     let mut occurrences = HashMap::<String, usize>::new();
     let mut items = Vec::new();
-    for (index, track) in entries.iter().enumerate() {
+    for (track, position) in entries.iter().zip(1_u64..) {
         let source = track["source_id"]
             .as_str()
             .map(str::to_owned)
-            .unwrap_or_else(|| format!("spotify:{}", index + 1));
+            .unwrap_or_else(|| format!("spotify:{position}"));
         let occurrence = occurrences.entry(source.clone()).or_default();
         let entry_id = format!("{source}#{occurrence}");
-        *occurrence += 1;
+        *occurrence = occurrence.saturating_add(1);
         let artists = track["artists"]
             .as_array()
             .map(|values| {
@@ -189,11 +189,12 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
         } else {
             format!("{artists} - {title}")
         };
-        let mut item = WatchItem::new(index as u64 + 1, &label, SourceKind::Spotify);
+        let mut item = WatchItem::new(position, &label, SourceKind::Spotify);
         item.video_id = Some(source.rsplit(':').next().unwrap_or("").to_owned());
         item.video_url = track["source_url"].as_str().map(str::to_owned);
-        item.thumbnail_url = track["source_metadata"]["image"]
-            .as_str()
+        item.thumbnail_url = track
+            .pointer("/source_metadata/image")
+            .and_then(Value::as_str)
             .map(str::to_owned);
         item.entry_id = Some(entry_id);
         item.track = Some(track.clone());

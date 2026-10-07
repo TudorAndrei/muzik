@@ -20,7 +20,6 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     input: WorkflowInput,
     settings: &Settings,
@@ -301,7 +300,10 @@ fn event_record(event: WorkflowEvent) -> JobEvent {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "three callers each pass a different mix of search options and callbacks"
+)]
 pub(crate) fn soulseek_download(
     paths: &Paths,
     query: &str,

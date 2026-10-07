@@ -179,7 +179,7 @@ pub(crate) mod testing {
     ) -> T {
         let prepared = Prepared::new(settings);
         let mut event = |_| {};
-        let events = RefCell::new(&mut event as &mut dyn FnMut(JobEvent));
+        let events: RefCell<&mut dyn FnMut(JobEvent)> = RefCell::new(&mut event);
         let mut imported = |_| {};
         let mut decide = |_: DecisionKind, _: Value| Err("unexpected decision".into());
         let cancelled = AtomicBool::new(false);

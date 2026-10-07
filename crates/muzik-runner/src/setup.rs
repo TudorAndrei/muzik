@@ -18,7 +18,7 @@ pub struct SoulseekAccount<'a> {
 
 pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     let config = app_config::load(config_file)?;
-    let section = &config["soulseek"];
+    let section = config.get("soulseek").unwrap_or(&Value::Null);
     let text = |key: &str| section[key].as_str().unwrap_or("").to_owned();
     let port = section["server_port"]
         .as_u64()
@@ -37,7 +37,14 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value> {
 
 pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) -> Result<()> {
     let config = app_config::load(config_file)?;
-    let saved = |key: &str| config["soulseek"][key].as_str().unwrap_or("").to_owned();
+    let saved = |key: &str| {
+        config
+            .get("soulseek")
+            .and_then(|section| section.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
     let username = account
         .username
         .map(str::trim)
@@ -74,7 +81,11 @@ pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) 
 
 pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
     let config = app_config::load(config_file)?;
-    let password = config["soulseek"]["password"].as_str().unwrap_or("").trim();
+    let password = config
+        .pointer("/soulseek/password")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if password.is_empty() || session::save_password(password).is_err() {
         return Ok(());
     }
@@ -145,7 +156,7 @@ fn version(line: &str) -> Option<String> {
     let after_version = words
         .iter()
         .position(|word| word.eq_ignore_ascii_case("version"))
-        .and_then(|index| words.get(index + 1));
+        .and_then(|index| words.get(index.checked_add(1)?));
     after_version
         .or_else(|| words.last())
         .filter(|word| word.chars().any(|character| character.is_ascii_digit()))

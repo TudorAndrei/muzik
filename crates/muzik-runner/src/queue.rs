@@ -156,12 +156,14 @@ impl Jobs {
         pending: &[PendingItem],
     ) -> crate::Result<usize> {
         let mut store = self.store();
-        let mut queued = 0;
+        let mut queued = 0_usize;
         for item in pending {
             let mut params = params.clone();
             item.id.write(&mut params);
-            params["title"] = json!(item.title);
-            params["action"] = json!(ItemAction::Run);
+            if let Some(fields) = params.as_object_mut() {
+                fields.insert("title".into(), json!(item.title));
+                fields.insert("action".into(), json!(ItemAction::Run));
+            }
             let admission = store.enqueue(&NewJob {
                 kind: Kind::Item,
                 item_key: &item.id.to_string(),
@@ -169,7 +171,7 @@ impl Jobs {
                 params: &params,
             })?;
             if matches!(admission, Admission::Inserted(_)) {
-                queued += 1;
+                queued = queued.saturating_add(1);
             }
         }
         Ok(queued)
@@ -180,17 +182,19 @@ impl Jobs {
         let kind = store
             .get(id)?
             .and_then(|job| job.question)
-            .map(|question| question["kind"].clone())
+            .and_then(|question| question.get("kind").cloned())
             .unwrap_or(Value::Null);
         Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
     pub fn release_import_questions(&self) -> crate::Result<usize> {
         let store = self.store();
-        let mut released = 0;
+        let mut released = 0_usize;
         for job in store.list(Status::Waiting)? {
-            let keeps_tags = job.params["playlist_id"]
-                .as_str()
+            let keeps_tags = job
+                .params
+                .get("playlist_id")
+                .and_then(Value::as_str)
                 .is_some_and(|id| SourceKind::of_playlist_id(id).keeps_current_tags());
             let kind = job
                 .question
@@ -204,7 +208,7 @@ impl Jobs {
                 )
                 && store.answer(job.id, &json!({"kind":kind,"value":KEEP_CURRENT_TAGS}))?
             {
-                released += 1;
+                released = released.saturating_add(1);
             }
         }
         Ok(released)
@@ -244,7 +248,7 @@ fn snapshot(store: &Store) -> Value {
         .into_iter()
         .map(|job| {
             let question = job.question.unwrap_or(Value::Null);
-            json!({"id":job.id,"title":job.title,"kind":question["kind"],"payload":question["payload"],"item":job.item_key})
+            json!({"id":job.id,"title":job.title,"kind":question.get("kind"),"payload":question.get("payload"),"item":job.item_key})
         })
         .collect();
     json!({"open":open,"waiting":waiting})

@@ -19,10 +19,6 @@ pub enum Gate {
 impl Gate {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    fn index(self) -> usize {
-        self as usize
-    }
-
     pub fn limit(self) -> usize {
         match self {
             Self::Download => 2,
@@ -37,29 +33,45 @@ struct Lane {
     waiting: Vec<(u64, String)>,
 }
 
+impl Lane {
+    const EMPTY: Self = Self {
+        active: Vec::new(),
+        waiting: Vec::new(),
+    };
+}
+
 #[derive(Default)]
 struct State {
-    lanes: [Lane; 3],
+    download: Lane,
+    process: Lane,
+    import: Lane,
     next: u64,
+}
+
+impl State {
+    fn lane(&self, gate: Gate) -> &Lane {
+        match gate {
+            Gate::Download => &self.download,
+            Gate::Process => &self.process,
+            Gate::Import => &self.import,
+        }
+    }
+
+    fn lane_mut(&mut self, gate: Gate) -> &mut Lane {
+        match gate {
+            Gate::Download => &mut self.download,
+            Gate::Process => &mut self.process,
+            Gate::Import => &mut self.import,
+        }
+    }
 }
 
 type Listener = Box<dyn Fn(Value) + Send>;
 
 static STATE: Mutex<State> = Mutex::new(State {
-    lanes: [
-        Lane {
-            active: Vec::new(),
-            waiting: Vec::new(),
-        },
-        Lane {
-            active: Vec::new(),
-            waiting: Vec::new(),
-        },
-        Lane {
-            active: Vec::new(),
-            waiting: Vec::new(),
-        },
-    ],
+    download: Lane::EMPTY,
+    process: Lane::EMPTY,
+    import: Lane::EMPTY,
     next: 0,
 });
 static CHANGED: Condvar = Condvar::new();
@@ -81,7 +93,8 @@ impl Drop for Permit {
         };
         HELD.with(|held| held.borrow_mut().retain(|entry| entry.1 != ticket));
         let mut state = STATE.lock();
-        state.lanes[gate.index()]
+        state
+            .lane_mut(gate)
             .active
             .retain(|(active, _)| *active != ticket);
         CHANGED.notify_all();
@@ -105,8 +118,8 @@ pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit> {
     let label = LABEL.with(|label| label.borrow().clone());
     let mut state = STATE.lock();
     let ticket = state.next;
-    state.next += 1;
-    state.lanes[gate.index()].waiting.push((ticket, label));
+    state.next = ticket.wrapping_add(1);
+    state.lane_mut(gate).waiting.push((ticket, label));
     publish(&state);
     let state = admit(state, gate, ticket, cancelled)?;
     drop(state);
@@ -125,7 +138,7 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
     {
         let mut state = STATE.lock();
         for (gate, ticket) in &held {
-            let lane = &mut state.lanes[gate.index()];
+            let lane = state.lane_mut(*gate);
             if let Some(index) = lane.active.iter().position(|entry| entry.0 == *ticket) {
                 labels.push(lane.active.remove(index).1);
             }
@@ -137,7 +150,7 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
     let never = AtomicBool::new(false);
     for ((gate, ticket), label) in held.into_iter().zip(labels) {
         let mut state = STATE.lock();
-        let waiting = &mut state.lanes[gate.index()].waiting;
+        let waiting = &mut state.lane_mut(gate).waiting;
         let at = waiting.partition_point(|entry| entry.0 < ticket);
         waiting.insert(at, (ticket, label));
         publish(&state);
@@ -155,7 +168,7 @@ fn admit(
     cancelled: &AtomicBool,
 ) -> Result<MutexGuard<'static, State>> {
     loop {
-        let lane = &mut state.lanes[gate.index()];
+        let lane = state.lane_mut(gate);
         if cancelled.load(Ordering::SeqCst) {
             lane.waiting.retain(|entry| entry.0 != ticket);
             CHANGED.notify_all();
@@ -182,7 +195,7 @@ pub fn snapshot() -> Value {
 fn describe(state: &State) -> Value {
     let mut lanes = serde_json::Map::new();
     for gate in Gate::ALL.iter().copied() {
-        let lane = &state.lanes[gate.index()];
+        let lane = state.lane(gate);
         let names = |entries: &[(u64, String)]| {
             entries
                 .iter()

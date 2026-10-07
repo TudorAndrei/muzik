@@ -86,8 +86,9 @@ impl Source for Youtube {
             updated.set(Stage::Download, StageStatus::Complete);
             updated.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         } else {
-            let split = result["split_dirs"]
-                .as_array()
+            let split = result
+                .get("split_dirs")
+                .and_then(Value::as_array)
                 .is_some_and(|dirs| !dirs.is_empty());
             mark_full(&mut updated, &adapter.prepared.settings.options, split);
         }
@@ -256,8 +257,9 @@ fn refresh_chapters_with(
     let mut found = chapters::parse_info_json(&metadata.to_string())
         .map_err(|error| JobError::Operation(error.to_string()))?;
     if found.is_empty() {
-        found = metadata["description"]
-            .as_str()
+        found = metadata
+            .get("description")
+            .and_then(Value::as_str)
             .map(chapters::parse_tracklist)
             .unwrap_or_default();
     }
@@ -367,8 +369,8 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
         .as_array()
         .into_iter()
         .flatten()
-        .enumerate()
-        .filter_map(|(index, entry)| {
+        .zip(1_u64..)
+        .filter_map(|(entry, position)| {
             let id = entry["id"].as_str().or_else(|| entry["url"].as_str())?;
             if !is_video_id(id) {
                 return None;
@@ -391,7 +393,7 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
                 })
                 .map(str::to_owned)
                 .or_else(|| saved.and_then(|item| item.thumbnail_url.clone()));
-            let mut item = WatchItem::new(index as u64 + 1, title, SourceKind::Youtube);
+            let mut item = WatchItem::new(position, title, SourceKind::Youtube);
             item.video_id = Some(id.to_owned());
             item.video_url = Some(format!("https://www.youtube.com/watch?v={id}"));
             item.thumbnail_url = thumbnail;

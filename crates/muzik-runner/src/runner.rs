@@ -254,7 +254,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
     let settings = settings(shared, job)?;
     let pending = watchlist::sync(
         &settings,
-        job.params["playlist_id"].as_str(),
+        job.params.get("playlist_id").and_then(Value::as_str),
         cancel,
         &mut |event| shared.event(job_id, Source::Workflow, event),
     )
