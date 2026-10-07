@@ -162,8 +162,11 @@ impl Session {
                 .map_err(|error| {
                     format!("Soulseek download failed: {}", BridgeError::from(error))
                 })?;
-            let deadline = Instant::now() + seconds(timeout) + Duration::from_secs(5);
-            if let Err(error) = finish(&receiver, deadline, cancelled) {
+            let finished = Instant::now()
+                .checked_add(seconds(timeout).saturating_add(Duration::from_secs(5)))
+                .ok_or_else(|| BridgeError::from("Soulseek download timeout is too long."))
+                .and_then(|deadline| finish(&receiver, deadline, cancelled));
+            if let Err(error) = finished {
                 let _ = self
                     .client
                     .cancel_download(&download.username, &download.filename);

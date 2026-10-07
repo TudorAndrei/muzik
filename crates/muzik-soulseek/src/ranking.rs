@@ -171,10 +171,10 @@ fn numbered(value: &str) -> bool {
         .chars()
         .skip_while(|character| !character.is_ascii_digit())
         .peekable();
-    let mut digits = 0;
+    let mut digits = 0_u32;
     while characters.peek().is_some_and(char::is_ascii_digit) {
         let _ = characters.next();
-        digits += 1;
+        digits = digits.saturating_add(1);
     }
     (1..=2).contains(&digits)
         && characters
