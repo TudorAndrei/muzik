@@ -2,6 +2,7 @@ name: Check
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -33,14 +34,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Install GPUI Linux libraries
-        timeout-minutes: 10
-        run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
-            install -y --no-install-recommends \
-            ffmpeg libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev \
-            libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev \
+        timeout-minutes: 20
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: >-
+            ffmpeg libfontconfig-dev libwayland-dev libwebkit2gtk-4.1-dev
+            libxkbcommon-x11-dev libx11-xcb-dev libssl-dev libzstd-dev
             vulkan-validationlayers libvulkan1
+          version: "1"
+          execute_install_scripts: true
       - uses: jdx/mise-action@v4
         with:
           install_args: rust mr-boxington hk zizmor cargo-binstall cargo:cargo-deny
