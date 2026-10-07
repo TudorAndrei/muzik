@@ -289,7 +289,7 @@ pub fn plan(
     for (source, step) in tracks.iter().chain(covers).zip(steps) {
         match step {
             Step::Fresh(destination) if claim(&destination) => {
-                plan.fresh += 1;
+                plan.fresh = plan.fresh.saturating_add(1);
                 plan.planned.insert(destination);
             }
             Step::Pending(transfer) if claim(&transfer.destination) => {
@@ -333,12 +333,13 @@ fn plan_track(
     }
     let size = audio.size.unwrap_or(0);
     let bytes = match &action {
-        Action::Convert(Encoding::Mp3 { kbps } | Encoding::Opus { kbps }) => {
-            match audio.bitrate_kbps.filter(|bitrate| *bitrate > 0) {
-                Some(bitrate) => size.saturating_mul(u64::from(*kbps)) / u64::from(bitrate),
-                None => size,
-            }
-        }
+        Action::Convert(Encoding::Mp3 { kbps } | Encoding::Opus { kbps }) => audio
+            .bitrate_kbps
+            .and_then(|bitrate| {
+                size.saturating_mul(u64::from(*kbps))
+                    .checked_div(u64::from(bitrate))
+            })
+            .unwrap_or(size),
         Action::Copy | Action::Convert(Encoding::Flac { .. }) => size,
     };
     Step::Pending(Transfer {

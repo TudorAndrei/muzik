@@ -210,7 +210,7 @@ pub fn apply(
     let unrecorded = AtomicUsize::new(0);
     let connection = Mutex::new(connection);
     let finished = |transfer: &Transfer, result: &Result<()>| {
-        let index = count.fetch_add(1, Ordering::Relaxed) + 1;
+        let index = count.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let record_error = match result {
             Ok(()) => record(&connection.lock(), transfer).err(),
             Err(_) => None,
