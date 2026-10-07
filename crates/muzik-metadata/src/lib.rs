@@ -1,4 +1,4 @@
-//! Blocking MusicBrainz release search and lookup.
+//! Blocking `MusicBrainz` release search and lookup.
 
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
@@ -11,8 +11,9 @@ use musicbrainz_rs::api_bindium::ApiRequestError;
 use musicbrainz_rs::api_bindium::ureq;
 use musicbrainz_rs::client::MusicBrainzClient;
 use musicbrainz_rs::entity::artist_credit::ArtistCredit;
+use musicbrainz_rs::entity::date_string::DateString;
 use musicbrainz_rs::entity::recording::Recording;
-use musicbrainz_rs::entity::release::Release;
+use musicbrainz_rs::entity::release::{Media, Release};
 use musicbrainz_rs::prelude::*;
 use muzik_core::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
 
@@ -27,7 +28,7 @@ pub enum Error {
     Api(#[from] Box<musicbrainz_rs::ApiEndpointError>),
 }
 
-/// Search fields supported by the beets MusicBrainz album search.
+/// Search fields supported by the beets `MusicBrainz` album search.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseSearch {
     pub release: String,
@@ -51,7 +52,7 @@ pub struct ReleaseSearchHit {
     pub score: Option<u8>,
 }
 
-/// Beets match settings that affect MusicBrainz release mapping.
+/// Beets match settings that affect `MusicBrainz` release mapping.
 #[derive(Clone, Debug)]
 pub struct ReleaseOptions {
     pub preferred_countries: Vec<String>,
@@ -94,6 +95,8 @@ impl MetadataClient {
         }
     }
 
+    /// # Errors
+    /// Returns an error when the release title is empty or the `MusicBrainz` request fails.
     pub fn search_releases(
         &self,
         criteria: &ReleaseSearch,
@@ -118,6 +121,8 @@ impl MetadataClient {
             .collect())
     }
 
+    /// # Errors
+    /// Returns an error when the `MusicBrainz` request fails.
     pub fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, Error> {
         tracing::debug!(id, "look up MusicBrainz release");
         let release = request_with_retry(|| {
@@ -135,6 +140,8 @@ impl MetadataClient {
         Ok(release_candidate_with_options(&release, &self.options))
     }
 
+    /// # Errors
+    /// Returns an error when the `MusicBrainz` request fails.
     pub fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, Error> {
         tracing::debug!(id, "look up MusicBrainz recording");
         let recording = request_with_retry(|| {
@@ -163,7 +170,10 @@ pub fn recording_candidate(recording: &Recording) -> TrackCandidate {
 }
 
 impl ReleaseSearch {
-    /// Build the Lucene fields used by the beets MusicBrainz album search.
+    /// Build the Lucene fields used by the beets `MusicBrainz` album search.
+    ///
+    /// # Errors
+    /// Returns an error when the release title is empty.
     pub fn query(&self) -> Result<String, Error> {
         if self.release.trim().is_empty() {
             return Err(Error::EmptyReleaseTitle);
@@ -264,7 +274,7 @@ fn artist_name(credits: &[ArtistCredit]) -> String {
     name
 }
 
-/// Convert one decoded MusicBrainz response to the shared matching model.
+/// Convert one decoded `MusicBrainz` response to the shared matching model.
 #[must_use]
 pub fn release_candidate(release: &Release) -> ReleaseCandidate {
     release_candidate_with_options(release, &ReleaseOptions::default())
@@ -295,10 +305,74 @@ pub fn release_candidate_with_options(
                 .is_some_and(|format| options.ignored_media.contains(format))
         })
         .collect();
+    let tracks = release_tracks(&media, credits, options);
+    let media_formats: std::collections::HashSet<&str> = media
+        .iter()
+        .filter_map(|medium| medium.format.as_deref())
+        .collect();
+    let media_name = if media_formats.len() == 1 && !tracks.is_empty() {
+        media_formats
+            .iter()
+            .next()
+            .map(|value| (*value).to_string())
+    } else {
+        Some("Media".to_string())
+    };
+    let first_label = release
+        .label_info
+        .as_deref()
+        .and_then(|labels| labels.first());
+    let preferred_event = options.preferred_countries.iter().find_map(|country| {
+        release.release_events.as_deref()?.iter().find_map(|event| {
+            let codes = event.area.as_ref()?.iso_3166_1_codes.as_ref()?;
+            codes
+                .contains(country)
+                .then_some((country.clone(), event.date.as_ref()))
+        })
+    });
+    let event_date = preferred_event
+        .as_ref()
+        .map_or(release.date.as_ref(), |(_, date)| *date);
+    let year = event_date.and_then(DateString::year).or_else(|| {
+        release
+            .release_group
+            .as_ref()
+            .and_then(|group| group.first_release_date.as_ref())
+            .and_then(DateString::year)
+    });
+    ReleaseCandidate {
+        id: ReleaseId(release.id.clone()),
+        title: release.title.clone(),
+        artist,
+        tracks,
+        release_group_id: release.release_group.as_ref().map(|group| group.id.clone()),
+        year,
+        country: preferred_event
+            .map(|(country, _)| country)
+            .or_else(|| release.country.clone()),
+        media: media_name,
+        label: first_label
+            .and_then(|info| info.label.as_ref())
+            .map(|label| label.name.clone())
+            .filter(|name| name != "[no label]"),
+        catalog_number: first_label.and_then(|info| info.catalog_number.clone()),
+        disambiguation: release
+            .disambiguation
+            .clone()
+            .filter(|value| !value.is_empty()),
+        is_various_artists,
+    }
+}
+
+fn release_tracks(
+    media: &[&Media],
+    credits: &[ArtistCredit],
+    options: &ReleaseOptions,
+) -> Vec<TrackCandidate> {
     let mut tracks = Vec::new();
     let mut medium_number: u32 = 0;
     let mut track_number: u32 = 0;
-    for medium in &media {
+    for medium in media {
         medium_number = medium_number.saturating_add(1);
         let medium_index = medium.position.unwrap_or(medium_number);
         for track in medium.tracks.as_deref().unwrap_or_default() {
@@ -330,63 +404,7 @@ pub fn release_candidate_with_options(
             });
         }
     }
-    let media_formats: std::collections::HashSet<&str> = media
-        .iter()
-        .filter_map(|medium| medium.format.as_deref())
-        .collect();
-    let media_name = if media_formats.len() == 1 && !tracks.is_empty() {
-        media_formats
-            .iter()
-            .next()
-            .map(|value| (*value).to_string())
-    } else {
-        Some("Media".to_string())
-    };
-    let first_label = release
-        .label_info
-        .as_deref()
-        .and_then(|labels| labels.first());
-    let preferred_event = options.preferred_countries.iter().find_map(|country| {
-        release.release_events.as_deref()?.iter().find_map(|event| {
-            let codes = event.area.as_ref()?.iso_3166_1_codes.as_ref()?;
-            codes
-                .contains(country)
-                .then_some((country.clone(), event.date.as_ref()))
-        })
-    });
-    let event_date = preferred_event
-        .as_ref()
-        .map(|(_, date)| *date)
-        .unwrap_or(release.date.as_ref());
-    let year = event_date.and_then(|date| date.year()).or_else(|| {
-        release
-            .release_group
-            .as_ref()
-            .and_then(|group| group.first_release_date.as_ref())
-            .and_then(|date| date.year())
-    });
-    ReleaseCandidate {
-        id: ReleaseId(release.id.clone()),
-        title: release.title.clone(),
-        artist,
-        tracks,
-        release_group_id: release.release_group.as_ref().map(|group| group.id.clone()),
-        year,
-        country: preferred_event
-            .map(|(country, _)| country)
-            .or_else(|| release.country.clone()),
-        media: media_name,
-        label: first_label
-            .and_then(|info| info.label.as_ref())
-            .map(|label| label.name.clone())
-            .filter(|name| name != "[no label]"),
-        catalog_number: first_label.and_then(|info| info.catalog_number.clone()),
-        disambiguation: release
-            .disambiguation
-            .clone()
-            .filter(|value| !value.is_empty()),
-        is_various_artists,
-    }
+    tracks
 }
 
 #[cfg(test)]
