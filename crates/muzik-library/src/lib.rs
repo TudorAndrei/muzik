@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use SqlValue as Value;
-pub use functions::register_functions;
+use functions::register_functions;
 pub use rusqlite::types::Value as SqlValue;
 pub use values::{path_from_sql, path_to_sql, scalar_text};
 pub use write::LibraryWrite;
@@ -59,14 +59,17 @@ pub struct Album {
 }
 
 impl Item {
+    #[must_use]
     pub fn field(&self, name: &str) -> Option<&Value> {
         self.fields.get(name)
     }
 
+    #[must_use]
     pub fn attribute(&self, name: &str) -> Option<&Value> {
         self.attributes.get(name)
     }
 
+    #[must_use]
     pub fn album_id(&self) -> Option<i64> {
         match self.field("album_id") {
             Some(Value::Integer(id)) => Some(*id),
@@ -76,10 +79,12 @@ impl Item {
 }
 
 impl Album {
+    #[must_use]
     pub fn field(&self, name: &str) -> Option<&Value> {
         self.fields.get(name)
     }
 
+    #[must_use]
     pub fn attribute(&self, name: &str) -> Option<&Value> {
         self.attributes.get(name)
     }
@@ -93,6 +98,9 @@ pub struct Library {
 
 impl Library {
     /// Make a read-only empty library for planning before the first import.
+    ///
+    /// # Errors
+    /// Returns an error if the in-memory database cannot be set up.
     pub fn empty() -> Result<Self, Error> {
         let connection = Connection::open_in_memory()?;
         connection.execute_batch(include_str!("schema.sql"))?;
@@ -105,6 +113,9 @@ impl Library {
     }
 
     /// Open an existing beets database without changing its schema.
+    ///
+    /// # Errors
+    /// Returns an error if the database cannot be opened.
     pub fn open_read_only(path: &Path) -> Result<Self, Error> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         register_functions(&connection)?;
@@ -116,10 +127,12 @@ impl Library {
         })
     }
 
-    pub fn connection(&self) -> &Connection {
+    pub const fn connection(&self) -> &Connection {
         &self.connection
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn item(&self, id: i64) -> Result<Option<Item>, Error> {
         let fields = self
             .connection
@@ -136,6 +149,8 @@ impl Library {
             .transpose()
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
     pub fn album(&self, id: i64) -> Result<Option<Album>, Error> {
         let fields = self
             .connection
@@ -152,6 +167,8 @@ impl Library {
             .transpose()
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails or a row has no id.
     pub fn items(&self) -> Result<Vec<Item>, Error> {
         let rows = self.rows(Entity::Item)?;
         let attributes = self.all_attributes(Entity::Item)?;
@@ -165,6 +182,8 @@ impl Library {
             .collect())
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails or a row has no id.
     pub fn albums(&self) -> Result<Vec<Album>, Error> {
         let rows = self.rows(Entity::Album)?;
         let attributes = self.all_attributes(Entity::Album)?;
@@ -178,6 +197,8 @@ impl Library {
             .collect())
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails or a row has no id.
     pub fn items_for_album(&self, album_id: i64) -> Result<Vec<Item>, Error> {
         let mut statement = self
             .connection
@@ -196,6 +217,8 @@ impl Library {
         Ok(items)
     }
 
+    /// # Errors
+    /// Returns an error if the query is invalid or the database query fails.
     pub fn query_items(&self, query_text: &str) -> Result<Vec<Item>, Error> {
         let query = query::Query::parse(query_text)?;
         let mut items = self.items()?;
@@ -204,6 +227,8 @@ impl Library {
         Ok(items)
     }
 
+    /// # Errors
+    /// Returns an error if the query is invalid or the database query fails.
     pub fn query_albums(&self, query_text: &str) -> Result<Vec<Album>, Error> {
         let query = query::Query::parse(query_text)?;
         let mut albums = self.albums()?;
@@ -264,14 +289,14 @@ enum Entity {
 }
 
 impl Entity {
-    fn table(self) -> &'static str {
+    const fn table(self) -> &'static str {
         match self {
             Self::Item => "items",
             Self::Album => "albums",
         }
     }
 
-    fn attribute_table(self) -> &'static str {
+    const fn attribute_table(self) -> &'static str {
         match self {
             Self::Item => "item_attributes",
             Self::Album => "album_attributes",

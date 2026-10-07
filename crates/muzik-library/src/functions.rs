@@ -20,7 +20,6 @@ pub fn register_functions(connection: &Connection) -> Result<(), Error> {
     })?;
     connection.create_scalar_function("bytelower", 1, FLAGS, |ctx| {
         Ok(match ctx.get_raw(0) {
-            ValueRef::Null => Value::Null,
             ValueRef::Blob(bytes) => Value::Blob(bytes.to_ascii_lowercase()),
             ValueRef::Text(bytes) => Value::Text(String::from_utf8_lossy(bytes).to_lowercase()),
             _ => Value::Null,
