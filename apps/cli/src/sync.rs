@@ -84,7 +84,7 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
     println!(
         "{} up to date, {} to copy, {} to convert, about {} to write",
         plan.fresh,
-        plan.pending.len() - converts,
+        plan.pending.len().saturating_sub(converts),
         converts,
         ByteSize(prepared.needed())
     );

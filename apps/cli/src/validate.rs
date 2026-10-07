@@ -20,9 +20,9 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let mut valid = 0;
-    let mut warnings = 0;
-    let mut invalid = 0;
+    let mut valid = 0_usize;
+    let mut warnings = 0_usize;
+    let mut invalid = 0_usize;
     for path in &files {
         let name = path.strip_prefix(&args.path).unwrap_or(path);
         let name = if name.as_os_str().is_empty() {
@@ -32,9 +32,9 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
         };
         match check(path) {
             Ok((file_kind, details, file_warnings)) => {
-                valid += 1;
+                valid = valid.saturating_add(1);
                 if !file_warnings.is_empty() {
-                    warnings += 1;
+                    warnings = warnings.saturating_add(1);
                 }
                 let status = if file_warnings.is_empty() {
                     "OK"
@@ -55,7 +55,7 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
                 }
             }
             Err(error) => {
-                invalid += 1;
+                invalid = invalid.saturating_add(1);
                 println!("{}\tFAIL\t{}", name.display(), crate::describe(&error));
             }
         }

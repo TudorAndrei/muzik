@@ -26,26 +26,26 @@ pub fn run(args: &Archive) -> anyhow::Result<()> {
         args.directory.display(),
         audio.len()
     );
-    let mut processed = 0;
-    let mut skipped = 0;
-    let mut failed = 0;
+    let mut processed = 0_usize;
+    let mut skipped = 0_usize;
+    let mut failed = 0_usize;
     if !args.skip_split {
         for path in &audio {
             let chapters = match chapters::find_chapters(path) {
                 Ok(chapters) => chapters,
                 Err(error) => {
                     eprintln!("Cannot read chapters for {}: {error}", path.display());
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                     continue;
                 }
             };
             if chapters.is_empty() {
                 println!("No chapters: {}", path.display());
-                skipped += 1;
+                skipped = skipped.saturating_add(1);
                 continue;
             }
             let Some(stem) = path.file_stem() else {
-                failed += 1;
+                failed = failed.saturating_add(1);
                 continue;
             };
             let output = args.output.join(stem);
@@ -66,14 +66,14 @@ pub fn run(args: &Archive) -> anyhow::Result<()> {
                 force: false,
             };
             match split::run(&request) {
-                Ok(_) => processed += 1,
+                Ok(_) => processed = processed.saturating_add(1),
                 Err(error) => {
                     eprintln!(
                         "Split failed for {}: {}",
                         path.display(),
                         crate::describe(&error)
                     );
-                    failed += 1;
+                    failed = failed.saturating_add(1);
                 }
             }
         }

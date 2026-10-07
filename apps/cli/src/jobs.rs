@@ -235,7 +235,7 @@ fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
         .interact_opt()
         .map_err(|error| error.to_string())?
         .ok_or("No answer was given.")?;
-    pick(&choices::choices(&question), index + 1).map_err(|error| error.to_string())
+    pick(&choices::choices(&question), index.saturating_add(1)).map_err(|error| error.to_string())
 }
 
 fn edit_chapters(payload: &Value) -> Result<Value, String> {
@@ -266,7 +266,7 @@ fn edit_chapters(payload: &Value) -> Result<Value, String> {
 fn print_question(question: &Value) {
     print_notes(question);
     for (index, line) in option_lines(question).iter().enumerate() {
-        println!("{:>3}. {line}", index + 1);
+        println!("{:>3}. {line}", index.saturating_add(1));
     }
 }
 

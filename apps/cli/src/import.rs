@@ -67,7 +67,10 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
             .planned_albums
             .saturating_sub(result.apply.skipped_albums),
         result.apply.destinations.len(),
-        result.apply.skipped_albums + result.apply.skipped_incremental
+        result
+            .apply
+            .skipped_albums
+            .saturating_add(result.apply.skipped_incremental)
     );
     if !result.apply.cleanup_failed.is_empty()
         || !result.apply.source_cleanup_failed.is_empty()

@@ -78,7 +78,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
         return Ok(());
     }
     let selected = flagged.len().min(args.limit);
-    let skipped = flagged.len() - selected;
+    let skipped = flagged.len().saturating_sub(selected);
     println!("Artist\tTitle\tCurrent\tStatus\tSuggested\tCandidate ID");
     let config = app_config::load(&app_config::path())?;
     let session = if selected > 0 {
@@ -132,7 +132,7 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
                         suggested,
                         id
                     );
-                    found += 1;
+                    found = found.saturating_add(1);
                 }
             },
         }
@@ -226,7 +226,7 @@ fn show_candidates(
         for (index, row) in rows.iter().enumerate() {
             println!(
                 "{}\t{}\t{:.1}\t{}\t{}\t{}\t{}",
-                index + 1,
+                index.saturating_add(1),
                 row["id"].as_str().unwrap_or(""),
                 row["score"].as_f64().unwrap_or(0.0),
                 row["format"].as_str().unwrap_or("?"),
@@ -408,7 +408,7 @@ fn choose_index(count: usize, no_interactive: bool) -> anyhow::Result<usize> {
         .map_err(|_| {
             anyhow!("no candidate was selected; use --no-interactive to select the first result")
         })?;
-    Ok(number - 1)
+    Ok(number.saturating_sub(1))
 }
 
 fn safe_display(value: &str) -> String {
