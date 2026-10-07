@@ -23,4 +23,5 @@ usage = { package = "usage-rs", version = "6.11.1" }
 zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
+bolero = "0.13"
 tempfile = "3"

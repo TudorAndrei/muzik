@@ -4694,6 +4694,7 @@ dependencies = [
 name = "muzik-bandcamp"
 version = "2.12.0"
 dependencies = [
+ "bolero",
  "html-escape",
  "muzik-core",
  "percent-encoding",

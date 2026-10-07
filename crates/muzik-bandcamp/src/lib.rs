@@ -713,9 +713,17 @@ fn disposition_name(header: &str) -> Option<String> {
 
 fn extract(archive: &Path, destination: &Path) -> Result<()> {
     let file = fs::File::open(archive)?;
-    zip::ZipArchive::new(file)
-        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?
-        .extract(destination)
+    let mut zip = zip::ZipArchive::new(file)
+        .map_err(|error| format!("The Bandcamp download is not a valid ZIP file: {error}"))?;
+    for index in 0..zip.len() {
+        let entry = zip
+            .by_index_raw(index)
+            .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))?;
+        if entry.is_symlink() {
+            return Err(format!("The Bandcamp ZIP file contains a link: {}", entry.name()).into());
+        }
+    }
+    zip.extract(destination)
         .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}").into())
 }
 
@@ -975,6 +983,81 @@ mod tests {
         let unsafe_archive = write("bad.zip", &["../escape.flac"])?;
         assert!(extract(&unsafe_archive, &destination).is_err());
         assert!(!directory.path().join("escape.flac").exists());
+
+        let linked = directory.path().join("link.zip");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&linked)?);
+        zip.add_symlink("Album", "/", zip::write::SimpleFileOptions::default())?;
+        zip.finish()?;
+        let linked_destination = directory.path().join("linked");
+        assert!(extract(&linked, &linked_destination).is_err());
+        assert!(!linked_destination.join("Album").exists());
         Ok(())
+    }
+
+    fn lexical(path: &Path) -> PathBuf {
+        let mut normal = PathBuf::new();
+        for component in path.components() {
+            match component {
+                std::path::Component::ParentDir => {
+                    normal.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => normal.push(other),
+            }
+        }
+        normal
+    }
+
+    fn assert_links_stay_inside(folder: &Path, root: &Path) {
+        for entry in fs::read_dir(folder).unwrap().map(Result::unwrap) {
+            let path = entry.path();
+            let kind = fs::symlink_metadata(&path).unwrap().file_type();
+            if kind.is_symlink() {
+                let resolved = fs::canonicalize(&path)
+                    .unwrap_or_else(|_| lexical(&folder.join(fs::read_link(&path).unwrap())));
+                assert!(resolved.starts_with(root), "{path:?} -> {resolved:?}");
+            } else if kind.is_dir() {
+                assert_links_stay_inside(&path, root);
+            }
+        }
+    }
+
+    #[test]
+    fn any_archive_writes_only_inside_the_destination() {
+        let name = |bytes: &[u8]| -> String {
+            bytes
+                .iter()
+                .map(|byte| ['a', '.', '/', '\\', 'b'][usize::from(*byte) % 5])
+                .collect()
+        };
+        bolero::check!()
+            .with_type::<Vec<(bool, Vec<u8>, Vec<u8>)>>()
+            .for_each(|entries| {
+                let directory = tempfile::tempdir().unwrap();
+                let root = directory.path().canonicalize().unwrap();
+                let archive = root.join("archive.zip");
+                let destination = root.join("out");
+                fs::create_dir(&destination).unwrap();
+                let mut zip = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+                for (link, path, target) in entries {
+                    let options = zip::write::SimpleFileOptions::default();
+                    if *link {
+                        let _ = zip.add_symlink(name(path), name(target), options);
+                    } else if zip.start_file(name(path), options).is_ok() {
+                        zip.write_all(b"audio").unwrap();
+                    }
+                }
+                if zip.finish().is_err() {
+                    return;
+                }
+                let _ = extract(&archive, &destination);
+                let mut top: Vec<_> = fs::read_dir(&root)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().file_name())
+                    .collect();
+                top.sort();
+                assert_eq!(top, ["archive.zip", "out"]);
+                assert_links_stay_inside(&destination, &destination);
+            });
     }
 }
