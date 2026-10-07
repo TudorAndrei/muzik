@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Blocking Soulseek search and download client for muzik"
 
+[lints]
+workspace = true
+
 [dependencies]
 keyring-core = "1.0"
 muzik-core = { path = "../muzik-core" }

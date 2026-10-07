@@ -5,16 +5,8 @@ edition = "2024"
 license = "GPL-3.0-only"
 publish = false
 
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-indexing_slicing = "deny"
-unreachable = "deny"
-unimplemented = "deny"
-todo = "deny"
-panic = "deny"
-exit = "deny"
-as_conversions = "deny"
+[lints]
+workspace = true
 
 [[bin]]
 name = "muzik"

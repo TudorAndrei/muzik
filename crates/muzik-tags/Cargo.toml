@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Beets-compatible audio tag read and write support"
 
+[lints]
+workspace = true
+
 [dependencies]
 lofty = "0.25"
 muzik-core = { path = "../muzik-core" }

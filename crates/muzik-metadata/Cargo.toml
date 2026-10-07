@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "MusicBrainz release search and lookup for muzik"
 
+[lints]
+workspace = true
+
 [dependencies]
 backon = { version = "1.6", default-features = false, features = ["std", "std-blocking-sleep"] }
 governor = { version = "0.10", default-features = false, features = ["std"] }

@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Read and write beets SQLite libraries from Rust"
 
+[lints]
+workspace = true
+
 [dependencies]
 deunicode = "1.6"
 fancy-regex = "0.19"

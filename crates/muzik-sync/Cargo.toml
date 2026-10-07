@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Copy muzik library tracks to a device in formats it plays"
 
+[lints]
+workspace = true
+
 [dependencies]
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }

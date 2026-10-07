@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Beets-compatible music matching primitives"
 
+[lints]
+workspace = true
+
 [dependencies]
 deunicode = "1.6"
 lsap = "=1.0.2"

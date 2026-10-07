@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Read a Bandcamp collection and download purchases"
 
+[lints]
+workspace = true
+
 [dependencies]
 html-escape = "0.2"
 muzik-core = { path = "../muzik-core" }

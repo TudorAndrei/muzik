@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "Spotify login, playlists, and playlist pages for muzik"
 
+[lints]
+workspace = true
+
 [dependencies]
 base64 = "0.22"
 chrono = "0.4"

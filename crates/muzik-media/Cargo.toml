@@ -6,6 +6,9 @@ license = "Apache-2.0"
 publish = false
 description = "ffmpeg, audio quality, and the chapter splitter for muzik"
 
+[lints]
+workspace = true
+
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 muzik-core = { path = "../muzik-core" }

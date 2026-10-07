@@ -5,6 +5,9 @@ edition = "2021"
 publish = false
 license = "GPL-3.0-only"
 
+[lints]
+workspace = true
+
 [dependencies]
 muzik-agent = { path = "../muzik-agent" }
 muzik-bandcamp = { path = "../muzik-bandcamp" }

@@ -5,10 +5,8 @@ edition = "2024"
 publish = false
 license-file = "../../LICENSE"
 
-[lints.clippy]
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 muzik-core = { path = "../muzik-core" }
