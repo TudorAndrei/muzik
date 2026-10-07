@@ -163,12 +163,12 @@ fn parse_sort(part: &str) -> Option<Sort> {
 }
 
 fn parse_term(part: &str) -> Result<Term, Error> {
-    let (negated, part) = match part.as_bytes().first() {
-        Some(b'-' | b'^') => (true, &part[1..]),
-        _ => (false, part),
+    let (negated, part) = match part.strip_prefix(['-', '^']) {
+        Some(rest) => (true, rest),
+        None => (false, part),
     };
-    let (field, pattern) = match part.find(':') {
-        Some(index) if index > 0 => (Some(part[..index].to_lowercase()), &part[index + 1..]),
+    let (field, pattern) = match part.split_once(':') {
+        Some((field, pattern)) if !field.is_empty() => (Some(field.to_lowercase()), pattern),
         _ => (None, part),
     };
     let (kind, pattern) = if let Some(pattern) = pattern.strip_prefix(':') {
@@ -228,7 +228,7 @@ fn term_matches(term: &Term, value: &Value) -> bool {
     match term.kind {
         Kind::Numeric => {
             let number = match value {
-                Value::Integer(number) => *number as f64,
+                Value::Integer(number) => integer_to_f64(*number),
                 Value::Real(number) => *number,
                 Value::Text(number) => match number.parse::<f64>() {
                     Ok(number) => number,
@@ -236,8 +236,11 @@ fn term_matches(term: &Term, value: &Value) -> bool {
                 },
                 _ => return false,
             };
-            let (min, max) = parse_range(&term.pattern, term.field.as_deref() == Some("length"))
-                .expect("numeric pattern validated");
+            let Ok((min, max)) =
+                parse_range(&term.pattern, term.field.as_deref() == Some("length"))
+            else {
+                return false;
+            };
             min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
         }
         Kind::Regexp => {
@@ -299,7 +302,15 @@ fn parse_duration(text: &str) -> Option<f64> {
     if seconds >= 60 {
         return None;
     }
-    Some(minutes.parse::<u32>().ok()? as f64 * 60.0 + seconds as f64)
+    Some(f64::from(minutes.parse::<u32>().ok()?) * 60.0 + f64::from(seconds))
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no From<i64> for f64; numeric queries compare as floats like beets"
+)]
+fn integer_to_f64(number: i64) -> f64 {
+    number as f64
 }
 
 fn compare_rows(

@@ -123,7 +123,9 @@ impl Library {
                 (!path.exists()).then_some(item.id)
             })
             .collect();
-        if !items.is_empty() && (missing.len() as f64) > (items.len() as f64) * safety_fraction {
+        if !items.is_empty()
+            && count_to_f64(missing.len()) > count_to_f64(items.len()) * safety_fraction
+        {
             return Err(Error::PruneAborted {
                 missing: missing.len(),
                 total: items.len(),
@@ -327,6 +329,14 @@ fn put_attributes(
         )?;
     }
     Ok(())
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no From<usize> for f64; counts compare against a float fraction"
+)]
+fn count_to_f64(count: usize) -> f64 {
+    count as f64
 }
 
 #[cfg(unix)]

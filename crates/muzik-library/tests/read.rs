@@ -3,16 +3,16 @@ use rusqlite::types::Value;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 
-fn fixture() -> (Library, JsonValue) {
+fn fixture() -> Result<(Library, JsonValue), Box<dyn std::error::Error>> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/library.db");
-    let library = Library::open_read_only(&path).expect("open beets fixture");
-    let expected = serde_json::from_str(include_str!("fixtures/library.json")).unwrap();
-    (library, expected)
+    let library = Library::open_read_only(&path)?;
+    let expected = serde_json::from_str(include_str!("fixtures/library.json"))?;
+    Ok((library, expected))
 }
 
 #[test]
 fn reads_items_and_flexible_attributes() {
-    let (library, expected) = fixture();
+    let (library, expected) = fixture().unwrap();
     let items = library.items().expect("read items");
     assert_eq!(items.len(), 2);
     let first = &items[0];
@@ -38,7 +38,7 @@ fn reads_items_and_flexible_attributes() {
 
 #[test]
 fn reads_albums_and_album_items() {
-    let (library, expected) = fixture();
+    let (library, expected) = fixture().unwrap();
     let albums = library.albums().expect("read albums");
     assert_eq!(albums.len(), 1);
     let album = &albums[0];
@@ -56,7 +56,7 @@ fn reads_albums_and_album_items() {
 
 #[test]
 fn beets_sql_functions_accept_text_and_blobs() {
-    let (library, _) = fixture();
+    let (library, _) = fixture().unwrap();
     let connection = library.connection();
     let regex: bool = connection
         .query_row("SELECT regexp('foobar', 'foo(?=bar)')", [], |row| {

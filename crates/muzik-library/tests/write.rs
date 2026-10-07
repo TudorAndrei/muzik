@@ -3,13 +3,13 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-fn fixture() -> (TempDir, Library) {
-    let directory = tempfile::tempdir().unwrap();
+fn fixture() -> Result<(TempDir, Library), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/library.db");
     let database = directory.path().join("library.db");
-    fs::copy(source, &database).unwrap();
-    let library = Library::open_read_write(&database).unwrap();
-    (directory, library)
+    fs::copy(source, &database)?;
+    let library = Library::open_read_write(&database)?;
+    Ok((directory, library))
 }
 
 fn fields(pairs: &[(&str, Value)]) -> Fields {
@@ -48,7 +48,7 @@ fn creates_first_library_with_readable_schema() {
 
 #[test]
 fn inserts_and_updates_fixed_and_flexible_fields() {
-    let (directory, mut library) = fixture();
+    let (directory, mut library) = fixture().unwrap();
     let album_id = library
         .transaction(|writer| {
             let album_id = writer.insert_album(
@@ -92,7 +92,7 @@ fn inserts_and_updates_fixed_and_flexible_fields() {
 
 #[test]
 fn failed_group_write_rolls_back_all_rows() {
-    let (_directory, mut library) = fixture();
+    let (_directory, mut library) = fixture().unwrap();
     let before = library.albums().unwrap().len();
     let result = library.transaction(|writer| {
         writer.insert_album(
@@ -114,7 +114,7 @@ fn failed_group_write_rolls_back_all_rows() {
 
 #[test]
 fn prune_checks_fraction_before_removing_any_rows() {
-    let (directory, mut library) = fixture();
+    let (directory, mut library) = fixture().unwrap();
     let music = directory.path().join("music");
     fs::create_dir(&music).unwrap();
     let present = music.join("present.mp3");
