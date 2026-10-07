@@ -151,7 +151,7 @@ fn items(purchases: &[bandcamp::Purchase]) -> LoadedSource {
                     .clone()
                     .unwrap_or_else(|| purchase.download_page.clone()),
             );
-            item.thumbnail_url = purchase.art_url.clone();
+            item.thumbnail_url.clone_from(&purchase.art_url);
             item.track = Some(json!({
                 "artist": purchase.artist,
                 "title": purchase.title,

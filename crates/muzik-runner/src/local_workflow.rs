@@ -50,7 +50,7 @@ pub fn run(
     }))
 }
 
-pub(crate) struct LocalOperations<'a> {
+pub struct LocalOperations<'a> {
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     pub(crate) on_import_event: &'a mut dyn FnMut(JobEvent),
     pub(crate) cancelled: &'a AtomicBool,
@@ -303,7 +303,7 @@ fn sql_text(value: &SqlValue) -> Option<String> {
         SqlValue::Blob(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
         SqlValue::Integer(value) => Some(value.to_string()),
         SqlValue::Real(value) => Some(value.to_string()),
-        _ => None,
+        SqlValue::Null => None,
     }
 }
 
@@ -340,7 +340,7 @@ fn match_score(distance: f64) -> u64 {
     crate::choices::percent(1.0 - distance.clamp(0.0, 1.0))
 }
 
-pub(crate) fn event_record(event: WorkflowEvent) -> JobEvent {
+pub fn event_record(event: WorkflowEvent) -> JobEvent {
     match event {
         WorkflowEvent::InputClassified(_) => JobEvent::message("Reading local audio."),
         WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted(Step::Read),
@@ -384,9 +384,8 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_album_is_skipped_by_default_without_a_question()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn a_duplicate_album_is_skipped_by_default_without_a_question() {
+        let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.yaml");
         let database = dir.path().join("library.db");
         fs::write(
@@ -397,18 +396,20 @@ mod tests {
                 database.display(),
                 dir.path().join("state.pickle").display()
             ),
-        )?;
+        )
+        .unwrap();
         let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../crates/muzik-tags/tests/fixtures/mediafile.flac");
         let mut asked = Vec::new();
         for round in 0..2 {
             let audio = dir.path().join(format!("round-{round}")).join("track.flac");
-            fs::create_dir_all(audio.parent().ok_or("no parent")?)?;
-            fs::copy(&fixture, &audio)?;
+            fs::create_dir_all(audio.parent().unwrap()).unwrap();
+            fs::copy(&fixture, &audio).unwrap();
             let request = settings(
                 dir.path(),
                 &json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
-            )?;
+            )
+            .unwrap();
             assert_eq!(request.options.duplicates, DuplicatePolicy::Skip);
             run(
                 &request,
@@ -419,33 +420,35 @@ mod tests {
                     asked.push(kind);
                     Ok(json!(muzik_core::KEEP_CURRENT_TAGS))
                 },
-            )?;
+            )
+            .unwrap();
         }
         assert_eq!(
             asked,
             [DecisionKind::ImportMatch, DecisionKind::ImportMatch]
         );
         assert_eq!(
-            muzik_library::Library::open_read_only(&database)?
-                .items()?
+            muzik_library::Library::open_read_only(&database)
+                .unwrap()
+                .items()
+                .unwrap()
                 .len(),
             1
         );
-        Ok(())
     }
 
     #[test]
-    fn local_dry_run_reports_plan_without_changing_audio() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn local_dry_run_reports_plan_without_changing_audio() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("album.flac");
-        fs::write(&audio, b"audio")?;
-        fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
         let splits = dir.path().join("splits");
         let request = settings(
             dir.path(),
             &json!({"raw":audio,"splits":splits,"no_organize":true,"dry_run":true}),
-        )?;
+        )
+        .unwrap();
         let mut events = Vec::new();
         let result = run(
             &request,
@@ -453,7 +456,8 @@ mod tests {
             &mut |event| events.push(event),
             &mut |_| {},
             &mut |_, _| Err("unexpected decision".into()),
-        )?;
+        )
+        .unwrap();
         assert_eq!(result["albums"], 1);
         assert!(
             events
@@ -462,19 +466,19 @@ mod tests {
         );
         assert!(audio.exists());
         assert!(!splits.exists());
-        Ok(())
     }
 
     #[test]
-    fn chapter_reject_keeps_local_audio_as_a_single() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn chapter_reject_keeps_local_audio_as_a_single() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("album.flac");
-        fs::write(&audio, b"audio")?;
-        fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n")?;
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(dir.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
         let request = settings(
             dir.path(),
             &json!({"raw":audio,"no_organize":true,"review":true,"dry_run":true}),
-        )?;
+        )
+        .unwrap();
         let mut decisions = Vec::new();
         let result = run(
             &request,
@@ -485,12 +489,12 @@ mod tests {
                 decisions.push((kind, payload));
                 Ok(json!(ChapterAnswer::Reject))
             },
-        )?;
+        )
+        .unwrap();
         assert_eq!(result["albums"], 0);
         assert_eq!(result["singles"], 1);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].0, DecisionKind::ChapterReview);
         assert_eq!(decisions[0].1["chapters"][0]["title"], "First");
-        Ok(())
     }
 }

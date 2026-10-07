@@ -16,6 +16,8 @@ pub struct SoulseekAccount<'a> {
     pub server_port: Option<u64>,
 }
 
+/// # Errors
+/// Returns an error when the config file cannot be read.
 pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     let config = app_config::load(config_file)?;
     let section = config.get("soulseek").unwrap_or(&Value::Null);
@@ -23,7 +25,7 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     let port = section["server_port"]
         .as_u64()
         .or_else(|| section["server_port"].as_str()?.parse().ok())
-        .unwrap_or(u64::from(DEFAULT_SERVER_PORT));
+        .unwrap_or_else(|| u64::from(DEFAULT_SERVER_PORT));
     let host = Some(text("server_host"))
         .filter(|host| !host.is_empty())
         .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
@@ -35,6 +37,8 @@ pub fn soulseek_account(config_file: &Path) -> Result<Value> {
     }))
 }
 
+/// # Errors
+/// Returns an error when the account is incomplete or invalid, or the config file cannot be read or written.
 pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) -> Result<()> {
     let config = app_config::load(config_file)?;
     let saved = |key: &str| {
@@ -59,7 +63,7 @@ pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) 
         .unwrap_or(DEFAULT_SERVER_HOST);
     let port = account
         .server_port
-        .unwrap_or(u64::from(DEFAULT_SERVER_PORT));
+        .unwrap_or_else(|| u64::from(DEFAULT_SERVER_PORT));
     if !(1..=65535).contains(&port) {
         return Err("Enter a server port from 1 to 65535.".into());
     }
@@ -79,6 +83,8 @@ pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) 
     move_soulseek_password(config_file)
 }
 
+/// # Errors
+/// Returns an error when the config file cannot be read or written.
 pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
     let config = app_config::load(config_file)?;
     let password = config
@@ -104,6 +110,7 @@ pub struct ServiceStatus {
     optional: bool,
 }
 
+#[must_use]
 pub fn check_services(paths: &Paths) -> Vec<ServiceStatus> {
     vec![
         check_binary("ffmpeg", "ffmpeg", &["-version"], false),
@@ -237,64 +244,57 @@ mod tests {
     }
 
     #[test]
-    fn soulseek_account_saves_without_returning_the_password()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn soulseek_account_saves_without_returning_the_password() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.yaml");
-        fs::write(&path, "native_gui:\n  jobs: 2\n")?;
+        fs::write(&path, "native_gui:\n  jobs: 2\n").unwrap();
         assert!(
             save_soulseek_account(&path, &account(Some("listener"), None, Some(2416))).is_err()
         );
         save_soulseek_account(
             &path,
             &account(Some("listener"), Some("secret"), Some(2242)),
-        )?;
-        let settings = soulseek_account(&path)?;
+        )
+        .unwrap();
+        let settings = soulseek_account(&path).unwrap();
         assert_eq!(settings["username"], "listener");
         assert_eq!(settings["has_password"], true);
         assert_eq!(settings["server_host"], "server.slsknet.org");
         assert_eq!(settings["server_port"], 2242);
         assert!(settings.get("password").is_none());
-        save_soulseek_account(&path, &account(Some("renamed"), Some(""), Some(2242)))?;
-        let saved = fs::read_to_string(&path)?;
+        save_soulseek_account(&path, &account(Some("renamed"), Some(""), Some(2242))).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
         assert!(saved.contains("secret"));
         assert!(saved.contains("renamed"));
         assert!(saved.contains("jobs: 2"));
-        Ok(())
     }
 
     #[test]
-    fn saved_user_name_is_kept_when_none_is_given() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn saved_user_name_is_kept_when_none_is_given() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.yaml");
-        save_soulseek_account(&path, &account(Some("a"), Some("b"), None))?;
-        save_soulseek_account(&path, &account(None, None, Some(2242)))?;
-        let settings = soulseek_account(&path)?;
+        save_soulseek_account(&path, &account(Some("a"), Some("b"), None)).unwrap();
+        save_soulseek_account(&path, &account(None, None, Some(2242))).unwrap();
+        let settings = soulseek_account(&path).unwrap();
         assert_eq!(settings["username"], "a");
         assert_eq!(settings["has_password"], true);
         assert_eq!(settings["server_port"], 2242);
-        Ok(())
     }
 
     #[test]
-    fn account_needs_a_user_name() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn account_needs_a_user_name() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.yaml");
-        let error = save_soulseek_account(&path, &account(None, Some("b"), None))
-            .err()
-            .ok_or("expected an error")?;
+        let error = save_soulseek_account(&path, &account(None, Some("b"), None)).unwrap_err();
         assert!(error.to_string().contains("username"));
-        Ok(())
     }
 
     #[test]
-    fn port_out_of_range_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn port_out_of_range_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.yaml");
-        let error = save_soulseek_account(&path, &account(Some("a"), Some("b"), Some(70000)))
-            .err()
-            .ok_or("expected an error")?;
+        let error =
+            save_soulseek_account(&path, &account(Some("a"), Some("b"), Some(70000))).unwrap_err();
         assert_eq!(error.to_string(), "Enter a server port from 1 to 65535.");
-        Ok(())
     }
 }

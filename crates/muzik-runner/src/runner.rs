@@ -1,6 +1,6 @@
 use crate::agent::Chooser;
 use crate::events::{AppEvent, Source};
-use crate::queue::{Jobs, job_id};
+use crate::queue::{Jobs, RunnerClaim, job_id};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
@@ -92,9 +92,13 @@ impl Drop for Runner {
 }
 
 impl Runner {
+    /// # Errors
+    /// Returns an error when the runner lock or the job queue cannot be prepared.
     pub fn start(jobs: Arc<Jobs>, options: Options) -> crate::Result<Option<Self>> {
-        let Some(lock) = jobs.runner_lock()? else {
-            return Ok(None);
+        let lock = match jobs.runner_lock()? {
+            RunnerClaim::Taken => return Ok(None),
+            RunnerClaim::Unlocked => None,
+            RunnerClaim::Locked(lock) => Some(lock),
         };
         jobs.import_legacy()?;
         jobs.store().recover()?;
@@ -124,18 +128,17 @@ impl Runner {
         }))
     }
 
+    #[must_use]
     pub fn running(&self) -> Running {
         Arc::clone(&self.shared.running)
     }
 
+    #[must_use]
     pub fn cancel(&self, job_id: &str) -> bool {
-        match self.shared.running().get(job_id) {
-            Some(cancel) => {
-                cancel.store(true, Ordering::SeqCst);
-                true
-            }
-            None => false,
-        }
+        self.shared.running().get(job_id).is_some_and(|cancel| {
+            cancel.store(true, Ordering::SeqCst);
+            true
+        })
     }
 
     pub fn wake(&self) {
@@ -146,6 +149,7 @@ impl Runner {
         self.shared.publish();
     }
 
+    #[must_use]
     pub fn is_idle(&self) -> bool {
         self.shared.running().is_empty()
             && self
@@ -182,7 +186,7 @@ fn work(shared: &Arc<Shared>) {
             shared.wake.wait_for(&mut idle, Duration::from_secs(1));
             continue;
         };
-        run_job(shared, job);
+        run_job(shared, &job);
     }
 }
 
@@ -207,7 +211,7 @@ fn watch(shared: &Arc<Shared>) {
     }
 }
 
-fn run_job(shared: &Arc<Shared>, job: Job) {
+fn run_job(shared: &Arc<Shared>, job: &Job) {
     let id = job_id(job.id);
     let cancel = Arc::new(AtomicBool::new(false));
     shared.running().insert(id.clone(), Arc::clone(&cancel));
@@ -220,9 +224,9 @@ fn run_job(shared: &Arc<Shared>, job: Job) {
     });
     shared.publish();
     let result = match job.kind {
-        Kind::Refresh => run_refresh(shared, &job, &id, &cancel),
-        Kind::Item => run_item(shared, &job, &id, &cancel),
-        Kind::Workflow => run_workflow(shared, &job, &id, &cancel),
+        Kind::Refresh => run_refresh(shared, job, &id, &cancel),
+        Kind::Item => run_item(shared, job, &id, &cancel),
+        Kind::Workflow => run_workflow(shared, job, &id, &cancel),
     };
     {
         let store = shared.store();
@@ -258,7 +262,7 @@ fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) ->
         cancel,
         &mut |event| shared.event(job_id, Source::Workflow, event),
     )
-    .map_err(job_error)?;
+    .map_err(|error| job_error(&error))?;
     let queued = shared
         .jobs
         .queue_pending(&job.params, &pending)
@@ -313,7 +317,7 @@ fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Ou
         &mut decide,
         &parked,
     )
-    .map_err(job_error)
+    .map_err(|error| job_error(&error))
 }
 
 fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
@@ -407,7 +411,7 @@ fn ask_agent(
     }
 }
 
-fn job_error(error: JobError) -> (bool, String) {
+fn job_error(error: &JobError) -> (bool, String) {
     (matches!(error, JobError::Cancelled), error.to_string())
 }
 
@@ -443,31 +447,35 @@ mod tests {
     }
 
     #[test]
-    fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer() {
+        let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let output = dir.path().join("downloads");
-        std::fs::create_dir_all(&output)?;
+        std::fs::create_dir_all(&output).unwrap();
         let audio = output.join("Song [abcdefghijk].flac");
-        std::fs::copy(crate::sources::testing::fixture(), &audio)?;
-        let config = crate::sources::testing::library_config(dir.path())?;
+        std::fs::copy(crate::sources::testing::fixture(), &audio).unwrap();
+        let config = crate::sources::testing::library_config(dir.path()).unwrap();
         let repository = Repository::open(&paths);
-        repository.add("https://www.youtube.com/playlist?list=PL1")?;
-        repository.update(|document| {
-            let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
-            item.video_id = Some("abcdefghijk".into());
-            item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
-            item.complete(Stage::Download, Some(audio.clone()));
-            document.playlists[0].items = vec![item];
-            Ok(())
-        })?;
-        let jobs = Arc::new(Jobs::open(&paths)?);
-        let (runner, _) = runner(&jobs)?;
+        repository
+            .add("https://www.youtube.com/playlist?list=PL1")
+            .unwrap();
+        repository
+            .update(|document| {
+                let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
+                item.video_id = Some("abcdefghijk".into());
+                item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
+                item.complete(Stage::Download, Some(audio.clone()));
+                document.playlists[0].items = vec![item];
+                Ok(())
+            })
+            .unwrap();
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let (runner, _) = runner(&jobs).unwrap();
         jobs.item(&json!({
             "playlist_id":"PL1","position":1,"video_id":"abcdefghijk","title":"Song",
             "action":"organize_again","output":output,"config":config,"interactive":true
-        }))?;
+        }))
+        .unwrap();
         runner.wake();
         let started = Instant::now();
         let waiting = loop {
@@ -477,50 +485,53 @@ mod tests {
             {
                 break job;
             }
-            if started.elapsed() > Duration::from_secs(20) {
-                return Err("the item did not park".into());
-            }
+            assert!(
+                started.elapsed() <= Duration::from_secs(20),
+                "the item did not park"
+            );
             std::thread::sleep(Duration::from_millis(50));
         };
         assert_eq!(waiting["kind"], "import_match");
         assert_eq!(waiting["item"], "PL1:1:abcdefghijk");
         assert_eq!(
-            repository.load()?.playlists[0].items[0].status(Stage::Organize),
+            repository.load().unwrap().playlists[0].items[0].status(Stage::Organize),
             StageStatus::Waiting
         );
-        let id = waiting["id"].as_i64().ok_or("the waiting job has no ID")?;
-        assert!(jobs.answer(id, &json!("as_is"))?);
+        let id = waiting["id"].as_i64().unwrap();
+        assert!(jobs.answer(id, &json!("as_is")).unwrap());
         runner.wake();
         runner.wait_until_idle(&AtomicBool::new(false));
         assert_eq!(
-            repository.load()?.playlists[0].items[0].status(Stage::Organize),
+            repository.load().unwrap().playlists[0].items[0].status(Stage::Organize),
             StageStatus::Complete
         );
         assert_eq!(
-            muzik_library::Library::open_read_only(&dir.path().join("library.db"))?
-                .items()?
+            muzik_library::Library::open_read_only(&dir.path().join("library.db"))
+                .unwrap()
+                .items()
+                .unwrap()
                 .len(),
             1
         );
-        Ok(())
     }
 
     #[test]
-    fn a_workflow_job_runs_and_reports_its_result() -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn a_workflow_job_runs_and_reports_its_result() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("track.flac");
-        std::fs::write(&audio, b"audio")?;
-        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path()))?);
-        let (runner, receiver) = runner(&jobs)?;
-        let id =
-            jobs.workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))?;
+        std::fs::write(&audio, b"audio").unwrap();
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path())).unwrap());
+        let (runner, receiver) = runner(&jobs).unwrap();
+        let id = jobs
+            .workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
+            .unwrap();
         runner.wake();
         let job_id = super::job_id(id);
         loop {
             if let AppEvent::JobCompleted {
                 job_id: done,
                 result,
-            } = receiver.recv_timeout(Duration::from_secs(20))?
+            } = receiver.recv_timeout(Duration::from_secs(20)).unwrap()
                 && done == job_id
             {
                 assert_eq!(result["singles"], 1);
@@ -529,26 +540,24 @@ mod tests {
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
         assert!(runner.is_idle());
-        Ok(())
     }
 
     #[test]
-    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let dir = tempfile::tempdir()?;
+    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs() {
+        let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("track.flac");
-        std::fs::write(&audio, b"audio")?;
-        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path()))?);
-        let (runner, _receiver) = runner(&jobs)?;
+        std::fs::write(&audio, b"audio").unwrap();
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path())).unwrap());
+        let (runner, _receiver) = runner(&jobs).unwrap();
         runner.wait_until_idle(&AtomicBool::new(true));
-        let id =
-            jobs.workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))?;
+        let id = jobs
+            .workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
+            .unwrap();
         runner.wake();
         std::thread::sleep(Duration::from_millis(1500));
         assert_eq!(
-            jobs.store().get(id)?.map(|job| job.status),
+            jobs.store().get(id).unwrap().map(|job| job.status),
             Some(muzik_store::jobs::Status::Queued)
         );
-        Ok(())
     }
 }

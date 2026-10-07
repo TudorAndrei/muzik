@@ -19,7 +19,8 @@ pub enum Gate {
 impl Gate {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn limit(self) -> usize {
+    #[must_use]
+    pub const fn limit(self) -> usize {
         match self {
             Self::Download => 2,
             Self::Process | Self::Import => 1,
@@ -49,7 +50,7 @@ struct State {
 }
 
 impl State {
-    fn lane(&self, gate: Gate) -> &Lane {
+    const fn lane(&self, gate: Gate) -> &Lane {
         match gate {
             Gate::Download => &self.download,
             Gate::Process => &self.process,
@@ -57,7 +58,7 @@ impl State {
         }
     }
 
-    fn lane_mut(&mut self, gate: Gate) -> &mut Lane {
+    const fn lane_mut(&mut self, gate: Gate) -> &mut Lane {
         match gate {
             Gate::Download => &mut self.download,
             Gate::Process => &mut self.process,
@@ -99,6 +100,7 @@ impl Drop for Permit {
             .retain(|(active, _)| *active != ticket);
         CHANGED.notify_all();
         publish(&state);
+        drop(state);
     }
 }
 
@@ -111,6 +113,8 @@ pub fn set_label(label: &str) {
     LABEL.with(|current| label.clone_into(&mut current.borrow_mut()));
 }
 
+/// # Errors
+/// Returns an error when the wait for the gate is cancelled.
 pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit> {
     if HELD.with(|held| held.borrow().iter().any(|entry| entry.0 == gate)) {
         return Ok(Permit { held: None });
@@ -121,7 +125,7 @@ pub fn enter(gate: Gate, cancelled: &AtomicBool) -> Result<Permit> {
     state.next = ticket.wrapping_add(1);
     state.lane_mut(gate).waiting.push((ticket, label));
     publish(&state);
-    let state = admit(state, gate, ticket, cancelled)?;
+    admit(&mut state, gate, ticket, cancelled)?;
     drop(state);
     HELD.with(|held| held.borrow_mut().push((gate, ticket)));
     Ok(Permit {
@@ -135,17 +139,16 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
         return work();
     }
     let mut labels = Vec::new();
-    {
-        let mut state = STATE.lock();
-        for (gate, ticket) in &held {
-            let lane = state.lane_mut(*gate);
-            if let Some(index) = lane.active.iter().position(|entry| entry.0 == *ticket) {
-                labels.push(lane.active.remove(index).1);
-            }
+    let mut state = STATE.lock();
+    for (gate, ticket) in &held {
+        let lane = state.lane_mut(*gate);
+        if let Some(index) = lane.active.iter().position(|entry| entry.0 == *ticket) {
+            labels.push(lane.active.remove(index).1);
         }
-        CHANGED.notify_all();
-        publish(&state);
     }
+    CHANGED.notify_all();
+    publish(&state);
+    drop(state);
     let result = work();
     let never = AtomicBool::new(false);
     for ((gate, ticket), label) in held.into_iter().zip(labels) {
@@ -154,25 +157,24 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
         let at = waiting.partition_point(|entry| entry.0 < ticket);
         waiting.insert(at, (ticket, label));
         publish(&state);
-        if let Ok(state) = admit(state, gate, ticket, &never) {
-            drop(state);
-        }
+        let _ = admit(&mut state, gate, ticket, &never);
+        drop(state);
     }
     result
 }
 
 fn admit(
-    mut state: MutexGuard<'static, State>,
+    state: &mut MutexGuard<'static, State>,
     gate: Gate,
     ticket: u64,
     cancelled: &AtomicBool,
-) -> Result<MutexGuard<'static, State>> {
+) -> Result<()> {
     loop {
         let lane = state.lane_mut(gate);
         if cancelled.load(Ordering::SeqCst) {
             lane.waiting.retain(|entry| entry.0 != ticket);
             CHANGED.notify_all();
-            publish(&state);
+            publish(state);
             return Err(Error::GateCancelled(gate));
         }
         if lane.active.len() < gate.limit()
@@ -181,10 +183,10 @@ fn admit(
             let entry = lane.waiting.remove(0);
             lane.active.push(entry);
             CHANGED.notify_all();
-            publish(&state);
-            return Ok(state);
+            publish(state);
+            return Ok(());
         }
-        CHANGED.wait_for(&mut state, Duration::from_millis(200));
+        CHANGED.wait_for(state, Duration::from_millis(200));
     }
 }
 
@@ -232,11 +234,11 @@ mod tests {
     }
 
     #[test]
-    fn a_gate_admits_its_limit_and_the_next_waits() -> Result<(), String> {
+    fn a_gate_admits_its_limit_and_the_next_waits() {
         let never = AtomicBool::new(false);
         set_label("gate holder");
-        let first = enter(Gate::Import, &never)?;
-        let again = enter(Gate::Import, &never)?;
+        let first = enter(Gate::Import, &never).unwrap();
+        let again = enter(Gate::Import, &never).unwrap();
         let (sender, receiver) = mpsc::channel();
         let waiter = thread::spawn(move || {
             set_label("gate waiter");
@@ -249,14 +251,13 @@ mod tests {
         assert!(listed(Gate::Import, "waiting", "gate waiter"));
         let during = suspended(|| receiver.recv_timeout(Duration::from_secs(5)));
         assert!(during.is_ok());
-        waiter.join().map_err(|_| "waiter panicked")??;
+        waiter.join().unwrap().unwrap();
         assert!(listed(Gate::Import, "active", "gate holder"));
         drop(again);
         drop(first);
         assert!(!listed(Gate::Import, "active", "gate holder"));
         let cancelled = AtomicBool::new(true);
         let blocked = thread::spawn(move || enter(Gate::Import, &cancelled).map(drop));
-        assert!(blocked.join().map_err(|_| "blocked panicked")?.is_err());
-        Ok(())
+        assert!(blocked.join().unwrap().is_err());
     }
 }

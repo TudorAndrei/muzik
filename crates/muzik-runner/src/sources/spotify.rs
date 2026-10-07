@@ -166,8 +166,7 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
     for (track, position) in entries.iter().zip(1_u64..) {
         let source = track["source_id"]
             .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| format!("spotify:{position}"));
+            .map_or_else(|| format!("spotify:{position}"), str::to_owned);
         let occurrence = occurrences.entry(source.clone()).or_default();
         let entry_id = format!("{source}#{occurrence}");
         *occurrence = occurrence.saturating_add(1);
@@ -214,15 +213,16 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn organize_again_imports_saved_audio() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn organize_again_imports_saved_audio() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("track.flac");
-        fs::copy(fixture(), &audio)?;
-        let config = library_config(directory.path())?;
+        fs::copy(fixture(), &audio).unwrap();
+        let config = library_config(directory.path()).unwrap();
         let settings = settings(
             directory.path(),
             &json!({"output":directory.path(),"config":config,"interactive":true,"quality_policy":"off"}),
-        )?;
+        )
+        .unwrap();
         let mut item = WatchItem::new(1, "Warhaus - Love's a Stranger", SourceKind::Spotify);
         item.set_path(Stage::Download, Some(audio));
         item.track = Some(json!({
@@ -231,11 +231,13 @@ mod tests {
         }));
         let result = with_adapter(&settings, |adapter, cancelled| {
             of(SourceKind::Spotify).process(adapter, &item, ItemAction::OrganizeAgain, cancelled)
-        })?;
+        })
+        .unwrap();
         assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
-        let imported =
-            muzik_library::Library::open_read_only(&directory.path().join("library.db"))?
-                .items()?;
+        let imported = muzik_library::Library::open_read_only(&directory.path().join("library.db"))
+            .unwrap()
+            .items()
+            .unwrap();
         assert_eq!(imported.len(), 1);
         let text = |name: &str| match imported[0].field(name) {
             Some(muzik_library::SqlValue::Text(text)) => text.clone(),
@@ -244,15 +246,15 @@ mod tests {
         assert_eq!(text("album"), "Warhaus");
         assert_eq!(text("title"), "Love's a Stranger");
         assert_eq!(text("albumartist"), "Warhaus");
-        Ok(())
     }
 
     #[test]
-    fn repeated_tracks_keep_separate_state_keys() -> Result<(), Box<dyn std::error::Error>> {
+    fn repeated_tracks_keep_separate_state_keys() {
         let loaded = items(&json!({"title":"Album","entries":[
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"},
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"}
-        ]}))?;
+        ]}))
+        .unwrap();
         assert_eq!(
             loaded.items[0].entry_id.as_deref(),
             Some("spotify:track:t1#0")
@@ -262,6 +264,5 @@ mod tests {
             Some("spotify:track:t1#1")
         );
         assert_eq!(loaded.items[0].title, "Alex - One");
-        Ok(())
     }
 }

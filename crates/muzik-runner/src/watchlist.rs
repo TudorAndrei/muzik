@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub fn sync(
+pub(crate) fn sync(
     settings: &Settings,
     playlist_id: Option<&str>,
     cancelled: &AtomicBool,
@@ -54,11 +54,13 @@ pub fn sync(
     Ok(synced.pending)
 }
 
+/// # Errors
+/// Returns an error when the watchlist sources cannot be read or saved.
 pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> crate::Result<bool> {
     sources::ensure(&Repository::open(paths), paths)
 }
 
-pub fn action(
+pub(crate) fn action(
     settings: &Settings,
     params: &Value,
     cancelled: &AtomicBool,

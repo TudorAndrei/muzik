@@ -17,7 +17,7 @@ mod bandcamp;
 mod spotify;
 mod youtube;
 
-pub(crate) trait Source {
+pub trait Source {
     fn load(
         &self,
         adapter: &mut Adapter<'_, '_>,
@@ -33,7 +33,7 @@ pub(crate) trait Source {
     ) -> Result<WatchItem, JobError>;
 }
 
-pub(crate) fn of(kind: SourceKind) -> &'static dyn Source {
+pub fn of(kind: SourceKind) -> &'static dyn Source {
     match kind {
         SourceKind::Youtube => &youtube::Youtube,
         SourceKind::Spotify => &spotify::Spotify,
@@ -41,7 +41,7 @@ pub(crate) fn of(kind: SourceKind) -> &'static dyn Source {
     }
 }
 
-pub(crate) fn ensure(repository: &Repository, paths: &Paths) -> crate::Result<bool> {
+pub fn ensure(repository: &Repository, paths: &Paths) -> crate::Result<bool> {
     bandcamp::ensure(repository, paths)
 }
 
@@ -137,7 +137,7 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
 }
 
 #[cfg(test)]
-pub(crate) mod testing {
+pub mod testing {
     use crate::settings::Settings;
     use crate::watchlist::{Adapter, Prepared};
     use muzik_core::paths::Paths;
@@ -147,7 +147,7 @@ pub(crate) mod testing {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::AtomicBool;
 
-    pub(crate) fn library_config(directory: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    pub fn library_config(directory: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let config = directory.join("config.yaml");
         std::fs::write(
             &config,
@@ -161,19 +161,19 @@ pub(crate) mod testing {
         Ok(config)
     }
 
-    pub(crate) fn fixture() -> PathBuf {
+    pub fn fixture() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../crates/muzik-tags/tests/fixtures/blank.flac")
     }
 
-    pub(crate) fn settings(
+    pub fn settings(
         directory: &Path,
         params: &Value,
     ) -> Result<Settings, Box<dyn std::error::Error>> {
         Ok(Settings::parse(&Paths::under(directory), params)?)
     }
 
-    pub(crate) fn with_adapter<T>(
+    pub fn with_adapter<T>(
         settings: &Settings,
         work: impl FnOnce(&mut Adapter<'_, '_>, &AtomicBool) -> T,
     ) -> T {
