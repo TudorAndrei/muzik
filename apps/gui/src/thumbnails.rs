@@ -16,10 +16,10 @@ pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path
                 .collect();
             ids.iter()
                 .map(|id| {
-                    let result = match urls.get(id.as_str()) {
-                        None => Err("The item is no longer in the watchlist.".to_owned()),
-                        Some(url) => cache_item(id, *url, cache_dir).map(Some),
-                    };
+                    let result = urls.get(id.as_str()).map_or_else(
+                        || Err("The item is no longer in the watchlist.".to_owned()),
+                        |url| cache_item(id, *url, cache_dir).map(Some),
+                    );
                     update(id, result)
                 })
                 .collect::<Vec<_>>()
@@ -93,21 +93,25 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn reads_an_existing_image_from_the_saved_watchlist() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
+    fn reads_an_existing_image_from_the_saved_watchlist() {
+        let dir = tempfile::tempdir().unwrap();
         let watchlist = Repository::new(dir.path().join("muzik.db"));
         let cache = dir.path().join("cache");
-        fs::create_dir(&cache)?;
-        fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"saved image")?;
-        watchlist.save(&muzik_store::watchlist::Watchlist::from_value(json!({
-            "version": 3,
-            "playlists": [{
-                "playlist_id": "PL1",
-                "url": "https://www.youtube.com/playlist?list=PL1",
-                "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk", "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/default.jpg"}]
-            }]
-        }))?)?;
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"saved image").unwrap();
+        watchlist
+            .save(
+                &muzik_store::watchlist::Watchlist::from_value(json!({
+                    "version": 3,
+                    "playlists": [{
+                        "playlist_id": "PL1",
+                        "url": "https://www.youtube.com/playlist?list=PL1",
+                        "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk", "thumbnail_url": "https://i.ytimg.com/vi/abcdefghijk/default.jpg"}]
+                    }]
+                }))
+                .unwrap(),
+            )
+            .unwrap();
         let result = cache_requested(&["abcdefghijk".into()], &watchlist, &cache);
         assert_eq!(result["thumbnails"].as_array().map(Vec::len), Some(1));
         assert_eq!(
@@ -115,6 +119,5 @@ mod tests {
             json!(cache.join("yt_thumbnail_abcdefghijk.jpg"))
         );
         assert!(result["thumbnails"][0]["error"].is_null());
-        Ok(())
     }
 }

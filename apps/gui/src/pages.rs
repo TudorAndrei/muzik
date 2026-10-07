@@ -5,7 +5,7 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 
 impl Muzik {
-    pub(crate) fn library(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn library(&self, cx: &Context<Self>) -> AnyElement {
         let scanning = self.reading(Read::Library);
         let items = self
             .library
@@ -105,7 +105,7 @@ impl Muzik {
         page_scroll(page)
     }
 
-    pub(crate) fn services_section(main: WeakEntity<Muzik>, cx: &App) -> AnyElement {
+    pub(crate) fn services_section(main: WeakEntity<Self>, cx: &App) -> AnyElement {
         let Some(main_view) = main.upgrade() else {
             return div().into_any_element();
         };
@@ -159,57 +159,14 @@ impl Muzik {
                 ))
                 .into_any_element();
         }
-        let theme = cx.theme();
         let mut rows = div().v_flex();
         for (index, service) in services.iter().enumerate() {
-            let (word, color) = match service["available"].as_bool() {
-                Some(true) => ("Available", theme.muted_foreground),
-                Some(false) if service["optional"] == true => ("Optional", theme.warning),
-                Some(false) => ("Unavailable", theme.danger),
-                None => ("Not set up", theme.muted_foreground),
-            };
-            let dot = match service["available"].as_bool() {
-                Some(true) => theme.success,
-                Some(false) => color,
-                None => theme.border,
-            };
-            rows = rows.child(
-                div()
-                    .id(("service", index))
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .py_2()
-                    .when(index > 0, |row| row.border_t_1().border_color(theme.border))
-                    .child(
-                        div()
-                            .w(px(110.))
-                            .flex_none()
-                            .text_sm()
-                            .font_semibold()
-                            .child(service["name"].as_str().unwrap_or("Service").to_string()),
-                    )
-                    .child(
-                        style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
-                            .flex_1()
-                            .min_w_0()
-                            .truncate(),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_none()
-                            .items_center()
-                            .gap_1p5()
-                            .child(div().size(px(6.)).rounded_full().bg(dot))
-                            .child(div().text_xs().text_color(color).child(word)),
-                    ),
-            );
+            rows = rows.child(service_row(index, service, cx));
         }
         section.child(rows).into_any_element()
     }
 
-    pub(crate) fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn spotify(&self, cx: &Context<Self>) -> AnyElement {
         let saved_ids: HashSet<&str> = self
             .watchlist
             .get("playlists")
@@ -218,21 +175,69 @@ impl Muzik {
             .flatten()
             .filter_map(|playlist| playlist["playlist_id"].as_str())
             .collect();
-        let liked_saved = saved_ids.contains("spotify:liked");
         let connected = self.spotify.get("connected").and_then(Value::as_bool) == Some(true);
         let has_client_id = self
             .spotify
             .get("client_id")
             .and_then(Value::as_str)
             .is_some_and(|id| !id.trim().is_empty());
+        let mut page = page_frame()
+            .child(style::page_title("Spotify"))
+            .child(self.spotify_application(cx));
+        if let Some(error) = self.spotify.get("error").and_then(Value::as_str) {
+            page = page.child(Alert::error("spotify-error", error.to_string()));
+        }
+        if self.reading(Read::SpotifyStatus) {
+            page = page.child(empty_state(
+                "Checking account",
+                "Reading the Spotify connection.",
+                true,
+            ));
+        } else if connected {
+            page = page.child(self.spotify_account(saved_ids.contains("spotify:liked"), cx));
+        } else if has_client_id {
+            page = page.child(self.spotify_connect(cx));
+        } else {
+            page = page.child(style::meta("Save a client ID to connect your account.", cx));
+        }
+        if !connected {
+            return page_scroll(page);
+        }
+        let playlists: Vec<&Value> = self
+            .spotify
+            .get("playlists")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|playlist| playlist["uri"] != "spotify:liked")
+            .collect();
+        if self.reading(Read::SpotifyPlaylists) {
+            return page_scroll(page.child(empty_state(
+                "Loading playlists",
+                "Reading your Spotify playlists.",
+                true,
+            )));
+        }
+        if playlists.is_empty() {
+            return page_scroll(page.child(empty_state(
+                "No playlists",
+                "No Spotify playlists were found for this account.",
+                false,
+            )));
+        }
+        page_scroll(
+            page.child(style::section_title("Playlists"))
+                .child(spotify_playlists_table(&playlists, &saved_ids, cx)),
+        )
+    }
+
+    fn spotify_application(&self, cx: &Context<Self>) -> GroupBox {
         let redirect = self
             .spotify
             .get("redirect_uri")
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let checking = self.reading(Read::SpotifyStatus);
-        let loading_playlists = self.reading(Read::SpotifyPlaylists);
         let mut redirect_row = div()
             .flex()
             .items_center()
@@ -245,7 +250,7 @@ impl Muzik {
                     .tooltip("Copy redirect URI"),
             );
         }
-        let application = GroupBox::new()
+        GroupBox::new()
             .id("spotify-application")
             .title("YOUR SPOTIFY APPLICATION")
             .outline()
@@ -298,181 +303,191 @@ impl Muzik {
                         .icon(IconName::ExternalLink)
                         .label("Open Spotify dashboard")
                         .on_click(cx.listener(|_, _, _, cx| {
-                            cx.open_url("https://developer.spotify.com/dashboard")
+                            cx.open_url("https://developer.spotify.com/dashboard");
                         })),
                 ),
-            );
-        let mut page = page_frame()
-            .child(style::page_title("Spotify"))
-            .child(application);
-        if let Some(error) = self.spotify.get("error").and_then(Value::as_str) {
-            page = page.child(Alert::error("spotify-error", error.to_string()));
-        }
-        if checking {
-            page = page.child(empty_state(
-                "Checking account",
-                "Reading the Spotify connection.",
-                true,
-            ));
-        } else if connected {
-            page = page.child(
-                GroupBox::new()
-                    .id("spotify-account")
-                    .title("CONNECTED ACCOUNT")
-                    .outline()
-                    .child(
-                        DescriptionList::horizontal()
-                            .columns(1)
-                            .label_width(px(120.))
-                            .item(
-                                "Account",
-                                self.spotify
-                                    .get("account_name")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("Spotify account")
-                                    .to_string(),
-                                1,
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .child(
-                                Button::new("spotify-liked")
-                                    .primary()
-                                    .label(if liked_saved {
-                                        "Liked Songs saved"
-                                    } else {
-                                        "Add Liked Songs to watchlist"
-                                    })
-                                    .disabled(liked_saved || self.reading(Read::Watchlist))
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.add_source("liked".into(), cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("spotify-reload")
-                                    .ghost()
-                                    .icon(IconName::RefreshCw)
-                                    .label("Reload playlists")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.spotify_playlists(cx);
-                                        cx.notify();
-                                    })),
-                            )
-                            .child(
-                                Button::new("spotify-disconnect")
-                                    .ghost()
-                                    .label("Disconnect")
-                                    .on_click(cx.listener(|view, _, _, cx| {
-                                        view.spotify_logout(cx);
-                                        cx.notify();
-                                    })),
-                            ),
+            )
+    }
+
+    fn spotify_account(&self, liked_saved: bool, cx: &Context<Self>) -> GroupBox {
+        GroupBox::new()
+            .id("spotify-account")
+            .title("CONNECTED ACCOUNT")
+            .outline()
+            .child(
+                DescriptionList::horizontal()
+                    .columns(1)
+                    .label_width(px(120.))
+                    .item(
+                        "Account",
+                        self.spotify
+                            .get("account_name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("Spotify account")
+                            .to_string(),
+                        1,
                     ),
-            );
-        } else if has_client_id {
-            page = page.child(
+            )
+            .child(
                 div()
-                    .v_flex()
+                    .flex()
                     .gap_2()
                     .child(
-                        div().flex().child(
-                            Button::new("spotify-connect")
-                                .primary()
-                                .label("Connect to Spotify")
-                                .disabled(self.has_run(RunKind::SpotifyLogin))
-                                .on_click(cx.listener(|view, _, _, cx| {
-                                    view.spotify_login(cx);
-                                })),
-                        ),
+                        Button::new("spotify-liked")
+                            .primary()
+                            .label(if liked_saved {
+                                "Liked Songs saved"
+                            } else {
+                                "Add Liked Songs to watchlist"
+                            })
+                            .disabled(liked_saved || self.reading(Read::Watchlist))
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.add_source("liked".into(), cx);
+                                cx.notify();
+                            })),
                     )
-                    .child(style::meta(
-                        "muzik opens your browser. Approve access, then return here.",
-                        cx,
-                    )),
-            );
-        } else {
-            page = page.child(style::meta("Save a client ID to connect your account.", cx));
-        }
-        if !connected {
-            return page_scroll(page);
-        }
-        let playlists: Vec<&Value> = self
-            .spotify
-            .get("playlists")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|playlist| playlist["uri"] != "spotify:liked")
-            .collect();
-        if loading_playlists {
-            return page_scroll(page.child(empty_state(
-                "Loading playlists",
-                "Reading your Spotify playlists.",
-                true,
-            )));
-        }
-        if playlists.is_empty() {
-            return page_scroll(page.child(empty_state(
-                "No playlists",
-                "No Spotify playlists were found for this account.",
-                false,
-            )));
-        }
-        let mut body = TableBody::new();
-        for (index, playlist) in playlists.into_iter().enumerate() {
-            let uri = playlist["uri"].as_str().unwrap_or("").to_string();
-            let saved = saved_ids.contains(uri.as_str());
-            body =
-                body.child(
-                    TableRow::new()
-                        .child(
-                            TableCell::new().child(div().min_w_0().truncate().child(
-                                playlist["name"].as_str().unwrap_or("Playlist").to_string(),
-                            )),
-                        )
-                        .child(TableCell::new().child(style::meta(
-                            playlist["owner"].as_str().unwrap_or("Spotify").to_string(),
-                            cx,
-                        )))
-                        .child(TableCell::new().text_right().child(style::mono(
-                            playlist["total"].as_u64().unwrap_or(0).to_string(),
-                            cx,
-                        )))
-                        .child(
-                            TableCell::new().text_right().child(
-                                Button::new(("spotify-add", index))
-                                    .small()
-                                    .label(if saved { "Saved" } else { "Add to watchlist" })
-                                    .disabled(saved)
-                                    .on_click(cx.listener(move |view, _, _, cx| {
-                                        view.add_source(uri.clone(), cx);
-                                        cx.notify();
-                                    })),
-                            ),
-                        ),
-                );
-        }
-        page_scroll(
-            page.child(style::section_title("Playlists")).child(
-                Table::new()
-                    .accessibility_label("Spotify playlists")
                     .child(
-                        TableHeader::new().child(
-                            TableRow::new()
-                                .child(TableHead::new().child("Name"))
-                                .child(TableHead::new().child("Owner"))
-                                .child(TableHead::new().text_right().child("Tracks"))
-                                .child(TableHead::new()),
-                        ),
+                        Button::new("spotify-reload")
+                            .ghost()
+                            .icon(IconName::RefreshCw)
+                            .label("Reload playlists")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.spotify_playlists(cx);
+                                cx.notify();
+                            })),
                     )
-                    .child(body),
+                    .child(
+                        Button::new("spotify-disconnect")
+                            .ghost()
+                            .label("Disconnect")
+                            .on_click(cx.listener(|view, _, _, cx| {
+                                view.spotify_logout(cx);
+                                cx.notify();
+                            })),
+                    ),
+            )
+    }
+
+    fn spotify_connect(&self, cx: &Context<Self>) -> Div {
+        div()
+            .v_flex()
+            .gap_2()
+            .child(
+                div().flex().child(
+                    Button::new("spotify-connect")
+                        .primary()
+                        .label("Connect to Spotify")
+                        .disabled(self.has_run(RunKind::SpotifyLogin))
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.spotify_login(cx);
+                        })),
+                ),
+            )
+            .child(style::meta(
+                "muzik opens your browser. Approve access, then return here.",
+                cx,
+            ))
+    }
+}
+
+fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
+    let theme = cx.theme();
+    let (word, color) = match service["available"].as_bool() {
+        Some(true) => ("Available", theme.muted_foreground),
+        Some(false) if service["optional"] == true => ("Optional", theme.warning),
+        Some(false) => ("Unavailable", theme.danger),
+        None => ("Not set up", theme.muted_foreground),
+    };
+    let dot = match service["available"].as_bool() {
+        Some(true) => theme.success,
+        Some(false) => color,
+        None => theme.border,
+    };
+    div()
+        .id(("service", index))
+        .flex()
+        .items_center()
+        .gap_3()
+        .py_2()
+        .when(index > 0, |row| row.border_t_1().border_color(theme.border))
+        .child(
+            div()
+                .w(px(110.))
+                .flex_none()
+                .text_sm()
+                .font_semibold()
+                .child(service["name"].as_str().unwrap_or("Service").to_string()),
+        )
+        .child(
+            style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
+                .flex_1()
+                .min_w_0()
+                .truncate(),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .gap_1p5()
+                .child(div().size(px(6.)).rounded_full().bg(dot))
+                .child(div().text_xs().text_color(color).child(word)),
+        )
+}
+
+fn spotify_playlists_table(
+    playlists: &[&Value],
+    saved_ids: &HashSet<&str>,
+    cx: &Context<Muzik>,
+) -> Table {
+    let mut body = TableBody::new();
+    for (index, playlist) in playlists.iter().enumerate() {
+        let uri = playlist["uri"].as_str().unwrap_or("").to_string();
+        let saved = saved_ids.contains(uri.as_str());
+        body = body.child(
+            TableRow::new()
+                .child(
+                    TableCell::new().child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .child(playlist["name"].as_str().unwrap_or("Playlist").to_string()),
+                    ),
+                )
+                .child(TableCell::new().child(style::meta(
+                    playlist["owner"].as_str().unwrap_or("Spotify").to_string(),
+                    cx,
+                )))
+                .child(TableCell::new().text_right().child(style::mono(
+                    playlist["total"].as_u64().unwrap_or(0).to_string(),
+                    cx,
+                )))
+                .child(
+                    TableCell::new().text_right().child(
+                        Button::new(("spotify-add", index))
+                            .small()
+                            .label(if saved { "Saved" } else { "Add to watchlist" })
+                            .disabled(saved)
+                            .on_click(cx.listener(move |view, _, _, cx| {
+                                view.add_source(uri.clone(), cx);
+                                cx.notify();
+                            })),
+                    ),
+                ),
+        );
+    }
+    Table::new()
+        .accessibility_label("Spotify playlists")
+        .child(
+            TableHeader::new().child(
+                TableRow::new()
+                    .child(TableHead::new().child("Name"))
+                    .child(TableHead::new().child("Owner"))
+                    .child(TableHead::new().text_right().child("Tracks"))
+                    .child(TableHead::new()),
             ),
         )
-    }
+        .child(body)
 }
 
 fn page_frame() -> Div {

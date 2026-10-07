@@ -9,7 +9,7 @@ mod watchlist_view;
 
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
-use gpui_kit::component::button::*;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputState};
@@ -20,9 +20,15 @@ use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
-use gpui_kit::component::*;
-use gpui_kit::prelude::FluentBuilder as _;
-use gpui_kit::*;
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+};
+use gpui_kit::prelude::*;
+use gpui_kit::{
+    AnyElement, AnyWindowHandle, App, Axis, Div, Entity, Image, KeyBinding, Menu, MenuItem,
+    ObjectFit, PathPromptOptions, Pixels, SharedString, Stateful, Task, WeakEntity, Window,
+    WindowOptions, actions, div, img, px,
+};
 use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, JobEvent, MetadataSource,
@@ -42,7 +48,13 @@ use std::rc::Rc;
 use std::sync::Arc;
 use strum_macros::{Display, EnumString};
 
-actions!(muzik, [Quit]);
+actions!(
+    muzik,
+    [
+        #[derive(Eq)]
+        Quit
+    ]
+);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -86,25 +98,29 @@ impl ActivityProgress {
 
 #[expect(
     clippy::as_conversions,
+    clippy::cast_precision_loss,
     reason = "std has no From<u64> for f64; progress counts tolerate rounding"
 )]
-fn u64_to_f64(value: u64) -> f64 {
+const fn u64_to_f64(value: u64) -> f64 {
     value as f64
 }
 
 #[expect(
     clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
     reason = "std has no TryFrom<f64> for integers; `as` saturates and maps NaN to zero"
 )]
-fn f64_to_u64(value: f64) -> u64 {
+const fn f64_to_u64(value: f64) -> u64 {
     value as u64
 }
 
 #[expect(
     clippy::as_conversions,
+    clippy::cast_possible_truncation,
     reason = "std has no From<f64> for f32; display values tolerate rounding"
 )]
-fn f64_to_f32(value: f64) -> f32 {
+const fn f64_to_f32(value: f64) -> f32 {
     value as f32
 }
 
@@ -146,7 +162,7 @@ impl RunKind {
             .unwrap_or_default()
     }
 
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Workflow => "Workflow",
             Self::Refresh => "Watchlist check",
@@ -179,10 +195,9 @@ impl Run {
     }
 
     fn progress_text(&self) -> String {
-        match self.progress.total {
-            Some(total) => format!("{:.0} / {:.0}", self.progress.completed, total),
-            None => String::new(),
-        }
+        self.progress.total.map_or_else(String::new, |total| {
+            format!("{:.0} / {:.0}", self.progress.completed, total)
+        })
     }
 }
 
@@ -205,7 +220,7 @@ fn filter_label(filter: usize) -> &'static str {
     filter_summary(filter).map_or("All", Into::into)
 }
 
-fn action_label(action: ItemAction) -> &'static str {
+const fn action_label(action: ItemAction) -> &'static str {
     match action {
         ItemAction::Run => "Run",
         ItemAction::Retry => "Retry",
@@ -375,7 +390,7 @@ impl Muzik {
             let main = cx.entity();
             let status = self.config_status.clone();
             self.config_view =
-                Some(cx.new(|cx| ConfigView::new(main, defaults, status, window, cx)));
+                Some(cx.new(|cx| ConfigView::new(&main, defaults, status, window, cx)));
             self.load_accounts(cx);
         }
         self.page = Page::Settings;
@@ -446,23 +461,20 @@ impl Muzik {
                 == Some(JobStatus::Queued);
             let kind = RunKind::parse(&job["kind"]);
             let title = job["title"].as_str().unwrap_or("Job");
-            match self.runs.iter_mut().find(|run| run.id == id) {
-                Some(run) => {
-                    run.kind = kind;
-                    run.title = title.into();
-                    if !queued && run.queued {
-                        run.queued = false;
-                        run.status = "Starting".into();
-                    }
+            if let Some(run) = self.runs.iter_mut().find(|run| run.id == id) {
+                run.kind = kind;
+                run.title = title.into();
+                if !queued && run.queued {
+                    run.queued = false;
+                    run.status = "Starting".into();
                 }
-                None => {
-                    let mut run = Run::new(id, kind, title);
-                    if !queued {
-                        run.queued = false;
-                        run.status = "Starting".into();
-                    }
-                    self.runs.push(run);
+            } else {
+                let mut run = Run::new(id, kind, title);
+                if !queued {
+                    run.queued = false;
+                    run.status = "Starting".into();
                 }
+                self.runs.push(run);
             }
         }
         self.runs.sort_by_key(|run| run.queued);
@@ -480,7 +492,7 @@ impl Muzik {
                 };
                 let progress = &mut run.progress;
                 progress.task = Some(*task);
-                progress.description = description.clone();
+                progress.description.clone_from(description);
                 progress.completed = 0.;
                 progress.total = total.filter(|total| *total > 0).map(u64_to_f64);
                 run.status = progress.description.clone();
@@ -579,12 +591,7 @@ impl Muzik {
         }
     }
 
-    fn request_action(
-        &mut self,
-        action: PendingAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn request_action(action: PendingAction, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         window.open_alert_dialog(cx, move |dialog, _, _| {
             let view = view.clone();
@@ -608,7 +615,7 @@ impl Muzik {
         });
     }
 
-    fn pick_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn pick_source(window: &Window, cx: &Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -640,76 +647,72 @@ impl Muzik {
         cx.notify();
     }
 
-    fn app_event(&mut self, event: AppEvent, window: &mut Window, _cx: &mut Context<Self>) {
-        {
-            {
-                match event {
-                    AppEvent::WatchlistUpdated(watchlist) => {
-                        self.replace_watchlist(watchlist, window, _cx);
-                        self.cache_visible_thumbnails(_cx);
-                        self.status = "Watchlist updated".into();
-                    }
-                    AppEvent::WatchlistError(message) => self.error = Some(message),
-                    AppEvent::WatchlistSaved => self.reload_watchlist = true,
-                    AppEvent::JobsUpdated(data) => {
-                        self.apply_jobs(&data);
-                        self.sync_watch_table(_cx);
-                    }
-                    AppEvent::QueuesUpdated(data) => self.gates = data,
-                    AppEvent::RemoteRunner(message) => self.status = message,
-                    AppEvent::JobStarted {
-                        job_id,
-                        title,
-                        kind,
-                    } => {
-                        if let Some(run) = self.run_mut(&job_id) {
-                            run.kind = kind.into();
-                            run.title = title;
-                            run.status = "Starting".into();
-                        }
-                    }
-                    AppEvent::JobEvent { job_id, event, .. } => {
-                        self.record_job_event(&job_id, &event);
-                        if self.logs.len() > 300 {
-                            self.logs.drain(..100);
-                        }
-                    }
-                    AppEvent::DecisionRequest {
-                        job_id,
-                        decision_id,
-                        kind,
-                        payload,
-                    } => {
-                        let data = json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload});
-                        self.set_status(&job_id, "Decision needed");
-                        self.requests.push(data.clone());
-                        if self.decision.is_none() {
-                            self.open_decision(data, window, _cx);
-                        }
-                    }
-                    AppEvent::JobCompleted { job_id, .. } => {
-                        self.job_finished(job_id, Ending::Completed, None, window, _cx);
-                    }
-                    AppEvent::JobCancelled { job_id } => {
-                        self.job_finished(job_id, Ending::Cancelled, None, window, _cx);
-                    }
-                    AppEvent::JobFailed { job_id, message } => {
-                        self.job_finished(job_id, Ending::Failed, Some(message), window, _cx);
-                    }
+    fn app_event(&mut self, event: AppEvent, window: &mut Window, cx: &mut Context<Self>) {
+        match event {
+            AppEvent::WatchlistUpdated(watchlist) => {
+                self.replace_watchlist(watchlist, window, cx);
+                self.cache_visible_thumbnails(cx);
+                self.status = "Watchlist updated".into();
+            }
+            AppEvent::WatchlistError(message) => self.error = Some(message),
+            AppEvent::WatchlistSaved => self.reload_watchlist = true,
+            AppEvent::JobsUpdated(data) => {
+                self.apply_jobs(&data);
+                self.sync_watch_table(cx);
+            }
+            AppEvent::QueuesUpdated(data) => self.gates = data,
+            AppEvent::RemoteRunner(message) => self.status = message,
+            AppEvent::JobStarted {
+                job_id,
+                title,
+                kind,
+            } => {
+                if let Some(run) = self.run_mut(&job_id) {
+                    run.kind = kind.into();
+                    run.title = title;
+                    run.status = "Starting".into();
                 }
+            }
+            AppEvent::JobEvent { job_id, event, .. } => {
+                self.record_job_event(&job_id, &event);
+                if self.logs.len() > 300 {
+                    self.logs.drain(..100);
+                }
+            }
+            AppEvent::DecisionRequest {
+                job_id,
+                decision_id,
+                kind,
+                payload,
+            } => {
+                let data = json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload});
+                self.set_status(&job_id, "Decision needed");
+                self.requests.push(data.clone());
+                if self.decision.is_none() {
+                    self.open_decision(data, window, cx);
+                }
+            }
+            AppEvent::JobCompleted { job_id, .. } => {
+                self.job_finished(&job_id, Ending::Completed, None, window, cx);
+            }
+            AppEvent::JobCancelled { job_id } => {
+                self.job_finished(&job_id, Ending::Cancelled, None, window, cx);
+            }
+            AppEvent::JobFailed { job_id, message } => {
+                self.job_finished(&job_id, Ending::Failed, Some(message), window, cx);
             }
         }
     }
 
     fn job_finished(
         &mut self,
-        id: String,
+        id: &str,
         ending: Ending,
         failure: Option<String>,
         window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
-        self.finished_runs.insert(id.clone());
+        self.finished_runs.insert(id.to_owned());
         let run = self
             .runs
             .iter()
@@ -719,17 +722,16 @@ impl Muzik {
         let title = run
             .as_ref()
             .map_or_else(|| "Job".to_owned(), |run| run.title.clone());
-        self.requests
-            .retain(|request| request["job_id"] != id.as_str());
+        self.requests.retain(|request| request["job_id"] != id);
         if self
             .decision
             .as_ref()
-            .is_some_and(|decision| decision["job_id"] == id.as_str())
+            .is_some_and(|decision| decision["job_id"] == id)
         {
             self.decision = None;
             self.chapter_rows.clear();
             if let Some(next) = self.requests.first().cloned() {
-                self.open_decision(next, window, _cx);
+                self.open_decision(next, window, cx);
             }
         }
         let job = job_label(kind, &title);
@@ -746,12 +748,12 @@ impl Muzik {
             (Ending::Completed, _) => None,
         };
         if let Some(note) = note {
-            window.push_notification(note, _cx);
+            window.push_notification(note, cx);
         }
         if kind == RunKind::SpotifyLogin {
-            self.spotify_status(_cx);
+            self.spotify_status(cx);
             if ending == Ending::Completed {
-                self.spotify_playlists(_cx);
+                self.spotify_playlists(cx);
             }
         } else {
             self.reload_watchlist = true;
@@ -792,14 +794,14 @@ impl Muzik {
             .and_then(|playlist| playlist["playlist_id"].as_str());
         if old_id.as_deref() != selected_id || old_title != name {
             self.playlist_name.update(cx, |state, cx| {
-                state.set_value(name.to_string(), window, cx)
+                state.set_value(name.to_string(), window, cx);
             });
         }
         self.watchlist = incoming;
         self.sync_watch_table(cx);
     }
 
-    fn sync_watch_table(&mut self, cx: &mut Context<Self>) {
+    fn sync_watch_table(&self, cx: &mut Context<Self>) {
         let rows = self
             .watchlist
             .get("playlists")
@@ -944,7 +946,7 @@ impl Muzik {
         self.reply(Value::Array(chapters), window, cx);
     }
 
-    fn header(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn header(&self, cx: &Context<Self>) -> AnyElement {
         let selected = PAGES
             .iter()
             .position(|(page, _)| *page == self.page)
@@ -980,7 +982,7 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn status_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn status_bar(&self, cx: &Context<Self>) -> AnyElement {
         let (text, color) = match &self.error {
             Some(error) => (error.clone(), cx.theme().danger),
             None if self.status.is_empty() => ("Ready".to_string(), cx.theme().muted_foreground),
@@ -1002,7 +1004,7 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn workflow(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn workflow(&self, cx: &Context<Self>) -> AnyElement {
         let source =
             div()
                 .v_flex()
@@ -1015,7 +1017,7 @@ impl Muzik {
                         .gap_2()
                         .child(div().flex_1().child(Input::new(&self.raw)))
                         .child(Button::new("pick-source").label("Choose…").on_click(
-                            cx.listener(|view, _, window, cx| view.pick_source(window, cx)),
+                            cx.listener(|_, _, window, cx| Self::pick_source(window, cx)),
                         )),
                 );
         let run = Button::new("run")
@@ -1094,10 +1096,11 @@ impl Muzik {
                 .collect();
             let waiting = lane["waiting"].as_array().map_or(0, Vec::len);
             let limit = lane["limit"].as_u64().unwrap_or(1);
-            let mut counts = format!("{}/{limit}", active.len());
-            if waiting > 0 {
-                counts.push_str(&format!(" · {waiting} waiting"));
-            }
+            let counts = if waiting > 0 {
+                format!("{}/{limit} · {waiting} waiting", active.len())
+            } else {
+                format!("{}/{limit}", active.len())
+            };
             lanes = lanes.child(
                 div()
                     .v_flex()
@@ -1119,7 +1122,7 @@ impl Muzik {
         lanes
     }
 
-    fn run_row(&self, index: usize, run: &Run, cx: &mut Context<Self>) -> AnyElement {
+    fn run_row(index: usize, run: &Run, cx: &Context<Self>) -> AnyElement {
         let id = run.id.clone();
         let label = job_label(run.kind, &run.title);
         let queued = run.queued;
@@ -1158,7 +1161,7 @@ impl Muzik {
                                     cx.notify();
                                     return;
                                 }
-                                view.request_action(
+                                Self::request_action(
                                     PendingAction {
                                         title: format!("Cancel {label}?"),
                                         description: "The job stops at a safe point. Finished files and saved state stay.",
@@ -1196,16 +1199,21 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn job_panel(&self, cx: &mut Context<Self>) -> AnyElement {
-        let running = self.runs.iter().filter(|run| !run.queued).count();
+    fn activity_summary(&self, running: usize) -> String {
         let queued = self.runs.len().saturating_sub(running);
-        let mut summary = format!("{running} running");
+        let mut parts = vec![format!("{running} running")];
         if queued > 0 {
-            summary.push_str(&format!(" · {queued} queued"));
+            parts.push(format!("{queued} queued"));
         }
         if !self.waiting.is_empty() {
-            summary.push_str(&format!(" · {} need you", self.waiting.len()));
+            parts.push(format!("{} need you", self.waiting.len()));
         }
+        parts.join(" · ")
+    }
+
+    fn job_panel(&self, cx: &Context<Self>) -> AnyElement {
+        let running = self.runs.iter().filter(|run| !run.queued).count();
+        let summary = self.activity_summary(running);
         let mut panel = div()
             .v_flex()
             .gap_4()
@@ -1227,105 +1235,61 @@ impl Muzik {
             )
             .when(self.gates.is_object(), |this| this.child(self.lanes(cx)));
         if let Some(decision) = &self.decision {
-            let kind = choices::kind(decision);
-            let mut review = div()
-                .id("decision")
-                .v_flex()
-                .gap_3()
-                .p_3()
-                .rounded_md()
-                .border_1()
-                .border_color(cx.theme().warning)
-                .bg(cx.theme().background)
-                .child(
-                    div()
-                        .v_flex()
-                        .gap_1()
-                        .child(style::overline("DECISION NEEDED", cx))
-                        .child(div().text_sm().font_semibold().child(choices::title(kind)))
-                        .when_some(decision["title"].as_str(), |this, title| {
-                            this.child(style::meta(short_text(title, 80), cx))
-                        }),
-                );
-            if let Some(note) = choices::note(decision) {
-                review = review.child(style::meta(note, cx));
-            }
-            if let Some(note) =
-                choices::agent_note(decision.pointer("/payload/agent").unwrap_or(&Value::Null))
-            {
-                review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
-            }
-            let suggested = choices::suggestion(decision);
-            let mut buttons = div().v_flex().gap_1p5();
-            for (index, option) in choices::choices(decision).into_iter().enumerate() {
-                let value = option.value.clone();
-                let reply =
-                    cx.listener(move |view, _, window, cx| view.reply(value.clone(), window, cx));
-                let highlight = suggested == Some(index);
-                if option.score.is_none() && option.meta.is_empty() {
-                    let button = Button::new(("decision", index))
-                        .label(option.label)
-                        .w_full()
-                        .on_click(reply);
-                    buttons = buttons.child(if highlight { button.primary() } else { button });
-                } else {
-                    buttons =
-                        buttons.child(decision_row(index, &option, highlight, cx).on_click(reply));
-                }
-            }
-            review = review.child(buttons);
-            let details = choices::details(decision);
-            if !details.is_empty() {
-                let mut list = div()
+            panel = panel.child(self.decision_review(decision, cx));
+        }
+        if !self.waiting.is_empty() {
+            panel = panel.child(self.waiting_inbox(cx));
+        }
+        if !self.runs.is_empty() {
+            panel = panel.child(self.jobs_list(running, cx));
+        }
+        for (index, section) in self.activity_sections.iter().enumerate() {
+            panel = panel.child(activity_section_box(index, section, cx));
+        }
+        panel.child(self.recent_events(cx)).into_any_element()
+    }
+
+    fn decision_review(&self, decision: &Value, cx: &Context<Self>) -> Stateful<Div> {
+        let kind = choices::kind(decision);
+        let mut review = div()
+            .id("decision")
+            .v_flex()
+            .gap_3()
+            .p_3()
+            .rounded_md()
+            .border_1()
+            .border_color(cx.theme().warning)
+            .bg(cx.theme().background)
+            .child(
+                div()
                     .v_flex()
                     .gap_1()
-                    .max_h(px(160.))
-                    .overflow_y_scrollbar();
-                for detail in details.iter().take(6) {
-                    list = list.child(style::meta(short_detail(detail), cx));
-                }
-                if details.len() > 6 {
-                    list = list.child(style::meta(
-                        format!("{} more", details.len().saturating_sub(6)),
-                        cx,
-                    ));
-                }
-                review = review.child(
-                    div()
-                        .v_flex()
-                        .gap_1()
-                        .pt_2()
-                        .border_t_1()
-                        .border_color(cx.theme().border)
-                        .child(style::overline("DETAILS", cx))
-                        .child(list),
-                );
-            }
-            if kind == Some(DecisionKind::ChapterEdit) {
-                let mut rows = div().v_flex().gap_2().max_h(px(300.));
-                for (index, chapter) in self.chapter_rows.iter().enumerate() {
-                    rows = rows.child(
-                        div()
-                            .id(("chapter", index))
-                            .v_flex()
-                            .gap_1()
-                            .child(format!("Chapter {}", index.saturating_add(1)))
-                            .child(
-                                div()
-                                    .flex()
-                                    .gap_1()
-                                    .child(Input::new(&chapter.index))
-                                    .child(Input::new(&chapter.start))
-                                    .child(Input::new(&chapter.end)),
-                            )
-                            .child(Input::new(&chapter.title)),
-                    );
-                }
-                review = review
+                    .child(style::overline("DECISION NEEDED", cx))
+                    .child(div().text_sm().font_semibold().child(choices::title(kind)))
+                    .when_some(decision["title"].as_str(), |this, title| {
+                        this.child(style::meta(short_text(title, 80), cx))
+                    }),
+            );
+        if let Some(note) = choices::note(decision) {
+            review = review.child(style::meta(note, cx));
+        }
+        if let Some(note) =
+            choices::agent_note(decision.pointer("/payload/agent").unwrap_or(&Value::Null))
+        {
+            review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
+        }
+        review = review.child(decision_buttons(decision, cx));
+        let details = choices::details(decision);
+        if !details.is_empty() {
+            review = review.child(decision_details(&details, cx));
+        }
+        if kind == Some(DecisionKind::ChapterEdit) {
+            review =
+                review
                     .child(div().text_sm().child(
                         "Index, start seconds, end seconds, title. Leave the last end blank.",
                     ))
-                    .child(rows.overflow_y_scrollbar())
+                    .child(self.chapter_rows_view().overflow_y_scrollbar())
                     .child(
                         Button::new("apply-chapters")
                             .primary()
@@ -1334,120 +1298,107 @@ impl Muzik {
                                 cx.listener(|view, _, window, cx| view.submit_chapters(window, cx)),
                             ),
                     );
-            }
-            if !decision["queue_job"].is_null() {
-                review = review.child(
-                    div().flex().child(
-                        Button::new("decision-later")
-                            .ghost()
-                            .small()
-                            .label("Later")
-                            .on_click(cx.listener(|view, _, _, cx| {
-                                view.decision = None;
-                                view.chapter_rows.clear();
-                                cx.notify();
-                            })),
-                    ),
-                );
-            }
-            panel = panel.child(review);
         }
-        if !self.waiting.is_empty() {
-            let open = self
-                .decision
-                .as_ref()
-                .map_or(Value::Null, |decision| decision["queue_job"].clone());
-            let mut inbox = div().v_flex().gap_1p5().child(style::overline(
-                format!("NEEDS YOU ({})", self.waiting.len()),
-                cx,
-            ));
-            for (index, waiting) in self.waiting.iter().enumerate() {
-                let kind = choices::kind(waiting);
-                let highlighted = waiting["id"] == open;
-                let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
-                let job = waiting.clone();
-                inbox = inbox.child(
-                    div()
-                        .id(("waiting", index))
-                        .v_flex()
-                        .gap_0p5()
-                        .p_2()
-                        .rounded_md()
-                        .border_1()
-                        .border_color(if highlighted {
-                            cx.theme().warning
-                        } else {
-                            cx.theme().border
-                        })
-                        .bg(cx.theme().background)
-                        .cursor_pointer()
-                        .hover(|this| this.bg(cx.theme().accent))
-                        .child(div().text_sm().font_semibold().child(title))
-                        .child(style::meta(choices::title(kind), cx))
-                        .on_click(cx.listener(move |view, _, window, cx| {
-                            view.open_waiting(&job, window, cx)
+        if !decision["queue_job"].is_null() {
+            review = review.child(
+                div().flex().child(
+                    Button::new("decision-later")
+                        .ghost()
+                        .small()
+                        .label("Later")
+                        .on_click(cx.listener(|view, _, _, cx| {
+                            view.decision = None;
+                            view.chapter_rows.clear();
+                            cx.notify();
                         })),
-                );
-            }
-            panel = panel.child(inbox);
+                ),
+            );
         }
-        if !self.runs.is_empty() {
-            let mut list = div().v_flex().gap_1p5().child(style::overline("JOBS", cx));
-            let limit = running.saturating_add(5);
-            let shown = self
-                .runs
-                .iter()
-                .enumerate()
-                .filter(|(index, run)| !run.queued || *index < limit);
-            for (index, run) in shown {
-                list = list.child(self.run_row(index, run, cx));
-            }
-            let hidden = self.runs.len().saturating_sub(limit);
-            if hidden > 0 {
-                list = list.child(style::meta(format!("{hidden} more in the queue"), cx));
-            }
-            panel = panel.child(list);
-        }
-        for (index, section) in self.activity_sections.iter().enumerate() {
-            let mut summary = div().v_flex().gap_1().child(
+        review
+    }
+
+    fn chapter_rows_view(&self) -> Div {
+        let mut rows = div().v_flex().gap_2().max_h(px(300.));
+        for (index, chapter) in self.chapter_rows.iter().enumerate() {
+            rows = rows.child(
                 div()
-                    .text_sm()
-                    .font_semibold()
-                    .child(format!("{} ({})", section.title, section.count)),
-            );
-            if section.rows.is_empty() {
-                summary = summary.child(div().text_sm().child("No results"));
-            }
-            for (row_index, row) in section.rows.iter().enumerate() {
-                summary = summary.child(
-                    div()
-                        .id((
-                            "activity-row",
-                            index.saturating_mul(10).saturating_add(row_index),
-                        ))
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(row.clone()),
-                );
-            }
-            if section.count > section.rows.len() {
-                summary = summary.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(format!(
-                            "{} more",
-                            section.count.saturating_sub(section.rows.len())
-                        )),
-                );
-            }
-            panel = panel.child(
-                GroupBox::new()
-                    .id(("activity-section", index))
-                    .outline()
-                    .child(summary),
+                    .id(("chapter", index))
+                    .v_flex()
+                    .gap_1()
+                    .child(format!("Chapter {}", index.saturating_add(1)))
+                    .child(
+                        div()
+                            .flex()
+                            .gap_1()
+                            .child(Input::new(&chapter.index))
+                            .child(Input::new(&chapter.start))
+                            .child(Input::new(&chapter.end)),
+                    )
+                    .child(Input::new(&chapter.title)),
             );
         }
+        rows
+    }
+
+    fn waiting_inbox(&self, cx: &Context<Self>) -> Div {
+        let open = self
+            .decision
+            .as_ref()
+            .map_or(Value::Null, |decision| decision["queue_job"].clone());
+        let mut inbox = div().v_flex().gap_1p5().child(style::overline(
+            format!("NEEDS YOU ({})", self.waiting.len()),
+            cx,
+        ));
+        for (index, waiting) in self.waiting.iter().enumerate() {
+            let kind = choices::kind(waiting);
+            let highlighted = waiting["id"] == open;
+            let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
+            let job = waiting.clone();
+            inbox = inbox.child(
+                div()
+                    .id(("waiting", index))
+                    .v_flex()
+                    .gap_0p5()
+                    .p_2()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(if highlighted {
+                        cx.theme().warning
+                    } else {
+                        cx.theme().border
+                    })
+                    .bg(cx.theme().background)
+                    .cursor_pointer()
+                    .hover(|this| this.bg(cx.theme().accent))
+                    .child(div().text_sm().font_semibold().child(title))
+                    .child(style::meta(choices::title(kind), cx))
+                    .on_click(cx.listener(move |view, _, window, cx| {
+                        view.open_waiting(&job, window, cx);
+                    })),
+            );
+        }
+        inbox
+    }
+
+    fn jobs_list(&self, running: usize, cx: &Context<Self>) -> Div {
+        let mut list = div().v_flex().gap_1p5().child(style::overline("JOBS", cx));
+        let limit = running.saturating_add(5);
+        let shown = self
+            .runs
+            .iter()
+            .enumerate()
+            .filter(|(index, run)| !run.queued || *index < limit);
+        for (index, run) in shown {
+            list = list.child(Self::run_row(index, run, cx));
+        }
+        let hidden = self.runs.len().saturating_sub(limit);
+        if hidden > 0 {
+            list = list.child(style::meta(format!("{hidden} more in the queue"), cx));
+        }
+        list
+    }
+
+    fn recent_events(&self, cx: &App) -> Div {
         let mut log = div().v_flex().gap_1p5();
         if self.logs.is_empty() {
             log = log.child(style::meta("Job updates will appear here.", cx));
@@ -1465,19 +1416,99 @@ impl Muzik {
                     .child(line.clone()),
             );
         }
-        panel
-            .child(
-                div()
-                    .v_flex()
-                    .gap_2()
-                    .pt_3()
-                    .border_t_1()
-                    .border_color(cx.theme().sidebar_border)
-                    .child(style::overline("RECENT EVENTS", cx))
-                    .child(log),
-            )
-            .into_any_element()
+        div()
+            .v_flex()
+            .gap_2()
+            .pt_3()
+            .border_t_1()
+            .border_color(cx.theme().sidebar_border)
+            .child(style::overline("RECENT EVENTS", cx))
+            .child(log)
     }
+}
+
+fn decision_buttons(decision: &Value, cx: &Context<Muzik>) -> Div {
+    let suggested = choices::suggestion(decision);
+    let mut buttons = div().v_flex().gap_1p5();
+    for (index, option) in choices::choices(decision).into_iter().enumerate() {
+        let value = option.value.clone();
+        let reply = cx.listener(move |view, _, window, cx| view.reply(value.clone(), window, cx));
+        let highlight = suggested == Some(index);
+        if option.score.is_none() && option.meta.is_empty() {
+            let button = Button::new(("decision", index))
+                .label(option.label)
+                .w_full()
+                .on_click(reply);
+            buttons = buttons.child(if highlight { button.primary() } else { button });
+        } else {
+            buttons = buttons.child(decision_row(index, &option, highlight, cx).on_click(reply));
+        }
+    }
+    buttons
+}
+
+fn decision_details(details: &[String], cx: &App) -> Div {
+    let mut list = div()
+        .v_flex()
+        .gap_1()
+        .max_h(px(160.))
+        .overflow_y_scrollbar();
+    for detail in details.iter().take(6) {
+        list = list.child(style::meta(short_detail(detail), cx));
+    }
+    if details.len() > 6 {
+        list = list.child(style::meta(
+            format!("{} more", details.len().saturating_sub(6)),
+            cx,
+        ));
+    }
+    div()
+        .v_flex()
+        .gap_1()
+        .pt_2()
+        .border_t_1()
+        .border_color(cx.theme().border)
+        .child(style::overline("DETAILS", cx))
+        .child(list)
+}
+
+fn activity_section_box(index: usize, section: &ActivitySection, cx: &App) -> GroupBox {
+    let mut summary = div().v_flex().gap_1().child(
+        div()
+            .text_sm()
+            .font_semibold()
+            .child(format!("{} ({})", section.title, section.count)),
+    );
+    if section.rows.is_empty() {
+        summary = summary.child(div().text_sm().child("No results"));
+    }
+    for (row_index, row) in section.rows.iter().enumerate() {
+        summary = summary.child(
+            div()
+                .id((
+                    "activity-row",
+                    index.saturating_mul(10).saturating_add(row_index),
+                ))
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(row.clone()),
+        );
+    }
+    if section.count > section.rows.len() {
+        summary = summary.child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "{} more",
+                    section.count.saturating_sub(section.rows.len())
+                )),
+        );
+    }
+    GroupBox::new()
+        .id(("activity-section", index))
+        .outline()
+        .child(summary)
 }
 
 impl Render for Muzik {
@@ -1828,13 +1859,13 @@ mod tests {
             assert!(window.try_find("save-config").is_none());
         })
         .unwrap();
-        let params = main.read_with(cx, |view, cx| view.launcher_params(cx));
+        let params = main.read_with(cx, Muzik::launcher_params);
         assert_eq!(params["output"], "/tmp/downloads");
         assert_eq!(params["splits"], "/tmp/splits");
     }
 
     #[gpui_kit::test]
-    fn job_events_show_candidates_and_status(cx: &mut TestAppContext) {
+    fn job_events_show_candidates_and_status(cx: &TestAppContext) {
         let main = cx.update(|cx| {
             gpui_kit::init(cx);
             let (_, main) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
@@ -1926,7 +1957,7 @@ mod tests {
             total: Some(10.),
             ..ActivityProgress::default()
         };
-        assert_eq!(progress.percentage(), 100.);
+        assert!((progress.percentage() - 100.).abs() < f32::EPSILON);
     }
 
     #[test]
