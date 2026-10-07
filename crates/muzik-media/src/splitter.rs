@@ -71,6 +71,9 @@ struct Metadata {
 /// Every track uses audio stream copy. If one track fails, source files stay in
 /// place. A successful split removes the source and its download sidecars unless
 /// `keep_source` is true.
+///
+/// # Errors
+/// Returns an error when the source or chapters are not valid, the output folder cannot be used, or a track fails.
 pub fn split_audio(
     source: &Path,
     chapters: &[Chapter],
@@ -89,6 +92,9 @@ pub fn split_audio(
 
 /// Split tracks and stop active ffmpeg processes when `cancelled` becomes true.
 /// Cancellation keeps the source and its sidecars in place.
+///
+/// # Errors
+/// Returns an error when the split is cancelled, the source or chapters are not valid, the output folder cannot be used, or a track fails.
 pub fn split_audio_with_cancel(
     source: &Path,
     chapters: &[Chapter],
@@ -134,23 +140,7 @@ fn split_audio_with_binary(
     }
 
     let metadata = extract_metadata(&source);
-    let chapter_sidecar = sidecar_path(&source, ".chapters.txt");
-    let cache_file = if chapter_sidecar.exists() {
-        let key = format!(
-            "split_{}_{}",
-            file_hash(&source)?,
-            file_hash(&chapter_sidecar)?
-        );
-        Some(
-            options
-                .cache_dir
-                .clone()
-                .unwrap_or_else(muzik_core::paths::cache_dir)
-                .join(format!("{key}.txt")),
-        )
-    } else {
-        None
-    };
+    let cache_file = split_cache_file(&source, options)?;
     if !options.force
         && let Some(ref cache_file) = cache_file
         && let Ok(cached) = fs::read_to_string(cache_file)
@@ -164,45 +154,10 @@ fn split_audio_with_binary(
     if cancelled.load(Ordering::SeqCst) {
         return Err(SplitError::Cancelled);
     }
-    if output.exists() {
-        if !output.is_dir() {
-            return Err(SplitError::OutputNotDirectory(output.to_path_buf()));
-        }
-        if fs::read_dir(output)?.next().is_some() {
-            if !options.force {
-                let complete = chapters.iter().all(|chapter| {
-                    fs::metadata(output.join(expected_track_name(
-                        &source,
-                        chapter,
-                        options.compilation,
-                    )))
-                    .is_ok_and(|file| file.is_file() && file.len() > 0)
-                });
-                if complete {
-                    return finish(&source, output, cache_file.as_deref(), options.keep_source);
-                }
-                return Err(SplitError::OutputNotEmpty(output.to_path_buf()));
-            }
-            fs::remove_dir_all(output)?;
-        }
+    if let Some(done) = prepare_output(&source, chapters, output, options, cache_file.as_deref())? {
+        return Ok(done);
     }
-    fs::create_dir_all(output)?;
 
-    let workers = if options.jobs == 0 {
-        std::thread::available_parallelism()
-            .map_or(4, |count| count.get())
-            .div_ceil(2)
-            .clamp(2, 8)
-    } else {
-        options.jobs
-    }
-    .min(chapters.len());
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()
-        .map_err(io::Error::other)?;
-    let failures = Mutex::new(Vec::new());
-    let completed = AtomicUsize::new(0);
     let track_context = SplitTrackContext {
         source: &source,
         output,
@@ -212,6 +167,90 @@ fn split_audio_with_binary(
         cancelled,
         ffmpeg,
     };
+    split_tracks(&track_context, chapters, options.jobs, on_progress)?;
+
+    if cancelled.load(Ordering::SeqCst) {
+        return Err(SplitError::Cancelled);
+    }
+    // The following file updates form the final commit step. Cancellation is
+    // observed before this step, so it cannot leave a removed source behind.
+    finish(&source, output, cache_file.as_deref(), options.keep_source)
+}
+
+fn split_cache_file(source: &Path, options: &SplitOptions) -> Result<Option<PathBuf>, SplitError> {
+    let chapter_sidecar = sidecar_path(source, ".chapters.txt");
+    if !chapter_sidecar.exists() {
+        return Ok(None);
+    }
+    let key = format!(
+        "split_{}_{}",
+        file_hash(source)?,
+        file_hash(&chapter_sidecar)?
+    );
+    Ok(Some(
+        options
+            .cache_dir
+            .clone()
+            .unwrap_or_else(muzik_core::paths::cache_dir)
+            .join(format!("{key}.txt")),
+    ))
+}
+
+fn prepare_output(
+    source: &Path,
+    chapters: &[Chapter],
+    output: &Path,
+    options: &SplitOptions,
+    cache_file: Option<&Path>,
+) -> Result<Option<PathBuf>, SplitError> {
+    if output.exists() {
+        if !output.is_dir() {
+            return Err(SplitError::OutputNotDirectory(output.to_path_buf()));
+        }
+        if fs::read_dir(output)?.next().is_some() {
+            if !options.force {
+                let complete = chapters.iter().all(|chapter| {
+                    fs::metadata(output.join(expected_track_name(
+                        source,
+                        chapter,
+                        options.compilation,
+                    )))
+                    .is_ok_and(|file| file.is_file() && file.len() > 0)
+                });
+                if complete {
+                    return finish(source, output, cache_file, options.keep_source).map(Some);
+                }
+                return Err(SplitError::OutputNotEmpty(output.to_path_buf()));
+            }
+            fs::remove_dir_all(output)?;
+        }
+    }
+    fs::create_dir_all(output)?;
+    Ok(None)
+}
+
+fn split_tracks(
+    track_context: &SplitTrackContext<'_>,
+    chapters: &[Chapter],
+    jobs: usize,
+    on_progress: &mut dyn FnMut(SplitProgress),
+) -> Result<(), SplitError> {
+    let cancelled = track_context.cancelled;
+    let workers = if jobs == 0 {
+        std::thread::available_parallelism()
+            .map_or(4, std::num::NonZero::get)
+            .div_ceil(2)
+            .clamp(2, 8)
+    } else {
+        jobs
+    }
+    .min(chapters.len());
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .map_err(io::Error::other)?;
+    let failures = Mutex::new(Vec::new());
+    let completed = AtomicUsize::new(0);
     let (sender, receiver) = std::sync::mpsc::channel();
     let split = std::thread::scope(|scope| {
         let work = scope.spawn(|| {
@@ -222,7 +261,7 @@ fn split_audio_with_binary(
                         if cancelled.load(Ordering::SeqCst) {
                             return Err(SplitError::Cancelled);
                         }
-                        if split_track(&track_context, chapter)? {
+                        if split_track(track_context, chapter)? {
                             let count = completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
                             let _ = sender.send(SplitProgress {
                                 completed: count,
@@ -250,13 +289,7 @@ fn split_audio_with_binary(
     if !failed.is_empty() {
         return Err(SplitError::TracksFailed(failed.len(), failed.join(", ")));
     }
-
-    if cancelled.load(Ordering::SeqCst) {
-        return Err(SplitError::Cancelled);
-    }
-    // The following file updates form the final commit step. Cancellation is
-    // observed before this step, so it cannot leave a removed source behind.
-    finish(&source, output, cache_file.as_deref(), options.keep_source)
+    Ok(())
 }
 
 fn finish(
@@ -293,11 +326,14 @@ fn finish(
 }
 
 /// Return `<source parent parent>/splits/<album slug>`.
+///
+/// # Errors
+/// Returns an error when `source` is not a file.
 pub fn default_output(source: &Path) -> Result<PathBuf, SplitError> {
     if !source.is_file() {
         return Err(SplitError::SourceMissing(source.to_path_buf()));
     }
-    let parent = source.parent().unwrap_or(Path::new("."));
+    let parent = source.parent().unwrap_or_else(|| Path::new("."));
     let root = parent.parent().unwrap_or(parent);
     Ok(root
         .join("splits")
@@ -409,7 +445,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         start: chapter.start,
         end: chapter.end,
         tags: &[
-            ("title", title.clone()),
+            ("title", title),
             ("artist", artist),
             ("albumartist", albumartist.to_owned()),
             ("album", metadata.album.clone()),
@@ -442,7 +478,7 @@ fn extract_metadata(source: &Path) -> Metadata {
         read_json(
             &source
                 .parent()
-                .unwrap_or(Path::new("."))
+                .unwrap_or_else(|| Path::new("."))
                 .join(".muzik.json"),
         )
     });
@@ -528,9 +564,7 @@ fn extract_metadata(source: &Path) -> Metadata {
     Metadata {
         artist: field("artist").unwrap_or_else(|| "Unknown Artist".into()),
         album: clean_album_name(&field("album").unwrap_or_else(|| "Unknown Album".into())),
-        year: field("date")
-            .map(|year| year.chars().take(4).collect())
-            .unwrap_or_else(|| "Unknown".into()),
+        year: field("date").map_or_else(|| "Unknown".into(), |year| year.chars().take(4).collect()),
         source_id,
     }
 }
@@ -658,7 +692,7 @@ fn safe_filename(title: &str) -> String {
 fn file_hash(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let mut hash = Sha256::new();
-    let mut buffer = [0_u8; 65_536];
+    let mut buffer = vec![0_u8; 65_536];
     loop {
         let count = file.read(&mut buffer)?;
         if count == 0 {

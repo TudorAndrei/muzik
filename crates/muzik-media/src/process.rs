@@ -32,6 +32,8 @@ pub fn background_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
 }
 
+/// # Errors
+/// Returns an error when the program cannot start.
 pub fn spawn(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
     let mut command = CommandWrap::from(command);
     #[cfg(unix)]
@@ -41,6 +43,8 @@ pub fn spawn(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
     command.spawn()
 }
 
+/// # Errors
+/// Returns an error when `cancelled` becomes true, the timeout passes, or the status cannot be read.
 pub fn wait(
     child: &mut Box<dyn ChildWrapper>,
     timeout: Option<Duration>,
@@ -72,27 +76,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn background_command_runs_the_program_at_lower_priority()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn background_command_runs_the_program_at_lower_priority() {
         let output = background_command("sh")
             .arg("-c")
             .arg("ps -o nice= -p $$")
-            .output()?;
+            .output()
+            .unwrap();
         assert!(output.status.success());
-        let niceness: i32 = String::from_utf8(output.stdout)?.trim().parse()?;
+        let niceness: i32 = String::from_utf8(output.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         assert!(niceness >= i32::from(BACKGROUND_NICENESS));
-        Ok(())
     }
 
     #[test]
-    fn a_stop_also_ends_the_programs_the_child_started() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn a_stop_also_ends_the_programs_the_child_started() {
+        let directory = tempfile::tempdir().unwrap();
         let marker = directory.path().join("grandchild.pid");
         let mut command = Command::new("sh");
         command
             .arg("-c")
             .arg(format!("sleep 30 & echo $! > '{}'; wait", marker.display()));
-        let mut child = spawn(command)?;
+        let mut child = spawn(command).unwrap();
         while !marker.exists() {
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -102,20 +109,27 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert!(matches!(stopped, Err(Stopped::TimedOut)));
-        let pid = std::fs::read_to_string(&marker)?;
+        let pid = std::fs::read_to_string(&marker).unwrap();
         std::thread::sleep(Duration::from_millis(100));
-        let alive = Command::new("kill").arg("-0").arg(pid.trim()).output()?;
+        let alive = Command::new("kill")
+            .arg("-0")
+            .arg(pid.trim())
+            .output()
+            .unwrap();
         assert!(!alive.status.success());
 
-        let mut child = spawn(Command::new("true"))?;
-        assert!(wait(&mut child, None, &AtomicBool::new(false))?.success());
+        let mut child = spawn(Command::new("true")).unwrap();
+        assert!(
+            wait(&mut child, None, &AtomicBool::new(false))
+                .unwrap()
+                .success()
+        );
         let mut sleep = Command::new("sleep");
         sleep.arg("30");
-        let mut child = spawn(sleep)?;
+        let mut child = spawn(sleep).unwrap();
         assert!(matches!(
             wait(&mut child, None, &AtomicBool::new(true)),
             Err(Stopped::Cancelled)
         ));
-        Ok(())
     }
 }
