@@ -522,7 +522,11 @@ fn source_with_item(path: &Path) -> Result<Repository, Box<dyn std::error::Error
     let repository = Repository::new(path.to_path_buf());
     repository.add("https://www.youtube.com/playlist?list=PL1")?;
     repository.update(|document| {
-        document.playlists[0].items = vec![WatchItem::new(1, "Song", SourceKind::Youtube)];
+        document
+            .playlists
+            .first_mut()
+            .ok_or("the watchlist has no playlist")?
+            .items = vec![WatchItem::new(1, "Song", SourceKind::Youtube)];
         Ok(())
     })?;
     Ok(repository)

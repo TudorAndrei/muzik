@@ -85,7 +85,11 @@ fn repository_with(
     let repository = Repository::new(directory.join("muzik.db"));
     repository.add("https://www.youtube.com/playlist?list=PL123")?;
     repository.update(|document| {
-        document.playlists[0].items = items;
+        document
+            .playlists
+            .first_mut()
+            .ok_or("the watchlist has no playlist")?
+            .items = items;
         Ok(())
     })?;
     Ok(repository)

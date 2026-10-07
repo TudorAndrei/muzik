@@ -126,7 +126,7 @@ fn parse_title(title: &str) -> Option<(String, String)> {
         .as_ref()?;
     let noise = NOISE.get_or_init(|| Regex::new(r"(?i)\s*[\(\[]\s*(?:full\s+album|complete\s+album|full\s+lp|official\s+album|remaster(?:ed)?|deluxe(?:\s+edition)?|bonus\s+tracks?)\s*[\)\]]").ok()).as_ref()?;
     let title = if let Some(found) = year.find(title) {
-        title[..found.start()].trim_end()
+        title.get(..found.start())?.trim_end()
     } else {
         title
     };

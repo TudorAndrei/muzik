@@ -55,12 +55,14 @@ impl Summary {
 pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value> {
     let index = AudioIndex::scan(output);
     let mut value = document.to_value();
-    let playlists = value["playlists"]
-        .as_array_mut()
+    let playlists = value
+        .get_mut("playlists")
+        .and_then(Value::as_array_mut)
         .ok_or("watchlist playlists are missing")?;
     for (playlist, saved) in playlists.iter_mut().zip(&document.playlists) {
-        let items = playlist["items"]
-            .as_array_mut()
+        let items = playlist
+            .get_mut("items")
+            .and_then(Value::as_array_mut)
             .ok_or("playlist items are missing")?;
         for (card, item) in items.iter_mut().zip(&saved.items) {
             enrich(card, item, &index, cache)?;

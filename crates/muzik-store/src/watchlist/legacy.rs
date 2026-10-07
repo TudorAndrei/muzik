@@ -122,14 +122,18 @@ fn apply_item(
     let Some(status) = cache_status(&entry) else {
         return;
     };
-    let path = entry["audio_file"]
-        .as_str()
+    let path = entry
+        .get("audio_file")
+        .and_then(Value::as_str)
         .map(PathBuf::from)
         .or_else(|| first_file(&entry));
     item.complete(Stage::Download, path);
     if matches!(status, CacheStatus::Split | CacheStatus::Organized) {
         item.set(Stage::Parse, StageStatus::Complete);
-        let split = entry["split_dir"].as_str().map(PathBuf::from);
+        let split = entry
+            .get("split_dir")
+            .and_then(Value::as_str)
+            .map(PathBuf::from);
         item.set(
             Stage::Split,
             if split.is_some() {

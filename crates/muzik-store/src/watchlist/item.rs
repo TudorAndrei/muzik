@@ -279,7 +279,7 @@ impl Playlist {
             let key = item.key().unwrap_or("").to_owned();
             let occurrence = counts.entry(key.clone()).or_default();
             old.insert((key, *occurrence), item);
-            *occurrence += 1;
+            *occurrence = occurrence.saturating_add(1);
         }
         counts.clear();
         self.items = discovered
@@ -292,7 +292,7 @@ impl Playlist {
                     item.last_action = previous.last_action;
                     item.last_error = previous.last_error;
                 }
-                *occurrence += 1;
+                *occurrence = occurrence.saturating_add(1);
                 item
             })
             .collect();
@@ -510,8 +510,7 @@ impl AudioIndex {
 
 fn bracketed_id(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
-    let start = stem.rfind('[')?;
-    let id = stem[start + 1..].strip_suffix(']')?;
+    let id = stem.rsplit_once('[')?.1.strip_suffix(']')?;
     (!id.is_empty()).then(|| id.to_owned())
 }
 

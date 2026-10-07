@@ -211,7 +211,9 @@ pub fn bandcamp_source(user: &str) -> Playlist {
 }
 
 pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
-    item["stages"][stage.as_ref()]["status"]
+    item.get("stages")?
+        .get(stage.as_ref())?
+        .get("status")?
         .as_str()?
         .parse()
         .ok()
@@ -428,7 +430,11 @@ fn read_document(connection: &Connection) -> Result<Watchlist> {
         let index = *positions
             .get(&id)
             .ok_or_else(|| format!("item belongs to missing playlist {id}"))?;
-        playlists[index].items.push(item);
+        playlists
+            .get_mut(index)
+            .ok_or_else(|| format!("item belongs to missing playlist {id}"))?
+            .items
+            .push(item);
     }
     Watchlist {
         playlists,

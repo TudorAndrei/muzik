@@ -122,9 +122,9 @@ pub fn sync(
     on_event(JobEvent::ProgressStarted {
         task: Task::WatchlistRefresh,
         description: "Checking watchlist playlists.".into(),
-        total: Some(ids.len() as u64),
+        total: u64::try_from(ids.len()).ok(),
     });
-    let mut errors = 0;
+    let mut errors: usize = 0;
     let mut loaded_ids = Vec::new();
     for id in &ids {
         check_cancelled(cancelled)?;
@@ -143,7 +143,7 @@ pub fn sync(
                     Ok(())
                 })?;
                 on_event(JobEvent::WatchlistSaved);
-                errors += 1;
+                errors = errors.saturating_add(1);
                 on_event(JobEvent::Message {
                     message,
                     severity: Severity::Error,
@@ -209,9 +209,9 @@ pub fn refresh(
     on_event: &mut dyn FnMut(JobEvent),
 ) -> Result<Value, JobError> {
     let synced = sync(repository, options, operations, cancelled, on_event)?;
-    let mut completed = 0;
-    let mut failed = 0;
-    let mut waiting = 0;
+    let mut completed: usize = 0;
+    let mut failed: usize = 0;
+    let mut waiting: usize = 0;
     if !options.dry_run {
         for item in &synced.pending {
             check_cancelled(cancelled)?;
@@ -223,10 +223,10 @@ pub fn refresh(
                 operations,
                 cancelled,
             ) {
-                Ok(ItemOutcome::Completed { .. }) => completed += 1,
-                Ok(ItemOutcome::Waiting { .. }) => waiting += 1,
+                Ok(ItemOutcome::Completed { .. }) => completed = completed.saturating_add(1),
+                Ok(ItemOutcome::Waiting { .. }) => waiting = waiting.saturating_add(1),
                 Err(JobError::Cancelled) => return Err(JobError::Cancelled),
-                Err(_) => failed += 1,
+                Err(_) => failed = failed.saturating_add(1),
             }
             on_event(JobEvent::WatchlistSaved);
         }
@@ -256,12 +256,8 @@ pub fn action(
     if options.dry_run {
         check_cancelled(cancelled)?;
         let document = repository.load()?;
-        let (playlist, item) = find_item(&document, id)?;
-        check_available(
-            &document.playlists[playlist].items[item],
-            action,
-            options.output,
-        )?;
+        let item = find_item(&document, id)?;
+        check_available(item, action, options.output)?;
         return Ok(
             json!({"action":{"action":action,"planned_stage":action.stage(),"dry_run":true},
             "watchlist":view(&document, options.output, options.cache)?}),
@@ -288,11 +284,12 @@ pub fn run_item(
     check_cancelled(cancelled)?;
     let stage = action.stage();
     let (playlist, item) = repository.update(|document| {
-        let (playlist, index) = find_item(document, id)?;
-        let item = document.playlists[playlist].items[index].clone();
-        check_available(&item, action, options.output)?;
-        let source = document.playlists[playlist].clone();
-        document.playlists[playlist].items[index].start(action);
+        let (playlist, index) = find_item_mut(document, id)?;
+        let source = playlist.clone();
+        let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
+        check_available(saved, action, options.output)?;
+        let item = saved.clone();
+        saved.start(action);
         Ok((source, item))
     })?;
     let result = operations.process(&playlist, &item, action, cancelled);
@@ -301,10 +298,9 @@ pub fn run_item(
         other => other,
     };
     repository.update_with(|document, connection| {
-        let Ok((playlist, index)) = find_item(document, id) else {
+        let Ok((playlist, index)) = find_item_mut(document, id) else {
             return Ok(());
         };
-        let playlist = &mut document.playlists[playlist];
         let mut card = item.clone();
         match &result {
             Ok(updated) => {
@@ -340,7 +336,7 @@ pub fn run_item(
                 card.fail(failed, action, &error.to_string());
             }
         }
-        playlist.items[index] = card;
+        *playlist.items.get_mut(index).ok_or(MISSING_VIDEO)? = card;
         Ok(())
     })?;
     match result {
@@ -350,15 +346,32 @@ pub fn run_item(
     }
 }
 
-fn find_item(document: &Watchlist, id: &ItemId) -> Result<(usize, usize)> {
+const MISSING_PLAYLIST: &str = "The selected playlist is no longer available.";
+const MISSING_VIDEO: &str = "The selected video is no longer available.";
+
+fn find_item<'a>(document: &'a Watchlist, id: &ItemId) -> Result<&'a WatchItem> {
     let playlist = document
         .playlists
         .iter()
-        .position(|playlist| playlist.playlist_id == id.playlist_id)
-        .ok_or("The selected playlist is no longer available.")?;
-    let item = document.playlists[playlist]
+        .find(|playlist| playlist.playlist_id == id.playlist_id)
+        .ok_or(MISSING_PLAYLIST)?;
+    let item = playlist
         .find(id)
-        .ok_or("The selected video is no longer available.")?;
+        .and_then(|index| playlist.items.get(index))
+        .ok_or(MISSING_VIDEO)?;
+    Ok(item)
+}
+
+fn find_item_mut<'a>(
+    document: &'a mut Watchlist,
+    id: &ItemId,
+) -> Result<(&'a mut Playlist, usize)> {
+    let playlist = document
+        .playlists
+        .iter_mut()
+        .find(|playlist| playlist.playlist_id == id.playlist_id)
+        .ok_or(MISSING_PLAYLIST)?;
+    let item = playlist.find(id).ok_or(MISSING_VIDEO)?;
     Ok((playlist, item))
 }
 
