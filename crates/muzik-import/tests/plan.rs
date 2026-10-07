@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +14,10 @@ struct FixtureProvider;
 
 struct FailingProvider;
 
-struct NoLookupProvider;
+#[derive(Default)]
+struct NoLookupProvider {
+    requested: Cell<bool>,
+}
 
 struct CancellingProvider<'a>(&'a AtomicBool);
 
@@ -28,11 +32,11 @@ impl ReleaseProvider for CancellingProvider<'_> {
     }
 
     fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 }
 
@@ -69,21 +73,28 @@ fn cancellation_after_metadata_search_stops_planning() {
     assert!(matches!(result, Err(muzik_import::Error::Cancelled)));
 }
 
+impl NoLookupProvider {
+    fn request<T>(&self) -> Result<T, muzik_metadata::Error> {
+        self.requested.set(true);
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
+    }
+}
+
 impl ReleaseProvider for NoLookupProvider {
     fn search_releases(
         &self,
         _: &ReleaseSearch,
         _: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        panic!("autotag=false must not search MusicBrainz");
+        self.request()
     }
 
     fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        panic!("autotag=false must not load a release");
+        self.request()
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        panic!("autotag=false must not load a recording");
+        self.request()
     }
 }
 
@@ -97,11 +108,11 @@ impl ReleaseProvider for FailingProvider {
     }
 
     fn lookup_release(&self, _: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 }
 
@@ -152,7 +163,7 @@ impl ReleaseProvider for FixtureProvider {
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 }
 
@@ -251,8 +262,9 @@ fn autotag_off_plans_as_is_without_metadata_requests() {
         Library::open_read_only(&crates.join("muzik-library/tests/fixtures/library.db")).unwrap();
     let beets = BeetsConfig::from_layers("", serde_json::json!({})).unwrap();
     let config = MatchConfig::from_beets(&beets).unwrap();
+    let provider = NoLookupProvider::default();
     let planner = ImportPlanner {
-        provider: &NoLookupProvider,
+        provider: &provider,
         library: &library,
         match_config: &config,
         search_limit: 5,
@@ -267,6 +279,7 @@ fn autotag_off_plans_as_is_without_metadata_requests() {
             },
         )
         .unwrap();
+    assert!(!provider.requested.get());
     assert_eq!(plan.albums.len(), 1);
     assert!(plan.albums[0].candidates.is_empty());
 }
@@ -291,8 +304,9 @@ fn incremental_plan_skips_seeded_album_directory() {
         &[vec![album_dir.canonicalize().unwrap()]],
     )
     .unwrap();
+    let provider = NoLookupProvider::default();
     let planner = ImportPlanner {
-        provider: &NoLookupProvider,
+        provider: &provider,
         library: &library,
         match_config: &config,
         search_limit: 5,
@@ -307,6 +321,7 @@ fn incremental_plan_skips_seeded_album_directory() {
             },
         )
         .unwrap();
+    assert!(!provider.requested.get());
     assert!(plan.albums.is_empty());
     assert_eq!(plan.skipped_incremental, 1);
     assert!(!IncrementalHistory::path_for_statefile(&temp.path().join("state.pickle")).exists());

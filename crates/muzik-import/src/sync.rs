@@ -33,7 +33,8 @@ pub fn sync<P: ReleaseProvider>(
             continue;
         }
         let Some(recording_id) = text(&item.fields, "mb_trackid") else {
-            result.singletons_without_recording_id += 1;
+            result.singletons_without_recording_id =
+                result.singletons_without_recording_id.saturating_add(1);
             continue;
         };
         let recording = provider.lookup_recording(recording_id)?;
@@ -65,13 +66,13 @@ pub fn sync<P: ReleaseProvider>(
             }
             return Err(error);
         }
-        result.singletons_updated += 1;
-        result.items_updated += 1;
+        result.singletons_updated = result.singletons_updated.saturating_add(1);
+        result.items_updated = result.items_updated.saturating_add(1);
     }
     let albums = library.query_albums(query)?;
     for album in albums {
         let Some(release_id) = text(&album.fields, "mb_albumid") else {
-            result.albums_without_release_id += 1;
+            result.albums_without_release_id = result.albums_without_release_id.saturating_add(1);
             continue;
         };
         let release = provider.lookup_release(release_id)?;
@@ -79,7 +80,7 @@ pub fn sync<P: ReleaseProvider>(
         let mut updates = Vec::new();
         for item in &items {
             let Some(track) = match_track(item, &release) else {
-                result.items_without_match += 1;
+                result.items_without_match = result.items_without_match.saturating_add(1);
                 continue;
             };
             let (title, artist) = ftclean::clean(&track.title, &track.artist);
@@ -151,8 +152,8 @@ pub fn sync<P: ReleaseProvider>(
             }
             return Err(error);
         }
-        result.albums_updated += 1;
-        result.items_updated += updates.len();
+        result.albums_updated = result.albums_updated.saturating_add(1);
+        result.items_updated = result.items_updated.saturating_add(updates.len());
     }
     Ok(result)
 }

@@ -190,26 +190,38 @@ pub fn apply_with_cancel(
     let mut reserved = BTreeSet::new();
     for (album, decision) in plan.albums.iter().zip(decisions) {
         check_cancelled(cancelled)?;
-        if decision.choice == MatchDecision::Skip
-            || (!album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip))
-        {
-            result.skipped_albums += 1;
+        let skip_duplicate =
+            !album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
+        let candidate_index = match decision.choice {
+            MatchDecision::Candidate(index) if !skip_duplicate => Some(Some(index)),
+            MatchDecision::AsIs if !skip_duplicate => Some(None),
+            MatchDecision::Candidate(_) | MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
+        let Some(candidate_index) = candidate_index else {
+            result.skipped_albums = result.skipped_albums.saturating_add(1);
             if !options.dry_run && !plan.incremental_skip_later {
                 record_history(plan, album, &mut result);
             }
             continue;
-        }
+        };
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
         let reserved_before = reserved.clone();
-        let prepared = match prepare(library, album, *decision, options, &mut reserved) {
+        let prepared = match prepare(
+            library,
+            album,
+            candidate_index,
+            decision.duplicate,
+            options,
+            &mut reserved,
+        ) {
             Err(ApplyError::AlreadyInLibrary(_))
                 if decision.duplicate == Some(DuplicateDecision::Skip) =>
             {
                 reserved = reserved_before;
-                result.skipped_albums += 1;
-                result.already_in_library += 1;
+                result.skipped_albums = result.skipped_albums.saturating_add(1);
+                result.already_in_library = result.already_in_library.saturating_add(1);
                 if !options.dry_run && !plan.incremental_skip_later {
                     record_history(plan, album, &mut result);
                 }
@@ -373,28 +385,26 @@ fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult
 fn prepare(
     library: &Library,
     album: &AlbumPlan,
-    decision: AlbumDecision,
+    candidate_index: Option<usize>,
+    duplicate: Option<DuplicateDecision>,
     options: &ApplyOptions,
     reserved: &mut BTreeSet<PathBuf>,
 ) -> Result<PreparedAlbum, ApplyError> {
-    let candidate = match decision.choice {
-        MatchDecision::Candidate(index) => Some(
+    let candidate = candidate_index
+        .map(|index| {
             album
                 .candidates
                 .get(index)
-                .ok_or(ApplyError::CandidateIndex { index })?,
-        ),
-        MatchDecision::AsIs => None,
-        MatchDecision::Skip => unreachable!(),
-    };
+                .ok_or(ApplyError::CandidateIndex { index })
+        })
+        .transpose()?;
     let compilation = candidate.is_some_and(|candidate| candidate.release.is_various_artists)
         || (candidate.is_none()
-            && album
-                .items
-                .iter()
-                .skip(1)
-                .any(|item| item.match_item.artist != album.items[0].match_item.artist));
-    let replace_ids = if decision.duplicate == Some(DuplicateDecision::Replace) {
+            && album.items.split_first().is_some_and(|(first, rest)| {
+                rest.iter()
+                    .any(|item| item.match_item.artist != first.match_item.artist)
+            }));
+    let replace_ids = if duplicate == Some(DuplicateDecision::Replace) {
         selected_replacements(library, album, candidate)?
     } else {
         Vec::new()
@@ -404,7 +414,13 @@ fn prepare(
     let mut album_fields = LibraryFields::new();
     let mut prepared = Vec::new();
     let albums = library.albums()?;
-    let next_id = albums.iter().map(|album| album.id).max().unwrap_or(0) + 1;
+    let next_id = albums
+        .iter()
+        .map(|album| album.id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or("album id space is exhausted")?;
     let mut known: Vec<AlbumFields> = albums
         .iter()
         .map(|album| AlbumFields {
@@ -724,7 +740,10 @@ fn item_fields(
         fields.insert("length".into(), SqlValue::Real(value));
     }
     if let Some(value) = properties.bitrate_kbps {
-        fields.insert("bitrate".into(), SqlValue::Integer(i64::from(value) * 1000));
+        fields.insert(
+            "bitrate".into(),
+            SqlValue::Integer(i64::from(value).saturating_mul(1000)),
+        );
     }
     if let Some(value) = properties.sample_rate_hz {
         fields.insert("samplerate".into(), SqlValue::Integer(i64::from(value)));

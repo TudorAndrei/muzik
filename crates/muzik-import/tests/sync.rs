@@ -15,7 +15,7 @@ impl ReleaseProvider for FixtureProvider {
         _: &ReleaseSearch,
         _: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {

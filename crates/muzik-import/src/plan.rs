@@ -172,7 +172,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             if let Some(history) = &options.history
                 && history.contains(&history_key)?
             {
-                skipped_incremental += 1;
+                skipped_incremental = usize::saturating_add(skipped_incremental, 1);
                 continue;
             }
             let mut items = Vec::new();
@@ -204,7 +204,9 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 plurality(&current, |item| item.artist.as_str())
             };
             let various_artists = current.iter().any(|item| item.compilation)
-                || current.iter().any(|item| item.artist != current[0].artist)
+                || current.split_first().is_some_and(|(first, rest)| {
+                    rest.iter().any(|item| item.artist != first.artist)
+                })
                 || ["", "various artists", "various", "va", "unknown"]
                     .contains(&artist.to_lowercase().as_str());
             let mut releases = Vec::new();
@@ -213,7 +215,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                     release: title.to_owned(),
                     artist: (!artist.is_empty()).then(|| artist.to_owned()),
                     various_artists,
-                    tracks: Some(items.len() as u32),
+                    tracks: u32::try_from(items.len()).ok(),
                     ..ReleaseSearch::default()
                 };
                 let hits = match self.provider.search_releases(&criteria, self.search_limit) {
@@ -249,13 +251,17 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 .candidates
                 .into_iter()
                 .map(|ranked| {
+                    let index = ranked.input_index;
                     Ok(PlannedCandidate {
-                        release: releases[ranked.input_index].clone(),
+                        release: releases
+                            .get(index)
+                            .ok_or(ImportError::CandidateIndex { index })?
+                            .clone(),
                         distance: ranked.distance.score(self.match_config)?,
                         assignment: ranked.assignment,
                     })
                 })
-                .collect::<Result<Vec<_>, muzik_match::Error>>()?;
+                .collect::<Result<Vec<_>, ImportError>>()?;
             let duplicates = if mode == ImportMode::Album {
                 find_duplicates(&items, &releases, &library_albums, &library_items)
             } else {

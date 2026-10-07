@@ -49,7 +49,7 @@ pub struct PathSanitizer {
 impl PathSanitizer {
     pub fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
         let replacements = if replacements.is_empty() {
-            configured_default_replacements()
+            configured_default_replacements()?
         } else {
             replacements
                 .iter()
@@ -73,7 +73,7 @@ impl PathSanitizer {
         if !truncated_again {
             return Ok(second);
         }
-        let defaults = fallback_replacements();
+        let defaults = fallback_replacements()?;
         self.stage(stem, &extension, &defaults)
             .map(|(path, _)| path)
     }
@@ -97,26 +97,24 @@ impl PathSanitizer {
                 Ok(part)
             })
             .collect::<Result<Vec<_>, fancy_regex::Error>>()?;
-        if parts.is_empty() {
-            parts.push(String::new());
+        match parts.last_mut() {
+            Some(last) => last.push_str(extension),
+            None => parts.push(extension.to_owned()),
         }
-        parts.last_mut().unwrap().push_str(extension);
         let mut truncated = false;
-        let last = parts.len() - 1;
+        let last = parts.len().saturating_sub(1);
         for (index, part) in parts.iter_mut().enumerate() {
             let limit = self.max_component_bytes;
             if part.len() > limit {
                 truncated = true;
                 if index == last {
                     let stem_limit = limit.saturating_sub(extension.len());
-                    let stem = part.strip_suffix(extension).unwrap_or(part);
-                    *part = format!(
-                        "{}{}",
-                        &stem[..stem.floor_char_boundary(stem_limit)],
-                        extension
-                    );
+                    let mut stem = part.strip_suffix(extension).unwrap_or(part).to_owned();
+                    stem.truncate(stem.floor_char_boundary(stem_limit));
+                    stem.push_str(extension);
+                    *part = stem;
                 } else {
-                    *part = part[..part.floor_char_boundary(limit)].to_string();
+                    part.truncate(part.floor_char_boundary(limit));
                 }
             }
         }
@@ -124,7 +122,7 @@ impl PathSanitizer {
     }
 }
 
-fn configured_default_replacements() -> Vec<(Regex, String)> {
+fn configured_default_replacements() -> Result<Vec<(Regex, String)>, fancy_regex::Error> {
     [
         (r"[<>:\?\*\|]", "_"),
         (r#"""#, "_"),
@@ -137,11 +135,11 @@ fn configured_default_replacements() -> Vec<(Regex, String)> {
         (r"^\s+", ""),
     ]
     .into_iter()
-    .map(|(pattern, replacement)| (Regex::new(pattern).unwrap(), replacement.to_owned()))
+    .map(|(pattern, replacement)| Regex::new(pattern).map(|regex| (regex, replacement.to_owned())))
     .collect()
 }
 
-fn fallback_replacements() -> Vec<(Regex, String)> {
+fn fallback_replacements() -> Result<Vec<(Regex, String)>, fancy_regex::Error> {
     [
         (r"[\\/]", "_"),
         (r"^\.", "_"),
@@ -151,7 +149,7 @@ fn fallback_replacements() -> Vec<(Regex, String)> {
         (r"\s+$", ""),
     ]
     .into_iter()
-    .map(|(pattern, replacement)| (Regex::new(pattern).unwrap(), replacement.to_owned()))
+    .map(|(pattern, replacement)| Regex::new(pattern).map(|regex| (regex, replacement.to_owned())))
     .collect()
 }
 
@@ -216,14 +214,10 @@ impl TemplateContext {
         if duplicates.len() <= 1 {
             return String::new();
         }
-        let (left, right) = if bracket.chars().count() == 2 {
-            let mut chars = bracket.chars();
-            (
-                chars.next().unwrap().to_string(),
-                chars.next().unwrap().to_string(),
-            )
-        } else {
-            (String::new(), String::new())
+        let mut chars = bracket.chars();
+        let (left, right) = match (chars.next(), chars.next(), chars.next()) {
+            (Some(left), Some(right), None) => (left.to_string(), right.to_string()),
+            _ => (String::new(), String::new()),
         };
         for key in disambiguators {
             let values: HashSet<_> = duplicates
@@ -247,111 +241,112 @@ fn is_identifier(character: char) -> bool {
     character == '_' || character.is_alphanumeric()
 }
 
+fn is_escapable(character: char) -> bool {
+    matches!(character, '$' | '%' | '}' | ',')
+}
+
+fn starts_with_escapable(input: &str) -> bool {
+    input.chars().next().is_some_and(is_escapable)
+}
+
+fn split_identifier(input: &str) -> (&str, &str) {
+    let end = input
+        .find(|character: char| !is_identifier(character))
+        .unwrap_or(input.len());
+    input.split_at_checked(end).unwrap_or((input, ""))
+}
+
 fn render_expression(input: &str, context: &TemplateContext) -> String {
     let mut output = String::new();
-    let mut cursor = 0;
-    while cursor < input.len() {
-        let current = input[cursor..].chars().next().unwrap();
+    let mut rest = input;
+    loop {
+        let mut chars = rest.chars();
+        let Some(current) = chars.next() else {
+            break;
+        };
+        let after = chars.as_str();
         if current == '$' {
-            let next = cursor + 1;
-            if let Some(escaped) = input[next..].chars().next()
-                && matches!(escaped, '$' | '%' | '}' | ',')
+            let mut after_chars = after.chars();
+            if let Some(escaped) = after_chars.next()
+                && is_escapable(escaped)
             {
                 output.push(escaped);
-                cursor = next + escaped.len_utf8();
+                rest = after_chars.as_str();
                 continue;
             }
-            if input[next..].starts_with('{') {
-                if let Some(close) = input[next + 1..].find('}') {
-                    let end = next + 1 + close;
-                    let key = &input[next + 1..end];
-                    if !key.is_empty() {
-                        output.push_str(
-                            context
-                                .fields
-                                .get(key)
-                                .map(String::as_str)
-                                .unwrap_or(&input[cursor..=end]),
-                        );
-                        cursor = end + 1;
-                        continue;
+            if let Some(braced) = after.strip_prefix('{') {
+                if let Some((key, tail)) = braced.split_once('}')
+                    && !key.is_empty()
+                {
+                    if let Some(value) = context.fields.get(key) {
+                        output.push_str(value);
+                    } else {
+                        output.push_str("${");
+                        output.push_str(key);
+                        output.push('}');
                     }
+                    rest = tail;
+                    continue;
                 }
             } else {
-                let end = next
-                    + input[next..]
-                        .char_indices()
-                        .take_while(|(_, character)| is_identifier(*character))
-                        .map(|(_, character)| character.len_utf8())
-                        .sum::<usize>();
-                if end > next {
-                    let key = &input[next..end];
-                    output.push_str(
-                        context
-                            .fields
-                            .get(key)
-                            .map(String::as_str)
-                            .unwrap_or(&input[cursor..end]),
-                    );
-                    cursor = end;
+                let (key, tail) = split_identifier(after);
+                if !key.is_empty() {
+                    if let Some(value) = context.fields.get(key) {
+                        output.push_str(value);
+                    } else {
+                        output.push('$');
+                        output.push_str(key);
+                    }
+                    rest = tail;
                     continue;
                 }
             }
         } else if current == '%' {
-            let start = cursor + 1;
-            let end = start
-                + input[start..]
-                    .char_indices()
-                    .take_while(|(_, character)| is_identifier(*character))
-                    .map(|(_, character)| character.len_utf8())
-                    .sum::<usize>();
-            if end > start
-                && input[end..].starts_with('{')
-                && let Some(close) = matching_brace(input, end)
+            let (name, tail) = split_identifier(after);
+            if !name.is_empty()
+                && let Some((inner, remaining)) = matching_brace(tail)
             {
-                let name = &input[start..end];
-                let args = split_arguments(&input[end + 1..close])
+                let args = split_arguments(inner)
                     .into_iter()
                     .map(|value| render_expression(value, context))
                     .collect::<Vec<_>>();
                 if let Some(value) = call(name, &args, context) {
                     output.push_str(&value);
                 } else {
-                    output.push_str(&input[cursor..=close]);
+                    output.push('%');
+                    output.push_str(name);
+                    output.push('{');
+                    output.push_str(inner);
+                    output.push('}');
                 }
-                cursor = close + 1;
+                rest = remaining;
                 continue;
             }
         }
         output.push(current);
-        cursor += current.len_utf8();
+        rest = after;
     }
     output
 }
 
-fn matching_brace(input: &str, open: usize) -> Option<usize> {
-    let mut depth = 0;
-    let mut escaped = false;
-    for (offset, character) in input[open..].char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '$'
-            && input[open + offset + 1..]
-                .chars()
-                .next()
-                .is_some_and(|next| matches!(next, '$' | '%' | '}' | ','))
-        {
-            escaped = true;
+fn matching_brace(input: &str) -> Option<(&str, &str)> {
+    if !input.starts_with('{') {
+        return None;
+    }
+    let mut depth = 0_usize;
+    let mut chars = input.char_indices();
+    while let Some((offset, character)) = chars.next() {
+        if character == '$' && starts_with_escapable(chars.as_str()) {
+            chars.next();
             continue;
         }
         match character {
-            '{' => depth += 1,
+            '{' => depth = depth.saturating_add(1),
             '}' => {
-                depth -= 1;
+                depth = depth.saturating_sub(1);
                 if depth == 0 {
-                    return Some(open + offset);
+                    let (head, tail) = input.split_at_checked(offset)?;
+                    return Some((head.strip_prefix('{')?, tail.strip_prefix('}')?));
                 }
             }
             _ => {}
@@ -365,34 +360,25 @@ fn split_arguments(input: &str) -> Vec<&str> {
         return Vec::new();
     }
     let mut args = Vec::new();
-    let mut depth = 0;
+    let mut depth = 0_isize;
     let mut start = 0;
-    let mut escaped = false;
-    for (offset, character) in input.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if character == '$'
-            && input[offset + 1..]
-                .chars()
-                .next()
-                .is_some_and(|next| matches!(next, '$' | '%' | '}' | ','))
-        {
-            escaped = true;
+    let mut chars = input.char_indices();
+    while let Some((offset, character)) = chars.next() {
+        if character == '$' && starts_with_escapable(chars.as_str()) {
+            chars.next();
             continue;
         }
         match character {
-            '{' => depth += 1,
-            '}' => depth -= 1,
+            '{' => depth = depth.saturating_add(1),
+            '}' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
-                args.push(&input[start..offset]);
-                start = offset + 1;
+                args.push(input.get(start..offset).unwrap_or_default());
+                start = chars.offset();
             }
             _ => {}
         }
     }
-    args.push(&input[start..]);
+    args.push(input.get(start..).unwrap_or_default());
     args
 }
 

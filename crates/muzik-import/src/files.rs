@@ -97,7 +97,7 @@ pub fn prune_empty_parents(path: &Path, root: &Path) -> Result<usize, FileError>
     let mut removed = 0;
     while current != root {
         match fs::remove_dir(&current) {
-            Ok(()) => removed += 1,
+            Ok(()) => removed = usize::saturating_add(removed, 1),
             Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => break,
             Err(error) => return Err(error.into()),
         }

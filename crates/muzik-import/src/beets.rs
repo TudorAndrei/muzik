@@ -363,7 +363,7 @@ pub fn write_library_tags(
         if path != requested && !path.starts_with(&requested) {
             continue;
         }
-        count += 1;
+        count = usize::saturating_add(count, 1);
         if dry_run {
             continue;
         }

@@ -34,7 +34,7 @@ impl ReleaseProvider for RecordedRelease {
     }
 
     fn lookup_recording(&self, _: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
-        unreachable!()
+        Err(muzik_metadata::Error::EmptyReleaseTitle)
     }
 }
 
