@@ -7,8 +7,10 @@ use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHe
 impl Muzik {
     pub(crate) fn library(&self, cx: &mut Context<Self>) -> AnyElement {
         let scanning = self.reading(Read::Library);
-        let items = self.library["items"]
-            .as_array()
+        let items = self
+            .library
+            .get("items")
+            .and_then(Value::as_array)
             .or_else(|| self.library.as_array());
         let mut page = page_frame().child(page_header(
             "Downloaded audio",
@@ -22,7 +24,12 @@ impl Muzik {
                     cx.notify();
                 })),
         ));
-        let output = self.library["output"].as_str().unwrap_or("").to_string();
+        let output = self
+            .library
+            .get("output")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         match items {
             Some(items) if !items.is_empty() => {
                 page = page.child(
@@ -35,7 +42,10 @@ impl Muzik {
                             format!(
                                 "· {} files · {}",
                                 items.len(),
-                                self.library["total_size"].as_str().unwrap_or("0 B")
+                                self.library
+                                    .get("total_size")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("0 B")
                             ),
                             cx,
                         )),
@@ -101,8 +111,10 @@ impl Muzik {
         };
         let view = main_view.read(cx);
         let checking = view.reading(Read::Services);
-        let services = view.services["services"]
-            .as_array()
+        let services = view
+            .services
+            .get("services")
+            .and_then(Value::as_array)
             .or_else(|| view.services.as_array())
             .cloned()
             .unwrap_or_default();
@@ -198,19 +210,25 @@ impl Muzik {
     }
 
     pub(crate) fn spotify(&self, cx: &mut Context<Self>) -> AnyElement {
-        let saved_ids: HashSet<&str> = self.watchlist["playlists"]
-            .as_array()
+        let saved_ids: HashSet<&str> = self
+            .watchlist
+            .get("playlists")
+            .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(|playlist| playlist["playlist_id"].as_str())
             .collect();
         let liked_saved = saved_ids.contains("spotify:liked");
-        let connected = self.spotify["connected"] == true;
-        let has_client_id = self.spotify["client_id"]
-            .as_str()
+        let connected = self.spotify.get("connected").and_then(Value::as_bool) == Some(true);
+        let has_client_id = self
+            .spotify
+            .get("client_id")
+            .and_then(Value::as_str)
             .is_some_and(|id| !id.trim().is_empty());
-        let redirect = self.spotify["redirect_uri"]
-            .as_str()
+        let redirect = self
+            .spotify
+            .get("redirect_uri")
+            .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
         let checking = self.reading(Read::SpotifyStatus);
@@ -287,7 +305,7 @@ impl Muzik {
         let mut page = page_frame()
             .child(style::page_title("Spotify"))
             .child(application);
-        if let Some(error) = self.spotify["error"].as_str() {
+        if let Some(error) = self.spotify.get("error").and_then(Value::as_str) {
             page = page.child(Alert::error("spotify-error", error.to_string()));
         }
         if checking {
@@ -308,8 +326,9 @@ impl Muzik {
                             .label_width(px(120.))
                             .item(
                                 "Account",
-                                self.spotify["account_name"]
-                                    .as_str()
+                                self.spotify
+                                    .get("account_name")
+                                    .and_then(Value::as_str)
                                     .unwrap_or("Spotify account")
                                     .to_string(),
                                 1,
@@ -381,8 +400,10 @@ impl Muzik {
         if !connected {
             return page_scroll(page);
         }
-        let playlists: Vec<&Value> = self.spotify["playlists"]
-            .as_array()
+        let playlists: Vec<&Value> = self
+            .spotify
+            .get("playlists")
+            .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter(|playlist| playlist["uri"] != "spotify:liked")

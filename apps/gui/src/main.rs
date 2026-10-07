@@ -79,9 +79,33 @@ struct ActivityProgress {
 impl ActivityProgress {
     fn percentage(&self) -> f32 {
         self.total.filter(|total| *total > 0.).map_or(0., |total| {
-            (self.completed / total * 100.).clamp(0., 100.) as f32
+            f64_to_f32((self.completed / total * 100.).clamp(0., 100.))
         })
     }
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no From<u64> for f64; progress counts tolerate rounding"
+)]
+fn u64_to_f64(value: u64) -> f64 {
+    value as f64
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no TryFrom<f64> for integers; `as` saturates and maps NaN to zero"
+)]
+fn f64_to_u64(value: f64) -> u64 {
+    value as u64
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no From<f64> for f32; display values tolerate rounding"
+)]
+fn f64_to_f32(value: f64) -> f32 {
+    value as f32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
@@ -328,12 +352,12 @@ impl Muzik {
     }
 
     fn launcher_params(&self, cx: &App) -> Value {
-        let mut params = serde_json::to_value(&self.defaults)
-            .ok()
-            .filter(Value::is_object)
-            .unwrap_or_else(|| json!({}));
-        params["raw"] = json!(self.raw.read(cx).value().to_string());
-        params
+        let mut params = match serde_json::to_value(&self.defaults) {
+            Ok(Value::Object(params)) => params,
+            _ => serde_json::Map::new(),
+        };
+        params.insert("raw".into(), json!(self.raw.read(cx).value().to_string()));
+        Value::Object(params)
     }
 
     fn apply_defaults(&mut self, defaults: GuiDefaults, cx: &mut Context<Self>) {
@@ -383,21 +407,19 @@ impl Muzik {
         self.runs.iter().any(|run| run.kind == kind)
     }
 
-    fn run_mut(&mut self, id: &str) -> &mut Run {
-        let index = match self.runs.iter().position(|run| run.id == id) {
-            Some(index) => index,
-            None => {
-                self.runs.push(Run::new(id, RunKind::Unknown, "Job"));
-                self.runs.len() - 1
-            }
+    fn run_mut(&mut self, id: &str) -> Option<&mut Run> {
+        let run = match self.runs.iter().position(|run| run.id == id) {
+            Some(index) => self.runs.get_mut(index)?,
+            None => self.runs.push_mut(Run::new(id, RunKind::Unknown, "Job")),
         };
-        let run = &mut self.runs[index];
         run.queued = false;
-        run
+        Some(run)
     }
 
     fn set_status(&mut self, id: &str, status: impl Into<String>) {
-        self.run_mut(id).status = status.into();
+        if let Some(run) = self.run_mut(id) {
+            run.status = status.into();
+        }
     }
 
     fn apply_jobs(&mut self, snapshot: &Value) {
@@ -453,12 +475,14 @@ impl Muzik {
                 description,
                 total,
             } => {
-                let run = self.run_mut(job_id);
+                let Some(run) = self.run_mut(job_id) else {
+                    return;
+                };
                 let progress = &mut run.progress;
                 progress.task = Some(*task);
                 progress.description = description.clone();
                 progress.completed = 0.;
-                progress.total = total.filter(|total| *total > 0).map(|total| total as f64);
+                progress.total = total.filter(|total| *total > 0).map(u64_to_f64);
                 run.status = progress.description.clone();
                 run.status.clone()
             }
@@ -467,19 +491,24 @@ impl Muzik {
                 completed,
                 total,
             } => {
-                let progress = &mut self.run_mut(job_id).progress;
+                let Some(run) = self.run_mut(job_id) else {
+                    return;
+                };
+                let progress = &mut run.progress;
                 if progress.task != Some(*task) {
                     return;
                 }
                 if let Some(total) = total.filter(|total| *total > 0) {
-                    progress.total = Some(total as f64);
+                    progress.total = Some(u64_to_f64(total));
                 }
-                progress.completed =
-                    completed.map_or(progress.completed + 1., |completed| completed as f64);
+                progress.completed = completed.map_or(progress.completed + 1., u64_to_f64);
                 String::new()
             }
             JobEvent::ProgressFinished { task, .. } => {
-                let progress = &mut self.run_mut(job_id).progress;
+                let Some(run) = self.run_mut(job_id) else {
+                    return;
+                };
+                let progress = &mut run.progress;
                 if progress.task != Some(*task) {
                     return;
                 }
@@ -493,9 +522,10 @@ impl Muzik {
                 format!("Started {step}")
             }
             JobEvent::StepFinished(step) => {
-                let progress = &mut self.run_mut(job_id).progress;
-                if progress.total.is_some() {
-                    progress.completed += 1.;
+                if let Some(run) = self.run_mut(job_id) {
+                    if run.progress.total.is_some() {
+                        run.progress.completed += 1.;
+                    }
                 }
                 format!("{step} finished")
             }
@@ -632,10 +662,11 @@ impl Muzik {
                         title,
                         kind,
                     } => {
-                        let run = self.run_mut(&job_id);
-                        run.kind = kind.into();
-                        run.title = title;
-                        run.status = "Starting".into();
+                        if let Some(run) = self.run_mut(&job_id) {
+                            run.kind = kind.into();
+                            run.title = title;
+                            run.status = "Starting".into();
+                        }
                     }
                     AppEvent::JobEvent { job_id, event, .. } => {
                         self.record_job_event(&job_id, &event);
@@ -731,13 +762,17 @@ impl Muzik {
     }
 
     fn replace_watchlist(&mut self, incoming: Value, window: &mut Window, cx: &mut Context<Self>) {
-        let old_id = self.watchlist["playlists"][self.selected_playlist]["playlist_id"]
-            .as_str()
+        let old = self
+            .watchlist
+            .get("playlists")
+            .and_then(|all| all.get(self.selected_playlist));
+        let old_id = old
+            .and_then(|playlist| playlist["playlist_id"].as_str())
             .map(str::to_owned);
-        let old_title = self.watchlist["playlists"][self.selected_playlist]["title"]
-            .as_str()
+        let old_title = old
+            .and_then(|playlist| playlist["title"].as_str())
             .unwrap_or("");
-        let playlists = incoming["playlists"].as_array();
+        let playlists = incoming.get("playlists").and_then(Value::as_array);
         let count = playlists.map_or(0, Vec::len);
         let selected = old_id
             .as_deref()
@@ -765,8 +800,10 @@ impl Muzik {
     }
 
     fn sync_watch_table(&mut self, cx: &mut Context<Self>) {
-        let rows = self.watchlist["playlists"]
-            .get(self.selected_playlist)
+        let rows = self
+            .watchlist
+            .get("playlists")
+            .and_then(|all| all.get(self.selected_playlist))
             .map(|playlist| watch_table::rows(playlist, self.filter, &self.queued_items))
             .unwrap_or_default();
         self.watch_table.update(cx, |state, cx| {
@@ -779,8 +816,11 @@ impl Muzik {
         let Some(open) = self.sheet_item.as_deref() else {
             return Vec::new();
         };
-        self.watchlist["playlists"][self.selected_playlist]["items"]
-            .as_array()
+        self.watchlist
+            .get("playlists")
+            .and_then(|all| all.get(self.selected_playlist))
+            .and_then(|playlist| playlist.get("items"))
+            .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter(|item| item["video_id"] == open)
@@ -815,7 +855,7 @@ impl Muzik {
     fn open_decision(&mut self, data: Value, window: &mut Window, cx: &mut Context<Self>) {
         self.chapter_rows.clear();
         if choices::kind(&data) == Some(DecisionKind::ChapterEdit) {
-            if let Some(chapters) = data["payload"]["chapters"].as_array() {
+            if let Some(chapters) = data.pointer("/payload/chapters").and_then(Value::as_array) {
                 for chapter in chapters {
                     let mut make = |key: &'static str| {
                         let value = describe(&chapter[key]);
@@ -851,17 +891,19 @@ impl Muzik {
             return;
         };
         self.chapter_rows.clear();
-        if decision["queue_job"].is_null() {
+        let field = |key: &str| decision.get(key).unwrap_or(&Value::Null);
+        let queue_job = field("queue_job");
+        if queue_job.is_null() {
+            let decision_id = field("decision_id");
             self.requests
-                .retain(|request| request["decision_id"] != decision["decision_id"]);
-            self.send_reply(describe(&decision["decision_id"]), value, cx);
-            if let Some(job_id) = decision["job_id"].as_str() {
+                .retain(|request| request["decision_id"] != *decision_id);
+            self.send_reply(describe(decision_id), value, cx);
+            if let Some(job_id) = field("job_id").as_str() {
                 self.set_status(job_id, "Working");
             }
         } else {
-            self.waiting
-                .retain(|job| job["id"] != decision["queue_job"]);
-            self.send_answer(decision["queue_job"].as_i64(), value, cx);
+            self.waiting.retain(|job| job["id"] != *queue_job);
+            self.send_answer(queue_job.as_i64(), value, cx);
         }
         if let Some(next) = self.requests.first().cloned() {
             self.open_decision(next, window, cx);
@@ -892,7 +934,7 @@ impl Muzik {
                 _ => {
                     self.status = format!(
                         "Check chapter {}: index, start, end, and title",
-                        row_number + 1
+                        row_number.saturating_add(1)
                     );
                     cx.notify();
                     return;
@@ -982,7 +1024,13 @@ impl Muzik {
             .label("Run workflow")
             .on_click(cx.listener(|view, _, _, cx| {
                 let params = view.launcher_params(cx);
-                if params["raw"].as_str().unwrap_or("").trim().is_empty() {
+                if params
+                    .get("raw")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .trim()
+                    .is_empty()
+                {
                     view.status = "Enter a URL or local path".into();
                     cx.notify();
                     return;
@@ -1037,7 +1085,7 @@ impl Muzik {
             ("process", "Process"),
             ("import", "Import"),
         ] {
-            let lane = &self.gates[key];
+            let lane = self.gates.get(key).unwrap_or(&Value::Null);
             let active: Vec<&str> = lane["active"]
                 .as_array()
                 .into_iter()
@@ -1150,7 +1198,7 @@ impl Muzik {
 
     fn job_panel(&self, cx: &mut Context<Self>) -> AnyElement {
         let running = self.runs.iter().filter(|run| !run.queued).count();
-        let queued = self.runs.len() - running;
+        let queued = self.runs.len().saturating_sub(running);
         let mut summary = format!("{running} running");
         if queued > 0 {
             summary.push_str(&format!(" · {queued} queued"));
@@ -1202,7 +1250,9 @@ impl Muzik {
             if let Some(note) = choices::note(decision) {
                 review = review.child(style::meta(note, cx));
             }
-            if let Some(note) = choices::agent_note(&decision["payload"]["agent"]) {
+            if let Some(note) =
+                choices::agent_note(decision.pointer("/payload/agent").unwrap_or(&Value::Null))
+            {
                 review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
             }
             let suggested = choices::suggestion(decision);
@@ -1235,7 +1285,10 @@ impl Muzik {
                     list = list.child(style::meta(short_detail(detail), cx));
                 }
                 if details.len() > 6 {
-                    list = list.child(style::meta(format!("{} more", details.len() - 6), cx));
+                    list = list.child(style::meta(
+                        format!("{} more", details.len().saturating_sub(6)),
+                        cx,
+                    ));
                 }
                 review = review.child(
                     div()
@@ -1256,7 +1309,7 @@ impl Muzik {
                             .id(("chapter", index))
                             .v_flex()
                             .gap_1()
-                            .child(format!("Chapter {}", index + 1))
+                            .child(format!("Chapter {}", index.saturating_add(1)))
                             .child(
                                 div()
                                     .flex()
@@ -1308,9 +1361,11 @@ impl Muzik {
                 format!("NEEDS YOU ({})", self.waiting.len()),
                 cx,
             ));
-            for (index, job) in self.waiting.iter().enumerate() {
-                let kind = choices::kind(job);
-                let job = job.clone();
+            for (index, waiting) in self.waiting.iter().enumerate() {
+                let kind = choices::kind(waiting);
+                let highlighted = waiting["id"] == open;
+                let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
+                let job = waiting.clone();
                 inbox = inbox.child(
                     div()
                         .id(("waiting", index))
@@ -1319,7 +1374,7 @@ impl Muzik {
                         .p_2()
                         .rounded_md()
                         .border_1()
-                        .border_color(if job["id"] == open {
+                        .border_color(if highlighted {
                             cx.theme().warning
                         } else {
                             cx.theme().border
@@ -1327,12 +1382,7 @@ impl Muzik {
                         .bg(cx.theme().background)
                         .cursor_pointer()
                         .hover(|this| this.bg(cx.theme().accent))
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_semibold()
-                                .child(short_text(job["title"].as_str().unwrap_or("Item"), 60)),
-                        )
+                        .child(div().text_sm().font_semibold().child(title))
                         .child(style::meta(choices::title(kind), cx))
                         .on_click(cx.listener(move |view, _, window, cx| {
                             view.open_waiting(&job, window, cx)
@@ -1343,15 +1393,16 @@ impl Muzik {
         }
         if !self.runs.is_empty() {
             let mut list = div().v_flex().gap_1p5().child(style::overline("JOBS", cx));
+            let limit = running.saturating_add(5);
             let shown = self
                 .runs
                 .iter()
                 .enumerate()
-                .filter(|(index, run)| !run.queued || *index < running + 5);
+                .filter(|(index, run)| !run.queued || *index < limit);
             for (index, run) in shown {
                 list = list.child(self.run_row(index, run, cx));
             }
-            let hidden = self.runs.len().saturating_sub(running + 5);
+            let hidden = self.runs.len().saturating_sub(limit);
             if hidden > 0 {
                 list = list.child(style::meta(format!("{hidden} more in the queue"), cx));
             }
@@ -1370,7 +1421,10 @@ impl Muzik {
             for (row_index, row) in section.rows.iter().enumerate() {
                 summary = summary.child(
                     div()
-                        .id(("activity-row", index * 10 + row_index))
+                        .id((
+                            "activity-row",
+                            index.saturating_mul(10).saturating_add(row_index),
+                        ))
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
                         .child(row.clone()),
@@ -1381,7 +1435,10 @@ impl Muzik {
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(format!("{} more", section.count - section.rows.len())),
+                        .child(format!(
+                            "{} more",
+                            section.count.saturating_sub(section.rows.len())
+                        )),
                 );
             }
             panel = panel.child(
@@ -1429,12 +1486,7 @@ impl Render for Muzik {
             Page::Workflow => self.workflow(cx),
             Page::Settings => div()
                 .flex_1()
-                .child(
-                    self.config_view
-                        .as_ref()
-                        .expect("config view exists")
-                        .clone(),
-                )
+                .children(self.config_view.clone())
                 .into_any_element(),
             Page::Watchlist => self.watchlist(cx),
             Page::Library => self.library(cx),
@@ -1472,19 +1524,20 @@ impl Render for Muzik {
 }
 
 fn shorten_paths(line: &str) -> String {
-    let Some(start) = line
+    let Some((head, tail)) = line
         .find('/')
-        .filter(|start| *start == 0 || line[..*start].ends_with(' '))
+        .and_then(|start| line.split_at_checked(start))
+        .filter(|(head, _)| head.is_empty() || head.ends_with(' '))
     else {
         return line.to_owned();
     };
-    let path = std::path::Path::new(&line[start..]);
+    let path = std::path::Path::new(tail);
     if path.components().count() < 3 {
         return line.to_owned();
     }
     path.file_name().map_or_else(
         || line.to_owned(),
-        |name| format!("{}{}", &line[..start], name.to_string_lossy()),
+        |name| format!("{head}{}", name.to_string_lossy()),
     )
 }
 
@@ -1516,8 +1569,9 @@ fn activity_section(
 
 fn candidate_summary(candidate: &Value) -> String {
     let title = candidate["title"].as_str().unwrap_or("Unknown title");
-    let format = candidate["quality"]["format"]
-        .as_str()
+    let format = candidate
+        .pointer("/quality/format")
+        .and_then(Value::as_str)
         .unwrap_or("Unknown format");
     let user = candidate["user"].as_str().unwrap_or("Unknown user");
     format!("{title} · {format} · {user}")
@@ -1633,7 +1687,7 @@ fn short_detail(detail: &str) -> String {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     if cfg!(target_os = "macos") {
         let path = tool_path(
             std::env::var_os("PATH"),
@@ -1646,14 +1700,14 @@ fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("--version") => {
             println!("muzik-gpui {}", env!("CARGO_PKG_VERSION"));
-            return;
+            return std::process::ExitCode::SUCCESS;
         }
         Some("--check-backend") => {
             if let Err(error) = check_backend() {
                 eprintln!("{error}");
-                std::process::exit(1);
+                return std::process::ExitCode::FAILURE;
             }
-            return;
+            return std::process::ExitCode::SUCCESS;
         }
         _ => {}
     }
@@ -1693,11 +1747,15 @@ fn main() {
             }
         })
         .detach();
-        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+        if let Err(error) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
             cx.new(|cx| Muzik::new(window, cx))
-        })
-        .expect("open main window");
+        }) {
+            tracing::error!(%error, "the main window did not open");
+            eprintln!("open main window: {error}");
+            cx.quit();
+        }
     });
+    std::process::ExitCode::SUCCESS
 }
 
 fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {

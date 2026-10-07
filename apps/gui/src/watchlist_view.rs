@@ -1,4 +1,5 @@
 use super::*;
+use crate::watch_table::ItemKey;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::empty::{Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle};
@@ -11,8 +12,10 @@ use gpui_kit::component::table::DataTable;
 
 impl Muzik {
     pub(crate) fn watchlist(&self, cx: &mut Context<Self>) -> AnyElement {
-        let playlists = self.watchlist["playlists"]
-            .as_array()
+        let playlists = self
+            .watchlist
+            .get("playlists")
+            .and_then(Value::as_array)
             .or_else(|| self.watchlist.as_array());
         let has_playlists = playlists.is_some_and(|all| !all.is_empty());
         let loading = self.reading(Read::Watchlist);
@@ -352,46 +355,44 @@ impl Muzik {
         });
     }
 
-    fn is_queued(&self, playlist_id: &str, position: usize, video_id: &str) -> bool {
+    fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
         self.queued_items
-            .contains(&ItemId::new(playlist_id, position as u64, Some(video_id)).to_string())
+            .contains(&ItemId::new(playlist_id, position, Some(video_id)).to_string())
     }
 
     pub(crate) fn item_request(
         &self,
         playlist_id: &str,
-        position: usize,
+        position: u64,
         video_id: &str,
         action: ItemAction,
     ) -> ItemRequest {
         let title = self
             .find_item(&(playlist_id.to_owned(), position, video_id.to_owned()))
-            .and_then(|item| item["title"].as_str().map(str::to_owned))
+            .and_then(|item| item.get("title").and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_else(|| video_id.to_owned());
         ItemRequest {
-            id: ItemId::new(playlist_id, position as u64, Some(video_id)),
+            id: ItemId::new(playlist_id, position, Some(video_id)),
             title,
             action,
         }
     }
 
-    fn find_item(&self, key: &(String, usize, String)) -> Option<Value> {
-        let playlists = self.watchlist["playlists"].as_array()?;
+    fn find_item(&self, key: &ItemKey) -> Option<Value> {
+        let playlists = self.watchlist.get("playlists")?.as_array()?;
         let playlist = playlists
             .iter()
             .find(|playlist| playlist_id(playlist) == key.0)?;
         playlist["items"]
             .as_array()?
             .iter()
-            .find(|item| {
-                item["position"].as_u64() == Some(key.1 as u64) && item_video_id(item) == key.2
-            })
+            .find(|item| item["position"].as_u64() == Some(key.1) && item_video_id(item) == key.2)
             .cloned()
     }
 
     pub(crate) fn open_item_sheet(
         &mut self,
-        key: (String, usize, String),
+        key: ItemKey,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -413,7 +414,7 @@ impl Muzik {
 fn item_sheet(
     sheet: Sheet,
     item: &Value,
-    key: &(String, usize, String),
+    key: &ItemKey,
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Sheet {
@@ -476,7 +477,10 @@ fn item_sheet(
         .border_color(cx.theme().border)
         .child(style::overline("COMMANDS", cx));
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
-        let availability = &item["actions"][action.as_ref()];
+        let availability = item
+            .get("actions")
+            .and_then(|actions| actions.get(action.as_ref()))
+            .unwrap_or(&Value::Null);
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
         let request = entity.read(cx).item_request(&key.0, key.1, &key.2, action);
         let label = action_label(action);
@@ -556,15 +560,21 @@ fn playlist_title(playlist: &Value) -> &str {
         .unwrap_or("Playlist")
 }
 
-fn item_position(item: &Value) -> usize {
-    item["position"].as_u64().unwrap_or(0) as usize
+fn item_position(item: &Value) -> u64 {
+    item["position"].as_u64().unwrap_or(0)
 }
 
 fn retryable(item: &Value) -> bool {
     item["summary"].as_str() == Some(Summary::Failed.as_ref())
-        && item["primary_action"]["action"].as_str() == Some(ItemAction::Retry.as_ref())
-        && item["actions"][ItemAction::Retry.as_ref()]["enabled"]
-            .as_bool()
+        && item
+            .pointer("/primary_action/action")
+            .and_then(Value::as_str)
+            == Some(ItemAction::Retry.as_ref())
+        && item
+            .get("actions")
+            .and_then(|actions| actions.get(ItemAction::Retry.as_ref()))
+            .and_then(|retry| retry.get("enabled"))
+            .and_then(Value::as_bool)
             .unwrap_or(true)
 }
 

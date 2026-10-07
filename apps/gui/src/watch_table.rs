@@ -2,7 +2,7 @@ use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 
-pub(crate) type ItemKey = (String, usize, String);
+pub(crate) type ItemKey = (String, u64, String);
 
 pub(crate) struct WatchRow {
     pub key: ItemKey,
@@ -11,26 +11,36 @@ pub(crate) struct WatchRow {
 }
 
 impl WatchRow {
+    fn text(&self, key: &str) -> Option<&str> {
+        self.item.get(key).and_then(Value::as_str)
+    }
+
     fn title(&self) -> &str {
-        self.item["title"].as_str().unwrap_or("Untitled")
+        self.text("title").unwrap_or("Untitled")
     }
 
     fn summary(&self) -> &str {
-        self.item["summary"].as_str().unwrap_or("")
+        self.text("summary").unwrap_or("")
     }
 
     fn error(&self) -> &str {
-        self.item["last_error"].as_str().unwrap_or("")
+        self.text("last_error").unwrap_or("")
     }
 
     fn primary(&self) -> Option<(ItemAction, String, bool)> {
-        let action = self.item["primary_action"]["action"]
+        let primary = self.item.get("primary_action")?;
+        let action = primary
+            .get("action")?
             .as_str()?
             .parse::<ItemAction>()
             .ok()?;
-        let label = self.item["primary_action"]["label"].as_str()?.to_string();
-        let enabled = self.item["actions"][action.as_ref()]["enabled"]
-            .as_bool()
+        let label = primary.get("label")?.as_str()?.to_string();
+        let enabled = self
+            .item
+            .get("actions")
+            .and_then(|actions| actions.get(action.as_ref()))
+            .and_then(|availability| availability.get("enabled"))
+            .and_then(Value::as_bool)
             .unwrap_or(true);
         Some((action, label, enabled && !self.queued))
     }
@@ -110,7 +120,9 @@ impl TableDelegate for WatchTable {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        let (key, name, width) = COLUMNS[col_ix];
+        let Some(&(key, name, width)) = COLUMNS.get(col_ix) else {
+            return Column::new("", "");
+        };
         let column = Column::new(key, name).width(px(width));
         if SORTABLE.contains(&col_ix) {
             column.sortable()
@@ -229,14 +241,13 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
         .flatten()
         .filter(|item| watchlist_view::matches_filter(item, filter))
         .map(|item| {
-            let position = item["position"].as_u64().unwrap_or(0) as usize;
+            let position = item["position"].as_u64().unwrap_or(0);
             let video_id = item["video_id"]
                 .as_str()
                 .or_else(|| item["id"].as_str())
                 .unwrap_or("")
                 .to_string();
-            let queued =
-                queued.contains(&ItemId::new(&id, position as u64, Some(&video_id)).to_string());
+            let queued = queued.contains(&ItemId::new(&id, position, Some(&video_id)).to_string());
             WatchRow {
                 key: (id.clone(), position, video_id),
                 item: item.clone(),

@@ -94,7 +94,7 @@ impl Muzik {
             self.status = "Backend is not available".into();
             return;
         }
-        self.read_serial += 1;
+        self.read_serial = self.read_serial.wrapping_add(1);
         let serial = self.read_serial;
         self.reads.insert(read, serial);
         self.spawn_call(read.name(), cx, work, move |view, result, window, cx| {
@@ -148,7 +148,7 @@ impl Muzik {
             |view, jobs, _, cx| {
                 view.apply_jobs(&jobs);
                 view.sync_watch_table(cx);
-                view.gates = jobs["gates"].clone();
+                view.gates = jobs.get("gates").cloned().unwrap_or_default();
             },
         );
     }
@@ -426,13 +426,13 @@ impl Muzik {
             |view, status, window, cx| {
                 view.spotify = status;
                 if view.spotify_client_id.read(cx).value().is_empty() {
-                    if let Some(client_id) = view.spotify["client_id"].as_str() {
+                    if let Some(client_id) = view.spotify.get("client_id").and_then(Value::as_str) {
                         let client_id = client_id.to_string();
                         view.spotify_client_id
                             .update(cx, |state, cx| state.set_value(client_id, window, cx));
                     }
                 }
-                if view.spotify["connected"] == true {
+                if view.spotify.get("connected").and_then(Value::as_bool) == Some(true) {
                     view.spotify_playlists(cx);
                 }
                 view.status = "Spotify ready".into();
@@ -446,8 +446,10 @@ impl Muzik {
             cx,
             Backend::spotify_playlists,
             |view, playlists, _, _| {
-                if view.spotify["connected"] == true {
-                    view.spotify["playlists"] = playlists;
+                if let Some(spotify) = view.spotify.as_object_mut().filter(|spotify| {
+                    spotify.get("connected").and_then(Value::as_bool) == Some(true)
+                }) {
+                    spotify.insert("playlists".into(), playlists);
                 }
                 view.status = "Spotify ready".into();
             },

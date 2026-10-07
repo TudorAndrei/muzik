@@ -382,7 +382,11 @@ impl ConfigView {
             ),
         );
         let numbers = [
-            ("Jobs", self.defaults.jobs as f64, 1.),
+            (
+                "Jobs",
+                u64_to_f64(u64::try_from(self.defaults.jobs).unwrap_or(u64::MAX)),
+                1.,
+            ),
             ("Min bitrate", f64::from(self.defaults.min_bitrate), 32.),
         ]
         .into_iter()
@@ -400,8 +404,14 @@ impl ConfigView {
                     move |_| current,
                     move |value, cx| {
                         edit(&view, cx, |defaults| match index {
-                            0 => defaults.jobs = value as usize,
-                            _ => defaults.min_bitrate = value as u32,
+                            0 => {
+                                defaults.jobs =
+                                    usize::try_from(f64_to_u64(value)).unwrap_or(usize::MAX)
+                            }
+                            _ => {
+                                defaults.min_bitrate =
+                                    u32::try_from(f64_to_u64(value)).unwrap_or(u32::MAX)
+                            }
                         })
                     },
                 ),

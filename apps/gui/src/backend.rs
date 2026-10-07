@@ -101,7 +101,7 @@ impl Backend {
             workers: WORKERS,
             run,
             in_memory: cfg!(test),
-            chooser: (!cfg!(test)).then(|| Arc::new(Codex) as Arc<dyn Chooser>),
+            chooser: (!cfg!(test)).then(|| -> Arc<dyn Chooser> { Arc::new(Codex) }),
             sink: Arc::new(move |event| {
                 let _ = sender.try_send(event);
             }),
@@ -299,7 +299,7 @@ impl Backend {
         if slot.is_some() {
             bail!("A Spotify login is already active.");
         }
-        let number = self.logins.fetch_add(1, Ordering::Relaxed) + 1;
+        let number = self.logins.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let job_id = format!("spotify-login-{number}");
         let cancel = Arc::new(AtomicBool::new(false));
         *slot = Some(ActiveLogin {
@@ -379,7 +379,9 @@ mod tests {
                     return Ok(event);
                 }
             }
-            let deadline = Instant::now() + timeout;
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .ok_or("timeout is too long")?;
             while Instant::now() < deadline {
                 match self.receiver.try_recv() {
                     Ok(event) if wanted(&event) => return Ok(event),
