@@ -296,8 +296,11 @@ pub fn release_candidate_with_options(
         })
         .collect();
     let mut tracks = Vec::new();
-    for (medium_number, medium) in media.iter().enumerate() {
-        let medium_index = medium.position.unwrap_or((medium_number + 1) as u32);
+    let mut medium_number: u32 = 0;
+    let mut track_number: u32 = 0;
+    for medium in &media {
+        medium_number = medium_number.saturating_add(1);
+        let medium_index = medium.position.unwrap_or(medium_number);
         for track in medium.tracks.as_deref().unwrap_or_default() {
             if track.recording.as_ref().is_some_and(|recording| {
                 recording.title == "[data track]"
@@ -314,13 +317,14 @@ pub fn release_candidate_with_options(
             let length_ms = track
                 .length
                 .or_else(|| recording.and_then(|item| item.length));
+            track_number = track_number.saturating_add(1);
             tracks.push(TrackCandidate {
                 recording_id: recording.map(|item| RecordingId(item.id.clone())),
                 release_track_id: Some(track.id.clone()),
                 title: track.title.clone(),
                 artist: artist_name(artist_credits),
                 length_seconds: length_ms.map(|length| f64::from(length) / 1000.0),
-                index: (tracks.len() + 1) as u32,
+                index: track_number,
                 medium: medium_index,
                 medium_index: track.position,
             });
