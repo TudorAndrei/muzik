@@ -29,12 +29,13 @@ description = "Build the Rust CLI and desktop app"
 run = "cargo build --locked -p muzik-cli -p muzik-gpui"
 
 [tasks.check]
-description = "Run format, Clippy, tests, and license checks"
+description = "Run format, Clippy, tests, dependency, and workflow checks"
 run = """
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
-cargo deny check licenses
+cargo deny check
+zizmor .github/workflows
 """
 
 [tasks.test-scoped]
