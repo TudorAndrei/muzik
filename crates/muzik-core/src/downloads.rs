@@ -62,19 +62,16 @@ pub fn scan(directory: &Path) -> io::Result<Vec<DownloadedItem>> {
 }
 
 pub fn youtube_id_from_name(name: &str) -> Option<&str> {
-    name.as_bytes()
-        .windows(13)
-        .enumerate()
-        .find_map(|(offset, part)| {
-            (part.first() == Some(&b'[')
-                && part.last() == Some(&b']')
-                && part.get(1..12).is_some_and(|id| {
-                    id.iter()
-                        .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-')
-                }))
-            .then(|| name.get(offset + 1..offset + 12))
-            .flatten()
-        })
+    name.as_bytes().windows(13).find_map(|part| {
+        let id = part.get(1..12)?;
+        (part.first() == Some(&b'[')
+            && part.last() == Some(&b']')
+            && id
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_' || *byte == b'-'))
+        .then(|| std::str::from_utf8(id).ok())
+        .flatten()
+    })
 }
 
 pub fn title_from_name(stem: &str) -> String {

@@ -31,7 +31,8 @@ pub fn default_config_path() -> PathBuf {
         .or_else(|| env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_default();
-    let mut directories = vec![home.join(".config")];
+    let fallback = home.join(".config");
+    let mut directories = vec![fallback.clone()];
     if cfg!(target_os = "macos") {
         directories.push(home.join("Library/Application Support"));
     }
@@ -55,7 +56,7 @@ pub fn default_config_path() -> PathBuf {
         .iter()
         .map(|directory| directory.join("beets/config.yaml"))
         .find(|path| path.is_file())
-        .unwrap_or_else(|| directories[0].join("beets/config.yaml"))
+        .unwrap_or_else(|| fallback.join("beets/config.yaml"))
 }
 
 #[derive(Debug, Error)]

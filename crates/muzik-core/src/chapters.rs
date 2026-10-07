@@ -110,7 +110,7 @@ pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
         .map(|(position, (start, title))| Chapter {
             index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
             start: *start,
-            end: entries.get(position + 1).map(|entry| entry.0),
+            end: entries.get(position.saturating_add(1)).map(|entry| entry.0),
             title: title.clone(),
         })
         .collect()
@@ -126,8 +126,10 @@ pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
         .filter_map(|comment| {
             let chapters = parse_tracklist(comment.get("text")?.as_str()?);
             (chapters.len() >= 2).then_some((
-                u8::from(comment.get("is_pinned") == Some(&Value::Bool(true))) * 2
-                    + u8::from(comment.get("author_is_uploader") == Some(&Value::Bool(true))),
+                (
+                    comment.get("is_pinned") == Some(&Value::Bool(true)),
+                    comment.get("author_is_uploader") == Some(&Value::Bool(true)),
+                ),
                 chapters,
             ))
         })
@@ -343,10 +345,17 @@ fn json_seconds(value: Option<&Value>, default: i64) -> Result<i64, Error> {
         _ => None,
     }
     .ok_or(Error::InvalidValue("chapter time"))?;
-    if !number.is_finite() || number < i64::MIN as f64 || number >= i64::MAX as f64 {
-        return Err(Error::InvalidValue("chapter time"));
-    }
-    Ok(number as i64)
+    truncate_to_i64(number).ok_or(Error::InvalidValue("chapter time"))
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no checked f64 to i64 conversion; the range is checked first"
+)]
+fn truncate_to_i64(number: f64) -> Option<i64> {
+    (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0)
+        .contains(&number)
+        .then_some(number as i64)
 }
 
 fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
