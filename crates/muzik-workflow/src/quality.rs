@@ -60,7 +60,10 @@ trait Backend {
 
 /// Return the original audio if a replacement cannot be verified. The caller
 /// owns any returned replacement directory and must remove it after import.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "public entry point that takes independent settings and callbacks from callers in other crates"
+)]
 pub fn check_youtube_quality(
     paths: &Paths,
     audio_files: Vec<PathBuf>,
@@ -87,7 +90,10 @@ pub fn check_youtube_quality(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "takes the check_youtube_quality arguments plus the backend that tests replace"
+)]
 fn check_with_backend(
     backend: &mut dyn Backend,
     audio_files: Vec<PathBuf>,
@@ -99,11 +105,10 @@ fn check_with_backend(
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
 ) -> Result<QualityUpgradeResult> {
     let keep = QualityUpgradeResult::keep(&audio_files);
-    if policy == QualityPolicy::Off || audio_files.is_empty() {
+    let Some(primary) = audio_files.first().filter(|_| policy != QualityPolicy::Off) else {
         return Ok(keep);
-    }
+    };
     check_cancelled(cancelled)?;
-    let primary = &audio_files[0];
     let current = match backend.measure(primary) {
         Ok(Some(current)) => current,
         Ok(None) => return Ok(keep),
@@ -243,8 +248,7 @@ fn check_with_backend(
         ));
         return Ok(no_safe());
     }
-    if files.len() == 1 {
-        let replacement = &files[0];
+    if let [replacement] = files.as_slice() {
         let measured = backend.measure(replacement).ok().flatten();
         let duration = backend.duration(replacement).ok().flatten();
         if !measured
@@ -361,11 +365,11 @@ fn measured_better(new: &MeasuredQuality, current: &MeasuredQuality) -> bool {
 }
 
 fn candidate_payload(candidate: &Candidate) -> Value {
-    let first = &candidate.files[0];
+    let first = candidate.files.first();
     json!({
         "username":candidate.username,
-        "title":first.name.rsplit(['/', '\\']).next().unwrap_or("Audio file"),
-        "quality":{"format":file_format(first).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.bitrate_kbps},
+        "title":first.and_then(|file| file.name.rsplit(['/', '\\']).next()).unwrap_or("Audio file"),
+        "quality":{"format":first.and_then(file_format).map_or_else(String::new, |format| format.to_string().to_ascii_uppercase()),"bitrate":first.and_then(|file| file.bitrate_kbps)},
         "files":candidate.files,
     })
 }
@@ -419,15 +423,24 @@ impl Backend for SoulseekBackend {
             if let Ok(bytes) = std::fs::read(sidecar)
                 && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
             {
-                let sources = [&value["resolved"], &value["candidate"]["metadata"], &value];
-                for source in sources {
+                let sources = [
+                    value.get("resolved"),
+                    value.pointer("/candidate/metadata"),
+                    Some(&value),
+                ];
+                for source in sources.into_iter().flatten() {
                     if artist.is_empty() {
-                        artist = source["artist"].as_str().unwrap_or("").to_owned();
+                        artist = source
+                            .get("artist")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned();
                     }
                     if title.is_empty() {
-                        title = source["title"]
-                            .as_str()
-                            .or_else(|| source["track"].as_str())
+                        title = source
+                            .get("title")
+                            .and_then(Value::as_str)
+                            .or_else(|| source.get("track").and_then(Value::as_str))
                             .unwrap_or("")
                             .to_owned();
                     }

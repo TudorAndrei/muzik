@@ -102,7 +102,11 @@ impl WorkflowOperations for RecordingOperations {
         on_progress(SplitProgress {
             completed: 1,
             total: task.chapters.len(),
-            chapter_index: task.chapters[0].index,
+            chapter_index: task
+                .chapters
+                .first()
+                .ok_or("the task has no chapters")?
+                .index,
         });
         Ok(())
     }
@@ -113,7 +117,7 @@ impl WorkflowOperations for RecordingOperations {
         _: &WorkflowOptions,
         _: &AtomicBool,
     ) -> Result<QualityCheckedAudio, String> {
-        self.quality_calls += 1;
+        self.quality_calls = self.quality_calls.saturating_add(1);
         Ok(self
             .quality_result
             .clone()

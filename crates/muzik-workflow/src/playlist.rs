@@ -181,7 +181,7 @@ pub fn run_spotify_export<O: WorkflowOperations>(
         check_cancelled(cancelled)?;
         let occurrence = occurrences.entry(track.source_id.clone()).or_default();
         let id = format!("{}#{}", track.source_id, *occurrence);
-        *occurrence += 1;
+        *occurrence = occurrence.saturating_add(1);
         if options.dry_run || !options.force && checkpoint.is_complete(&id, options.no_organize) {
             result.items.push(PlaylistItemResult {
                 id,
@@ -443,7 +443,7 @@ fn parse_spotify_json(data: &[u8]) -> Result<SpotifyPlaylist, Error> {
                 .as_u64()
                 .and_then(|number| usize::try_from(number).ok())
                 .ok_or_else(|| Error::Operation("Spotify track position is invalid".into()))?,
-            None => index + 1,
+            None => index.saturating_add(1),
         };
         let source_id = entry
             .get("source_id")
@@ -498,7 +498,7 @@ fn parse_spotify_csv(path: &Path) -> Result<SpotifyPlaylist, Error> {
         if !field("episode").is_empty() || field("type").eq_ignore_ascii_case("episode") {
             return Err(Error::Operation(format!(
                 "Spotify CSV row {} is an episode",
-                index + 2
+                index.saturating_add(2)
             )));
         }
         let title = field("track_name");
@@ -506,14 +506,17 @@ fn parse_spotify_csv(path: &Path) -> Result<SpotifyPlaylist, Error> {
         if title.is_empty() || artist.is_empty() {
             return Err(Error::Operation(format!(
                 "Spotify CSV row {} needs track_name and artist_name",
-                index + 2
+                index.saturating_add(2)
             )));
         }
         let position = if field("position").is_empty() {
-            index + 1
+            index.saturating_add(1)
         } else {
             field("position").parse::<usize>().map_err(|_| {
-                Error::Operation(format!("invalid position in Spotify CSV row {}", index + 2))
+                Error::Operation(format!(
+                    "invalid position in Spotify CSV row {}",
+                    index.saturating_add(2)
+                ))
             })?
         };
         let track_id = field("spotify_track_id");

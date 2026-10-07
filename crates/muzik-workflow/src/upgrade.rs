@@ -50,7 +50,7 @@ pub fn scan_library(
         let Some(measured) = measure(&path)? else {
             continue;
         };
-        scanned += 1;
+        scanned = scanned.saturating_add(1);
         if measured.lossless
             || measured
                 .bitrate_kbps
@@ -184,7 +184,8 @@ pub(crate) fn tokens(value: &str) -> HashSet<String> {
 }
 
 fn overlap(need: &HashSet<String>, haystack: &HashSet<String>) -> bool {
-    !need.is_empty() && need.intersection(haystack).count() * 3 >= need.len() * 2
+    !need.is_empty()
+        && need.intersection(haystack).count().saturating_mul(3) >= need.len().saturating_mul(2)
 }
 
 pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
@@ -204,21 +205,23 @@ pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
         .map(|file| file.name.as_str())
         .collect::<Vec<_>>();
     let all_text = tokens(&names.join(" "));
-    let title_text = if files.len() == 1 {
-        tokens(files[0].name.rsplit(['/', '\\']).next().unwrap_or(""))
-    } else {
-        let common_parent = files[0]
-            .name
-            .rsplit_once(['/', '\\'])
-            .map(|(parent, _)| parent);
-        if common_parent.is_none()
-            || files.iter().any(|file| {
-                file.name.rsplit_once(['/', '\\']).map(|(parent, _)| parent) != common_parent
-            })
-        {
-            return false;
+    let title_text = match files.as_slice() {
+        [] => return false,
+        [file] => tokens(file.name.rsplit(['/', '\\']).next().unwrap_or("")),
+        [first, ..] => {
+            let common_parent = first
+                .name
+                .rsplit_once(['/', '\\'])
+                .map(|(parent, _)| parent);
+            if common_parent.is_none()
+                || files.iter().any(|file| {
+                    file.name.rsplit_once(['/', '\\']).map(|(parent, _)| parent) != common_parent
+                })
+            {
+                return false;
+            }
+            tokens(common_parent.unwrap_or(""))
         }
-        tokens(common_parent.unwrap_or(""))
     };
     if !overlap(&tokens(wanted.artist), &all_text) || !overlap(&tokens(wanted.title), &title_text) {
         return false;

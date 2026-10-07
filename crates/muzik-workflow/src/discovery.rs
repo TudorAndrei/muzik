@@ -121,8 +121,8 @@ fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
             .into_iter()
             .filter(|hit| hit.score.is_some_and(|score| score >= 95))
             .collect::<Vec<_>>();
-        if strong.len() == 1 {
-            Some(client.lookup_release(&strong[0].id.0)?)
+        if let [hit] = strong.as_slice() {
+            Some(client.lookup_release(&hit.id.0)?)
         } else {
             None
         }
@@ -150,7 +150,12 @@ fn validate_duration(
     release_total: i64,
     audio_duration: f64,
 ) -> Vec<Chapter> {
-    let difference = (audio_duration - release_total as f64).abs();
+    #[expect(
+        clippy::as_conversions,
+        reason = "std has no i64 to f64 conversion; release lengths in seconds are far below 2^53"
+    )]
+    let release_total = release_total as f64;
+    let difference = (audio_duration - release_total).abs();
     if difference > 15.0_f64.max(audio_duration * 0.05) {
         return Vec::new();
     }
@@ -175,15 +180,11 @@ fn chapters_from_tracks(tracks: &[muzik_core::TrackCandidate]) -> Vec<Chapter> {
         let Some(length) = track.length_seconds else {
             return Vec::new();
         };
-        let rounded = length.round();
-        if !rounded.is_finite() || rounded <= 0.0 || rounded > i64::MAX as f64 {
-            return Vec::new();
-        }
-        let Some(end) = start.checked_add(rounded as i64) else {
+        let Some(end) = whole_seconds(length).and_then(|seconds| start.checked_add(seconds)) else {
             return Vec::new();
         };
         chapters.push(Chapter {
-            index: u32::try_from(position + 1).unwrap_or(u32::MAX),
+            index: u32::try_from(position.saturating_add(1)).unwrap_or(u32::MAX),
             start,
             end: Some(end),
             title: track.title.clone(),
@@ -191,6 +192,15 @@ fn chapters_from_tracks(tracks: &[muzik_core::TrackCandidate]) -> Vec<Chapter> {
         start = end;
     }
     chapters
+}
+
+#[expect(
+    clippy::as_conversions,
+    reason = "std has no checked f64 to i64 conversion; the range is checked before the cast"
+)]
+fn whole_seconds(length: f64) -> Option<i64> {
+    let rounded = length.round();
+    (rounded.is_finite() && rounded > 0.0 && rounded <= i64::MAX as f64).then_some(rounded as i64)
 }
 
 #[cfg(test)]

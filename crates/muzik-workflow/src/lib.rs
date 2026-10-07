@@ -503,9 +503,11 @@ pub fn process_audio_plan_with_events<O: WorkflowOperations>(
 }
 
 pub fn organize_targets_for_singles(singles: &[PathBuf]) -> Vec<PathBuf> {
-    if singles.len() > 1 {
-        let mut common = singles[0].parent().map(Path::to_path_buf);
-        for path in singles.iter().skip(1) {
+    if let [first, rest @ ..] = singles
+        && !rest.is_empty()
+    {
+        let mut common = first.parent().map(Path::to_path_buf);
+        for path in rest {
             while let Some(root) = common.as_ref() {
                 if path.starts_with(root) {
                     break;
