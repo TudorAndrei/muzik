@@ -276,8 +276,9 @@ impl Login {
             .map_err(|error| {
                 format!("Bandcamp sent an account summary that is not valid: {error}")
             })?;
-        summary["collection_summary"]["username"]
-            .as_str()
+        summary
+            .pointer("/collection_summary/username")
+            .and_then(Value::as_str)
             .filter(|user| !user.is_empty())
             .map(str::to_owned)
             .ok_or_else(|| "Bandcamp did not accept the cookies. Log in to Bandcamp in the browser, then copy the identity cookie again.".into())
@@ -352,11 +353,11 @@ fn write_private(path: &Path, text: &str) -> Result<()> {
 
 fn page_blob(html: &str) -> Option<Value> {
     let start = html.find("id=\"pagedata\"")?;
-    let tag_end = start + html[start..].find('>')?;
-    let tag = &html[..tag_end];
-    let tag = &tag[tag.rfind('<')?..];
+    let tag_end = start.checked_add(html.get(start..)?.find('>')?)?;
+    let tag = html.get(..tag_end)?;
+    let tag = tag.get(tag.rfind('<')?..)?;
     let blob = tag.split_once("data-blob=\"")?.1;
-    let blob = &blob[..blob.find('"')?];
+    let blob = blob.get(..blob.find('"')?)?;
     serde_json::from_str(&html_escape::decode_html_entities(blob)).ok()
 }
 
@@ -383,18 +384,27 @@ impl Purchase {
 
 pub fn collection(login: &Login) -> Result<Vec<Purchase>> {
     let blob = login.page_blob(&format!("https://bandcamp.com/{}", login.user))?;
-    if blob["fan_data"]["is_own_page"] != true {
+    if blob.pointer("/fan_data/is_own_page") != Some(&Value::Bool(true)) {
         return Err(format!(
             "Bandcamp did not accept the login for \"{}\". Check the user name, or copy the cookies again.",
             login.user
         )
         .into());
     }
-    let fan_id = blob["fan_data"]["fan_id"].clone();
+    let fan_id = blob
+        .pointer("/fan_data/fan_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data = |key: &str| {
+        blob.get("collection_data")
+            .and_then(|collection| collection.get(key))
+    };
     let mut details: Vec<Value> = Vec::new();
-    let cache = &blob["item_cache"]["collection"];
-    let sequence = blob["collection_data"]["sequence"].as_array();
-    match (sequence, cache.as_object()) {
+    let cache = blob
+        .pointer("/item_cache/collection")
+        .and_then(Value::as_object);
+    let sequence = data("sequence").and_then(Value::as_array);
+    match (sequence, cache) {
         (Some(sequence), Some(cache)) => details.extend(
             sequence
                 .iter()
@@ -404,13 +414,13 @@ pub fn collection(login: &Login) -> Result<Vec<Purchase>> {
         (None, Some(cache)) => details.extend(cache.values().cloned()),
         _ => {}
     }
-    let mut urls = blob["collection_data"]["redownload_urls"]
-        .as_object()
+    let mut urls = data("redownload_urls")
+        .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let mut more = blob["collection_data"]["item_count"].as_u64().unwrap_or(0)
-        > blob["collection_data"]["batch_size"].as_u64().unwrap_or(0);
-    let mut token = blob["collection_data"]["last_token"].clone();
+    let mut more = data("item_count").and_then(Value::as_u64).unwrap_or(0)
+        > data("batch_size").and_then(Value::as_u64).unwrap_or(0);
+    let mut token = data("last_token").cloned().unwrap_or(Value::Null);
     while more {
         let mut response = ureq::post("https://bandcamp.com/api/fancollection/1/collection_items")
             .header("User-Agent", USER_AGENT)
@@ -428,12 +438,17 @@ pub fn collection(login: &Login) -> Result<Vec<Purchase>> {
             .map_err(|error| {
                 format!("Bandcamp sent a collection page that is not valid: {error}")
             })?;
-        details.extend(page["items"].as_array().cloned().unwrap_or_default());
-        if let Some(page_urls) = page["redownload_urls"].as_object() {
+        details.extend(
+            page.get("items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        if let Some(page_urls) = page.get("redownload_urls").and_then(Value::as_object) {
             urls.extend(page_urls.clone());
         }
-        more = page["more_available"] == true;
-        token = page["last_token"].clone();
+        more = page.get("more_available") == Some(&Value::Bool(true));
+        token = page.get("last_token").cloned().unwrap_or(Value::Null);
     }
     Ok(purchases(&details, &urls))
 }
@@ -484,15 +499,18 @@ pub fn download(
     let partial = destination.with_file_name(format!(".{folder}.{format}.part"));
     let mut locate = || {
         let blob = login.page_blob(download_page)?;
-        let item = blob["digital_items"]
-            .as_array()
+        let item = blob
+            .get("digital_items")
+            .and_then(Value::as_array)
             .and_then(|items| items.first())
             .ok_or("Bandcamp has no download for this purchase.")?;
         let downloads = item["downloads"]
             .as_object()
             .ok_or("Bandcamp has no download for this purchase.")?;
-        downloads[format]["url"]
-            .as_str()
+        downloads
+            .get(format)
+            .and_then(|download| download.get("url"))
+            .and_then(Value::as_str)
             .map(str::to_owned)
             .ok_or_else(|| {
                 format!(
@@ -534,7 +552,7 @@ fn transfer(
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<String> {
     let mut url = Some(locate()?);
-    let mut failures = 0;
+    let mut failures: u32 = 0;
     loop {
         if cancelled.load(Ordering::SeqCst) {
             let _ = fs::remove_file(partial);
@@ -552,7 +570,7 @@ fn transfer(
         failures = if saved_bytes(partial) > before {
             0
         } else {
-            failures + 1
+            failures.saturating_add(1)
         };
         if failures >= DOWNLOAD_ATTEMPTS {
             return Err(error);
@@ -630,8 +648,14 @@ fn fetch(
         if count == 0 {
             break;
         }
-        file.write_all(&buffer[..count])?;
-        received += count as u64;
+        let chunk = buffer
+            .get(..count)
+            .ok_or("The Bandcamp download stopped: the reader sent too many bytes.")?;
+        file.write_all(chunk)?;
+        received = u64::try_from(count)
+            .ok()
+            .and_then(|count| received.checked_add(count))
+            .ok_or("The Bandcamp download is too large.")?;
         on_progress(received, total);
     }
     file.sync_all()?;
@@ -652,8 +676,8 @@ fn content_range(header: &str) -> Option<(u64, Option<u64>)> {
 }
 
 fn wait(duration: Duration, cancelled: &AtomicBool) {
-    let end = Instant::now() + duration;
-    while Instant::now() < end && !cancelled.load(Ordering::SeqCst) {
+    let start = Instant::now();
+    while start.elapsed() < duration && !cancelled.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(100));
     }
 }
@@ -845,7 +869,9 @@ mod tests {
         use std::io::{BufRead, BufReader};
         use std::net::TcpListener;
 
-        let body: Vec<u8> = (0..200_000u32).map(|index| (index % 251) as u8).collect();
+        let body = (0..200_000u32)
+            .map(|index| u8::try_from(index % 251))
+            .collect::<Result<Vec<u8>, _>>()?;
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}/album.zip", listener.local_addr()?);
         let served = body.clone();
@@ -906,10 +932,8 @@ mod tests {
         assert_eq!(name, "Band - Album.zip");
         assert_eq!(fs::read(&partial)?, body);
         assert_eq!(ranges, [None, Some(format!("bytes={}-", body.len() / 2))]);
-        assert_eq!(
-            progress.last(),
-            Some(&(body.len() as u64, Some(body.len() as u64)))
-        );
+        let size = u64::try_from(body.len())?;
+        assert_eq!(progress.last(), Some(&(size, Some(size))));
         Ok(())
     }
 
