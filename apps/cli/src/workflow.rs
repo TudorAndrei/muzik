@@ -74,12 +74,11 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn local_dry_run_keeps_source_and_does_not_create_split_files()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn local_dry_run_keeps_source_and_does_not_create_split_files() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("album.flac");
-        fs::write(&audio, b"audio")?;
-        fs::write(directory.path().join("album.chapters.txt"), "0:00 First\n")?;
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(directory.path().join("album.chapters.txt"), "0:00 First\n").unwrap();
         let splits = directory.path().join("splits");
         run_with(
             &Paths::under(&directory.path().join("state")),
@@ -107,9 +106,9 @@ mod tests {
                 no_interactive: true,
                 queue: false,
             },
-        )?;
+        )
+        .unwrap();
         assert!(audio.exists());
         assert!(!splits.exists());
-        Ok(())
     }
 }

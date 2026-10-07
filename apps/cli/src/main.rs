@@ -39,7 +39,7 @@ enum Command {
     Cache(Cache),
     /// Manage library and service settings.
     Config(Config),
-    /// Download audio from YouTube with yt-dlp.
+    #[usage(help = "Download audio from YouTube with yt-dlp.")]
     Download(Download),
     /// Show downloaded audio files.
     Downloaded(Downloaded),
@@ -80,6 +80,10 @@ struct Validate {
 }
 
 #[derive(Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent command-line flag"
+)]
 struct Import {
     /// Audio file or directory to import.
     directory: Option<PathBuf>,
@@ -173,6 +177,10 @@ struct Sync {
 }
 
 #[derive(Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent command-line flag"
+)]
 struct Archive {
     /// Directory with downloaded audio files.
     directory: PathBuf,
@@ -206,8 +214,12 @@ struct Archive {
 }
 
 #[derive(Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent command-line flag"
+)]
 struct Workflow {
-    /// YouTube video URL, local audio path, or search text.
+    #[usage(help = "YouTube video URL, local audio path, or search text.")]
     raw: String,
     /// Directory for downloaded audio.
     #[usage(long, short = 'o')]
@@ -254,8 +266,12 @@ struct Workflow {
     /// Source for chapter metadata.
     #[usage(long, value_enum, default = "auto")]
     metadata_source: muzik_core::MetadataSource,
-    /// Check YouTube audio and select safe Soulseek replacements.
-    #[usage(long, value_enum, default = "off")]
+    #[usage(
+        long,
+        value_enum,
+        default = "off",
+        help = "Check YouTube audio and select safe Soulseek replacements."
+    )]
     quality_policy: muzik_core::QualityPolicy,
     /// Minimum acceptable lossy bitrate in kbps.
     #[usage(long, default = "256")]
@@ -321,7 +337,7 @@ struct Watchlist {
 enum WatchlistCommand {
     /// List watched playlists and the state of their items.
     List(WatchlistList),
-    /// Add a YouTube playlist, a Spotify playlist or album, or liked.
+    #[usage(help = "Add a YouTube playlist, a Spotify playlist or album, or liked.")]
     Add(WatchlistAdd),
     /// Remove a playlist from the watchlist.
     Remove(WatchlistRemove),
@@ -363,8 +379,12 @@ struct WatchlistItem {
     playlist_id: String,
     /// Item position shown by `muzik watchlist list --items`.
     position: u64,
-    /// Command: run, retry, download_again, check_quality_again, parse_again, split_again, organize_again, or run_all_again.
-    #[usage(long, short = 'a', default = "run")]
+    #[usage(
+        long,
+        short = 'a',
+        default = "run",
+        help = "Command: run, retry, download_again, check_quality_again, parse_again, split_again, organize_again, or run_all_again."
+    )]
     action: String,
     /// Only add the job to the queue.
     #[usage(long)]
@@ -488,7 +508,7 @@ struct Downloaded {
 
 #[derive(Args)]
 struct Download {
-    /// YouTube video or playlist URL.
+    #[usage(help = "YouTube video or playlist URL.")]
     url: String,
     /// Folder for downloaded audio.
     #[usage(long, short = 'o')]

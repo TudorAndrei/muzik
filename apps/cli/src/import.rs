@@ -38,8 +38,7 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
             let title = album
                 .items
                 .first()
-                .map(|item| item.match_item.album.as_str())
-                .unwrap_or("");
+                .map_or("", |item| item.match_item.album.as_str());
             println!("Album: {} ({title})", album.source_dir.display());
             if args.quiet {
                 Ok(AlbumDecision {

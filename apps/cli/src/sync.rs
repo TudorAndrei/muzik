@@ -6,7 +6,7 @@ use muzik_import::beets;
 use muzik_library::Library;
 use muzik_media::quality;
 use muzik_store::db;
-use muzik_sync::{self as sync, Action, Encoding, Options, Shortfall, Target};
+use muzik_sync::{self as sync, Action, Done, Encoding, Options, Prepared, Shortfall, Target};
 use serde_json::json;
 use std::path::Path;
 
@@ -63,6 +63,37 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
         },
         &quality::measure,
     )?;
+    print_plan(&prepared);
+    if let Some(shortfall) = prepared.shortfall() {
+        return Err(no_space(shortfall, args.delete));
+    }
+    if args.dry_run {
+        print_dry_run(&prepared);
+        return Ok(());
+    }
+    let report = sync::apply(prepared, connection, &|done| {
+        print_done(&done, &target.path);
+    })
+    .map_err(|error| match error {
+        sync::Error::TargetMissing(path) => missing(&path),
+        sync::Error::NoSpace(shortfall) => no_space(shortfall, args.delete),
+        error => error.into(),
+    })?;
+    if report.failed > 0 {
+        bail!("{} of {} files failed", report.failed, report.written);
+    }
+    if report.unrecorded > 0 {
+        bail!(
+            "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
+            report.unrecorded,
+            report.written
+        );
+    }
+    println!("Sync complete: {} files written", report.written);
+    Ok(())
+}
+
+fn print_plan(prepared: &Prepared) {
     let plan = prepared.plan();
     for source in &plan.outside {
         eprintln!("skip (outside the library folder): {}", source.display());
@@ -101,57 +132,38 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
             ByteSize(prepared.freed())
         );
     }
-    if let Some(shortfall) = prepared.shortfall() {
-        return Err(no_space(shortfall, args.delete));
+}
+
+fn print_dry_run(prepared: &Prepared) {
+    for path in prepared.stale() {
+        println!("delete\t{}", path.display());
     }
-    if args.dry_run {
-        for path in prepared.stale() {
-            println!("delete\t{}", path.display());
-        }
-        for transfer in &plan.pending {
-            println!(
-                "{}\t{}",
-                label(&transfer.action),
-                transfer.destination.display()
-            );
-        }
-        return Ok(());
-    }
-    let report = sync::apply(prepared, connection, &|done| {
-        let name = done
-            .transfer
-            .destination
-            .strip_prefix(&target.path)
-            .unwrap_or(&done.transfer.destination)
-            .display();
-        let (index, total) = (done.index, done.total);
-        match done.result {
-            Ok(()) => {
-                println!("[{index}/{total}] {}\t{name}", label(&done.transfer.action));
-                if let Some(error) = &done.record_error {
-                    eprintln!("cannot record the encoding of {name}: {error}");
-                }
-            }
-            Err(error) => eprintln!("[{index}/{total}] failed\t{name}: {error}"),
-        }
-    })
-    .map_err(|error| match error {
-        sync::Error::TargetMissing(path) => missing(&path),
-        sync::Error::NoSpace(shortfall) => no_space(shortfall, args.delete),
-        error => error.into(),
-    })?;
-    if report.failed > 0 {
-        bail!("{} of {} files failed", report.failed, report.written);
-    }
-    if report.unrecorded > 0 {
-        bail!(
-            "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
-            report.unrecorded,
-            report.written
+    for transfer in &prepared.plan().pending {
+        println!(
+            "{}\t{}",
+            label(&transfer.action),
+            transfer.destination.display()
         );
     }
-    println!("Sync complete: {} files written", report.written);
-    Ok(())
+}
+
+fn print_done(done: &Done<'_>, root: &Path) {
+    let name = done
+        .transfer
+        .destination
+        .strip_prefix(root)
+        .unwrap_or(&done.transfer.destination)
+        .display();
+    let (index, total) = (done.index, done.total);
+    match done.result {
+        Ok(()) => {
+            println!("[{index}/{total}] {}\t{name}", label(&done.transfer.action));
+            if let Some(error) = &done.record_error {
+                eprintln!("cannot record the encoding of {name}: {error}");
+            }
+        }
+        Err(error) => eprintln!("[{index}/{total}] failed\t{name}: {error}"),
+    }
 }
 
 fn missing(path: &Path) -> anyhow::Error {

@@ -23,9 +23,6 @@ pub fn run(args: &Organize) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // The old CLI accepted --import, but it imported by default. Keep the
-    // flag as an alias so existing commands have the same result.
-    let _legacy_import_alias = args.import;
     import::run(&Import {
         directory: Some(args.directory.clone()),
         library: None,

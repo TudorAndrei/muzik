@@ -9,6 +9,7 @@ use muzik_store::jobs::CancelRequest;
 use parking_lot::Mutex;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::io::IsTerminal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -19,7 +20,7 @@ static PROMPT: Mutex<()> = Mutex::new(());
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 static NULL: Value = Value::Null;
 
-pub(crate) fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
+pub fn field<'a>(value: &'a Value, key: &str) -> &'a Value {
     value.get(key).unwrap_or(&NULL)
 }
 
@@ -96,7 +97,7 @@ pub fn answer(id: &str, choice: Option<usize>, value: Option<&str>) -> anyhow::R
         .context("This job does not wait for a choice.")?;
     let answer = match (choice, value) {
         (Some(choice), None) => pick(&choices::choices(&question), choice)?,
-        (None, Some(value)) => serde_json::from_str(value).unwrap_or(Value::from(value)),
+        (None, Some(value)) => serde_json::from_str(value).unwrap_or_else(|_| Value::from(value)),
         _ => bail!("Give a choice number or --value, not both."),
     };
     if !jobs.answer(number, &answer)? {
@@ -139,7 +140,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> anyhow::Result<()> {
                 }
                 report(&titles, &event);
             }),
-            ask: Arc::new(ask),
+            ask: Arc::new(|prompt| ask(&prompt)),
             chooser: Some(Arc::new(Codex)),
             generation: Arc::new(AtomicU64::new(0)),
         },
@@ -168,12 +169,11 @@ pub fn drain(jobs: &Arc<Jobs>) -> anyhow::Result<()> {
 }
 
 fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
-    let mut titles = titles.lock();
     match event {
         AppEvent::JobStarted {
             job_id: id, title, ..
         } => {
-            titles.insert(id.clone(), title.clone());
+            titles.lock().insert(id.clone(), title.clone());
             println!("{id} started: {title}");
         }
         AppEvent::JobEvent {
@@ -196,24 +196,24 @@ fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
             }
         }
         AppEvent::JobCompleted { job_id: id, .. } => {
-            println!("{id} finished: {}", title(&titles, id));
+            println!("{id} finished: {}", title(titles, id));
         }
         AppEvent::JobCancelled { job_id: id } => {
-            println!("{id} cancelled: {}", title(&titles, id));
+            println!("{id} cancelled: {}", title(titles, id));
         }
         AppEvent::JobFailed {
             job_id: id,
             message,
-        } => println!("{id} failed: {}: {message}", title(&titles, id)),
+        } => println!("{id} failed: {}: {message}", title(titles, id)),
         _ => {}
     }
 }
 
-fn title(titles: &HashMap<String, String>, id: &str) -> String {
-    titles.get(id).cloned().unwrap_or_default()
+fn title(titles: &Mutex<HashMap<String, String>>, id: &str) -> String {
+    titles.lock().get(id).cloned().unwrap_or_default()
 }
 
-fn ask(prompt: Prompt<'_>) -> Result<Value, String> {
+fn ask(prompt: &Prompt<'_>) -> Result<Value, String> {
     if !std::io::stdin().is_terminal() {
         return Err("This job needs an answer. Run it in a terminal or in the app.".into());
     }
@@ -290,10 +290,10 @@ fn option_lines(question: &Value) -> Vec<String> {
         .map(|(index, option)| {
             let mut line = option.label.clone();
             if !option.meta.is_empty() {
-                line.push_str(&format!(" · {}", option.meta));
+                let _ = write!(line, " · {}", option.meta);
             }
             if let Some(score) = option.score {
-                line.push_str(&format!(" · {score}%"));
+                let _ = write!(line, " · {score}%");
             }
             if suggested == Some(index) {
                 line.push_str(" (suggested)");
@@ -311,7 +311,7 @@ fn pick(options: &[Choice], choice: usize) -> anyhow::Result<Value> {
         .with_context(|| format!("Enter a number from 1 to {}.", options.len()))
 }
 
-pub(crate) fn text(value: &Value) -> String {
+pub fn text(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => String::new(),

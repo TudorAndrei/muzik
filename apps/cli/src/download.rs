@@ -51,6 +51,5 @@ fn chapter_count(audio: &Path) -> usize {
     };
     data.get("chapters")
         .and_then(serde_json::Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0)
+        .map_or(0, Vec::len)
 }

@@ -11,9 +11,7 @@ use muzik_core::paths::{Paths, expand_home};
 use muzik_runner::setup::{self, SoulseekAccount};
 
 pub fn show(path: Option<&Path>) -> anyhow::Result<()> {
-    let library_path = path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(muzik_core::default_config_path);
+    let library_path = path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     let library = read_yaml(&library_path)?;
     println!("Library config: {}", library_path.display());
     println!("  exists: {}", library_path.exists());
@@ -55,15 +53,11 @@ pub fn show(path: Option<&Path>) -> anyhow::Result<()> {
 }
 
 pub fn set_library(directory: &Path, db: Option<&Path>, path: Option<&Path>) -> anyhow::Result<()> {
-    let library_path = path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(muzik_core::default_config_path);
+    let library_path = path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     let directory = expand_home(directory);
     fs::create_dir_all(&directory)?;
     let directory = fs::canonicalize(directory)?;
-    let db = db
-        .map(expand_home)
-        .unwrap_or_else(|| directory.join(".library.db"));
+    let db = db.map_or_else(|| directory.join(".library.db"), expand_home);
     let db = std::path::absolute(db)?;
 
     let mut data = read_yaml(&library_path)?;
@@ -114,9 +108,7 @@ pub fn set_soulseek(args: &SetSoulseek) -> anyhow::Result<()> {
 }
 
 pub fn edit(path: Option<&Path>) -> anyhow::Result<()> {
-    let path = path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(muzik_core::default_config_path);
+    let path = path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     if !path.exists() {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -154,8 +146,7 @@ fn write_yaml(path: &Path, value: &Value) -> io::Result<()> {
 fn value_text(value: &Value) -> String {
     value
         .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.to_string())
+        .map_or_else(|| value.to_string(), str::to_owned)
 }
 
 #[cfg(test)]

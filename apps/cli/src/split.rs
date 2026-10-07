@@ -1,5 +1,6 @@
 //! Chapter review and the native ffmpeg splitter command.
 
+use std::fmt::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, anyhow, bail};
@@ -46,7 +47,7 @@ pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
     Ok(output)
 }
 
-pub(crate) fn split_error(error: splitter::SplitError) -> anyhow::Error {
+pub fn split_error(error: splitter::SplitError) -> anyhow::Error {
     match error {
         splitter::SplitError::OutputNotEmpty(_) => {
             anyhow!("{error} Use --force to replace them.")
@@ -55,7 +56,7 @@ pub(crate) fn split_error(error: splitter::SplitError) -> anyhow::Error {
     }
 }
 
-pub(crate) fn show_chapters(chapters: &[Chapter]) {
+pub fn show_chapters(chapters: &[Chapter]) {
     println!("  #  Start     Title");
     for chapter in chapters {
         println!(
@@ -78,7 +79,7 @@ fn clock(seconds: i64) -> String {
     }
 }
 
-pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<Chapter>>> {
+pub fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<Chapter>>> {
     loop {
         let choice = dialoguer::Select::new()
             .with_prompt("Continue, edit, or abort?")
@@ -101,10 +102,10 @@ pub(crate) fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Opti
     }
 }
 
-pub(crate) fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
+pub fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
     let mut text = String::new();
     for chapter in chapters {
-        text.push_str(&format!("{} {}\n", clock(chapter.start), chapter.title));
+        let _ = writeln!(text, "{} {}", clock(chapter.start), chapter.title);
     }
     let text = edit::edit_with_builder(
         text,
