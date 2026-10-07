@@ -97,10 +97,10 @@ static SHARED: Mutex<Shared> = Mutex::new(None);
 impl Session {
     pub fn shared(settings: SessionSettings) -> Result<Arc<Self>, BridgeError> {
         let mut shared = SHARED.lock();
-        if let Some((current, session)) = shared.as_ref() {
-            if *current == settings {
-                return Ok(Arc::clone(session));
-            }
+        if let Some((current, session)) = shared.as_ref()
+            && *current == settings
+        {
+            return Ok(Arc::clone(session));
         }
         let session = Arc::new(Self::connect(settings.clone())?);
         *shared = Some((settings, Arc::clone(&session)));

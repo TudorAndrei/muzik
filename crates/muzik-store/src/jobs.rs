@@ -1,6 +1,6 @@
 use crate::Result;
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSqlOutput, ValueRef};
-use rusqlite::{params, Connection, OptionalExtension, Row, ToSql, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, Row, ToSql, TransactionBehavior, params};
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
@@ -674,9 +674,11 @@ mod tests {
         store.connection.execute_batch(
             "CREATE TRIGGER refuse BEFORE INSERT ON jobs BEGIN SELECT RAISE(ABORT, 'refused'); END;",
         )?;
-        assert!(store
-            .replace_waiting(&job(Kind::Item, "a", &params))
-            .is_err());
+        assert!(
+            store
+                .replace_waiting(&job(Kind::Item, "a", &params))
+                .is_err()
+        );
         let kept = store.get(waiting)?.ok_or("job is missing")?;
         assert_eq!(
             (kept.status, kept.question),

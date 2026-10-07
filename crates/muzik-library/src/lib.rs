@@ -12,11 +12,11 @@ use std::path::Path;
 use std::path::PathBuf;
 use thiserror::Error;
 
+use SqlValue as Value;
 pub use functions::register_functions;
 pub use rusqlite::types::Value as SqlValue;
 pub use values::{path_from_sql, path_to_sql, scalar_text};
 pub use write::LibraryWrite;
-use SqlValue as Value;
 
 #[derive(Debug, Error)]
 pub enum Error {

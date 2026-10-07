@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use muzik_tags::{read, write, TagData};
+use muzik_tags::{TagData, read, write};
 use serde_json::Value;
 
 const SUFFIXES: &[&str] = &["mp3", "flac", "m4a", "opus", "ogg"];

@@ -259,7 +259,7 @@ pub(crate) fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{rows, ColumnSort, WatchTable};
+    use super::{ColumnSort, WatchTable, rows};
     use gpui_kit::WeakEntity;
     use muzik_store::watchlist::Summary;
     use serde_json::json;

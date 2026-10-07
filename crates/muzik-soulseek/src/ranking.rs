@@ -1,8 +1,8 @@
 //! Rank peer results by audio quality and match to the search text.
 
 use crate::types::{Candidate, FileEntry};
-use muzik_core::audio::AudioFormat;
 use muzik_core::PreferredAudio;
+use muzik_core::audio::AudioFormat;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]

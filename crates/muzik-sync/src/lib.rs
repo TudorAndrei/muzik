@@ -1,12 +1,12 @@
 //! Copy library tracks to a device folder in formats that the device plays.
 
 use muzik_core::audio::Codec;
-use muzik_core::{app_config, paths, SyncPreset};
+use muzik_core::{SyncPreset, app_config, paths};
 use muzik_media::ffmpeg::{Convert, Ffmpeg};
 use muzik_media::quality::MeasuredQuality;
-use muzik_store::{sync_files, Connection};
+use muzik_store::{Connection, sync_files};
 use rayon::prelude::*;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io;
@@ -18,7 +18,7 @@ mod run;
 
 pub use error::{Error, Result};
 pub use muzik_media::ffmpeg::Encoding;
-pub use run::{apply, prepare, select, Done, Options, Prepared, Report, Selection, Shortfall};
+pub use run::{Done, Options, Prepared, Report, Selection, Shortfall, apply, prepare, select};
 
 const SECTION: &str = "sync";
 const PARTIAL: &str = "muzik-part";
@@ -314,12 +314,11 @@ fn plan_track(
     if source.strip_prefix(directory).is_err() {
         return Step::Outside(source.to_path_buf());
     }
-    if let Some(action) = guess(source).map(|audio| target.action(&audio)) {
-        if let Some(destination) = target.destination(directory, source, &action) {
-            if is_current(source, &destination, &action, encodings) {
-                return Step::Fresh(destination);
-            }
-        }
+    if let Some(action) = guess(source).map(|audio| target.action(&audio))
+        && let Some(destination) = target.destination(directory, source, &action)
+        && is_current(source, &destination, &action, encodings)
+    {
+        return Step::Fresh(destination);
     }
     let Ok(Some(audio)) = probe(source) else {
         return Step::Unreadable(source.to_path_buf());

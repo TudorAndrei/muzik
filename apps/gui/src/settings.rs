@@ -292,16 +292,16 @@ impl ConfigView {
             prompt: Some("Select".into()),
         });
         cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let value = path.to_string_lossy().into_owned();
-                    let _ = view.update_in(cx, |view, window, cx| {
-                        if let Some(state) = view.paths.get(index) {
-                            state.update(cx, |state, cx| state.set_value(value, window, cx));
-                        }
-                        cx.notify();
-                    });
-                }
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let value = path.to_string_lossy().into_owned();
+                let _ = view.update_in(cx, |view, window, cx| {
+                    if let Some(state) = view.paths.get(index) {
+                        state.update(cx, |state, cx| state.set_value(value, window, cx));
+                    }
+                    cx.notify();
+                });
             }
         })
         .detach();

@@ -1,8 +1,8 @@
 use crate::{
-    available_bytes, encodings, plan, record, remove_empty_folders, run as transfer_all,
-    stale_files, Error, Plan, Result, Target, Transfer,
+    Error, Plan, Result, Target, Transfer, available_bytes, encodings, plan, record,
+    remove_empty_folders, run as transfer_all, stale_files,
 };
-use muzik_library::{path_from_sql, Item, Library};
+use muzik_library::{Item, Library, path_from_sql};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;
 use parking_lot::Mutex;
@@ -244,7 +244,7 @@ fn absolute(directory: &Path, path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{shortfall, Shortfall};
+    use super::{Shortfall, shortfall};
 
     #[test]
     fn freed_space_counts_toward_the_available_space() {

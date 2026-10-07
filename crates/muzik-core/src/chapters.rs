@@ -426,7 +426,9 @@ mod tests {
 
     #[test]
     fn cue_orders_tracks_and_rounds_frames() {
-        let chapters = parse_cue("TITLE \"Album\"\n TRACK 02 AUDIO\n TITLE \"Two\"\n INDEX 01 03:12:38\n TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n");
+        let chapters = parse_cue(
+            "TITLE \"Album\"\n TRACK 02 AUDIO\n TITLE \"Two\"\n INDEX 01 03:12:38\n TRACK 01 AUDIO\n TITLE \"One\"\n INDEX 01 00:00:00\n",
+        );
         assert_eq!(chapters[0].index, 1);
         assert_eq!(chapters[0].end, Some(193));
         assert_eq!(chapters[1].title, "Two");

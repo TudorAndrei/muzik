@@ -1,6 +1,6 @@
 //! Typed ffmpeg commands for splitting and converting audio.
 
-use crate::process::{self, background_command, Stopped};
+use crate::process::{self, Stopped, background_command};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

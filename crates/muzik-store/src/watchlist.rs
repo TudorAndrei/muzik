@@ -1,6 +1,6 @@
 //! Versioned watchlist data shared with the existing application.
 
-use crate::{db, Result};
+use crate::{Result, db};
 use muzik_core::paths::Paths;
 use parking_lot::Mutex;
 use rusqlite::{Connection, TransactionBehavior};
@@ -19,10 +19,10 @@ mod reconcile;
 pub mod source;
 mod view;
 
-pub use item::{now, AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist};
+pub use item::{AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
-pub use reconcile::{reconcile, ReconcileOptions};
-pub use view::{view, Summary};
+pub use reconcile::{ReconcileOptions, reconcile};
+pub use view::{Summary, view};
 
 #[derive(
     Clone,
@@ -534,21 +534,19 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
             Some("Liked Songs"),
         ));
     }
-    if let Some((_, query)) = text.split_once('?') {
-        if let Some(id) = query.split('&').find_map(|pair| pair.strip_prefix("list=")) {
-            if !id.is_empty()
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            {
-                return Ok(Playlist::new(
-                    id,
-                    &format!("https://www.youtube.com/playlist?list={id}"),
-                    SourceKind::Youtube,
-                    None,
-                ));
-            }
-        }
+    if let Some((_, query)) = text.split_once('?')
+        && let Some(id) = query.split('&').find_map(|pair| pair.strip_prefix("list="))
+        && !id.is_empty()
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Ok(Playlist::new(
+            id,
+            &format!("https://www.youtube.com/playlist?list={id}"),
+            SourceKind::Youtube,
+            None,
+        ));
     }
     let spotify = text
         .strip_prefix("spotify:playlist:")
@@ -563,18 +561,17 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
             let (kind, id) = rest.split_once('/')?;
             Some((kind, id.split(['?', '/']).next()?))
         });
-    if let Some((kind, id)) = spotify {
-        if matches!(kind, "playlist" | "album")
-            && id.len() >= 10
-            && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        {
-            return Ok(Playlist::new(
-                &format!("spotify:{kind}:{id}"),
-                &format!("https://open.spotify.com/{kind}/{id}"),
-                SourceKind::Spotify,
-                None,
-            ));
-        }
+    if let Some((kind, id)) = spotify
+        && matches!(kind, "playlist" | "album")
+        && id.len() >= 10
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        return Ok(Playlist::new(
+            &format!("spotify:{kind}:{id}"),
+            &format!("https://open.spotify.com/{kind}/{id}"),
+            SourceKind::Spotify,
+            None,
+        ));
     }
     Err("enter a YouTube playlist URL, Spotify playlist or album link, or liked".into())
 }

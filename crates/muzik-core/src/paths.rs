@@ -1,4 +1,4 @@
-use etcetera::app_strategy::{choose_native_strategy, AppStrategy, AppStrategyArgs};
+use etcetera::app_strategy::{AppStrategy, AppStrategyArgs, choose_native_strategy};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -140,7 +140,7 @@ pub fn migrate_legacy(paths: &Paths) -> io::Result<Vec<(PathBuf, PathBuf)>> {
                         new.display(),
                         old.display()
                     ),
-                ))
+                ));
             }
             Move::Conflict | Move::Skipped => {}
         }
@@ -187,7 +187,7 @@ fn move_dir(old: &Path, new: &Path) -> io::Result<Move> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_home, home, move_dir, Move};
+    use super::{Move, expand_home, home, move_dir};
     use std::fs;
     use std::path::{Path, PathBuf};
 

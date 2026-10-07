@@ -3,21 +3,21 @@
 use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use muzik_core::{
-    chapters::Chapter, ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, Step, Task,
-    KEEP_CURRENT_TAGS,
+    ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, KEEP_CURRENT_TAGS, Step, Task,
+    chapters::Chapter,
 };
 use muzik_import::apply::{DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
-use muzik_import::decide::{decide_album, Ask, ImportPolicy};
+use muzik_import::decide::{Ask, ImportPolicy, decide_album};
 use muzik_import::plan::{AlbumPlan, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_media::splitter;
 use muzik_store::watchlist::Stage;
 use muzik_workflow::{
-    run_workflow_with_events, ChapterReview, SplitProgress, SplitTask, WorkflowEvent,
-    WorkflowOperations, WorkflowOptions,
+    ChapterReview, SplitProgress, SplitTask, WorkflowEvent, WorkflowOperations, WorkflowOptions,
+    run_workflow_with_events,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -375,7 +375,7 @@ mod tests {
     use crate::settings::Settings;
     use muzik_core::paths::Paths;
     use muzik_core::{ChapterAnswer, DecisionKind, DuplicatePolicy, JobEvent};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::fs;
     use std::sync::atomic::AtomicBool;
 
@@ -384,8 +384,8 @@ mod tests {
     }
 
     #[test]
-    fn a_duplicate_album_is_skipped_by_default_without_a_question(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_duplicate_album_is_skipped_by_default_without_a_question()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let config = dir.path().join("config.yaml");
         let database = dir.path().join("library.db");
@@ -455,9 +455,11 @@ mod tests {
             &mut |_, _| Err("unexpected decision".into()),
         )?;
         assert_eq!(result["albums"], 1);
-        assert!(events
-            .iter()
-            .any(|event| matches!(event, JobEvent::Message { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, JobEvent::Message { .. }))
+        );
         assert!(audio.exists());
         assert!(!splits.exists());
         Ok(())

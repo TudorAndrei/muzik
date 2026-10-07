@@ -1,7 +1,7 @@
 //! Measured audio quality for library scans and workflow decisions.
 
-use muzik_core::audio::{AudioFormat, Codec};
 use muzik_core::QualityPolicy;
+use muzik_core::audio::{AudioFormat, Codec};
 use muzik_tags::AudioProperties;
 use std::path::Path;
 
@@ -103,9 +103,9 @@ pub fn decide(
 
 #[cfg(test)]
 mod tests {
-    use super::{decide, measure, MeasuredQuality, QualityDecision};
-    use muzik_core::audio::{AudioFormat, Codec};
+    use super::{MeasuredQuality, QualityDecision, decide, measure};
     use muzik_core::QualityPolicy;
+    use muzik_core::audio::{AudioFormat, Codec};
     use muzik_tags::AudioProperties;
 
     fn properties(format: AudioFormat, codec: Option<Codec>) -> AudioProperties {

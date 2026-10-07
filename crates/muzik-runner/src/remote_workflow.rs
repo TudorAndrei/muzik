@@ -4,18 +4,18 @@ use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{app_config, chapters::Chapter, DecisionKind, JobEvent, PreferredAudio, Step};
+use muzik_core::{DecisionKind, JobEvent, PreferredAudio, Step, app_config, chapters::Chapter};
 use muzik_soulseek::fetch::Timeouts;
-use muzik_soulseek::session::{setting, Session, SessionSettings};
+use muzik_soulseek::session::{Session, SessionSettings, setting};
 use muzik_soulseek::types::Candidate;
 use muzik_store::watchlist::Stage;
 use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
-    classify_input, playlist, run_workflow_with_events, AudioFallback, AudioSource, ChapterReview,
-    QualityCheckedAudio, SplitProgress, SplitTask, WorkflowEvent, WorkflowInput,
-    WorkflowOperations, WorkflowOptions,
+    AudioFallback, AudioSource, ChapterReview, QualityCheckedAudio, SplitProgress, SplitTask,
+    WorkflowEvent, WorkflowInput, WorkflowOperations, WorkflowOptions, classify_input, playlist,
+    run_workflow_with_events,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -6,7 +6,7 @@ use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock,
 use muzik_store::watchlist::jobs::PendingItem;
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
 use parking_lot::{Mutex, MutexGuard};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -283,11 +283,11 @@ fn unique() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_job_id, EnqueueError, Jobs};
+    use super::{EnqueueError, Jobs, parse_job_id};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
-    use muzik_store::watchlist::jobs::PendingItem;
     use muzik_store::watchlist::ItemId;
+    use muzik_store::watchlist::jobs::PendingItem;
     use serde_json::json;
     use std::path::Path;
 

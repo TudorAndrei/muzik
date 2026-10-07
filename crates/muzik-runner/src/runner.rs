@@ -1,20 +1,20 @@
 use crate::agent::Chooser;
 use crate::events::{AppEvent, Source};
-use crate::queue::{job_id, Jobs};
+use crate::queue::{Jobs, job_id};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
-use muzik_store::watchlist::jobs::JobError;
 use muzik_store::watchlist::Stage;
-use muzik_workflow::{classify_input, WorkflowInput};
+use muzik_store::watchlist::jobs::JobError;
+use muzik_workflow::{WorkflowInput, classify_input};
 use parking_lot::{Condvar, Mutex, MutexGuard};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -419,9 +419,9 @@ mod tests {
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{Repository, SourceKind, Stage, StageStatus, WatchItem};
     use serde_json::json;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::mpsc;
-    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     fn runner(jobs: &Arc<Jobs>) -> Result<(Runner, mpsc::Receiver<AppEvent>), String> {
@@ -443,8 +443,8 @@ mod tests {
     }
 
     #[test]
-    fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::under(dir.path());
         let output = dir.path().join("downloads");
@@ -521,11 +521,10 @@ mod tests {
                 job_id: done,
                 result,
             } = receiver.recv_timeout(Duration::from_secs(20))?
+                && done == job_id
             {
-                if done == job_id {
-                    assert_eq!(result["singles"], 1);
-                    break;
-                }
+                assert_eq!(result["singles"], 1);
+                break;
             }
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
@@ -534,8 +533,8 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let audio = dir.path().join("track.flac");
         std::fs::write(&audio, b"audio")?;

@@ -1,5 +1,5 @@
 use muzik_core::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct Choice {
     pub label: String,
@@ -164,17 +164,17 @@ pub fn details(question: &Value) -> Vec<String> {
                         .filter_map(|path| path.as_str().map(str::to_owned)),
                 );
             }
-            if kind == DecisionKind::ImportDuplicate {
-                if let Some(duplicates) = payload["duplicates"].as_array() {
-                    details.extend(duplicates.iter().map(|duplicate| {
-                        format!(
-                            "Existing: {} · {} · {}",
-                            duplicate["artist"].as_str().unwrap_or("Unknown artist"),
-                            duplicate["album"].as_str().unwrap_or("Unknown album"),
-                            duplicate["path"].as_str().unwrap_or("No path")
-                        )
-                    }));
-                }
+            if kind == DecisionKind::ImportDuplicate
+                && let Some(duplicates) = payload["duplicates"].as_array()
+            {
+                details.extend(duplicates.iter().map(|duplicate| {
+                    format!(
+                        "Existing: {} · {} · {}",
+                        duplicate["artist"].as_str().unwrap_or("Unknown artist"),
+                        duplicate["album"].as_str().unwrap_or("Unknown album"),
+                        duplicate["path"].as_str().unwrap_or("No path")
+                    )
+                }));
             }
             details
         }

@@ -5,8 +5,8 @@ mod ranking;
 mod string_distance;
 
 pub use distance::{
-    album_distance, track_distance, AlbumField, Distance, DistanceKey, Error, MatchAlbum,
-    MatchConfig, MatchItem, MatchTrack,
+    AlbumField, Distance, DistanceKey, Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack,
+    album_distance, track_distance,
 };
-pub use ranking::{assign_items, rank_albums, Assignment, RankedAlbum, Ranking, Recommendation};
+pub use ranking::{Assignment, RankedAlbum, Ranking, Recommendation, assign_items, rank_albums};
 pub use string_distance::string_dist;

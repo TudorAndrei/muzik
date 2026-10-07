@@ -28,12 +28,12 @@ use muzik_core::{
     AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, JobEvent, MetadataSource,
     QualityPolicy, Task as JobTask,
 };
-use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::AppEvent;
+use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use requests::{Command, PendingAction, Read};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use settings::ConfigView;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -270,10 +270,10 @@ impl Muzik {
                 .row_selectable(true)
         });
         cx.subscribe_in(&watch_table, window, |view, table, event, window, cx| {
-            if let TableEvent::DoubleClickedRow(row) = event {
-                if let Some(key) = table.read(cx).delegate().key(*row) {
-                    view.open_item_sheet(key, window, cx);
-                }
+            if let TableEvent::DoubleClickedRow(row) = event
+                && let Some(key) = table.read(cx).delegate().key(*row)
+            {
+                view.open_item_sheet(key, window, cx);
             }
         })
         .detach();
@@ -522,10 +522,10 @@ impl Muzik {
                 format!("Started {step}")
             }
             JobEvent::StepFinished(step) => {
-                if let Some(run) = self.run_mut(job_id) {
-                    if run.progress.total.is_some() {
-                        run.progress.completed += 1.;
-                    }
+                if let Some(run) = self.run_mut(job_id)
+                    && run.progress.total.is_some()
+                {
+                    run.progress.completed += 1.;
                 }
                 format!("{step} finished")
             }
@@ -616,15 +616,15 @@ impl Muzik {
             prompt: Some("Select".into()),
         });
         cx.spawn_in(window, async move |view, cx| {
-            if let Ok(Ok(Some(paths))) = receiver.await {
-                if let Some(path) = paths.into_iter().next() {
-                    let value = path.to_string_lossy().into_owned();
-                    let _ = view.update_in(cx, |view, window, cx| {
-                        view.raw
-                            .update(cx, |state, cx| state.set_value(value, window, cx));
-                        cx.notify();
-                    });
-                }
+            if let Ok(Ok(Some(paths))) = receiver.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                let value = path.to_string_lossy().into_owned();
+                let _ = view.update_in(cx, |view, window, cx| {
+                    view.raw
+                        .update(cx, |state, cx| state.set_value(value, window, cx));
+                    cx.notify();
+                });
             }
         })
         .detach();
@@ -854,24 +854,24 @@ impl Muzik {
 
     fn open_decision(&mut self, data: Value, window: &mut Window, cx: &mut Context<Self>) {
         self.chapter_rows.clear();
-        if choices::kind(&data) == Some(DecisionKind::ChapterEdit) {
-            if let Some(chapters) = data.pointer("/payload/chapters").and_then(Value::as_array) {
-                for chapter in chapters {
-                    let mut make = |key: &'static str| {
-                        let value = describe(&chapter[key]);
-                        cx.new(|cx| {
-                            InputState::new(window, cx)
-                                .placeholder(key)
-                                .default_value(value)
-                        })
-                    };
-                    self.chapter_rows.push(ChapterRow {
-                        index: make("index"),
-                        start: make("start"),
-                        end: make("end"),
-                        title: make("title"),
-                    });
-                }
+        if choices::kind(&data) == Some(DecisionKind::ChapterEdit)
+            && let Some(chapters) = data.pointer("/payload/chapters").and_then(Value::as_array)
+        {
+            for chapter in chapters {
+                let mut make = |key: &'static str| {
+                    let value = describe(&chapter[key]);
+                    cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .placeholder(key)
+                            .default_value(value)
+                    })
+                };
+                self.chapter_rows.push(ChapterRow {
+                    index: make("index"),
+                    start: make("start"),
+                    end: make("end"),
+                    title: make("title"),
+                });
             }
         }
         self.decision = Some(data);
@@ -1694,7 +1694,7 @@ fn main() -> std::process::ExitCode {
             std::env::var_os("HOME").map(PathBuf::from),
         );
         if let Ok(path) = std::env::join_paths(path) {
-            std::env::set_var("PATH", path);
+            unsafe { std::env::set_var("PATH", path) };
         }
     }
     match std::env::args().nth(1).as_deref() {
@@ -1727,12 +1727,12 @@ fn main() -> std::process::ExitCode {
             .with_ansi(false)
             .init();
     }
-    if keyring::Entry::store_status().is_ok() {
-        if let Err(error) = muzik_runner::setup::move_soulseek_password(
+    if keyring::Entry::store_status().is_ok()
+        && let Err(error) = muzik_runner::setup::move_soulseek_password(
             &muzik_core::paths::Paths::user().config_file(),
-        ) {
-            tracing::warn!(%error, "the Soulseek password did not move to the keychain");
-        }
+        )
+    {
+        tracing::warn!(%error, "the Soulseek password did not move to the keychain");
     }
     let app = gpui_kit::application().with_assets(style::AppAssets);
     app.run(|cx| {
@@ -1784,8 +1784,8 @@ fn check_backend() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        activity_section, candidate_summary, merge_thumbnail_paths, shorten_paths, tool_path,
-        ActivityProgress, Muzik,
+        ActivityProgress, Muzik, activity_section, candidate_summary, merge_thumbnail_paths,
+        shorten_paths, tool_path,
     };
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
@@ -1873,10 +1873,11 @@ mod tests {
                 view.record_job_event("queue-1", &JobEvent::message("Writing tags"));
                 assert_eq!(status(view), "Writing tags");
                 assert!(view.logs.iter().any(|line| line == "Writing tags"));
-                assert!(view
-                    .logs
-                    .iter()
-                    .any(|line| line == "1 soulseek candidates found"));
+                assert!(
+                    view.logs
+                        .iter()
+                        .any(|line| line == "1 soulseek candidates found")
+                );
             });
         });
     }
@@ -1931,7 +1932,9 @@ mod tests {
     #[test]
     fn event_lines_show_the_folder_name_instead_of_the_full_path() {
         assert_eq!(
-            shorten_paths("Import group 1 of 1: /Users/tudor/Library/Application Support/muzik/splits/GENDEMA - sassy things [Full album] [wiih44Gfi2M]"),
+            shorten_paths(
+                "Import group 1 of 1: /Users/tudor/Library/Application Support/muzik/splits/GENDEMA - sassy things [Full album] [wiih44Gfi2M]"
+            ),
             "Import group 1 of 1: GENDEMA - sassy things [Full album] [wiih44Gfi2M]"
         );
         assert_eq!(shorten_paths("Split 3/12 tracks"), "Split 3/12 tracks");

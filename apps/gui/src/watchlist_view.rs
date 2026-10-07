@@ -514,10 +514,8 @@ fn item_sheet(
                     });
                 }),
         );
-        if !enabled {
-            if let Some(reason) = availability["reason"].as_str() {
-                row = row.child(style::meta(reason.to_string(), cx));
-            }
+        if !enabled && let Some(reason) = availability["reason"].as_str() {
+            row = row.child(style::meta(reason.to_string(), cx));
         }
         commands = commands.child(row);
     }

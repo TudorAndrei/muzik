@@ -2,13 +2,13 @@
 
 use super::source::availability;
 use super::{
-    now, reconcile, view, AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository,
-    Stage, StageStatus, WatchItem, Watchlist,
+    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, StageStatus,
+    WatchItem, Watchlist, now, reconcile, view,
 };
 use crate::Result;
 use muzik_core::{JobEvent, Severity, Task};
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 

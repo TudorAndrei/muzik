@@ -338,10 +338,10 @@ fn compare_rows(
 fn sort_value<'a>(fields: &'a Fields, attributes: &'a Fields, field: &str) -> Option<&'a Value> {
     if field == "artist" || field == "albumartist" {
         let sort_field = format!("{field}_sort");
-        if let Some(value @ Value::Text(text)) = fields.get(&sort_field) {
-            if !text.is_empty() {
-                return Some(value);
-            }
+        if let Some(value @ Value::Text(text)) = fields.get(&sort_field)
+            && !text.is_empty()
+        {
+            return Some(value);
         }
     }
     value(fields, attributes, field)

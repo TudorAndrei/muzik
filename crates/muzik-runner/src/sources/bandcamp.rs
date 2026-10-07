@@ -1,4 +1,4 @@
-use super::{check_cancelled, mark_full, organize, required, safe_name, Source};
+use super::{Source, check_cancelled, mark_full, organize, required, safe_name};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_bandcamp as bandcamp;
@@ -6,7 +6,7 @@ use muzik_core::paths::Paths;
 use muzik_core::{JobEvent, Task};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{
-    bandcamp_source, ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem,
+    ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem, bandcamp_source,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};

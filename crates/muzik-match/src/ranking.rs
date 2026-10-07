@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use strum_macros::EnumString;
 
 use crate::distance::{
-    album_distance, track_distance, AlbumField, Distance, Error, MatchAlbum, MatchConfig,
-    MatchItem, MatchTrack,
+    AlbumField, Distance, Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack, album_distance,
+    track_distance,
 };
 
 /// Track mapping and items left after minimum-cost assignment.

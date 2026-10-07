@@ -1,11 +1,11 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
 use crate::ffmpeg::{self, Cut, Ffmpeg};
-use muzik_core::chapters::{sidecar_path, Chapter};
+use muzik_core::chapters::{Chapter, sidecar_path};
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
@@ -151,14 +151,13 @@ fn split_audio_with_binary(
     } else {
         None
     };
-    if !options.force {
-        if let Some(ref cache_file) = cache_file {
-            if let Ok(cached) = fs::read_to_string(cache_file) {
-                let cached = PathBuf::from(cached.trim());
-                if cached.exists() {
-                    return Ok(cached);
-                }
-            }
+    if !options.force
+        && let Some(ref cache_file) = cache_file
+        && let Ok(cached) = fs::read_to_string(cache_file)
+    {
+        let cached = PathBuf::from(cached.trim());
+        if cached.exists() {
+            return Ok(cached);
         }
     }
 

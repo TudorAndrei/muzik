@@ -1,12 +1,12 @@
 //! Read and update the existing muzik config file.
 
+use crate::Result;
 use crate::config_choices::{
     AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
 };
 use crate::paths::{self, Paths};
-use crate::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -205,8 +205,8 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn saves_gui_settings_without_changing_spotify_settings(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn saves_gui_settings_without_changing_spotify_settings()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let paths = Paths::under(dir.path());
         let path = paths.config_file();

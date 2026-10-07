@@ -1,12 +1,12 @@
 use super::{
-    at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube, Source,
+    Source, at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube,
 };
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
-use muzik_workflow::playlist::{write_spotify_tags, SpotifyTags};
+use muzik_workflow::playlist::{SpotifyTags, write_spotify_tags};
 use muzik_workflow::process_audio_plan_with_events;
 use serde_json::Value;
 use std::cell::Cell;
@@ -51,10 +51,8 @@ impl Source for Spotify {
             )));
         }
         let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
-        if !fresh {
-            if let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
-                return import_file(adapter, item, file.to_path_buf(), cancelled);
-            }
+        if !fresh && let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
+            return import_file(adapter, item, file.to_path_buf(), cancelled);
         }
         let track = item
             .track

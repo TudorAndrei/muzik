@@ -1,5 +1,5 @@
 use crate::thumbnails;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{Context, anyhow, bail};
 use async_channel::Receiver;
 use bytesize::ByteSize;
 use chrono::{DateTime, Local};
@@ -9,15 +9,15 @@ use muzik_core::downloads::scan;
 use muzik_core::paths::Paths;
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::app::WatchlistCheck;
-use muzik_runner::{setup, App, AppEvent, AppOptions};
+use muzik_runner::{App, AppEvent, AppOptions, setup};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::{ItemAction, ItemId, Playlist};
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const WORKERS: usize = 5;
 
@@ -357,8 +357,8 @@ mod tests {
     use std::collections::{HashSet, VecDeque};
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -374,10 +374,10 @@ mod tests {
             timeout: Duration,
             wanted: impl Fn(&AppEvent) -> bool,
         ) -> Result<AppEvent, Box<dyn std::error::Error>> {
-            if let Some(index) = self.skipped.iter().position(&wanted) {
-                if let Some(event) = self.skipped.remove(index) {
-                    return Ok(event);
-                }
+            if let Some(index) = self.skipped.iter().position(&wanted)
+                && let Some(event) = self.skipped.remove(index)
+            {
+                return Ok(event);
             }
             let deadline = Instant::now()
                 .checked_add(timeout)
@@ -451,9 +451,11 @@ mod tests {
         assert_eq!(result["total_size"], "5 B");
         assert_eq!(result["items"][0]["title"], "Track");
         assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");
-        assert!(result["items"][0]["modified"]
-            .as_str()
-            .is_some_and(|date| !date.is_empty()));
+        assert!(
+            result["items"][0]["modified"]
+                .as_str()
+                .is_some_and(|date| !date.is_empty())
+        );
         Ok(())
     }
 
@@ -518,7 +520,7 @@ mod tests {
                 }
                 AppEvent::JobCompleted { job_id, .. } if jobs.contains(&job_id) => done += 1,
                 AppEvent::JobFailed { message, .. } => {
-                    return Err(format!("job failed: {message}").into())
+                    return Err(format!("job failed: {message}").into());
                 }
                 _ => {}
             }
@@ -572,9 +574,11 @@ mod tests {
         let (_state, backend, _) = started(true)?;
         assert!(backend.cache_thumbnails(Vec::new()).is_none());
         backend.thumbnails.lock().insert("abcdefghijk".into());
-        assert!(backend
-            .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
-            .is_none());
+        assert!(
+            backend
+                .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
+                .is_none()
+        );
         Ok(())
     }
 

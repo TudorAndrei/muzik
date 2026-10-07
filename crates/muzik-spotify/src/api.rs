@@ -53,8 +53,8 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn a_playlist_reference_keeps_its_name_owner_total_and_image(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_playlist_reference_keeps_its_name_owner_total_and_image()
+    -> Result<(), Box<dyn std::error::Error>> {
         let playlist: rspotify_model::SimplifiedPlaylist = serde_json::from_value(json!({
             "collaborative": false,
             "external_urls": {},

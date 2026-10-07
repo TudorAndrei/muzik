@@ -1,16 +1,16 @@
 use super::{
-    at, cancel_or, check_cancelled, mark_full, organize, required, workflow_error, Source,
+    Source, at, cancel_or, check_cancelled, mark_full, organize, required, workflow_error,
 };
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::{chapters, ChapterAnswer, DecisionKind};
+use muzik_core::{ChapterAnswer, DecisionKind, chapters};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
-use muzik_workflow::quality::{check_youtube_quality, QualityUpgradeResult};
-use muzik_workflow::ytdlp::{is_video_id, YtDlp};
-use muzik_workflow::{classify_input, WorkflowInput, WorkflowOperations};
-use serde_json::{json, Value};
+use muzik_workflow::quality::{QualityUpgradeResult, check_youtube_quality};
+use muzik_workflow::ytdlp::{YtDlp, is_video_id};
+use muzik_workflow::{WorkflowInput, WorkflowOperations, classify_input};
+use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -221,12 +221,12 @@ fn apply_quality_result(item: &mut WatchItem, result: &QualityUpgradeResult) {
         item.set(Stage::Parse, StageStatus::Skipped);
         item.set(Stage::Split, StageStatus::Complete);
         item.invalidate(&[Stage::Organize]);
-    } else if let Some(replacement) = result.audio_files.first() {
-        if item.path(Stage::Download) != Some(replacement.as_path()) {
-            item.set_path(Stage::Download, Some(replacement.clone()));
-            item.set_path(Stage::Quality, Some(replacement.clone()));
-            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
-        }
+    } else if let Some(replacement) = result.audio_files.first()
+        && item.path(Stage::Download) != Some(replacement.as_path())
+    {
+        item.set_path(Stage::Download, Some(replacement.clone()));
+        item.set_path(Stage::Quality, Some(replacement.clone()));
+        item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
     }
 }
 
@@ -293,7 +293,7 @@ fn refresh_chapters_with(
         Some(ChapterAnswer::Reject) => {
             return Err(JobError::Operation(
                 "YouTube chapters were not accepted.".into(),
-            ))
+            ));
         }
         None => return Err(JobError::Operation("Select a chapter action.".into())),
     }
@@ -450,8 +450,8 @@ mod tests {
     }
 
     #[test]
-    fn multi_file_quality_replacement_imports_as_a_ready_album(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn multi_file_quality_replacement_imports_as_a_ready_album()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let original = directory.path().join("Album [abcdefghijk].flac");
         let album = directory.path().join("replacement");
@@ -543,7 +543,9 @@ mod tests {
 
     #[test]
     fn description_tracklist_orders_times_and_keeps_titles() {
-        let chapters = muzik_core::chapters::parse_tracklist("Track list:\n2. Song Two (04:10 - 08:00)\n[0:00] First Song\n4:10 Duplicate\n8:00 - Final Song\n");
+        let chapters = muzik_core::chapters::parse_tracklist(
+            "Track list:\n2. Song Two (04:10 - 08:00)\n[0:00] First Song\n4:10 Duplicate\n8:00 - Final Song\n",
+        );
         assert_eq!(chapters.len(), 3);
         assert_eq!(chapters[0].title, "First Song");
         assert_eq!(chapters[0].end, Some(250));

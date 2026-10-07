@@ -42,7 +42,7 @@ pub fn save(id: &str, content_type: &str, bytes: &[u8], root: &Path) -> Result<P
         "image/jpeg" if bytes.starts_with(b"\xff\xd8\xff") => "jpg",
         "image/png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") => "png",
         "image/jpeg" | "image/png" => {
-            return Err("Thumbnail response has invalid image data.".into())
+            return Err("Thumbnail response has invalid image data.".into());
         }
         _ => return Err("Thumbnail response is not a JPEG or PNG image.".into()),
     };
@@ -76,13 +76,15 @@ mod tests {
             Some("yt_thumbnail_abcdefghijk.jpg")
         );
         assert_eq!(cached_path("abcdefghijk", root.path()), Some(jpeg));
-        assert!(save(
-            "../escape",
-            "image/png",
-            b"\x89PNG\r\n\x1a\ndata",
-            root.path()
-        )
-        .is_err());
+        assert!(
+            save(
+                "../escape",
+                "image/png",
+                b"\x89PNG\r\n\x1a\ndata",
+                root.path()
+            )
+            .is_err()
+        );
         assert!(save("other_id", "text/html", b"<html>", root.path()).is_err());
         Ok(())
     }

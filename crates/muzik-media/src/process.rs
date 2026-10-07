@@ -72,8 +72,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn background_command_runs_the_program_at_lower_priority(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn background_command_runs_the_program_at_lower_priority()
+    -> Result<(), Box<dyn std::error::Error>> {
         let output = background_command("sh")
             .arg("-c")
             .arg("ps -o nice= -p $$")

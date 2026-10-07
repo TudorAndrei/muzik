@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
 use thiserror::Error;
 
+use crate::Recommendation;
 use crate::string_dist;
 use crate::string_distance::count_to_f64;
-use crate::Recommendation;
 
 const VA_ARTISTS: &[&str] = &["", "various artists", "various", "va", "unknown"];
 
@@ -527,10 +527,10 @@ pub fn album_distance(
         }
     }
     let disc_total = plurality(items, |item| item.disc_total);
-    if let Some(mediums) = album.mediums.filter(|mediums| *mediums != 0) {
-        if disc_total != 0 {
-            dist.add_number(DistanceKey::Mediums, disc_total, mediums)?;
-        }
+    if let Some(mediums) = album.mediums.filter(|mediums| *mediums != 0)
+        && disc_total != 0
+    {
+        dist.add_number(DistanceKey::Mediums, disc_total, mediums)?;
     }
     let year = plurality(items, |item| item.year);
     if let Some(album_year) = album.year.filter(|year| *year != 0) {

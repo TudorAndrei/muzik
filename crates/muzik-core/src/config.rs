@@ -94,7 +94,7 @@ impl BeetsConfig {
                 return Err(Error::Read {
                     path: user_path.display().to_string(),
                     source,
-                })
+                });
             }
         };
         tracing::debug!(path = %user_path.display(), "loading beets config");

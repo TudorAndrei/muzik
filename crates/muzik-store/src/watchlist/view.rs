@@ -3,7 +3,7 @@ use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
 use crate::Result;
 use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 

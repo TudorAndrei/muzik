@@ -1,7 +1,8 @@
 [package]
 name = "muzik-core"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Shared muzik vocabulary, configuration, paths, and the watchlist"

@@ -1,6 +1,6 @@
 use crate::{Error, Result};
 use parking_lot::{Condvar, Mutex, MutexGuard};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -218,7 +218,7 @@ fn publish(state: &State) {
 
 #[cfg(test)]
 mod tests {
-    use super::{enter, set_label, snapshot, suspended, Gate};
+    use super::{Gate, enter, set_label, snapshot, suspended};
     use serde_json::json;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;

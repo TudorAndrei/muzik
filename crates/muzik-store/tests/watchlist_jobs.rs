@@ -4,7 +4,7 @@ use muzik_store::watchlist::{
     ItemAction, ItemId, Playlist, ReconcileOptions, Repository, SourceKind, Stage, StageStatus,
     WatchItem,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -290,14 +290,16 @@ fn refresh_of_one_source_reads_and_processes_only_that_source() -> TestResult {
     assert_eq!(log.0, ["load PLtwo", "process video_PLtwo"]);
     let mut missing = options(directory.path());
     missing.playlist_id = Some("PLgone");
-    assert!(jobs::refresh(
-        &repository,
-        missing,
-        &mut log,
-        &AtomicBool::new(false),
-        &mut |_| {},
-    )
-    .is_err());
+    assert!(
+        jobs::refresh(
+            &repository,
+            missing,
+            &mut log,
+            &AtomicBool::new(false),
+            &mut |_| {},
+        )
+        .is_err()
+    );
     Ok(())
 }
 

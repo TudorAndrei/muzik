@@ -1,7 +1,8 @@
 [package]
 name = "muzik-library"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Read and write beets SQLite libraries from Rust"

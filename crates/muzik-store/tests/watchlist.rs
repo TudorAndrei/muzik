@@ -1,9 +1,9 @@
 use muzik_core::QualityPolicy;
 use muzik_store::watchlist::{
-    bandcamp_source, import_cache, reconcile, view, CheckedWrite, ReconcileOptions, Repository,
-    SourceKind, Stage, StageStatus, WatchItem, Watchlist,
+    CheckedWrite, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
+    Watchlist, bandcamp_source, import_cache, reconcile, view,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
@@ -153,9 +153,11 @@ fn edits_saved_sources_without_losing_item_state() -> TestResult {
     let added = repository.add("https://www.youtube.com/watch?v=abcdefghijk&list=PL_ONE")?;
     assert_eq!(added.playlist_id, "PL_ONE");
     assert_eq!(added.url, "https://www.youtube.com/playlist?list=PL_ONE");
-    assert!(repository
-        .add("https://youtube.com/playlist?list=PL_ONE")
-        .is_err());
+    assert!(
+        repository
+            .add("https://youtube.com/playlist?list=PL_ONE")
+            .is_err()
+    );
 
     let mut saved = repository.load()?.to_value();
     saved["playlists"][0]["items"] = json!([{
@@ -194,9 +196,11 @@ fn rejects_an_invalid_old_file_without_moving_it() -> TestResult {
     fs::write(&path, invalid)?;
     let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
-    assert!(repository
-        .add("https://youtube.com/playlist?list=PL_NEW")
-        .is_err());
+    assert!(
+        repository
+            .add("https://youtube.com/playlist?list=PL_NEW")
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(path)?, invalid);
     Ok(())
 }

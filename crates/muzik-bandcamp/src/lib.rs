@@ -2,7 +2,7 @@
 
 use muzik_core::paths::Paths;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -810,8 +810,8 @@ mod tests {
     }
 
     #[test]
-    fn a_saved_login_loads_again_and_keeps_the_cookies_private(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_saved_login_loads_again_and_keeps_the_cookies_private()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let user = directory.path().join("bandcamp_user");
         let cookies = directory.path().join("bandcamp_cookies.txt");
@@ -872,8 +872,8 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupted_download_continues_from_the_saved_bytes(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn an_interrupted_download_continues_from_the_saved_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
         use std::io::{BufRead, BufReader};
         use std::net::TcpListener;
 
@@ -895,10 +895,10 @@ mod tests {
                     if line.trim().is_empty() {
                         break;
                     }
-                    if let Some((name, value)) = line.split_once(':') {
-                        if name.eq_ignore_ascii_case("range") {
-                            range = Some(value.trim().to_owned());
-                        }
+                    if let Some((name, value)) = line.split_once(':')
+                        && name.eq_ignore_ascii_case("range")
+                    {
+                        range = Some(value.trim().to_owned());
                     }
                 }
                 let start = range

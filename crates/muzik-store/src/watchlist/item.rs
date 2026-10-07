@@ -485,18 +485,18 @@ impl AudioIndex {
             for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
                 if path.is_dir() {
                     pending.push(path);
-                } else if muzik_core::audio::is_audio(&path) {
-                    if let Some(id) = bracketed_id(&path) {
-                        index
-                            .by_id
-                            .entry(id)
-                            .and_modify(|current| {
-                                if path < *current {
-                                    current.clone_from(&path);
-                                }
-                            })
-                            .or_insert(path);
-                    }
+                } else if muzik_core::audio::is_audio(&path)
+                    && let Some(id) = bracketed_id(&path)
+                {
+                    index
+                        .by_id
+                        .entry(id)
+                        .and_modify(|current| {
+                            if path < *current {
+                                current.clone_from(&path);
+                            }
+                        })
+                        .or_insert(path);
                 }
             }
         }

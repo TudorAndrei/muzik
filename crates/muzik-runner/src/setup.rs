@@ -2,10 +2,10 @@ use crate::Result;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
 use muzik_soulseek::session::{
-    self, Session, SessionSettings, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT,
+    self, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, Session, SessionSettings,
 };
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::Command;
 
@@ -196,7 +196,7 @@ fn check_soulseek(paths: &Paths) -> ServiceStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_binary, save_soulseek_account, soulseek_account, version, SoulseekAccount};
+    use super::{SoulseekAccount, check_binary, save_soulseek_account, soulseek_account, version};
     use std::fs;
 
     fn account<'a>(
@@ -237,8 +237,8 @@ mod tests {
     }
 
     #[test]
-    fn soulseek_account_saves_without_returning_the_password(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn soulseek_account_saves_without_returning_the_password()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("config.yaml");
         fs::write(&path, "native_gui:\n  jobs: 2\n")?;

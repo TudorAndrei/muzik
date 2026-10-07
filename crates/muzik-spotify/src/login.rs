@@ -1,8 +1,8 @@
 //! Spotify browser login with PKCE and one loopback callback.
 
-use super::{account_name, request_token, save_token, settings, Client, Error, Result, Settings};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use super::{Client, Error, Result, Settings, account_name, request_token, save_token, settings};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -207,8 +207,8 @@ mod tests {
     }
 
     #[test]
-    fn loopback_callback_returns_the_code_and_an_http_answer(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn loopback_callback_returns_the_code_and_an_http_answer()
+    -> Result<(), Box<dyn std::error::Error>> {
         let listener = match TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
             Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),

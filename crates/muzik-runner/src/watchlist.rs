@@ -3,15 +3,15 @@
 use crate::settings::Settings;
 use crate::sources;
 use muzik_core::{DecisionKind, JobEvent, Task};
-use muzik_store::jobs::{park_on, Kind, NewJob};
+use muzik_store::jobs::{Kind, NewJob, park_on};
 use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
 };
 use muzik_store::watchlist::{
-    import_cache, AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem,
+    AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem, import_cache,
 };
 use rusqlite::Connection;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

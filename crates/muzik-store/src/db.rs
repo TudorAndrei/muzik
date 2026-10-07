@@ -2,7 +2,7 @@
 
 use crate::{Error, Result};
 use rusqlite::{Connection, TransactionBehavior};
-use rusqlite_migration::{MigrationDefinitionError, Migrations, M};
+use rusqlite_migration::{M, MigrationDefinitionError, Migrations};
 use std::path::Path;
 use std::time::Duration;
 
@@ -106,8 +106,8 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration()
+    -> Result<(), Box<dyn std::error::Error>> {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("muzik.db");
         {

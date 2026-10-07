@@ -1,7 +1,8 @@
 [package]
 name = "muzik-sync"
 version.workspace = true
-edition = "2021"
+edition.workspace = true
+rust-version.workspace = true
 license = "Apache-2.0"
 publish = false
 description = "Copy muzik library tracks to a device in formats it plays"

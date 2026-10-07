@@ -1,12 +1,12 @@
 //! Read Spotify track metadata into the existing version 1 export format.
 
-use super::{utc, Client, Result};
+use super::{Client, Result, utc};
 use chrono::{DateTime, Utc};
 use rspotify_model::{
     AlbumId, FullAlbum, FullPlaylist, FullTrack, Id, Image, PlayableItem, PlaylistId, PlaylistItem,
     SavedTrack, SimplifiedArtist, SimplifiedTrack,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::Path;
 use url::Url;
 
@@ -126,10 +126,10 @@ fn parse_reference(uri: &str) -> Result<Reference> {
             _ => return Err(unreadable().into()),
         }
     };
-    if let Reference::Playlist(id) | Reference::Album(id) = &reference {
-        if id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
-            return Err("Spotify ID must contain only letters and numbers".into());
-        }
+    if let Reference::Playlist(id) | Reference::Album(id) = &reference
+        && (id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+    {
+        return Err("Spotify ID must contain only letters and numbers".into());
     }
     Ok(reference)
 }
@@ -193,10 +193,12 @@ fn entry(
     );
     entry.insert(
         "source_url".into(),
-        json!(track.url.cloned().or_else(|| track
-            .id
-            .as_ref()
-            .map(|id| format!("https://open.spotify.com/track/{id}")))),
+        json!(track.url.cloned().or_else(|| {
+            track
+                .id
+                .as_ref()
+                .map(|id| format!("https://open.spotify.com/track/{id}"))
+        })),
     );
     for (key, value) in [
         ("album", Some(album.name)),
@@ -232,7 +234,7 @@ fn names(artists: &[SimplifiedArtist]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{entry, parse_reference, Album, Reference, Track};
+    use super::{Album, Reference, Track, entry, parse_reference};
     use chrono::{TimeZone, Utc};
     use rspotify_model::{Image, SimplifiedArtist};
     use std::collections::HashMap;
@@ -261,8 +263,8 @@ mod tests {
     }
 
     #[test]
-    fn an_entry_uses_the_album_artist_and_image_when_the_track_has_none(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn an_entry_uses_the_album_artist_and_image_when_the_track_has_none()
+    -> Result<(), Box<dyn std::error::Error>> {
         let album_artists = [artist("Alex")];
         let images = [Image {
             height: None,

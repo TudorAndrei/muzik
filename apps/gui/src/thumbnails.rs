@@ -2,7 +2,7 @@
 
 use muzik_core::thumbnails as cache;
 use muzik_store::watchlist::Repository;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
@@ -88,7 +88,7 @@ fn fetch_and_save(
 
 #[cfg(test)]
 mod tests {
-    use super::{cache_requested, Repository};
+    use super::{Repository, cache_requested};
     use serde_json::json;
     use std::fs;
 

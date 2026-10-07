@@ -1,7 +1,7 @@
 //! Shared values for the workflow settings stored in config files.
 
 use crate::audio::AudioFormat;
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;

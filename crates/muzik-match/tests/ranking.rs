@@ -1,7 +1,7 @@
 use muzik_core::BeetsConfig;
 use muzik_match::{
-    assign_items, rank_albums, track_distance, Error, MatchAlbum, MatchConfig, MatchItem,
-    MatchTrack, Recommendation,
+    Error, MatchAlbum, MatchConfig, MatchItem, MatchTrack, Recommendation, assign_items,
+    rank_albums, track_distance,
 };
 use serde::Deserialize;
 use serde_json::json;

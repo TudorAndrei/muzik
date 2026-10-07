@@ -1,5 +1,5 @@
-use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
+use muzik_core::audio::Codec;
 use muzik_library::{Fields, Library, SqlValue};
 use muzik_media::quality::MeasuredQuality;
 use muzik_store::Connection;

@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
-use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,8 +11,8 @@ use serde_json::Value;
 use soulseek_rs::DownloadStatus;
 
 use crate::error::{BridgeError, Result};
-use crate::ranking::{format, rank, search_query, RankedCandidate};
-use crate::session::{setting, Session};
+use crate::ranking::{RankedCandidate, format, rank, search_query};
+use crate::session::{Session, setting};
 use crate::types::Candidate;
 
 const POLL: Duration = Duration::from_millis(100);
@@ -230,7 +230,7 @@ fn finish(
 
 #[cfg(test)]
 mod tests {
-    use super::{finish, local_files, Timeouts};
+    use super::{Timeouts, finish, local_files};
     use crate::types::{Candidate, FileEntry};
     use serde_json::json;
     use soulseek_rs::DownloadStatus;

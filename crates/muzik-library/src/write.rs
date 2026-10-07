@@ -1,7 +1,7 @@
 //! Transactional writes to the existing beets schema.
 
 use crate::{Entity, Error, Fields, Library, Value};
-use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 

@@ -1,10 +1,10 @@
 //! A one-time import of the cache files that the Python version wrote.
 
-use super::{now, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist};
+use super::{ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist, now};
 use crate::Result;
 use muzik_core::audio::is_audio;
 use rusqlite::OptionalExtension;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use strum_macros::{AsRefStr, EnumString};
@@ -106,12 +106,12 @@ fn apply_item(
         return;
     };
     let mut entry = entry_of(&video_id);
-    if !options.no_organize {
-        if let Some(target) = remaining_organize_target(&entry, options.splits) {
-            processed.retain(|id| id != &video_id);
-            mark_organize_failed(item, &entry, &target);
-            return;
-        }
+    if !options.no_organize
+        && let Some(target) = remaining_organize_target(&entry, options.splits)
+    {
+        processed.retain(|id| id != &video_id);
+        mark_organize_failed(item, &entry, &target);
+        return;
     }
     if processed.contains(&video_id) {
         return;

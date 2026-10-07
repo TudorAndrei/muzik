@@ -425,12 +425,12 @@ impl Muzik {
             Backend::spotify_status,
             |view, status, window, cx| {
                 view.spotify = status;
-                if view.spotify_client_id.read(cx).value().is_empty() {
-                    if let Some(client_id) = view.spotify.get("client_id").and_then(Value::as_str) {
-                        let client_id = client_id.to_string();
-                        view.spotify_client_id
-                            .update(cx, |state, cx| state.set_value(client_id, window, cx));
-                    }
+                if view.spotify_client_id.read(cx).value().is_empty()
+                    && let Some(client_id) = view.spotify.get("client_id").and_then(Value::as_str)
+                {
+                    let client_id = client_id.to_string();
+                    view.spotify_client_id
+                        .update(cx, |state, cx| state.set_value(client_id, window, cx));
                 }
                 if view.spotify.get("connected").and_then(Value::as_bool) == Some(true) {
                     view.spotify_playlists(cx);

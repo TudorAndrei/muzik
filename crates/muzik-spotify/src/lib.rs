@@ -3,9 +3,9 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use muzik_core::app_config;
 use rspotify_model::{Id, Page, PrivateUser, Token};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,7 @@ use url::Url;
 mod login;
 pub use login::login;
 mod api;
-pub use api::{list_playlists, PlaylistRef};
+pub use api::{PlaylistRef, list_playlists};
 mod reader;
 pub use reader::load_playlist_document;
 
@@ -343,7 +343,7 @@ fn utc(time: DateTime<Utc>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear_tokens, load_token, save_token, status, Client};
+    use super::{Client, clear_tokens, load_token, save_token, status};
     use std::fs;
 
     #[test]
@@ -407,9 +407,11 @@ mod tests {
         )?;
         let result = status(&config, &dir.path().join("spotify-token.json"))?;
         assert_eq!(result["connected"], false);
-        assert!(result["redirect_uri"]
-            .as_str()
-            .is_some_and(|value| value.ends_with("/callback")));
+        assert!(
+            result["redirect_uri"]
+                .as_str()
+                .is_some_and(|value| value.ends_with("/callback"))
+        );
         Ok(())
     }
 }

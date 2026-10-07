@@ -1,6 +1,6 @@
 use crate::Result;
-use muzik_core::paths::{expand_home, Paths};
-use muzik_core::{app_config, ChoiceError};
+use muzik_core::paths::{Paths, expand_home};
+use muzik_core::{ChoiceError, app_config};
 use muzik_store::watchlist::ReconcileOptions;
 use muzik_workflow::{WorkflowOptions, WorkflowRequest};
 use serde_json::Value;

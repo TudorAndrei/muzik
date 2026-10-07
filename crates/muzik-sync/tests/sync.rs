@@ -1,5 +1,5 @@
-use muzik_core::audio::Codec;
 use muzik_core::SyncPreset;
+use muzik_core::audio::Codec;
 use muzik_media::quality::MeasuredQuality;
 use muzik_sync::{self as sync, Action, Encoding, Target};
 use std::collections::{BTreeMap, BTreeSet};
@@ -189,8 +189,8 @@ fn plan_writes_one_track_per_device_file_name() -> Result<(), Box<dyn std::error
 }
 
 #[test]
-fn a_converted_file_is_current_only_with_the_recorded_encoding(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn a_converted_file_is_current_only_with_the_recorded_encoding()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let library = dir.path().join("library");
     let card = dir.path().join("card");

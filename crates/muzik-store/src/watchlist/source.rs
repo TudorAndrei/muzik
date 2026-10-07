@@ -1,6 +1,6 @@
 //! The rules that differ between YouTube, Spotify, and Bandcamp items.
 
-use super::{ItemAction, SourceKind, Stage, WatchItem, BANDCAMP_PLAYLIST_ID};
+use super::{BANDCAMP_PLAYLIST_ID, ItemAction, SourceKind, Stage, WatchItem};
 use muzik_core::chapters;
 use std::path::Path;
 
@@ -89,7 +89,12 @@ fn spotify(item: &WatchItem, action: ItemAction, audio: Option<&Path>) -> Availa
             (false, Some("No acquired audio is available."))
         };
     }
-    (false, Some("A Spotify track is one file: it has no quality check, no chapters to parse, and nothing to split."))
+    (
+        false,
+        Some(
+            "A Spotify track is one file: it has no quality check, no chapters to parse, and nothing to split.",
+        ),
+    )
 }
 
 fn bandcamp(item: &WatchItem, action: ItemAction) -> Availability {
@@ -97,7 +102,12 @@ fn bandcamp(item: &WatchItem, action: ItemAction) -> Availability {
         return (true, None);
     }
     if action != ItemAction::OrganizeAgain {
-        return (false, Some("A Bandcamp purchase has no quality check, no chapters to parse, and nothing to split."));
+        return (
+            false,
+            Some(
+                "A Bandcamp purchase has no quality check, no chapters to parse, and nothing to split.",
+            ),
+        );
     }
     if item.path(Stage::Download).is_some_and(Path::is_dir) {
         (true, None)

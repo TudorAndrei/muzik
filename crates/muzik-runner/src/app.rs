@@ -2,7 +2,7 @@
 
 use crate::agent::Chooser;
 use crate::events::AppEvent;
-use crate::queue::{job_id, parse_job_id, EnqueueError, Jobs};
+use crate::queue::{EnqueueError, Jobs, job_id, parse_job_id};
 use crate::runner::{Options, Prompt, Runner, Sink};
 use crate::settings::Settings;
 use crate::{gates, watchlist};
@@ -12,11 +12,11 @@ use muzik_store::watchlist::{
     self as saved, CheckedWrite, ItemAction, ItemId, Playlist, Repository,
 };
 use parking_lot::Mutex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::Arc;
 use std::time::Duration;
 
 type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
@@ -243,10 +243,10 @@ pub struct WatchlistCheck {
 
 impl WatchlistCheck {
     pub fn run(self) {
-        if let Err(error) = self.check() {
-            if self.current() {
-                (self.sink)(AppEvent::WatchlistError(error.to_string()));
-            }
+        if let Err(error) = self.check()
+            && self.current()
+        {
+            (self.sink)(AppEvent::WatchlistError(error.to_string()));
         }
     }
 
@@ -321,7 +321,7 @@ fn ask(
             Ok(value) => break Ok(value),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {
-                break Err("The decision is not pending.".to_owned())
+                break Err("The decision is not pending.".to_owned());
             }
         }
     };
@@ -336,8 +336,8 @@ mod tests {
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
-    use std::sync::mpsc::{self, Receiver};
     use std::sync::Arc;
+    use std::sync::mpsc::{self, Receiver};
     use std::time::Duration;
 
     fn app(root: &std::path::Path, run: bool) -> Result<(App, Receiver<AppEvent>), String> {
@@ -356,8 +356,8 @@ mod tests {
     }
 
     #[test]
-    fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones()
+    -> Result<(), Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let (app, events) = app(dir.path(), false)?;
         app.add_source("https://www.youtube.com/playlist?list=PLnative123")?;
