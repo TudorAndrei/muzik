@@ -12,7 +12,7 @@ const ATTRIB_VBR: u32 = 2;
 const ATTRIB_SAMPLE_RATE_HZ: u32 = 4;
 const ATTRIB_BIT_DEPTH: u32 = 5;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub size: u64,
@@ -37,7 +37,7 @@ impl From<&WireFile> for FileEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub username: String,
     pub slots: u8,

@@ -22,6 +22,7 @@ pub fn search_query(query: &str, prefer: PreferredAudio) -> String {
         .map_or_else(|| query.to_owned(), |suffix| format!("{query} {suffix}"))
 }
 
+#[must_use]
 pub fn rank(
     candidates: Vec<Candidate>,
     query: &str,
@@ -44,6 +45,7 @@ pub fn rank(
     ranked
 }
 
+#[must_use]
 pub fn format(file: &FileEntry) -> Option<AudioFormat> {
     let (_, extension) = file.name.rsplit_once('.')?;
     AudioFormat::from_extension(extension).filter(|format| {
@@ -162,8 +164,7 @@ fn name(path: &str) -> &str {
 
 fn parent(path: &str) -> &str {
     path.rsplit_once(['/', '\\'])
-        .map(|(parent, _)| parent)
-        .unwrap_or("")
+        .map_or("", |(parent, _)| parent)
 }
 
 fn numbered(value: &str) -> bool {

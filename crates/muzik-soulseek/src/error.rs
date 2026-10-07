@@ -45,12 +45,12 @@ impl From<soulseek_rs::SoulseekRs> for BridgeError {
         match err {
             soulseek_rs::SoulseekRs::NetworkError(e) => Self::Network(e.to_string()),
             soulseek_rs::SoulseekRs::AuthenticationFailed => Self::AuthenticationFailed,
-            soulseek_rs::SoulseekRs::ParseError(msg) => Self::Protocol(msg),
+            soulseek_rs::SoulseekRs::ParseError(msg)
+            | soulseek_rs::SoulseekRs::InvalidMessage(msg)
+            | soulseek_rs::SoulseekRs::CompressionError(msg) => Self::Protocol(msg),
             soulseek_rs::SoulseekRs::Timeout => Self::Timeout,
             soulseek_rs::SoulseekRs::ConnectionClosed => Self::ConnectionClosed,
-            soulseek_rs::SoulseekRs::InvalidMessage(msg) => Self::Protocol(msg),
             soulseek_rs::SoulseekRs::NotConnected => Self::NotConnected,
-            soulseek_rs::SoulseekRs::CompressionError(msg) => Self::Protocol(msg),
             soulseek_rs::SoulseekRs::LockPoisoned => {
                 Self::Protocol("internal lock poisoned".to_string())
             }
