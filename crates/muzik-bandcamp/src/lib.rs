@@ -3,6 +3,7 @@
 use muzik_core::paths::Paths;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::fmt::Write as _;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -104,7 +105,7 @@ pub struct Cookie {
     pub value: String,
 }
 
-pub fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
+fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
     let text = text.trim();
     let mut cookies = if text.starts_with('[') || text.starts_with('{') {
         json_cookies(text)?
@@ -197,10 +198,11 @@ fn header_cookies(text: &str) -> Vec<Cookie> {
 fn netscape(cookies: &[Cookie]) -> String {
     let mut text = String::from("# Netscape HTTP Cookie File\n");
     for cookie in cookies {
-        text.push_str(&format!(
-            ".bandcamp.com\tTRUE\t/\tTRUE\t0\t{}\t{}\n",
+        let _ = writeln!(
+            text,
+            ".bandcamp.com\tTRUE\t/\tTRUE\t0\t{}\t{}",
             cookie.name, cookie.value
-        ));
+        );
     }
     text
 }
@@ -212,16 +214,19 @@ pub struct Login {
 }
 
 impl Login {
+    #[must_use]
     pub fn load(paths: &Paths) -> Option<Self> {
         Self::load_from(&paths.bandcamp_user(), &paths.bandcamp_cookies())
     }
 
-    pub fn load_from(user_file: &Path, cookie_file: &Path) -> Option<Self> {
+    fn load_from(user_file: &Path, cookie_file: &Path) -> Option<Self> {
         let user = fs::read_to_string(user_file).ok()?.trim().to_owned();
         let cookies = parse_cookies(&fs::read_to_string(cookie_file).ok()?).ok()?;
         (!user.is_empty()).then_some(Self { user, cookies })
     }
 
+    /// # Errors
+    /// Returns an error when the cookies or user name are not valid, or when the files cannot be written.
     pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self> {
         Self::save_to(
             &paths.bandcamp_user(),
@@ -231,7 +236,7 @@ impl Login {
         )
     }
 
-    pub fn save_to(
+    fn save_to(
         user_file: &Path,
         cookie_file: &Path,
         user: &str,
@@ -284,6 +289,8 @@ impl Login {
             .ok_or_else(|| "Bandcamp did not accept the cookies. Log in to Bandcamp in the browser, then copy the identity cookie again.".into())
     }
 
+    /// # Errors
+    /// Returns an error when a login file exists but cannot be removed.
     pub fn clear(paths: &Paths) -> Result<bool> {
         let mut removed = false;
         for path in [paths.bandcamp_cookies(), paths.bandcamp_user()] {
@@ -327,6 +334,7 @@ impl Login {
     }
 }
 
+#[must_use]
 pub fn status(paths: &Paths) -> Value {
     match Login::load(paths) {
         Some(login) => json!({"logged_in": true, "user": login.user}),
@@ -361,7 +369,7 @@ fn page_blob(html: &str) -> Option<Value> {
     serde_json::from_str(&html_escape::decode_html_entities(blob)).ok()
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Purchase {
     pub key: String,
     pub artist: String,
@@ -373,6 +381,7 @@ pub struct Purchase {
 }
 
 impl Purchase {
+    #[must_use]
     pub fn label(&self) -> String {
         if self.artist.is_empty() {
             self.title.clone()
@@ -382,6 +391,8 @@ impl Purchase {
     }
 }
 
+/// # Errors
+/// Returns an error when Bandcamp does not answer, does not accept the login, or sends data that is not valid.
 pub fn collection(login: &Login) -> Result<Vec<Purchase>> {
     let blob = login.page_blob(&format!("https://bandcamp.com/{}", login.user))?;
     if blob.pointer("/fan_data/is_own_page") != Some(&Value::Bool(true)) {
@@ -483,6 +494,8 @@ fn purchases(details: &[Value], urls: &serde_json::Map<String, Value>) -> Vec<Pu
         .collect()
 }
 
+/// # Errors
+/// Returns an error when the download fails or is cancelled, when the ZIP file is not safe, or when it has no audio files.
 pub fn download(
     login: &Login,
     download_page: &str,
@@ -752,7 +765,7 @@ mod tests {
     use strum::VariantNames;
 
     #[test]
-    fn formats_round_trip_through_their_bandcamp_names() -> Result<(), Box<dyn std::error::Error>> {
+    fn formats_round_trip_through_their_bandcamp_names() {
         assert_eq!(
             BandcampFormat::VARIANTS,
             [
@@ -767,25 +780,26 @@ mod tests {
             ]
         );
         for &name in BandcampFormat::VARIANTS {
-            let format: BandcampFormat = name.parse()?;
+            let format: BandcampFormat = name.parse().unwrap();
             assert_eq!(format.as_ref(), name);
             assert_eq!(format.to_string(), name);
-            assert_eq!(serde_json::to_value(format)?, name);
+            assert_eq!(serde_json::to_value(format).unwrap(), name);
         }
         assert_eq!(BandcampFormat::default(), BandcampFormat::Flac);
-        Ok(())
     }
 
     #[test]
-    fn cookies_parse_from_a_header_a_cookie_file_and_json() -> Result<()> {
-        let header = parse_cookies("Cookie: client_id=abc; identity=7%09token%7B; js_logged_in=1")?;
+    fn cookies_parse_from_a_header_a_cookie_file_and_json() {
+        let header =
+            parse_cookies("Cookie: client_id=abc; identity=7%09token%7B; js_logged_in=1").unwrap();
         assert!(header.contains(&Cookie {
             name: "identity".into(),
             value: "7%09token%7B".into()
         }));
         let file = parse_cookies(
             "# Netscape HTTP Cookie File\n#HttpOnly_.bandcamp.com\tTRUE\t/\tTRUE\t0\tidentity\tsecret\n.other.com\tTRUE\t/\tTRUE\t0\tidentity\tnope\n",
-        )?;
+        )
+        .unwrap();
         assert_eq!(
             file,
             vec![Cookie {
@@ -795,10 +809,11 @@ mod tests {
         );
         let json = parse_cookies(
             r#"[{"domain":".bandcamp.com","name":"identity","value":"secret"},{"domain":".other.com","name":"x","value":"y"}]"#,
-        )?;
+        )
+        .unwrap();
         assert_eq!(json, file);
         assert_eq!(
-            parse_cookies("7%09token%2B%7B")?,
+            parse_cookies("7%09token%2B%7B").unwrap(),
             vec![Cookie {
                 name: "identity".into(),
                 value: "7%09token%2B%7B".into()
@@ -806,13 +821,11 @@ mod tests {
         );
         assert!(parse_cookies("client_id=abc").is_err());
         assert!(parse_cookies("").is_err());
-        Ok(())
     }
 
     #[test]
-    fn a_saved_login_loads_again_and_keeps_the_cookies_private()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn a_saved_login_loads_again_and_keeps_the_cookies_private() {
+        let directory = tempfile::tempdir().unwrap();
         let user = directory.path().join("bandcamp_user");
         let cookies = directory.path().join("bandcamp_cookies.txt");
         assert!(Login::save_to(&user, &cookies, "bad name", "identity=x").is_err());
@@ -821,18 +834,21 @@ mod tests {
             &cookies,
             "@listener",
             "identity=secret; js_logged_in=1",
-        )?;
-        let login = Login::load_from(&user, &cookies).ok_or("login did not load")?;
+        )
+        .unwrap();
+        let login = Login::load_from(&user, &cookies).unwrap();
         assert_eq!(login.user, "listener");
         assert_eq!(login.header(), "identity=secret; js_logged_in=1");
-        Login::save_to(&user, &cookies, "listener", "")?;
+        Login::save_to(&user, &cookies, "listener", "").unwrap();
         assert!(Login::load_from(&user, &cookies).is_some());
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(&cookies)?.permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                fs::metadata(&cookies).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
-        Ok(())
     }
 
     #[test]
@@ -872,17 +888,17 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupted_download_continues_from_the_saved_bytes()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn an_interrupted_download_continues_from_the_saved_bytes() {
         use std::io::{BufRead, BufReader};
         use std::net::TcpListener;
 
         let body = (0..200_000u32)
             .map(|index| u8::try_from(index % 251))
-            .collect::<Result<Vec<u8>, _>>()?;
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let url = format!("http://{}/album.zip", listener.local_addr()?);
-        let served = body.clone();
+            .collect::<Result<Vec<u8>, _>>()
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/album.zip", listener.local_addr().unwrap());
+        let payload = body.clone();
         let server = std::thread::spawn(move || -> std::io::Result<Vec<Option<String>>> {
             let mut ranges = Vec::new();
             for cut in [true, false] {
@@ -909,8 +925,8 @@ mod tests {
                 let status = if start > 0 {
                     format!(
                         "206 Partial Content\r\nContent-Range: bytes {start}-{}/{}",
-                        served.len() - 1,
-                        served.len()
+                        payload.len() - 1,
+                        payload.len()
                     )
                 } else {
                     "200 OK".to_owned()
@@ -918,15 +934,19 @@ mod tests {
                 write!(
                     stream,
                     "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Disposition: attachment; filename=\"Band - Album.zip\"\r\nConnection: close\r\n\r\n",
-                    served.len() - start
+                    payload.len() - start
                 )?;
-                let end = if cut { served.len() / 2 } else { served.len() };
-                stream.write_all(&served[start..end])?;
+                let end = if cut {
+                    payload.len() / 2
+                } else {
+                    payload.len()
+                };
+                stream.write_all(&payload[start..end])?;
                 ranges.push(range);
             }
             Ok(ranges)
         });
-        let directory = tempfile::tempdir()?;
+        let directory = tempfile::tempdir().unwrap();
         let partial = directory.path().join(".album.flac.part");
         let mut progress = Vec::new();
         let name = transfer(
@@ -935,14 +955,14 @@ mod tests {
             &partial,
             &AtomicBool::new(false),
             &mut |received, total| progress.push((received, total)),
-        )?;
-        let ranges = server.join().map_err(|_| "server panicked")??;
+        )
+        .unwrap();
+        let ranges = server.join().unwrap().unwrap();
         assert_eq!(name, "Band - Album.zip");
-        assert_eq!(fs::read(&partial)?, body);
+        assert_eq!(fs::read(&partial).unwrap(), body);
         assert_eq!(ranges, [None, Some(format!("bytes={}-", body.len() / 2))]);
-        let size = u64::try_from(body.len())?;
+        let size = u64::try_from(body.len()).unwrap();
         assert_eq!(progress.last(), Some(&(size, Some(size))));
-        Ok(())
     }
 
     #[test]
@@ -964,8 +984,8 @@ mod tests {
     }
 
     #[test]
-    fn archive_entries_stay_inside_the_destination() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn archive_entries_stay_inside_the_destination() {
+        let directory = tempfile::tempdir().unwrap();
         let write = |name: &str, entries: &[&str]| -> Result<PathBuf, Box<dyn std::error::Error>> {
             let path = directory.path().join(name);
             let mut zip = zip::ZipWriter::new(fs::File::create(&path)?);
@@ -977,21 +997,28 @@ mod tests {
             Ok(path)
         };
         let destination = directory.path().join("out");
-        extract(&write("good.zip", &["Album/01 Song.flac"])?, &destination)?;
-        assert_eq!(fs::read(destination.join("Album/01 Song.flac"))?, b"audio");
+        extract(
+            &write("good.zip", &["Album/01 Song.flac"]).unwrap(),
+            &destination,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(destination.join("Album/01 Song.flac")).unwrap(),
+            b"audio"
+        );
 
-        let unsafe_archive = write("bad.zip", &["../escape.flac"])?;
+        let unsafe_archive = write("bad.zip", &["../escape.flac"]).unwrap();
         assert!(extract(&unsafe_archive, &destination).is_err());
         assert!(!directory.path().join("escape.flac").exists());
 
         let linked = directory.path().join("link.zip");
-        let mut zip = zip::ZipWriter::new(fs::File::create(&linked)?);
-        zip.add_symlink("Album", "/", zip::write::SimpleFileOptions::default())?;
-        zip.finish()?;
+        let mut zip = zip::ZipWriter::new(fs::File::create(&linked).unwrap());
+        zip.add_symlink("Album", "/", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.finish().unwrap();
         let linked_destination = directory.path().join("linked");
         assert!(extract(&linked, &linked_destination).is_err());
         assert!(!linked_destination.join("Album").exists());
-        Ok(())
     }
 
     fn lexical(path: &Path) -> PathBuf {
