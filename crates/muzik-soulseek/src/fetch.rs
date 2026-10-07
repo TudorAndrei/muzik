@@ -83,7 +83,7 @@ pub fn local_files(candidate: &Candidate, root: &Path) -> Result<Vec<PathBuf>> {
         .iter()
         .map(|remote| {
             let name = remote.name.rsplit(['/', '\\']).next().unwrap_or("");
-            if name.is_empty()
+            if matches!(name, "" | "." | "..")
                 || name.chars().any(char::is_control)
                 || !names.insert(name.to_ascii_lowercase())
             {
@@ -268,10 +268,41 @@ mod tests {
         );
         assert!(local_files(&candidate(&["A\\Song.flac", "B/song.FLAC"]), root).is_err());
         assert!(local_files(&candidate(&["Album\\"]), root).is_err());
+        assert!(local_files(&candidate(&["Album\\.."]), root).is_err());
+        assert!(local_files(&candidate(&["Album/."]), root).is_err());
         let mut nameless = candidate(&["Song.flac"]);
         nameless.username = " ".into();
         assert!(local_files(&nameless, root).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn local_files_stay_directly_inside_the_root_for_any_peer_names() {
+        let root = Path::new("/music");
+        bolero::check!()
+            .with_type::<(String, Vec<Vec<u8>>)>()
+            .for_each(|(username, raw)| {
+                let names: Vec<String> = raw
+                    .iter()
+                    .map(|bytes| {
+                        bytes
+                            .iter()
+                            .map(|byte| {
+                                ['a', '.', '/', '\\', ' ', '\0', 'é'][usize::from(*byte) % 7]
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let mut peer = candidate(&names.iter().map(String::as_str).collect::<Vec<_>>());
+                peer.username.clone_from(username);
+                if let Ok(paths) = local_files(&peer, root) {
+                    assert_eq!(paths.len(), names.len());
+                    for path in paths {
+                        assert_eq!(path.parent(), Some(root), "{path:?}");
+                        assert!(path.file_name().is_some(), "{path:?}");
+                    }
+                }
+            });
     }
 
     #[test]
