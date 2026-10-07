@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   fuzz:
+    name: Fuzz ${{ matrix.package }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:

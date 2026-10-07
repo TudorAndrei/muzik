@@ -13,6 +13,7 @@ concurrency:
 
 jobs:
   commits:
+    name: Commits
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -25,6 +26,7 @@ jobs:
       - run: cog check --from-latest-tag
 
   check:
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -46,6 +48,7 @@ jobs:
       - run: mise run check
 
   gpui-macos:
+    name: GPUI on macOS
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v7

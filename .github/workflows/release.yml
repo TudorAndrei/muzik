@@ -11,12 +11,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   version:
+    name: Version
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: write
+      actions: read # read the Check workflow runs for this commit
+      contents: write # push the version commit and tag
     outputs:
       tag: ${{ steps.tag.outputs.version }}
     steps:
@@ -81,6 +86,7 @@ jobs:
         run: echo "version=${EXISTING:-$BUMPED}" >> "$GITHUB_OUTPUT"
 
   build:
+    name: Build ${{ matrix.target }}
     needs: version
     strategy:
       fail-fast: false
@@ -163,10 +169,11 @@ jobs:
           if-no-files-found: error
 
   publish:
+    name: Publish
     needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write # create the GitHub release
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -181,10 +188,12 @@ jobs:
         run: gh release create "$TAG" dist/* --generate-notes --verify-tag
 
   homebrew:
+    name: Homebrew
     needs: [version, publish]
     runs-on: ubuntu-latest
+    environment: homebrew
     permissions:
-      contents: write
+      contents: write # push the cask update to main
     steps:
       - uses: actions/checkout@v7
         with:
