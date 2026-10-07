@@ -11,12 +11,18 @@ fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-fn expected() -> Value {
-    serde_json::from_slice(&fs::read(fixtures().join("mediafile_tags.json")).unwrap()).unwrap()
+fn expected() -> Result<Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_slice(&fs::read(
+        fixtures().join("mediafile_tags.json"),
+    )?)?)
 }
 
-fn expected_fields() -> BTreeMap<String, String> {
-    let values = &expected()["files"]["mp3"];
+fn expected_fields() -> Result<BTreeMap<String, String>, Box<dyn std::error::Error>> {
+    let expected = expected()?;
+    let values = expected
+        .get("files")
+        .and_then(|files| files.get("mp3"))
+        .ok_or("missing files.mp3")?;
     let mut fields = BTreeMap::new();
     for key in [
         "title",
@@ -36,10 +42,15 @@ fn expected_fields() -> BTreeMap<String, String> {
         "media",
         "albumdisambig",
     ] {
-        fields.insert(key.into(), values[key].as_str().unwrap().into());
+        let value = values
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("missing {key}"))?;
+        fields.insert(key.into(), value.into());
     }
     for key in ["track", "tracktotal", "disc", "disctotal"] {
-        fields.insert(key.into(), values[key].to_string());
+        let value = values.get(key).ok_or_else(|| format!("missing {key}"))?;
+        fields.insert(key.into(), value.to_string());
     }
     fields.insert("date".into(), "2021-04-07".into());
     fields.insert("original_date".into(), "2019-11-03".into());
@@ -48,12 +59,12 @@ fn expected_fields() -> BTreeMap<String, String> {
     fields.insert("rg_album_gain".into(), "-4.50 dB".into());
     fields.insert("rg_track_peak".into(), "0.912345".into());
     fields.insert("rg_album_peak".into(), "0.987654".into());
-    fields
+    Ok(fields)
 }
 
 #[test]
 fn reads_mediafile_tags_in_five_formats() {
-    let expected = expected_fields();
+    let expected = expected_fields().unwrap();
     for suffix in SUFFIXES {
         let path = fixtures().join(format!("mediafile.{suffix}"));
         let actual = read(&path, &["MUZIK_MOOD"]).unwrap();
@@ -85,7 +96,7 @@ fn writes_tags_for_mediafile_to_read() {
         .unwrap_or_else(|| std::env::temp_dir().join(format!("muzik-tags-{}", std::process::id())));
     fs::create_dir_all(&root).unwrap();
     let data = TagData {
-        fields: expected_fields(),
+        fields: expected_fields().unwrap(),
         lists: BTreeMap::from([
             (
                 "artists".into(),

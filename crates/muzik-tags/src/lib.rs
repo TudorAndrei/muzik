@@ -274,7 +274,7 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
             }
             native.save_to_path(path, WriteOptions::default())?;
         }
-        _ => unreachable!(),
+        _ => return Err(TagsError::Unsupported(kind)),
     }
     debug!(path = %path.display(), count = data.fields.len(), "wrote audio tags");
     Ok(())

@@ -118,7 +118,7 @@ pub fn embed_cover(
                 FileType::Vorbis => VorbisFile::read_from(&mut reader, options)?
                     .vorbis_comments()
                     .clone(),
-                _ => unreachable!(),
+                _ => return Err(TagsError::Unsupported(kind)),
             };
             tag.remove_picture_type(PictureType::CoverFront);
             tag.insert_picture(picture, None)
