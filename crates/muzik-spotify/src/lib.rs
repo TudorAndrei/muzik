@@ -88,16 +88,17 @@ pub fn clear_tokens(path: &Path) -> Result<bool> {
 
 pub fn settings(path: &Path) -> Result<Settings> {
     let config = app_config::load(path).unwrap_or_else(|_| json!({}));
-    let saved = &config["spotify"];
+    let saved = config.get("spotify");
     let value = |environment: &str, key: &str, fallback: &str| {
         std::env::var(environment)
             .ok()
             .filter(|text| !text.trim().is_empty())
             .or_else(|| {
-                saved[key]
+                let saved = saved.and_then(|saved| saved.get(key))?;
+                saved
                     .as_str()
                     .map(str::to_owned)
-                    .or_else(|| saved[key].as_i64().map(|number| number.to_string()))
+                    .or_else(|| saved.as_i64().map(|number| number.to_string()))
                     .filter(|text| !text.trim().is_empty())
             })
             .unwrap_or_else(|| fallback.to_owned())
@@ -308,23 +309,24 @@ impl Client {
 
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
     let settings = settings(config_path)?;
-    let mut result = json!({
-        "client_id": settings.client_id,
-        "redirect_uri": settings.redirect_uri(),
-        "connected": false,
-    });
+    let mut result = serde_json::Map::new();
+    result.insert("client_id".into(), json!(settings.client_id));
+    result.insert("redirect_uri".into(), json!(settings.redirect_uri()));
+    result.insert("connected".into(), json!(false));
     if load_token(token_path).is_some() {
         match Client::connect(config_path, token_path)
             .and_then(|mut client| account_name(&mut client))
         {
             Ok(name) => {
-                result["connected"] = json!(true);
-                result["account_name"] = json!(name);
+                result.insert("connected".into(), json!(true));
+                result.insert("account_name".into(), json!(name));
             }
-            Err(error) => result["error"] = json!(error.to_string()),
+            Err(error) => {
+                result.insert("error".into(), json!(error.to_string()));
+            }
         }
     }
-    Ok(result)
+    Ok(Value::Object(result))
 }
 
 fn account_name(client: &mut Client) -> Result<String> {

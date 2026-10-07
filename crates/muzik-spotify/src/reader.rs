@@ -42,7 +42,7 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
     let mut entries = Vec::new();
     let mut push = |entry: Option<Map<String, Value>>| {
         if let Some(mut entry) = entry {
-            entry.insert("index".into(), json!(entries.len() + 1));
+            entry.insert("index".into(), json!(entries.len().saturating_add(1)));
             entries.push(Value::Object(entry));
         }
     };
@@ -91,8 +91,8 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
         "title": title,
         "entries": entries,
     });
-    if let Some(snapshot) = snapshot {
-        document["snapshot_id"] = json!(snapshot);
+    if let (Some(snapshot), Value::Object(document)) = (snapshot, &mut document) {
+        document.insert("snapshot_id".into(), json!(snapshot));
     }
     Ok(document)
 }
