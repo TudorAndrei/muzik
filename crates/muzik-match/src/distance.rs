@@ -121,7 +121,7 @@ pub struct MatchItem {
     pub compilation: bool,
 }
 
-/// The fields in a beets TrackInfo that affect matching.
+/// The fields in a beets `TrackInfo` that affect matching.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MatchTrack {
     #[serde(default)]
@@ -142,7 +142,7 @@ pub struct MatchTrack {
     pub data_source: Option<String>,
 }
 
-/// The fields in a beets AlbumInfo that affect matching.
+/// The fields in a beets `AlbumInfo` that affect matching.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct MatchAlbum {
     #[serde(default, alias = "album")]
@@ -196,6 +196,8 @@ pub struct MatchConfig {
 }
 
 impl MatchConfig {
+    /// # Errors
+    /// Returns an error when a required `match:` setting is missing or not valid.
     pub fn from_beets(config: &BeetsConfig) -> Result<Self, Error> {
         let at = |keys: &[&str]| config.get(keys);
         let weights = at(&["match", "distance_weights"])
@@ -225,7 +227,7 @@ impl MatchConfig {
         };
         let number = |key| {
             at(&["match", key])
-                .and_then(|v| v.as_f64())
+                .and_then(serde_json::Value::as_f64)
                 .ok_or(Error::InvalidConfig("match numeric setting"))
         };
         let max_rec = at(&["match", "max_rec"])
@@ -245,7 +247,7 @@ impl MatchConfig {
             preferred_media: strings(&["match", "preferred", "media"]),
             preferred_countries: strings(&["match", "preferred", "countries"]),
             prefer_original_year: at(&["match", "preferred", "original_year"])
-                .and_then(|v| v.as_bool())
+                .and_then(serde_json::Value::as_bool)
                 .unwrap_or(false),
             track_length_grace: number("track_length_grace")?,
             track_length_max: number("track_length_max")?,
@@ -285,11 +287,11 @@ impl MatchConfig {
 #[derive(Clone, Debug, Default)]
 pub struct Distance {
     penalties: Vec<(DistanceKey, Vec<f64>)>,
-    pub tracks: Vec<Distance>,
+    pub tracks: Vec<Self>,
 }
 
 impl Distance {
-    pub fn add(&mut self, key: DistanceKey, value: f64) -> Result<(), Error> {
+    pub(crate) fn add(&mut self, key: DistanceKey, value: f64) -> Result<(), Error> {
         if !(0.0..=1.0).contains(&value) {
             return Err(Error::InvalidPenalty { key, value });
         }
@@ -301,7 +303,7 @@ impl Distance {
         Ok(())
     }
 
-    pub fn add_string(
+    pub(crate) fn add_string(
         &mut self,
         key: DistanceKey,
         left: Option<&str>,
@@ -310,11 +312,16 @@ impl Distance {
         self.add(key, string_dist(left, right))
     }
 
-    pub fn add_equality(&mut self, key: DistanceKey, equal: bool) -> Result<(), Error> {
+    pub(crate) fn add_equality(&mut self, key: DistanceKey, equal: bool) -> Result<(), Error> {
         self.add(key, if equal { 0.0 } else { 1.0 })
     }
 
-    pub fn add_number(&mut self, key: DistanceKey, left: u32, right: u32) -> Result<(), Error> {
+    pub(crate) fn add_number(
+        &mut self,
+        key: DistanceKey,
+        left: u32,
+        right: u32,
+    ) -> Result<(), Error> {
         let difference = left.abs_diff(right);
         for _ in 0..difference.max(1) {
             self.add(key, if difference == 0 { 0.0 } else { 1.0 })?;
@@ -322,7 +329,7 @@ impl Distance {
         Ok(())
     }
 
-    pub fn add_ratio(
+    pub(crate) fn add_ratio(
         &mut self,
         key: DistanceKey,
         numerator: f64,
@@ -336,7 +343,7 @@ impl Distance {
         self.add(key, value)
     }
 
-    pub fn raw_distance(&self, config: &MatchConfig) -> Result<f64, Error> {
+    pub(crate) fn raw_distance(&self, config: &MatchConfig) -> Result<f64, Error> {
         let mut total = 0.0;
         for (key, values) in &self.penalties {
             let weight = config
@@ -348,7 +355,7 @@ impl Distance {
         Ok(total)
     }
 
-    pub fn max_distance(&self, config: &MatchConfig) -> Result<f64, Error> {
+    pub(crate) fn max_distance(&self, config: &MatchConfig) -> Result<f64, Error> {
         let mut total = 0.0;
         for (key, values) in &self.penalties {
             let weight = config
@@ -360,6 +367,8 @@ impl Distance {
         Ok(total)
     }
 
+    /// # Errors
+    /// Returns an error when the config has no weight for a penalty key.
     pub fn score(&self, config: &MatchConfig) -> Result<f64, Error> {
         let max = self.max_distance(config)?;
         if max == 0.0 {
@@ -369,7 +378,11 @@ impl Distance {
         }
     }
 
-    pub fn weighted_penalty(&self, key: DistanceKey, config: &MatchConfig) -> Result<f64, Error> {
+    pub(crate) fn weighted_penalty(
+        &self,
+        key: DistanceKey,
+        config: &MatchConfig,
+    ) -> Result<f64, Error> {
         let max = self.max_distance(config)?;
         if max == 0.0 {
             return Ok(0.0);
@@ -387,7 +400,7 @@ impl Distance {
         Ok(values.iter().sum::<f64>() * weight / max)
     }
 
-    pub fn active_keys(&self, config: &MatchConfig) -> Result<Vec<DistanceKey>, Error> {
+    pub(crate) fn active_keys(&self, config: &MatchConfig) -> Result<Vec<DistanceKey>, Error> {
         let mut result = Vec::new();
         for &(key, _) in &self.penalties {
             if self.weighted_penalty(key, config)? != 0.0 {
@@ -397,11 +410,14 @@ impl Distance {
         Ok(result)
     }
 
+    #[must_use]
     pub fn penalties(&self) -> &[(DistanceKey, Vec<f64>)] {
         &self.penalties
     }
 }
 
+/// # Errors
+/// Returns an error when a penalty is outside 0..=1.
 pub fn track_distance(
     item: &MatchItem,
     track: &MatchTrack,
@@ -489,6 +505,8 @@ fn preferred_match(value: &str, patterns: &[String], media: bool) -> Result<f64,
     Ok(1.0)
 }
 
+/// # Errors
+/// Returns an error when there are no items, a pair is outside the album, a weight or preferred regex is not valid, or a penalty is outside 0..=1.
 pub fn album_distance(
     items: &[MatchItem],
     album: &MatchAlbum,
@@ -499,6 +517,26 @@ pub fn album_distance(
         return Err(Error::NoItems);
     }
     let mut dist = Distance::default();
+    add_release_distance(&mut dist, items, album, config)?;
+    add_year_distance(&mut dist, items, album, config)?;
+    add_details_distance(&mut dist, items, album, config)?;
+    add_track_distances(&mut dist, items, album, pairs, config)?;
+    let data_source = plurality(items, |item| item.data_source.clone());
+    if let Some(penalty) =
+        config.source_penalty(data_source.as_deref(), album.data_source.as_deref())
+    {
+        dist.add(DistanceKey::DataSource, penalty)?;
+    }
+    tracing::debug!(score = dist.score(config)?, "scored album candidate");
+    Ok(dist)
+}
+
+fn add_release_distance(
+    dist: &mut Distance,
+    items: &[MatchItem],
+    album: &MatchAlbum,
+    config: &MatchConfig,
+) -> Result<(), Error> {
     let artist = plurality(items, |item| item.artist.clone());
     let album_artist = plurality(items, |item| item.album_artist.clone());
     let artist =
@@ -532,6 +570,15 @@ pub fn album_distance(
     {
         dist.add_number(DistanceKey::Mediums, disc_total, mediums)?;
     }
+    Ok(())
+}
+
+fn add_year_distance(
+    dist: &mut Distance,
+    items: &[MatchItem],
+    album: &MatchAlbum,
+    config: &MatchConfig,
+) -> Result<(), Error> {
     let year = plurality(items, |item| item.year);
     if let Some(album_year) = album.year.filter(|year| *year != 0) {
         if config.prefer_original_year {
@@ -558,6 +605,15 @@ pub fn album_distance(
             }
         }
     }
+    Ok(())
+}
+
+fn add_details_distance(
+    dist: &mut Distance,
+    items: &[MatchItem],
+    album: &MatchAlbum,
+    config: &MatchConfig,
+) -> Result<(), Error> {
     let country = plurality(items, |item| item.country.clone());
     if let Some(album_country) = album.country.as_deref().filter(|value| !value.is_empty()) {
         if !config.preferred_countries.is_empty() {
@@ -597,6 +653,16 @@ pub fn album_distance(
             Some(album_id.as_str()) == album.album_id.as_deref(),
         )?;
     }
+    Ok(())
+}
+
+fn add_track_distances(
+    dist: &mut Distance,
+    items: &[MatchItem],
+    album: &MatchAlbum,
+    pairs: &[(usize, usize)],
+    config: &MatchConfig,
+) -> Result<(), Error> {
     for &(item_index, track_index) in pairs {
         let (Some(item), Some(track)) = (items.get(item_index), album.tracks.get(track_index))
         else {
@@ -612,12 +678,5 @@ pub fn album_distance(
     for _ in pairs.len()..items.len() {
         dist.add(DistanceKey::UnmatchedTracks, 1.0)?;
     }
-    let data_source = plurality(items, |item| item.data_source.clone());
-    if let Some(penalty) =
-        config.source_penalty(data_source.as_deref(), album.data_source.as_deref())
-    {
-        dist.add(DistanceKey::DataSource, penalty)?;
-    }
-    tracing::debug!(score = dist.score(config)?, "scored album candidate");
-    Ok(dist)
+    Ok(())
 }

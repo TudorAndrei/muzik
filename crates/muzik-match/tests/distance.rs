@@ -18,7 +18,7 @@ struct Expected {
     score: f64,
     penalties: Value,
     #[serde(default)]
-    tracks: Vec<Expected>,
+    tracks: Vec<Self>,
 }
 
 #[derive(Deserialize)]

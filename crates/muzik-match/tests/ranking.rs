@@ -45,6 +45,7 @@ struct ExpectedRanking {
 }
 
 #[test]
+#[expect(clippy::float_cmp, reason = "beets parity needs exact float equality")]
 fn matches_beets_assignment_and_ranking() {
     let fixture: Fixture = serde_json::from_str(include_str!("fixtures/ranking.json")).unwrap();
     assert_eq!(fixture.beets_version, "2.13.1");

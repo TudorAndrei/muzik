@@ -16,6 +16,8 @@ pub struct Assignment {
     pub extra_tracks: Vec<usize>,
 }
 
+/// # Errors
+/// Returns an error when a distance cannot be computed or the track assignment fails.
 pub fn assign_items(
     items: &[MatchItem],
     tracks: &[MatchTrack],
@@ -90,7 +92,7 @@ pub struct Ranking {
     pub recommendation: Recommendation,
 }
 
-fn required_field_present(album: &MatchAlbum, field: &AlbumField) -> bool {
+const fn required_field_present(album: &MatchAlbum, field: &AlbumField) -> bool {
     match field {
         AlbumField::Album => !album.title.is_empty(),
         AlbumField::Artist => !album.artist.is_empty(),
@@ -144,6 +146,9 @@ fn recommendation(
 }
 
 /// Rank a fixed set of candidate releases with beets' filters and thresholds.
+///
+/// # Errors
+/// Returns an error when a distance cannot be computed or the track assignment fails.
 pub fn rank_albums(
     items: &[MatchItem],
     candidates: &[MatchAlbum],

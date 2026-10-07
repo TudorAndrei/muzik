@@ -49,9 +49,10 @@ fn basic_distance(left: &str, right: &str) -> f64 {
 
 #[expect(
     clippy::as_conversions,
+    clippy::cast_precision_loss,
     reason = "std has no From<usize> for f64; beets divides counts as floats"
 )]
-pub(crate) fn count_to_f64(count: usize) -> f64 {
+pub const fn count_to_f64(count: usize) -> f64 {
     count as f64
 }
 
