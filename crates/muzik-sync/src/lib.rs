@@ -108,6 +108,8 @@ enum Step {
 }
 
 impl Target {
+    /// # Errors
+    /// Returns an error if the target is missing or one of its settings is invalid.
     pub fn load(config: &Value, name: &str) -> Result<Self> {
         let targets = config.get(SECTION).and_then(Value::as_object);
         let Some(entry) = targets.and_then(|targets| targets.get(name)) else {
@@ -157,6 +159,8 @@ impl Target {
         Ok(target)
     }
 
+    /// # Errors
+    /// Returns an error if the target or name is invalid or the config file cannot be written.
     pub fn save(&self, config_path: &Path, name: &str) -> Result<()> {
         self.validate()?;
         let name = name.trim();
@@ -190,6 +194,7 @@ impl Target {
         }
     }
 
+    #[must_use]
     pub fn action(&self, audio: &MeasuredQuality) -> Action {
         let codec = &audio.format;
         match self.preset {
@@ -255,6 +260,7 @@ impl Target {
 }
 
 impl Plan {
+    #[must_use]
     pub fn bytes_needed(&self) -> u64 {
         self.pending
             .iter()
@@ -434,6 +440,8 @@ fn sanitize(relative: &Path) -> Option<PathBuf> {
     (!clean.as_os_str().is_empty()).then_some(clean)
 }
 
+/// # Errors
+/// Returns an error if the file cannot be copied, converted, or moved into place.
 pub fn transfer(transfer: &Transfer) -> Result<()> {
     let parent = transfer
         .destination
@@ -491,6 +499,8 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if the sync records cannot be read.
 pub fn encodings(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, Encoding>> {
     Ok(sync_files::load(connection, root)?
         .into_iter()
@@ -502,6 +512,8 @@ pub fn encodings(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBu
         .collect())
 }
 
+/// # Errors
+/// Returns an error if the sync record cannot be written.
 pub fn record(connection: &Connection, transfer: &Transfer) -> Result<()> {
     let encoding = match &transfer.action {
         Action::Copy => None,
@@ -526,6 +538,8 @@ pub fn run(
     .count()
 }
 
+/// # Errors
+/// Returns an error if a folder under the root cannot be read.
 pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<PathBuf>> {
     let mut stale = Vec::new();
     let mut folders = vec![root.to_path_buf()];
@@ -553,7 +567,7 @@ pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<P
     Ok(stale)
 }
 
-pub fn remove_empty_folders(root: &Path) -> io::Result<()> {
+pub(crate) fn remove_empty_folders(root: &Path) -> io::Result<()> {
     for entry in fs::read_dir(root)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() && !entry.file_name().to_string_lossy().starts_with('.') {
@@ -568,6 +582,7 @@ pub fn remove_empty_folders(root: &Path) -> io::Result<()> {
 }
 
 #[cfg(unix)]
+#[must_use]
 pub fn available_bytes(path: &Path) -> Option<u64> {
     rustix::fs::statvfs(path)
         .ok()

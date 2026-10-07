@@ -54,34 +54,42 @@ pub struct Report {
 }
 
 impl Prepared {
-    pub fn plan(&self) -> &Plan {
+    #[must_use]
+    pub const fn plan(&self) -> &Plan {
         &self.plan
     }
 
-    pub fn target(&self) -> &Target {
+    #[must_use]
+    pub const fn target(&self) -> &Target {
         &self.target
     }
 
-    pub fn delete(&self) -> bool {
+    #[must_use]
+    pub const fn delete(&self) -> bool {
         self.options.delete
     }
 
-    pub fn delete_blocked(&self) -> bool {
+    #[must_use]
+    pub const fn delete_blocked(&self) -> bool {
         self.delete_blocked
     }
 
+    #[must_use]
     pub fn stale(&self) -> &[PathBuf] {
         &self.stale
     }
 
-    pub fn freed(&self) -> u64 {
+    #[must_use]
+    pub const fn freed(&self) -> u64 {
         self.freed
     }
 
-    pub fn needed(&self) -> u64 {
+    #[must_use]
+    pub const fn needed(&self) -> u64 {
         self.needed
     }
 
+    #[must_use]
     pub fn shortfall(&self) -> Option<Shortfall> {
         shortfall(self.needed, self.freed, self.available)
     }
@@ -100,6 +108,8 @@ fn size(paths: &[PathBuf]) -> u64 {
         .sum()
 }
 
+/// # Errors
+/// Returns an error if the query is invalid or the library cannot be read.
 pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) -> Result<Selection> {
     let items = library.query_items(query)?;
     let tracks: Vec<PathBuf> = items
@@ -131,6 +141,8 @@ pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) ->
     })
 }
 
+/// # Errors
+/// Returns an error if the sync records or the target folder cannot be read.
 pub fn prepare(
     target: &Target,
     directory: &Path,
@@ -172,6 +184,8 @@ pub fn prepare(
     })
 }
 
+/// # Errors
+/// Returns an error if the target is missing, has too little space, or stale files cannot be removed.
 pub fn apply(
     prepared: Prepared,
     connection: Connection,
