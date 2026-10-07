@@ -20,6 +20,10 @@ use crate::{Error, Result};
 const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
 #[derive(Clone, Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool mirrors one beets import flag that front ends set by name"
+)]
 pub struct ImportRequest {
     pub source: PathBuf,
     pub config_path: Option<PathBuf>,
@@ -60,17 +64,16 @@ pub enum SyncOutcome {
     Updated(SyncResult),
 }
 
-pub fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> Result<PathBuf> {
+fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> Result<PathBuf> {
     let raw = config
         .get(&[key])
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| format!("beets config has no {key} path"))?;
     let expanded = if raw == "~" || raw.starts_with("~/") {
-        std::env::var_os("HOME")
-            .map(|home| {
-                PathBuf::from(home).join(raw.trim_start_matches('~').trim_start_matches('/'))
-            })
-            .unwrap_or_else(|| PathBuf::from(raw))
+        std::env::var_os("HOME").map_or_else(
+            || PathBuf::from(raw),
+            |home| PathBuf::from(home).join(raw.trim_start_matches('~').trim_start_matches('/')),
+        )
     } else {
         PathBuf::from(raw)
     };
@@ -79,18 +82,18 @@ pub fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> R
     } else {
         config_path
             .parent()
-            .unwrap_or(Path::new("."))
+            .unwrap_or_else(|| Path::new("."))
             .join(expanded)
     })
 }
 
+/// # Errors
+/// Returns an error when the beets config cannot be loaded or lacks a required path.
 pub fn load_paths(
     config_path: Option<&Path>,
     overrides: serde_json::Value,
 ) -> Result<(BeetsConfig, BeetsPaths)> {
-    let config_path = config_path
-        .map(Path::to_path_buf)
-        .unwrap_or_else(muzik_core::default_config_path);
+    let config_path = config_path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     let config = BeetsConfig::load(&config_path, overrides).map_err(|error| error.to_string())?;
     let paths = BeetsPaths {
         library: configured_path(&config, &config_path, "library")?,
@@ -101,10 +104,15 @@ pub fn load_paths(
     Ok((config, paths))
 }
 
+/// # Errors
+/// Returns an error when the request or config is invalid, or the source cannot be planned.
 pub fn plan_import(request: ImportRequest) -> Result<ImportPreview> {
     plan_import_with_cancel(request, &|| false)
 }
 
+/// # Errors
+/// Returns an error when the plan is cancelled, the request or config is invalid, or the source
+/// cannot be planned.
 pub fn plan_import_with_cancel(
     request: ImportRequest,
     cancelled: &dyn Fn() -> bool,
@@ -181,10 +189,19 @@ pub fn plan_import_with_cancel(
     })
 }
 
+/// # Errors
+/// Returns an error when the library cannot be opened or the import cannot be applied.
 pub fn apply_import(preview: ImportPreview, decisions: &[AlbumDecision]) -> Result<ImportOutcome> {
     apply_import_with_cancel(preview, decisions, &|| false)
 }
 
+/// # Errors
+/// Returns an error when the import is cancelled, the library cannot be opened, or the import
+/// cannot be applied.
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "muzik-runner calls this by value; a reference would change its pub signature"
+)]
 pub fn apply_import_with_cancel(
     preview: ImportPreview,
     decisions: &[AlbumDecision],
@@ -233,6 +250,8 @@ fn check_cancelled(cancelled: &dyn Fn() -> bool) -> Result<()> {
     }
 }
 
+/// # Errors
+/// Returns an error when the source cannot be planned or the import cannot be applied.
 pub fn import_with(
     request: ImportRequest,
     mut decide: impl FnMut(&AlbumPlan) -> AlbumDecision,
@@ -247,6 +266,8 @@ pub fn import_with(
     apply_import(preview, &decisions)
 }
 
+/// # Errors
+/// Returns an error when the config or library cannot be read, or the sync fails.
 pub fn sync_library(
     query: &str,
     config_path: Option<&Path>,
@@ -329,6 +350,9 @@ fn legacy_path(value: &HashableValue) -> Result<PathBuf> {
     }
 }
 
+/// # Errors
+/// Returns an error when the directory or library is missing, no item matches, or a tag write
+/// fails.
 pub fn write_library_tags(
     directory: &Path,
     config_path: Option<&Path>,
@@ -422,13 +446,15 @@ fn tags_from_item(item: &Item) -> TagData {
         let Some(year) = item.field(&format!("{prefix}year")).and_then(scalar_text) else {
             continue;
         };
-        let mut date = format!("{year:0>4}");
-        if let Some(month) = item.field(&format!("{prefix}month")).and_then(scalar_text) {
-            date.push_str(&format!("-{month:0>2}"));
-            if let Some(day) = item.field(&format!("{prefix}day")).and_then(scalar_text) {
-                date.push_str(&format!("-{day:0>2}"));
-            }
-        }
+        let month = item.field(&format!("{prefix}month")).and_then(scalar_text);
+        let day = month
+            .as_ref()
+            .and_then(|_| item.field(&format!("{prefix}day")).and_then(scalar_text));
+        let date = match (month, day) {
+            (Some(month), Some(day)) => format!("{year:0>4}-{month:0>2}-{day:0>2}"),
+            (Some(month), None) => format!("{year:0>4}-{month:0>2}"),
+            (None, _) => format!("{year:0>4}"),
+        };
         tags.fields.insert(target.to_owned(), date);
     }
     if let Some(comp) = item.field("comp").and_then(scalar_text) {
@@ -526,7 +552,7 @@ mod tests {
             .record(&[source_dir.canonicalize().unwrap()])
             .unwrap();
         let request = ImportRequest {
-            source: source.clone(),
+            source,
             config_path: Some(config_path),
             dry_run: true,
             ..ImportRequest::default()

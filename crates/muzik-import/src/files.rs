@@ -18,7 +18,7 @@ pub enum Placement {
 }
 
 /// Place one regular file without replacing an existing destination.
-pub fn place(source: &Path, destination: &Path, mode: Placement) -> Result<(), FileError> {
+pub(crate) fn place(source: &Path, destination: &Path, mode: Placement) -> Result<(), FileError> {
     if !source.is_file() {
         return Err(FileError::InvalidSource(source.to_owned()));
     }
@@ -81,13 +81,16 @@ fn symlink_file(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 /// Move a file to the operating system trash.
-pub fn move_to_trash(path: &Path) -> Result<(), FileError> {
+pub(crate) fn move_to_trash(path: &Path) -> Result<(), FileError> {
     trash::delete(path)?;
     Ok(())
 }
 
 /// Remove empty parent directories up to, but not including, `root`.
 /// Returns the number of directories removed.
+///
+/// # Errors
+/// Returns an error when `path` is outside `root` or a directory cannot be removed.
 pub fn prune_empty_parents(path: &Path, root: &Path) -> Result<usize, FileError> {
     let root = root.canonicalize()?;
     let mut current = path.canonicalize()?;

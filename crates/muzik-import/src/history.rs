@@ -22,11 +22,15 @@ struct HistoryFile {
 
 impl IncrementalHistory {
     /// Return the native state path next to the beets pickle state file.
+    #[must_use]
     pub fn path_for_statefile(statefile: &Path) -> PathBuf {
         statefile.with_extension("muzik-history.json")
     }
 
     /// Seed the native history only when it does not already exist.
+    ///
+    /// # Errors
+    /// Returns an error when the existing history file cannot be read or parsed.
     pub fn open_or_seed(statefile: &Path, imported: &[Vec<PathBuf>]) -> Result<Self, Error> {
         let history = Self {
             path: Self::path_for_statefile(statefile),
@@ -50,11 +54,13 @@ impl IncrementalHistory {
         Ok(history)
     }
 
+    /// # Errors
+    /// Returns an error when the history file cannot be read or parsed.
     pub fn contains(&self, paths: &[PathBuf]) -> Result<bool, Error> {
         Ok(self.read()?.entries.contains(paths))
     }
 
-    pub fn record(&self, paths: &[PathBuf]) -> Result<(), Error> {
+    pub(crate) fn record(&self, paths: &[PathBuf]) -> Result<(), Error> {
         let mut file = self.read()?;
         if file.entries.insert(paths.to_vec()) {
             self.write(&file)?;
@@ -63,7 +69,7 @@ impl IncrementalHistory {
     }
 
     /// Save the migrated beets entries before a real import run.
-    pub fn persist_seed(&self) -> Result<(), Error> {
+    pub(crate) fn persist_seed(&self) -> Result<(), Error> {
         match fs::metadata(&self.path) {
             Ok(_) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => self.write(&HistoryFile {
@@ -84,7 +90,7 @@ impl IncrementalHistory {
     }
 
     fn write(&self, file: &HistoryFile) -> Result<(), Error> {
-        let parent = self.path.parent().unwrap_or(Path::new("."));
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         let mut writer = io::BufWriter::new(&mut temporary);

@@ -18,8 +18,9 @@ impl ReleaseProvider for RecordedRelease {
         criteria: &ReleaseSearch,
         _: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        assert_eq!(criteria.release, "Dummy");
-        assert_eq!(criteria.artist.as_deref(), Some("Portishead"));
+        if criteria.release != "Dummy" || criteria.artist.as_deref() != Some("Portishead") {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(vec![ReleaseSearchHit {
             id: self.release.id.clone(),
             title: self.release.title.clone(),
@@ -29,7 +30,9 @@ impl ReleaseProvider for RecordedRelease {
     }
 
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        assert_eq!(id, self.release.id.0);
+        if id != self.release.id.0 {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(self.release.clone())
     }
 

@@ -23,7 +23,7 @@ pub struct PathFormats {
 
 impl PathFormats {
     /// Return a path relative to the music directory.
-    pub fn destination(
+    pub(crate) fn destination(
         &self,
         kind: PathKind,
         context: &TemplateContext,
@@ -47,7 +47,7 @@ pub struct PathSanitizer {
 }
 
 impl PathSanitizer {
-    pub fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
+    pub(crate) fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
         let replacements = if replacements.is_empty() {
             configured_default_replacements()?
         } else {
@@ -65,7 +65,11 @@ impl PathSanitizer {
     }
 
     /// Apply the beets replacement and truncation stages, then append the suffix.
-    pub fn legalize(&self, subpath: &str, extension: &str) -> Result<String, fancy_regex::Error> {
+    pub(crate) fn legalize(
+        &self,
+        subpath: &str,
+        extension: &str,
+    ) -> Result<String, fancy_regex::Error> {
         let extension = extension.to_lowercase();
         let (first, _) = self.stage(subpath, &extension, &self.replacements)?;
         let stem = first.strip_suffix(&extension).unwrap_or(&first);
@@ -182,25 +186,22 @@ impl TemplateContext {
         let Some(album) = self.albums.iter().find(|album| album.id == id) else {
             return String::new();
         };
-        let keys = args
-            .first()
-            .filter(|value| !value.is_empty())
-            .map(|value| value.split_whitespace().collect::<Vec<_>>())
-            .unwrap_or_else(|| self.aunique_keys.iter().map(String::as_str).collect());
-        let disambiguators = args
-            .get(1)
-            .filter(|value| !value.is_empty())
-            .map(|value| value.split_whitespace().collect::<Vec<_>>())
-            .unwrap_or_else(|| {
+        let keys = args.first().filter(|value| !value.is_empty()).map_or_else(
+            || self.aunique_keys.iter().map(String::as_str).collect(),
+            |value| value.split_whitespace().collect::<Vec<_>>(),
+        );
+        let disambiguators = args.get(1).filter(|value| !value.is_empty()).map_or_else(
+            || {
                 self.aunique_disambiguators
                     .iter()
                     .map(String::as_str)
                     .collect()
-            });
+            },
+            |value| value.split_whitespace().collect::<Vec<_>>(),
+        );
         let bracket = args
             .get(2)
-            .map(String::as_str)
-            .unwrap_or(&self.aunique_bracket);
+            .map_or(self.aunique_bracket.as_str(), String::as_str);
         let duplicates: Vec<_> = self
             .albums
             .iter()
@@ -222,10 +223,10 @@ impl TemplateContext {
         for key in disambiguators {
             let values: HashSet<_> = duplicates
                 .iter()
-                .map(|candidate| candidate.fields.get(key).map(String::as_str).unwrap_or(""))
+                .map(|candidate| candidate.fields.get(key).map_or("", String::as_str))
                 .collect();
             if values.len() == duplicates.len() {
-                let value = album.fields.get(key).map(String::as_str).unwrap_or("");
+                let value = album.fields.get(key).map_or("", String::as_str);
                 return if value.is_empty() {
                     String::new()
                 } else {
@@ -241,7 +242,7 @@ fn is_identifier(character: char) -> bool {
     character == '_' || character.is_alphanumeric()
 }
 
-fn is_escapable(character: char) -> bool {
+const fn is_escapable(character: char) -> bool {
     matches!(character, '$' | '%' | '}' | ',')
 }
 
@@ -383,8 +384,8 @@ fn split_arguments(input: &str) -> Vec<&str> {
 }
 
 fn call(name: &str, args: &[String], context: &TemplateContext) -> Option<String> {
-    let first = args.first().map(String::as_str).unwrap_or("");
-    let second = args.get(1).map(String::as_str).unwrap_or("");
+    let first = args.first().map_or("", String::as_str);
+    let second = args.get(1).map_or("", String::as_str);
     let result = match name {
         "if" => {
             let condition = first.trim();
@@ -394,7 +395,7 @@ fn call(name: &str, args: &[String], context: &TemplateContext) -> Option<String
             if truth {
                 second
             } else {
-                args.get(2).map(String::as_str).unwrap_or("")
+                args.get(2).map_or("", String::as_str)
             }
             .to_string()
         }

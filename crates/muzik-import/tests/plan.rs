@@ -122,9 +122,12 @@ impl ReleaseProvider for FixtureProvider {
         criteria: &ReleaseSearch,
         _limit: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        assert_eq!(criteria.release, "Night Lines");
-        assert_eq!(criteria.artist.as_deref(), Some("Mara Vale"));
-        assert_eq!(criteria.tracks, Some(1));
+        if criteria.release != "Night Lines"
+            || criteria.artist.as_deref() != Some("Mara Vale")
+            || criteria.tracks != Some(1)
+        {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(vec![ReleaseSearchHit {
             id: ReleaseId("release-1".to_owned()),
             title: "Night Lines".to_owned(),
@@ -134,7 +137,9 @@ impl ReleaseProvider for FixtureProvider {
     }
 
     fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, muzik_metadata::Error> {
-        assert_eq!(id, "release-1");
+        if id != "release-1" {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(ReleaseCandidate {
             id: ReleaseId(id.to_owned()),
             title: "Night Lines".to_owned(),
@@ -210,7 +215,10 @@ fn groups_audio_and_ranks_release_with_source_sidecar() {
         .unwrap()
         .duration_seconds
         .unwrap();
-    assert_eq!(album.items[0].match_item.length, duration);
+    assert_eq!(
+        album.items[0].match_item.length.to_bits(),
+        duration.to_bits()
+    );
     assert_eq!(album.candidates.len(), 1);
     assert_eq!(album.candidates[0].release.id.0, "release-1");
     assert_eq!(album.candidates[0].assignment.pairs, vec![(0, 0)]);

@@ -10,7 +10,7 @@ use muzik_import::history::IncrementalHistory;
 use muzik_import::plan::{
     Duplicate, DuplicateReason, ImportMode, ImportPlanner, PlanOptions, ReleaseProvider,
 };
-use muzik_library::{Library, SqlValue};
+use muzik_library::{Fields, Library, SqlValue};
 use muzik_match::MatchConfig;
 use muzik_metadata::{ReleaseSearch, ReleaseSearchHit};
 
@@ -22,8 +22,9 @@ impl ReleaseProvider for FixtureProvider {
         criteria: &ReleaseSearch,
         _limit: u8,
     ) -> Result<Vec<ReleaseSearchHit>, muzik_metadata::Error> {
-        assert_eq!(criteria.release, "Night Lines");
-        assert_eq!(criteria.artist.as_deref(), Some("Mara Vale"));
+        if criteria.release != "Night Lines" || criteria.artist.as_deref() != Some("Mara Vale") {
+            return Err(muzik_metadata::Error::EmptyReleaseTitle);
+        }
         Ok(vec![ReleaseSearchHit {
             id: ReleaseId("new-release".into()),
             title: "Night Lines".into(),
@@ -96,6 +97,19 @@ fn fixture() -> Result<Fixture, Box<dyn std::error::Error>> {
 
 #[test]
 fn cancellation_during_placement_restores_files_and_keeps_database() {
+    fn files_under(path: &std::path::Path) -> usize {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    files_under(&entry.path())
+                } else {
+                    1
+                }
+            })
+            .sum()
+    }
     let (_temp, source, database, root, config) = fixture().unwrap();
     let second = source.with_file_name("03 Other.flac");
     fs::copy(&source, &second).unwrap();
@@ -141,19 +155,6 @@ fn cancellation_during_placement_restores_files_and_keeps_database() {
     assert!(second.exists());
     assert_eq!(library.items().unwrap().len(), old_items);
     assert_eq!(library.albums().unwrap().len(), old_albums);
-    fn files_under(path: &std::path::Path) -> usize {
-        fs::read_dir(path)
-            .unwrap()
-            .map(|entry| {
-                let entry = entry.unwrap();
-                if entry.file_type().unwrap().is_dir() {
-                    files_under(&entry.path())
-                } else {
-                    1
-                }
-            })
-            .sum()
-    }
     assert_eq!(files_under(&root), 0);
 }
 
@@ -632,7 +633,7 @@ fn replace_removes_selected_duplicate_rows() {
     fields.insert("album".into(), SqlValue::Text("Night Lines".into()));
     fields.insert("albumartist".into(), SqlValue::Text("Mara Vale".into()));
     fields.insert("mb_albumid".into(), SqlValue::Text("new-release".into()));
-    let old_id = library.insert_album(&fields, &Default::default()).unwrap();
+    let old_id = library.insert_album(&fields, &Fields::new()).unwrap();
     let mut item_fields = muzik_library::Fields::new();
     item_fields.insert("album_id".into(), SqlValue::Integer(old_id));
     item_fields.insert(
@@ -644,9 +645,7 @@ fn replace_removes_selected_duplicate_rows() {
                 .to_vec(),
         ),
     );
-    let old_item_id = library
-        .insert_item(&item_fields, &Default::default())
-        .unwrap();
+    let old_item_id = library.insert_item(&item_fields, &Fields::new()).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
         provider: &FixtureProvider,
@@ -684,7 +683,7 @@ fn replace_removes_selected_duplicate_rows() {
         ),
     );
     library
-        .update_item(old_item_id, &old_path, &Default::default())
+        .update_item(old_item_id, &old_path, &Fields::new())
         .unwrap();
 
     let result = apply::apply(
@@ -723,7 +722,7 @@ fn replace_keeps_album_from_unselected_release() {
     fields.insert("album".into(), SqlValue::Text("Night Lines".into()));
     fields.insert("albumartist".into(), SqlValue::Text("Mara Vale".into()));
     fields.insert("mb_albumid".into(), SqlValue::Text("other-release".into()));
-    let other_id = library.insert_album(&fields, &Default::default()).unwrap();
+    let other_id = library.insert_album(&fields, &Fields::new()).unwrap();
     let match_config = MatchConfig::from_beets(&config).unwrap();
     let planner = ImportPlanner {
         provider: &FixtureProvider,
