@@ -224,7 +224,7 @@ fn split_audio_with_binary(
                             return Err(SplitError::Cancelled);
                         }
                         if split_track(&track_context, chapter)? {
-                            let count = completed.fetch_add(1, Ordering::SeqCst) + 1;
+                            let count = completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
                             let _ = sender.send(SplitProgress {
                                 completed: count,
                                 total: chapters.len(),
@@ -565,10 +565,7 @@ fn parse_title(title: &str) -> (Option<String>, Option<String>, Option<String>) 
         .captures(title)
         .and_then(|captures| captures.get(1))
         .map(|value| value.as_str().to_owned());
-    let title = year_re
-        .find(title)
-        .map_or(title, |found| &title[..found.start()])
-        .trim();
+    let title = year_re.splitn(title, 2).next().unwrap_or(title).trim();
     if let Some((artist, album)) = title.split_once(" - ") {
         (
             Some(artist.trim().into()),
@@ -597,9 +594,9 @@ fn clean_album_name(album: &str) -> String {
 
 fn parse_artist_title(title: &str) -> Option<(&str, &str)> {
     let separator = Regex::new(r"\s+[-–—]\s+").ok()?;
-    let found = separator.find(title)?;
-    let artist = title[..found.start()].trim();
-    let song = title[found.end()..].trim();
+    let mut parts = separator.splitn(title, 2);
+    let artist = parts.next()?.trim();
+    let song = parts.next()?.trim();
     (!artist.is_empty() && !song.is_empty()).then_some((artist, song))
 }
 
@@ -610,9 +607,6 @@ fn strip_featured(title: &str) -> (String, Vec<String>) {
         return (title.trim().into(), Vec::new());
     };
     let Some(capture) = pattern.captures(title) else {
-        return (title.trim().into(), Vec::new());
-    };
-    let Some(matched) = capture.get(0) else {
         return (title.trim().into(), Vec::new());
     };
     let names = capture
@@ -627,9 +621,7 @@ fn strip_featured(title: &str) -> (String, Vec<String>) {
         .filter(|name| !name.trim().is_empty())
         .map(|name| name.trim().to_owned())
         .collect();
-    let clean = format!("{}{}", &title[..matched.start()], &title[matched.end()..])
-        .trim()
-        .to_owned();
+    let clean = pattern.replacen(title, 1, "").trim().to_owned();
     (
         if clean.is_empty() {
             title.trim().into()
@@ -673,7 +665,10 @@ fn file_hash(path: &Path) -> io::Result<String> {
         if count == 0 {
             break;
         }
-        hash.update(&buffer[..count]);
+        let chunk = buffer
+            .get(..count)
+            .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+        hash.update(chunk);
     }
     Ok(format!("{:x}", hash.finalize()))
 }
