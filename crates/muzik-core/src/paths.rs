@@ -12,6 +12,7 @@ pub struct Paths {
 }
 
 impl Paths {
+    #[must_use]
     pub fn user() -> Self {
         Self {
             data: data_dir(),
@@ -21,6 +22,7 @@ impl Paths {
         }
     }
 
+    #[must_use]
     pub fn under(root: &Path) -> Self {
         Self {
             data: root.join("data"),
@@ -30,48 +32,56 @@ impl Paths {
         }
     }
 
+    #[must_use]
     pub fn spotify_token(&self) -> PathBuf {
         self.config.join("spotify-token.json")
     }
 
+    #[must_use]
     pub fn bandcamp_cookies(&self) -> PathBuf {
         self.config.join("bandcamp_cookies.txt")
     }
 
+    #[must_use]
     pub fn bandcamp_user(&self) -> PathBuf {
         self.config.join("bandcamp_user")
     }
 
+    #[must_use]
     pub fn database(&self) -> PathBuf {
         self.data.join("muzik.db")
     }
 
+    #[must_use]
     pub fn config_file(&self) -> PathBuf {
         self.config.join("config.yaml")
     }
 
+    #[must_use]
     pub fn downloads(&self) -> PathBuf {
         self.data.join("downloads")
     }
 
+    #[must_use]
     pub fn splits(&self) -> PathBuf {
         self.data.join("splits")
     }
 
+    #[must_use]
     pub fn soulseek(&self) -> PathBuf {
         self.data.join("soulseek")
     }
 
+    #[must_use]
     pub fn logs(&self) -> PathBuf {
         self.cache.join("logs")
     }
 }
 
+#[must_use]
 pub fn expand_home(path: &Path) -> PathBuf {
-    match path.strip_prefix("~") {
-        Ok(rest) => home().join(rest),
-        Err(_) => path.to_path_buf(),
-    }
+    path.strip_prefix("~")
+        .map_or_else(|_| path.to_path_buf(), |rest| home().join(rest))
 }
 
 fn native() -> Option<impl AppStrategy> {
@@ -83,14 +93,17 @@ fn native() -> Option<impl AppStrategy> {
     .ok()
 }
 
+#[must_use]
 pub fn data_dir() -> PathBuf {
     native().map_or_else(|| PathBuf::from("muzik"), |strategy| strategy.data_dir())
 }
 
+#[must_use]
 pub fn download_dir() -> PathBuf {
     data_dir().join("downloads")
 }
 
+#[must_use]
 pub fn config_dir() -> PathBuf {
     if cfg!(target_os = "macos") {
         return data_dir();
@@ -101,6 +114,7 @@ pub fn config_dir() -> PathBuf {
     )
 }
 
+#[must_use]
 pub fn cache_dir() -> PathBuf {
     native().map_or_else(
         || PathBuf::from("muzik/cache"),
@@ -113,6 +127,9 @@ fn home() -> PathBuf {
 }
 
 /// Move the folders of muzik 2.x on macOS to the folders named by the app bundle ID.
+///
+/// # Errors
+/// Returns an error if a folder cannot be moved or both the old and new data folders exist.
 pub fn migrate_legacy(paths: &Paths) -> io::Result<Vec<(PathBuf, PathBuf)>> {
     if !cfg!(target_os = "macos") {
         return Ok(Vec::new());

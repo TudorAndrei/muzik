@@ -18,6 +18,8 @@ pub struct DownloadedItem {
     pub modified_at: SystemTime,
 }
 
+/// # Errors
+/// Returns an error if the directory or a file in it cannot be read.
 pub fn scan(directory: &Path) -> io::Result<Vec<DownloadedItem>> {
     if !directory.exists() {
         return Ok(Vec::new());
@@ -61,6 +63,7 @@ pub fn scan(directory: &Path) -> io::Result<Vec<DownloadedItem>> {
     Ok(items)
 }
 
+#[must_use]
 pub fn youtube_id_from_name(name: &str) -> Option<&str> {
     name.as_bytes().windows(13).find_map(|part| {
         let id = part.get(1..12)?;
@@ -74,6 +77,7 @@ pub fn youtube_id_from_name(name: &str) -> Option<&str> {
     })
 }
 
+#[must_use]
 pub fn title_from_name(stem: &str) -> String {
     if let Some(id) = youtube_id_from_name(stem) {
         let marker = format!("[{id}]");
@@ -92,12 +96,11 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn scans_flat_audio_and_keeps_existing_youtube_names() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
-        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio")?;
-        fs::write(dir.path().join("cover.jpg"), b"image")?;
-        let items = scan(dir.path())?;
+    fn scans_flat_audio_and_keeps_existing_youtube_names() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio").unwrap();
+        fs::write(dir.path().join("cover.jpg"), b"image").unwrap();
+        let items = scan(dir.path()).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items.first().map(|item| item.title.as_str()), Some("Track"));
         assert_eq!(
@@ -105,6 +108,5 @@ mod tests {
             Some("dQw4w9WgXcQ")
         );
         assert_eq!(items.first().map(|item| item.size), Some(5));
-        Ok(())
     }
 }
