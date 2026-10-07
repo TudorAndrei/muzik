@@ -3,6 +3,8 @@ use rusqlite::Connection;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// # Errors
+/// Returns an error if the sync records cannot be read.
 pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, String>> {
     let mut statement = connection.prepare("SELECT destination, encoding FROM sync_files")?;
     let rows = statement.query_map([], |row| {
@@ -19,6 +21,8 @@ pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, St
     Ok(files)
 }
 
+/// # Errors
+/// Returns an error if the sync record cannot be written or removed.
 pub fn save(connection: &Connection, destination: &Path, encoding: Option<&str>) -> Result<()> {
     let destination = destination.to_string_lossy();
     match encoding {
@@ -42,25 +46,23 @@ mod tests {
     use crate::db;
 
     #[test]
-    fn load_returns_the_saved_text_under_the_root_only() -> Result<(), String> {
-        let connection = db::open_in_memory()?;
-        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":1}"))?;
-        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":2}"))?;
-        save(&connection, Path::new("/other/b.mp3"), Some("{\"mp3\":3}"))?;
-        let files = load(&connection, Path::new("/device"))?;
+    fn load_returns_the_saved_text_under_the_root_only() {
+        let connection = db::open_in_memory().unwrap();
+        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":1}")).unwrap();
+        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":2}")).unwrap();
+        save(&connection, Path::new("/other/b.mp3"), Some("{\"mp3\":3}")).unwrap();
+        let files = load(&connection, Path::new("/device")).unwrap();
         assert_eq!(
             files.into_iter().collect::<Vec<_>>(),
             vec![(PathBuf::from("/device/a.mp3"), "{\"mp3\":2}".to_owned())]
         );
-        Ok(())
     }
 
     #[test]
-    fn saving_no_encoding_removes_the_row() -> Result<(), String> {
-        let connection = db::open_in_memory()?;
-        save(&connection, Path::new("/device/a.mp3"), Some("{}"))?;
-        save(&connection, Path::new("/device/a.mp3"), None)?;
-        assert!(load(&connection, Path::new("/device"))?.is_empty());
-        Ok(())
+    fn saving_no_encoding_removes_the_row() {
+        let connection = db::open_in_memory().unwrap();
+        save(&connection, Path::new("/device/a.mp3"), Some("{}")).unwrap();
+        save(&connection, Path::new("/device/a.mp3"), None).unwrap();
+        assert!(load(&connection, Path::new("/device")).unwrap().is_empty());
     }
 }

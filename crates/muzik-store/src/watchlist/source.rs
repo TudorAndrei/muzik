@@ -1,4 +1,4 @@
-//! The rules that differ between YouTube, Spotify, and Bandcamp items.
+//! The rules that differ between `YouTube`, Spotify, and Bandcamp items.
 
 use super::{BANDCAMP_PLAYLIST_ID, ItemAction, SourceKind, Stage, WatchItem};
 use muzik_core::chapters;
@@ -7,6 +7,7 @@ use std::path::Path;
 pub type Availability = (bool, Option<&'static str>);
 
 impl SourceKind {
+    #[must_use]
     pub fn of_playlist_id(id: &str) -> Self {
         if id.starts_with("spotify:") {
             Self::Spotify
@@ -17,10 +18,12 @@ impl SourceKind {
         }
     }
 
+    #[must_use]
     pub fn single_file(self) -> bool {
         !self.is_youtube()
     }
 
+    #[must_use]
     pub fn keeps_current_tags(self) -> bool {
         self == Self::Spotify
     }
@@ -137,10 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn each_kind_offers_only_its_own_stages() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn each_kind_offers_only_its_own_stages() {
+        let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("Song.flac");
-        std::fs::write(&audio, b"")?;
+        std::fs::write(&audio, b"").unwrap();
         let youtube = item(SourceKind::Youtube);
         assert!(availability(&youtube, ItemAction::CheckQualityAgain, Some(&audio)).0);
         assert!(!availability(&youtube, ItemAction::ParseAgain, None).0);
@@ -155,7 +158,6 @@ mod tests {
         bandcamp.set_path(Stage::Download, Some(directory.path().to_path_buf()));
         assert!(availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
         assert!(!availability(&bandcamp, ItemAction::ParseAgain, None).0);
-        Ok(())
     }
 
     #[test]

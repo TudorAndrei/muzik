@@ -54,7 +54,7 @@ pub struct Synced {
     pub document: Watchlist,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ItemOutcome {
     Completed { stage: Stage },
     Waiting { stage: Stage, question: Value },
@@ -64,7 +64,11 @@ pub enum ItemOutcome {
 /// `process` returns the item with its final stage state.
 /// `park` runs in the transaction that saves a waiting stage.
 pub trait Operations {
+    /// # Errors
+    /// Returns an error if the source cannot be read, or `JobError::Cancelled` after a cancel.
     fn load(&mut self, playlist: &Playlist) -> Result<LoadedSource, JobError>;
+    /// # Errors
+    /// Returns an error if a stage fails, waits for a choice, or is cancelled.
     fn process(
         &mut self,
         playlist: &Playlist,
@@ -72,6 +76,8 @@ pub trait Operations {
         action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<WatchItem, JobError>;
+    /// # Errors
+    /// Returns an error if the waiting job cannot be saved.
     fn park(
         &mut self,
         _connection: &Connection,
@@ -93,6 +99,8 @@ pub struct JobOptions<'a> {
     pub playlist_id: Option<&'a str>,
 }
 
+/// # Errors
+/// Returns an error if the watchlist has no matching source, cannot be saved, or the job is cancelled.
 pub fn sync(
     repository: &Repository,
     options: JobOptions<'_>,
@@ -201,6 +209,8 @@ pub fn sync(
     })
 }
 
+/// # Errors
+/// Returns an error if the sync fails, the watchlist cannot be read, or the job is cancelled.
 pub fn refresh(
     repository: &Repository,
     options: JobOptions<'_>,
@@ -245,6 +255,8 @@ pub fn refresh(
     Ok(json!({"summary":summary, "watchlist":view(&document, options.output, options.cache)?}))
 }
 
+/// # Errors
+/// Returns an error if the item is missing or unavailable, its stage fails, or the job is cancelled.
 pub fn action(
     repository: &Repository,
     options: JobOptions<'_>,
@@ -273,6 +285,8 @@ pub fn action(
     )
 }
 
+/// # Errors
+/// Returns an error if the item is missing or unavailable, its stage fails, or the job is cancelled.
 pub fn run_item(
     repository: &Repository,
     options: JobOptions<'_>,

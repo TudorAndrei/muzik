@@ -19,6 +19,8 @@ enum CacheStatus {
     Organized,
 }
 
+/// # Errors
+/// Returns an error if the watchlist or the import marker cannot be read or written.
 pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> Result<bool> {
     repository.update_with(|document, connection| {
         let done: Option<String> = connection

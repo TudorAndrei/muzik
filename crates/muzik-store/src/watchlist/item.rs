@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Watchlist {
     #[serde(default = "current_version")]
     pub version: u64,
@@ -23,11 +23,11 @@ impl Default for Watchlist {
     }
 }
 
-fn current_version() -> u64 {
+const fn current_version() -> u64 {
     3
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Playlist {
     pub playlist_id: String,
     pub url: String,
@@ -47,7 +47,7 @@ pub struct Playlist {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WatchItem {
     pub position: u64,
     pub title: String,
@@ -75,7 +75,7 @@ pub struct WatchItem {
     pub extra: Map<String, Value>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stages {
     #[serde(default)]
     pub download: StageRecord,
@@ -89,7 +89,7 @@ pub struct Stages {
     pub organize: StageRecord,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageRecord {
     #[serde(default)]
     pub status: StageStatus,
@@ -119,10 +119,13 @@ impl ItemId {
         }
     }
 
+    #[must_use]
     pub fn of(playlist_id: &str, item: &WatchItem) -> Self {
         Self::new(playlist_id, item.position, item.video_id.as_deref())
     }
 
+    /// # Errors
+    /// Returns an error if `playlist_id` is missing or blank, or `position` is not a positive integer.
     pub fn from_params(params: &Value) -> Result<Self> {
         let playlist_id = params["playlist_id"]
             .as_str()
@@ -158,22 +161,26 @@ impl std::fmt::Display for ItemId {
     }
 }
 
+#[must_use]
 pub fn now() -> String {
     Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
 impl Watchlist {
+    /// # Errors
+    /// Returns an error if `value` is not a valid watchlist document.
     pub fn from_value(value: Value) -> Result<Self> {
         let watchlist: Self =
             serde_json::from_value(value).map_err(|error| format!("invalid watchlist: {error}"))?;
         watchlist.normalized()
     }
 
+    #[must_use]
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
-    pub fn normalized(mut self) -> Result<Self> {
+    pub(super) fn normalized(mut self) -> Result<Self> {
         if !(1..=3).contains(&self.version) {
             return Err(format!("unsupported watchlist version: {}", self.version).into());
         }
@@ -186,6 +193,7 @@ impl Watchlist {
         Ok(self)
     }
 
+    #[must_use]
     pub fn playlist(&self, id: &str) -> Option<&Playlist> {
         self.playlists
             .iter()
@@ -237,6 +245,7 @@ impl Playlist {
         Ok(())
     }
 
+    #[must_use]
     pub fn is_processed(&self, key: &str) -> bool {
         self.processed_video_ids.iter().any(|id| id == key)
     }
@@ -251,6 +260,7 @@ impl Playlist {
         }
     }
 
+    #[must_use]
     pub fn find(&self, id: &ItemId) -> Option<usize> {
         if id.playlist_id != self.playlist_id {
             return None;
@@ -260,6 +270,7 @@ impl Playlist {
             .position(|item| ItemId::of(&self.playlist_id, item) == *id)
     }
 
+    #[must_use]
     pub fn pending(&self) -> Vec<&WatchItem> {
         let mut seen = HashSet::new();
         self.items
@@ -300,6 +311,7 @@ impl Playlist {
 }
 
 impl WatchItem {
+    #[must_use]
     pub fn new(position: u64, title: &str, kind: SourceKind) -> Self {
         Self {
             position,
@@ -328,6 +340,7 @@ impl WatchItem {
         Ok(())
     }
 
+    #[must_use]
     pub fn key(&self) -> Option<&str> {
         let key = if self.kind.is_youtube() {
             &self.video_id
@@ -337,7 +350,8 @@ impl WatchItem {
         key.as_deref().filter(|key| !key.is_empty())
     }
 
-    pub fn stage(&self, stage: Stage) -> &StageRecord {
+    #[must_use]
+    pub const fn stage(&self, stage: Stage) -> &StageRecord {
         match stage {
             Stage::Download => &self.stages.download,
             Stage::Quality => &self.stages.quality,
@@ -347,7 +361,7 @@ impl WatchItem {
         }
     }
 
-    pub fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
+    pub const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
         match stage {
             Stage::Download => &mut self.stages.download,
             Stage::Quality => &mut self.stages.quality,
@@ -357,7 +371,8 @@ impl WatchItem {
         }
     }
 
-    pub fn status(&self, stage: Stage) -> StageStatus {
+    #[must_use]
+    pub const fn status(&self, stage: Stage) -> StageStatus {
         self.stage(stage).status
     }
 
@@ -365,6 +380,7 @@ impl WatchItem {
         Stage::ALL.iter().map(|stage| self.status(*stage))
     }
 
+    #[must_use]
     pub fn path(&self, stage: Stage) -> Option<&Path> {
         self.stage(stage).path.as_deref()
     }
@@ -436,10 +452,12 @@ impl WatchItem {
         self.statuses().all(StageStatus::is_done)
     }
 
+    #[must_use]
     pub fn is_waiting(&self) -> bool {
         self.statuses().any(|status| status == StageStatus::Waiting)
     }
 
+    #[must_use]
     pub fn is_gone(&self) -> bool {
         self.unavailable == Some(true)
             || self.status(Stage::Download) == StageStatus::Failed
@@ -503,6 +521,7 @@ impl AudioIndex {
         index
     }
 
+    #[must_use]
     pub fn find(&self, id: &str) -> Option<PathBuf> {
         self.by_id.get(id).cloned()
     }
@@ -522,7 +541,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn a_stored_document_reads_and_writes_the_same_fields() -> Result<(), String> {
+    fn a_stored_document_reads_and_writes_the_same_fields() {
         let stored = json!({"version":2,"playlists":[{
             "playlist_id":"PL1","url":"https://www.youtube.com/playlist?list=PL1","kind":"youtube",
             "title":null,"last_checked_at":null,"last_error":null,"processed_video_ids":["a","a"],
@@ -532,7 +551,7 @@ mod tests {
                 "last_error":null,"track":null,"note":1,
                 "stages":{"download":{"status":"waiting","updated_at":null,"path":"/a.flac",
                     "error":null,"question":{"kind":"import_match"}}}}]}]});
-        let watchlist = Watchlist::from_value(stored)?;
+        let watchlist = Watchlist::from_value(stored).unwrap();
         let value = watchlist.to_value();
         assert_eq!(value["version"], 3);
         assert_eq!(value["playlists"][0]["custom"], "kept");
@@ -545,26 +564,26 @@ mod tests {
         );
         assert_eq!(item["stages"]["quality"]["status"], "not_started");
         assert!(item.get("unavailable").is_none());
-        assert_eq!(Watchlist::from_value(value)?, watchlist);
-        Ok(())
+        assert_eq!(Watchlist::from_value(value).unwrap(), watchlist);
     }
 
     #[test]
-    fn an_item_id_reads_and_writes_job_params() -> Result<(), String> {
+    fn an_item_id_reads_and_writes_job_params() {
         let id = super::ItemId::from_params(
             &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"run"}),
-        )?;
+        )
+        .unwrap();
         assert_eq!(id.to_string(), "PL1:3:abcdefghijk");
         let mut params = json!({"output":"/music"});
         id.write(&mut params);
-        assert_eq!(super::ItemId::from_params(&params)?, id);
+        assert_eq!(super::ItemId::from_params(&params).unwrap(), id);
         let bare =
-            super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))?;
+            super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))
+                .unwrap();
         assert_eq!(bare.to_string(), "PL1:2:");
         assert_eq!(bare.video_id, None);
         assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
         assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
-        Ok(())
     }
 
     #[test]
@@ -608,12 +627,12 @@ mod tests {
     }
 
     #[test]
-    fn audio_is_found_in_nested_folders_by_its_id() -> Result<(), Box<dyn std::error::Error>> {
-        let directory = tempfile::tempdir()?;
+    fn audio_is_found_in_nested_folders_by_its_id() {
+        let directory = tempfile::tempdir().unwrap();
         let nested = directory.path().join("album");
-        fs::create_dir(&nested)?;
-        fs::write(nested.join("Song [abcdefghijk].opus"), b"")?;
-        fs::write(directory.path().join("Song [abcdefghijk].info.json"), b"")?;
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("Song [abcdefghijk].opus"), b"").unwrap();
+        fs::write(directory.path().join("Song [abcdefghijk].info.json"), b"").unwrap();
         let index = AudioIndex::scan(directory.path());
         let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
         item.video_id = Some("abcdefghijk".into());
@@ -623,6 +642,5 @@ mod tests {
         );
         item.video_id = Some("missing".into());
         assert_eq!(item.downloaded_audio(&index), None);
-        Ok(())
     }
 }

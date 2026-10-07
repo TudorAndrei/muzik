@@ -52,7 +52,8 @@ pub enum Stage {
 impl Stage {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn of_decision(kind: muzik_core::DecisionKind) -> Self {
+    #[must_use]
+    pub const fn of_decision(kind: muzik_core::DecisionKind) -> Self {
         match kind {
             muzik_core::DecisionKind::ImportMatch | muzik_core::DecisionKind::ImportDuplicate => {
                 Self::Organize
@@ -65,7 +66,8 @@ impl Stage {
         }
     }
 
-    pub fn resume_action(self) -> ItemAction {
+    #[must_use]
+    pub const fn resume_action(self) -> ItemAction {
         match self {
             Self::Organize => ItemAction::OrganizeAgain,
             Self::Parse => ItemAction::ParseAgain,
@@ -104,7 +106,8 @@ pub enum StageStatus {
 }
 
 impl StageStatus {
-    pub fn is_done(self) -> bool {
+    #[must_use]
+    pub const fn is_done(self) -> bool {
         matches!(self, Self::Complete | Self::Skipped)
     }
 }
@@ -140,7 +143,8 @@ pub enum ItemAction {
 impl ItemAction {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
-    pub fn stage(self) -> Stage {
+    #[must_use]
+    pub const fn stage(self) -> Stage {
         match self {
             Self::CheckQualityAgain => Stage::Quality,
             Self::ParseAgain => Stage::Parse,
@@ -150,7 +154,8 @@ impl ItemAction {
         }
     }
 
-    pub fn replaces_files(self) -> bool {
+    #[must_use]
+    pub const fn replaces_files(self) -> bool {
         matches!(
             self,
             Self::DownloadAgain
@@ -187,6 +192,7 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
+    #[must_use]
     pub fn of(value: &Value) -> Self {
         value["kind"]
             .as_str()
@@ -194,6 +200,7 @@ impl SourceKind {
             .unwrap_or_default()
     }
 
+    #[must_use]
     pub fn is_youtube(self) -> bool {
         self == Self::Youtube
     }
@@ -201,6 +208,7 @@ impl SourceKind {
 
 pub const BANDCAMP_PLAYLIST_ID: &str = "bandcamp:collection";
 
+#[must_use]
 pub fn bandcamp_source(user: &str) -> Playlist {
     Playlist::new(
         BANDCAMP_PLAYLIST_ID,
@@ -210,6 +218,7 @@ pub fn bandcamp_source(user: &str) -> Playlist {
     )
 }
 
+#[must_use]
 pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
     item.get("stages")?
         .get(stage.as_ref())?
@@ -233,37 +242,43 @@ pub struct Repository {
 static WRITER: Mutex<()> = Mutex::new(());
 
 impl Repository {
+    #[must_use]
     pub fn open(paths: &Paths) -> Self {
         Self::new(paths.database()).with_legacy(paths.config.join("watchlist.json"))
     }
 
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
         Self { path, legacy: None }
     }
 
+    #[must_use]
     pub fn with_legacy(mut self, legacy: PathBuf) -> Self {
         self.legacy = Some(legacy);
         self
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    fn locked<T>(&self, work: impl FnOnce() -> T) -> T {
+    fn locked<T>(work: impl FnOnce() -> T) -> T {
         let _writer = WRITER.lock();
         work()
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or written, or if `change` fails.
     pub fn update<T>(&self, change: impl FnOnce(&mut Watchlist) -> Result<T>) -> Result<T> {
         self.update_with(|document, _| change(document))
     }
 
-    pub fn update_with<T>(
+    pub(crate) fn update_with<T>(
         &self,
         change: impl FnOnce(&mut Watchlist, &Connection) -> Result<T>,
     ) -> Result<T> {
-        self.locked(|| {
+        Self::locked(|| {
             let mut connection = self.connect()?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -276,10 +291,14 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
     pub fn load(&self) -> Result<Watchlist> {
         read_document(&self.connect()?)
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist is invalid or the database cannot be written.
     pub fn save(&self, value: &Watchlist) -> Result<()> {
         let value = value.clone().normalized()?;
         let mut connection = self.connect()?;
@@ -289,10 +308,14 @@ impl Repository {
         Ok(transaction.commit()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or read.
     pub fn revision(&self) -> Result<i64> {
         read_revision(&self.connect()?)
     }
 
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
     pub fn load_revision(&self) -> Result<(Watchlist, i64)> {
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
@@ -302,9 +325,11 @@ impl Repository {
         Ok((document, revision))
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist is invalid or the database cannot be written.
     pub fn save_at(&self, revision: i64, value: &Watchlist) -> Result<CheckedWrite> {
         let value = value.clone().normalized()?;
-        self.locked(|| {
+        Self::locked(|| {
             let mut connection = self.connect()?;
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -318,6 +343,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn ensure(&self, source: &Playlist) -> Result<bool> {
         if self.load()?.playlist(&source.playlist_id).is_some() {
             return Ok(false);
@@ -331,6 +358,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if `input` is not a known source, the source is already present, or the write fails.
     pub fn add(&self, input: &str) -> Result<Playlist> {
         let source = parse_source(input)?;
         self.update(|document| {
@@ -342,6 +371,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn rename(&self, playlist_id: &str, title: &str) -> Result<bool> {
         self.update(|document| {
             let Some(playlist) = document.playlist_mut(playlist_id) else {
@@ -353,6 +384,8 @@ impl Repository {
         })
     }
 
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn remove(&self, playlist_id: &str) -> Result<bool> {
         self.update(|document| {
             let before = document.playlists.len();
@@ -520,6 +553,8 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
     Ok(())
 }
 
+/// # Errors
+/// Returns an error if `input` is not a `YouTube` playlist, Spotify playlist or album, or liked songs.
 pub fn parse_source(input: &str) -> Result<Playlist> {
     let text = input.trim();
     let lower = text.to_ascii_lowercase();

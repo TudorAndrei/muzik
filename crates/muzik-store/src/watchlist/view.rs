@@ -34,6 +34,7 @@ pub enum Summary {
 impl Summary {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
+    #[must_use]
     pub fn of(item: &WatchItem) -> Self {
         let statuses: Vec<StageStatus> = item.statuses().collect();
         if item.is_unavailable() {
@@ -52,6 +53,8 @@ impl Summary {
     }
 }
 
+/// # Errors
+/// Returns an error if the serialized watchlist does not have the expected shape.
 pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value> {
     let index = AudioIndex::scan(output);
     let mut value = document.to_value();
