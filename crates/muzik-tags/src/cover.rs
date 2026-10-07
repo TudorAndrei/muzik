@@ -12,7 +12,7 @@ use lofty::mp4::{Ilst, Mp4File};
 use lofty::mpeg::MpegFile;
 use lofty::ogg::{OggPictureStorage, OpusFile, VorbisFile};
 use lofty::picture::{Picture, PictureType};
-use lofty::tag::TagExt;
+use lofty::tag::{Tag, TagExt};
 
 use crate::TagsError;
 
@@ -71,6 +71,10 @@ pub fn find_cover(directory: impl AsRef<Path>) -> Option<PathBuf> {
 }
 
 /// Replace the front cover while keeping all non-picture tag values.
+///
+/// # Errors
+///
+/// Returns an error when the image is not of `mime_type`, the format is not supported, or the file cannot be read or written.
 pub fn embed_cover(
     path: impl AsRef<Path>,
     image_bytes: &[u8],
@@ -131,9 +135,13 @@ pub fn embed_cover(
 }
 
 /// Return the front cover image and its MIME type, or the first picture.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read.
 pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, String)>, TagsError> {
     let audio = lofty::read_from_path(path)?;
-    let pictures: Vec<&Picture> = audio.tags().iter().flat_map(|tag| tag.pictures()).collect();
+    let pictures: Vec<&Picture> = audio.tags().iter().flat_map(Tag::pictures).collect();
     let picture = pictures
         .iter()
         .find(|picture| picture.pic_type() == PictureType::CoverFront)
@@ -145,6 +153,10 @@ pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, String)>, 
 }
 
 /// Return whether a file has a front cover.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read.
 pub fn has_front_cover(path: impl AsRef<Path>) -> Result<bool, TagsError> {
     let audio = lofty::read_from_path(path)?;
     let mp4 = audio.file_type() == FileType::Mp4;

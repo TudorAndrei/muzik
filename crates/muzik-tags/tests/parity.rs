@@ -91,9 +91,10 @@ fn reads_mediafile_tags_in_five_formats() {
 
 #[test]
 fn writes_tags_for_mediafile_to_read() {
-    let root = std::env::var_os("MUZIK_TAGS_WRITE_FIXTURES")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("muzik-tags-{}", std::process::id())));
+    let root = std::env::var_os("MUZIK_TAGS_WRITE_FIXTURES").map_or_else(
+        || std::env::temp_dir().join(format!("muzik-tags-{}", std::process::id())),
+        PathBuf::from,
+    );
     fs::create_dir_all(&root).unwrap();
     let data = TagData {
         fields: expected_fields().unwrap(),

@@ -166,6 +166,10 @@ pub enum TagsError {
 }
 
 /// Read known mediafile fields and the named custom keys.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read.
 pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, TagsError> {
     let path = path.as_ref();
     let file = lofty::read_from_path(path)?;
@@ -208,6 +212,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
 }
 
 /// Write the supplied fields while keeping tags that are not supplied.
+///
+/// # Errors
+///
+/// Returns an error when the format is not supported, a field is unknown, or the file cannot be read or written.
 pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     let path = path.as_ref();
     let file = lofty::read_from_path(path)?;
@@ -354,7 +362,7 @@ fn read_customs(
     Ok(result)
 }
 
-fn album_disambig_key(kind: FileType) -> Option<&'static str> {
+const fn album_disambig_key(kind: FileType) -> Option<&'static str> {
     match kind {
         FileType::Mpeg | FileType::Mp4 => Some("MusicBrainz Album Comment"),
         FileType::Flac | FileType::Opus | FileType::Vorbis => Some("MUSICBRAINZ_ALBUMCOMMENT"),
