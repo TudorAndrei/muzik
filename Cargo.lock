@@ -4993,7 +4993,7 @@ dependencies = [
 name = "muzik-spotify"
 version = "2.13.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "getrandom 0.4.3",
  "muzik-core",
