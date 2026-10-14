@@ -480,6 +480,37 @@ fn item_sheet(
     let Some(entity) = view.upgrade() else {
         return sheet.title(title).child(body);
     };
+    let item_id = ItemId::new(&key.0, key.1, Some(&key.2)).to_string();
+    let waiting = entity
+        .read(cx)
+        .waiting
+        .iter()
+        .find(|job| job["item"].as_str() == Some(item_id.as_str()))
+        .cloned();
+    let waiting_stage = style::stage_states(item)
+        .into_iter()
+        .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
+        .map(|(stage, _)| stage);
+    if let Some(job) = waiting {
+        let view = view.clone();
+        body = body.child(
+            Button::new("open-item-decision")
+                .primary()
+                .label(waiting_stage.map_or_else(
+                    || "Open waiting choice".to_string(),
+                    |stage| format!("Open {} review", style::stage_label(stage)),
+                ))
+                .on_click(move |_, window, cx| {
+                    window.close_sheet(cx);
+                    let _ = view.update(cx, |view, cx| view.open_waiting(&job, window, cx));
+                }),
+        );
+    } else if waiting_stage.is_some() {
+        body = body.child(style::meta(
+            "No choice is open. Select Resume under Commands to continue this item.",
+            cx,
+        ));
+    }
     let commands = item_commands(item, key, &title, &entity, view, cx);
     sheet
         .title(title)
@@ -495,6 +526,9 @@ fn item_commands(
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Div {
+    let is_waiting = style::stage_states(item)
+        .iter()
+        .any(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting);
     let mut commands = div()
         .v_flex()
         .gap_3()
@@ -509,13 +543,18 @@ fn item_commands(
             .unwrap_or(&Value::Null);
         let enabled = availability["enabled"].as_bool().unwrap_or(true);
         let request = entity.read(cx).item_request(&key.0, key.1, &key.2, action);
-        let label = action_label(action);
+        let label = if action == ItemAction::Run && is_waiting {
+            "Resume"
+        } else {
+            action_label(action)
+        }
+        .to_string();
         let item_title = title.to_string();
         let view = view.clone();
         let mut row = div().v_flex().gap_1().child(
             Button::new(("item-action", index))
                 .small()
-                .label(label)
+                .label(label.clone())
                 .disabled(!enabled)
                 .on_click(move |_, window, cx| {
                     window.close_sheet(cx);
@@ -527,7 +566,7 @@ fn item_commands(
                                 PendingAction {
                                     title: format!("{label} for “{item_title}”?"),
                                     description: REPLACE_WARNING,
-                                    confirm: label.into(),
+                                    confirm: label.clone(),
                                     destructive: false,
                                     command: Command::RunItem(request),
                                 },

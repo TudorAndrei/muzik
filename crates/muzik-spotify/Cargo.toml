@@ -11,7 +11,7 @@ description = "Spotify login, playlists, and playlist pages for muzik"
 workspace = true
 
 [dependencies]
-base64 = "0.22"
+base64 = "0.23"
 chrono = "0.4"
 getrandom = "0.4"
 muzik-core = { path = "../muzik-core" }

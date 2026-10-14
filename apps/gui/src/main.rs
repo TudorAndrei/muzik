@@ -1073,10 +1073,10 @@ impl Muzik {
                     .flex()
                     .justify_center()
                     .flex_1()
+                    .min_w_0()
                     .overflow_y_scrollbar()
                     .child(form),
             )
-            .child(self.job_panel(cx))
             .into_any_element()
     }
 
@@ -1211,14 +1211,14 @@ impl Muzik {
         parts.join(" · ")
     }
 
-    fn job_panel(&self, cx: &Context<Self>) -> AnyElement {
+    fn job_panel(&self, width: Pixels, cx: &Context<Self>) -> AnyElement {
         let running = self.runs.iter().filter(|run| !run.queued).count();
         let summary = self.activity_summary(running);
         let mut panel = div()
             .v_flex()
             .gap_4()
             .p_4()
-            .w(px(320.))
+            .w(width)
             .h_full()
             .flex_none()
             .overflow_y_scrollbar()
@@ -1240,9 +1240,17 @@ impl Muzik {
         if !self.waiting.is_empty() {
             panel = panel.child(self.waiting_inbox(cx));
         }
-        if !self.runs.is_empty() {
-            panel = panel.child(self.jobs_list(running, cx));
-        }
+        panel = if self.runs.is_empty() {
+            panel.child(
+                div()
+                    .v_flex()
+                    .gap_1()
+                    .child(style::overline("JOBS", cx))
+                    .child(style::meta("No active jobs", cx)),
+            )
+        } else {
+            panel.child(self.jobs_list(running, cx))
+        };
         for (index, section) in self.activity_sections.iter().enumerate() {
             panel = panel.child(activity_section_box(index, section, cx));
         }
@@ -1512,29 +1520,28 @@ fn activity_section_box(index: usize, section: &ActivitySection, cx: &App) -> Gr
 }
 
 impl Render for Muzik {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let body = match self.page {
             Page::Workflow => self.workflow(cx),
             Page::Settings => div()
                 .flex_1()
+                .min_w_0()
                 .children(self.config_view.clone())
                 .into_any_element(),
             Page::Watchlist => self.watchlist(cx),
             Page::Library => self.library(cx),
             Page::Spotify => self.spotify(cx),
         };
-        let body = if !matches!(self.page, Page::Workflow | Page::Settings)
-            && (!self.runs.is_empty() || self.decision.is_some() || !self.waiting.is_empty())
-        {
-            div()
-                .flex()
-                .flex_1()
-                .child(body)
-                .child(self.job_panel(cx))
-                .into_any_element()
-        } else {
-            body
-        };
+        let body = div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(body)
+            .child(self.job_panel(
+                px((window.bounds().size.width.as_f32() - 600.).clamp(200., 420.)),
+                cx,
+            ));
         div()
             .v_flex()
             .size_full()
