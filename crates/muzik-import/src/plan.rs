@@ -444,46 +444,14 @@ fn plurality<'a>(items: &'a [MatchItem], get: impl Fn(&'a MatchItem) -> &'a str)
 }
 
 fn read_sidecar(path: &Path) -> Result<Option<serde_json::Value>, ImportError> {
-    for candidate in [
-        path.with_extension("muzik.json"),
-        path.parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(".muzik.json"),
-    ] {
-        let contents = match fs::read_to_string(candidate) {
-            Ok(contents) => contents,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error.into()),
-        };
-        let Ok(data) = serde_json::from_str::<serde_json::Value>(&contents) else {
-            continue;
-        };
-        if data.is_object() {
-            return Ok(Some(data));
-        }
-    }
-    Ok(None)
+    Ok(muzik_core::sidecar::read(
+        path,
+        muzik_core::sidecar::Policy::Import,
+    )?)
 }
 
 fn sidecar_value<'a>(data: &'a serde_json::Value, key: &str) -> Option<&'a serde_json::Value> {
-    [
-        data.get("resolved").and_then(|resolved| resolved.get(key)),
-        data.get("candidate")
-            .and_then(|candidate| candidate.get("metadata"))
-            .and_then(|metadata| metadata.get(key)),
-        data.get(key),
-        data.get("candidate")
-            .and_then(|candidate| candidate.get(key)),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|value| match value {
-        serde_json::Value::String(value) => !value.trim().is_empty(),
-        serde_json::Value::Number(value) => value.as_i64() != Some(0),
-        serde_json::Value::Bool(value) => *value,
-        serde_json::Value::Null => false,
-        _ => true,
-    })
+    muzik_core::sidecar::value(data, &[key], muzik_core::sidecar::Policy::Import)
 }
 
 fn sidecar_field<'a>(data: &'a serde_json::Value, key: &str) -> Option<&'a str> {
