@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 csv = "1"
+hex = "0.4"
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }
 muzik-media = { path = "../muzik-media" }

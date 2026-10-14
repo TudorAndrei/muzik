@@ -306,7 +306,7 @@ fn quality_score(
 pub fn candidate_id(candidate: &Candidate) -> Result<String> {
     let bytes = serde_json::to_vec(candidate)?;
     let digest = Sha256::digest(bytes);
-    let hex = format!("{digest:x}");
+    let hex = hex::encode(digest);
     Ok(hex.get(..16).unwrap_or(&hex).to_owned())
 }
 

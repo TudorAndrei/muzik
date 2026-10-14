@@ -4849,6 +4849,7 @@ name = "muzik-media"
 version = "2.13.0"
 dependencies = [
  "chrono",
+ "hex",
  "muzik-core",
  "muzik-tags",
  "parking_lot",
@@ -4991,6 +4992,7 @@ name = "muzik-workflow"
 version = "2.13.0"
 dependencies = [
  "csv",
+ "hex",
  "muzik-core",
  "muzik-library",
  "muzik-media",
