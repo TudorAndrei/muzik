@@ -145,8 +145,12 @@ impl Muzik {
             "jobs.list",
             cx,
             |backend| Ok(backend.jobs()),
-            |view, jobs, _, cx| {
-                view.apply_jobs(&jobs);
+            |view, jobs, window, cx| {
+                let previous = view.activity.decision().cloned();
+                view.activity.apply_jobs(&jobs);
+                if previous.as_ref() != view.activity.decision() {
+                    view.prepare_decision(window, cx);
+                }
                 view.sync_watch_table(cx);
                 view.gates = jobs.get("gates").cloned().unwrap_or_default();
             },
@@ -486,10 +490,7 @@ impl Muzik {
         };
         match backend.spotify_login() {
             Ok(login) => {
-                let mut run = Run::new(login.job_id(), RunKind::SpotifyLogin, "Spotify connection");
-                run.queued = false;
-                run.status = "Waiting for the browser".into();
-                self.runs.push(run);
+                self.activity.start_login(login.job_id());
                 self.spawn_call(
                     "spotify.login",
                     cx,

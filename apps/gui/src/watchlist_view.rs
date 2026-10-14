@@ -59,7 +59,7 @@ impl Muzik {
         let refresh = Button::new("watch-refresh")
             .icon(IconName::RefreshCw)
             .label("Refresh all")
-            .disabled(!has_playlists || self.has_run(RunKind::Refresh))
+            .disabled(!has_playlists || self.activity.has_run(RunKind::Refresh))
             .on_click(cx.listener(move |view, _, _, cx| view.refresh(None, cx)));
         div()
             .flex()
@@ -254,7 +254,7 @@ impl Muzik {
                 .small()
                 .icon(IconName::RefreshCw)
                 .label("Refresh")
-                .disabled(self.has_run(RunKind::Refresh))
+                .disabled(self.activity.has_run(RunKind::Refresh))
                 .on_click(cx.listener(move |view, _, _, cx| {
                     view.refresh(Some(refresh_source.clone()), cx);
                 })),
@@ -367,7 +367,8 @@ impl Muzik {
     }
 
     fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
-        self.queued_items
+        self.activity
+            .queued_items()
             .contains(&ItemId::new(playlist_id, position, Some(video_id)).to_string())
     }
 
@@ -483,10 +484,11 @@ fn item_sheet(
     let item_id = ItemId::new(&key.0, key.1, Some(&key.2)).to_string();
     let waiting = entity
         .read(cx)
-        .waiting
+        .activity
+        .waiting()
         .iter()
-        .find(|job| job["item"].as_str() == Some(item_id.as_str()))
-        .cloned();
+        .find(|job| job.data.get("item").and_then(Value::as_str) == Some(item_id.as_str()))
+        .and_then(|job| job.data.get("queue_job").and_then(Value::as_i64));
     let waiting_stage = style::stage_states(item)
         .into_iter()
         .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
@@ -502,7 +504,7 @@ fn item_sheet(
                 ))
                 .on_click(move |_, window, cx| {
                     window.close_sheet(cx);
-                    let _ = view.update(cx, |view, cx| view.open_waiting(&job, window, cx));
+                    let _ = view.update(cx, |view, cx| view.open_waiting(job, window, cx));
                 }),
         );
     } else if waiting_stage.is_some() {

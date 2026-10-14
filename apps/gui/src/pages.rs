@@ -377,7 +377,7 @@ impl Muzik {
                     Button::new("spotify-connect")
                         .primary()
                         .label("Connect to Spotify")
-                        .disabled(self.has_run(RunKind::SpotifyLogin))
+                        .disabled(self.activity.has_run(RunKind::SpotifyLogin))
                         .on_click(cx.listener(|view, _, _, cx| {
                             view.spotify_login(cx);
                         })),

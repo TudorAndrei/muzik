@@ -16,6 +16,11 @@ apply their results to the view. Progress and decision requests arrive as
 `AppEvent` values on a channel. The Rust workflow and watchlist services do the
 work outside the GPUI event loop.
 
+`apps/gui/src/activity.rs` owns job progress, pending choices, and finished job
+IDs. It combines queue snapshots and live events. The view reads this state
+and sends replies to the selected queue job or live request. A new job-start
+event permits a cancelled job to run again with the same ID.
+
 ## Pages
 
 - **Workflow** accepts a URL or local path. It shows progress, logs, and

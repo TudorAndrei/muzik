@@ -1,3 +1,4 @@
+mod activity;
 mod backend;
 mod pages;
 mod requests;
@@ -7,6 +8,10 @@ mod thumbnails;
 mod watch_table;
 mod watchlist_view;
 
+use activity::{
+    Activity, ActivitySection, Ending, Finished, ReplyTarget, Run, RunKind, job_label, short_text,
+    u64_to_f64,
+};
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
@@ -31,12 +36,10 @@ use gpui_kit::{
 };
 use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
-    AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, JobEvent, MetadataSource,
-    QualityPolicy, Task as JobTask,
+    AudioFallback, AudioSource, DecisionKind, DuplicatePolicy, MetadataSource, QualityPolicy,
 };
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
-use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
 use requests::{Command, PendingAction, Read};
 use serde_json::{Value, json};
@@ -46,7 +49,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-use strum_macros::{Display, EnumString};
 
 actions!(
     muzik,
@@ -80,31 +82,6 @@ struct ChapterRow {
     title: Entity<InputState>,
 }
 
-#[derive(Default)]
-struct ActivityProgress {
-    description: String,
-    task: Option<JobTask>,
-    completed: f64,
-    total: Option<f64>,
-}
-
-impl ActivityProgress {
-    fn percentage(&self) -> f32 {
-        self.total.filter(|total| *total > 0.).map_or(0., |total| {
-            f64_to_f32((self.completed / total * 100.).clamp(0., 100.))
-        })
-    }
-}
-
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_precision_loss,
-    reason = "std has no From<u64> for f64; progress counts tolerate rounding"
-)]
-const fn u64_to_f64(value: u64) -> f64 {
-    value as f64
-}
-
 #[expect(
     clippy::as_conversions,
     clippy::cast_possible_truncation,
@@ -113,98 +90,6 @@ const fn u64_to_f64(value: u64) -> f64 {
 )]
 const fn f64_to_u64(value: f64) -> u64 {
     value as u64
-}
-
-#[expect(
-    clippy::as_conversions,
-    clippy::cast_possible_truncation,
-    reason = "std has no From<f64> for f32; display values tolerate rounding"
-)]
-const fn f64_to_f32(value: f64) -> f32 {
-    value as f32
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, EnumString)]
-#[strum(serialize_all = "snake_case")]
-enum Ending {
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, EnumString)]
-#[strum(serialize_all = "snake_case")]
-enum RunKind {
-    Workflow,
-    Refresh,
-    Item,
-    SpotifyLogin,
-    #[default]
-    #[strum(disabled)]
-    Unknown,
-}
-
-impl From<JobKind> for RunKind {
-    fn from(kind: JobKind) -> Self {
-        match kind {
-            JobKind::Workflow => Self::Workflow,
-            JobKind::Refresh => Self::Refresh,
-            JobKind::Item => Self::Item,
-        }
-    }
-}
-
-impl RunKind {
-    fn parse(value: &Value) -> Self {
-        value
-            .as_str()
-            .and_then(|kind| kind.parse().ok())
-            .unwrap_or_default()
-    }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Workflow => "Workflow",
-            Self::Refresh => "Watchlist check",
-            Self::Item => "Item",
-            Self::SpotifyLogin => "Spotify connection",
-            Self::Unknown => "Job",
-        }
-    }
-}
-
-struct Run {
-    id: String,
-    kind: RunKind,
-    title: String,
-    status: String,
-    queued: bool,
-    progress: ActivityProgress,
-}
-
-impl Run {
-    fn new(id: &str, kind: RunKind, title: &str) -> Self {
-        Self {
-            id: id.into(),
-            kind,
-            title: title.into(),
-            status: "Queued".into(),
-            queued: true,
-            progress: ActivityProgress::default(),
-        }
-    }
-
-    fn progress_text(&self) -> String {
-        self.progress.total.map_or_else(String::new, |total| {
-            format!("{:.0} / {:.0}", self.progress.completed, total)
-        })
-    }
-}
-
-struct ActivitySection {
-    title: &'static str,
-    count: usize,
-    rows: Vec<String>,
 }
 
 const REPLACE_WARNING: &str =
@@ -249,16 +134,9 @@ struct Muzik {
     read_serial: u64,
     status: String,
     error: Option<String>,
-    runs: Vec<Run>,
-    finished_runs: HashSet<String>,
+    activity: Activity,
     gates: Value,
-    queued_items: HashSet<String>,
     reload_watchlist: bool,
-    activity_sections: Vec<ActivitySection>,
-    logs: Vec<String>,
-    decision: Option<Value>,
-    requests: Vec<Value>,
-    waiting: Vec<Value>,
     watchlist: Value,
     selected_playlist: usize,
     filter: usize,
@@ -309,16 +187,9 @@ impl Muzik {
             read_serial: 0,
             status: String::new(),
             error: None,
-            runs: Vec::new(),
-            finished_runs: HashSet::new(),
+            activity: Activity::default(),
             gates: Value::Null,
-            queued_items: HashSet::new(),
             reload_watchlist: false,
-            activity_sections: Vec::new(),
-            logs: Vec::new(),
-            decision: None,
-            requests: Vec::new(),
-            waiting: Vec::new(),
             watchlist: Value::Null,
             selected_playlist: 0,
             filter: 0,
@@ -418,179 +289,6 @@ impl Muzik {
         cx.notify();
     }
 
-    fn has_run(&self, kind: RunKind) -> bool {
-        self.runs.iter().any(|run| run.kind == kind)
-    }
-
-    fn run_mut(&mut self, id: &str) -> Option<&mut Run> {
-        let run = match self.runs.iter().position(|run| run.id == id) {
-            Some(index) => self.runs.get_mut(index)?,
-            None => self.runs.push_mut(Run::new(id, RunKind::Unknown, "Job")),
-        };
-        run.queued = false;
-        Some(run)
-    }
-
-    fn set_status(&mut self, id: &str, status: impl Into<String>) {
-        if let Some(run) = self.run_mut(id) {
-            run.status = status.into();
-        }
-    }
-
-    fn apply_jobs(&mut self, snapshot: &Value) {
-        self.waiting = snapshot["waiting"].as_array().cloned().unwrap_or_default();
-        let open = snapshot["open"].as_array().cloned().unwrap_or_default();
-        self.queued_items = open
-            .iter()
-            .filter_map(|job| job["item"].as_str().map(str::to_owned))
-            .collect();
-        let listed: HashSet<&str> = open
-            .iter()
-            .filter_map(|job| job["job_id"].as_str())
-            .collect();
-        self.runs
-            .retain(|run| !run.queued || listed.contains(run.id.as_str()));
-        for job in &open {
-            let id = job["job_id"].as_str().unwrap_or("");
-            if id.is_empty() || self.finished_runs.contains(id) {
-                continue;
-            }
-            let queued = job["status"]
-                .as_str()
-                .and_then(|status| status.parse::<JobStatus>().ok())
-                == Some(JobStatus::Queued);
-            let kind = RunKind::parse(&job["kind"]);
-            let title = job["title"].as_str().unwrap_or("Job");
-            if let Some(run) = self.runs.iter_mut().find(|run| run.id == id) {
-                run.kind = kind;
-                run.title = title.into();
-                if !queued && run.queued {
-                    run.queued = false;
-                    run.status = "Starting".into();
-                }
-            } else {
-                let mut run = Run::new(id, kind, title);
-                if !queued {
-                    run.queued = false;
-                    run.status = "Starting".into();
-                }
-                self.runs.push(run);
-            }
-        }
-        self.runs.sort_by_key(|run| run.queued);
-    }
-
-    fn record_job_event(&mut self, job_id: &str, event: &JobEvent) {
-        let line = match event {
-            JobEvent::ProgressStarted {
-                task,
-                description,
-                total,
-            } => {
-                let Some(run) = self.run_mut(job_id) else {
-                    return;
-                };
-                let progress = &mut run.progress;
-                progress.task = Some(*task);
-                progress.description.clone_from(description);
-                progress.completed = 0.;
-                progress.total = total.filter(|total| *total > 0).map(u64_to_f64);
-                run.status = progress.description.clone();
-                run.status.clone()
-            }
-            JobEvent::ProgressAdvanced {
-                task,
-                completed,
-                total,
-            } => {
-                let Some(run) = self.run_mut(job_id) else {
-                    return;
-                };
-                let progress = &mut run.progress;
-                if progress.task != Some(*task) {
-                    return;
-                }
-                if let Some(total) = total.filter(|total| *total > 0) {
-                    progress.total = Some(u64_to_f64(total));
-                }
-                progress.completed = completed.map_or(progress.completed + 1., u64_to_f64);
-                String::new()
-            }
-            JobEvent::ProgressFinished { task, .. } => {
-                let Some(run) = self.run_mut(job_id) else {
-                    return;
-                };
-                let progress = &mut run.progress;
-                if progress.task != Some(*task) {
-                    return;
-                }
-                if let Some(total) = progress.total {
-                    progress.completed = total;
-                }
-                format!("{} finished", progress.description)
-            }
-            JobEvent::StepStarted(step) => {
-                self.set_status(job_id, step.to_string());
-                format!("Started {step}")
-            }
-            JobEvent::StepFinished(step) => {
-                if let Some(run) = self.run_mut(job_id)
-                    && run.progress.total.is_some()
-                {
-                    run.progress.completed += 1.;
-                }
-                format!("{step} finished")
-            }
-            JobEvent::Message { message, .. } => {
-                self.set_status(job_id, message.clone());
-                message.clone()
-            }
-            JobEvent::CandidatesFound { source, candidates } => {
-                self.set_activity_section(activity_section(
-                    "Source candidates",
-                    candidates,
-                    candidate_summary,
-                ));
-                format!(
-                    "{} {source} candidates found",
-                    self.activity_sections
-                        .iter()
-                        .find(|section| section.title == "Source candidates")
-                        .map_or(0, |section| section.count),
-                )
-            }
-            JobEvent::ItemWaiting { title, question } => {
-                let kind = choices::title(choices::kind(question));
-                self.set_status(job_id, format!("Waiting for you: {kind}"));
-                format!("{title} waits for you: {kind}")
-            }
-            JobEvent::AgentDecided {
-                label,
-                confidence,
-                reason,
-            } => {
-                self.set_status(job_id, format!("Chose {label}"));
-                format!("Chose {label} ({:.0}%): {reason}", confidence * 100.0)
-            }
-            JobEvent::WatchlistSaved => return,
-        };
-        if !line.is_empty() {
-            self.logs.push(short_text(&shorten_paths(&line), 180));
-        }
-    }
-
-    fn set_activity_section(&mut self, section: ActivitySection) {
-        if let Some(existing) = self
-            .activity_sections
-            .iter_mut()
-            .find(|existing| existing.title == section.title)
-        {
-            *existing = section;
-        } else {
-            self.activity_sections.push(section);
-        }
-    }
-
     fn request_action(action: PendingAction, window: &mut Window, cx: &mut Context<Self>) {
         let view = cx.entity().downgrade();
         window.open_alert_dialog(cx, move |dialog, _, _| {
@@ -648,6 +346,14 @@ impl Muzik {
     }
 
     fn app_event(&mut self, event: AppEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let previous = self.activity.decision().cloned();
+        let finished = self.activity.apply(&event);
+        if previous.as_ref() != self.activity.decision() {
+            self.prepare_decision(window, cx);
+        }
+        if let Some(finished) = finished {
+            self.job_finished(finished, window, cx);
+        }
         match event {
             AppEvent::WatchlistUpdated(watchlist) => {
                 self.replace_watchlist(watchlist, window, cx);
@@ -656,86 +362,28 @@ impl Muzik {
             }
             AppEvent::WatchlistError(message) => self.error = Some(message),
             AppEvent::WatchlistSaved => self.reload_watchlist = true,
-            AppEvent::JobsUpdated(data) => {
-                self.apply_jobs(&data);
+            AppEvent::JobsUpdated(_) => {
                 self.sync_watch_table(cx);
             }
             AppEvent::QueuesUpdated(data) => self.gates = data,
             AppEvent::RemoteRunner(message) => self.status = message,
-            AppEvent::JobStarted {
-                job_id,
-                title,
-                kind,
-            } => {
-                if let Some(run) = self.run_mut(&job_id) {
-                    run.kind = kind.into();
-                    run.title = title;
-                    run.status = "Starting".into();
-                }
-            }
-            AppEvent::JobEvent { job_id, event, .. } => {
-                self.record_job_event(&job_id, &event);
-                if self.logs.len() > 300 {
-                    self.logs.drain(..100);
-                }
-            }
-            AppEvent::DecisionRequest {
-                job_id,
-                decision_id,
-                kind,
-                payload,
-            } => {
-                let data = json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload});
-                self.set_status(&job_id, "Decision needed");
-                self.requests.push(data.clone());
-                if self.decision.is_none() {
-                    self.open_decision(data, window, cx);
-                }
-            }
-            AppEvent::JobCompleted { job_id, .. } => {
-                self.job_finished(&job_id, Ending::Completed, None, window, cx);
-            }
-            AppEvent::JobCancelled { job_id } => {
-                self.job_finished(&job_id, Ending::Cancelled, None, window, cx);
-            }
-            AppEvent::JobFailed { job_id, message } => {
-                self.job_finished(&job_id, Ending::Failed, Some(message), window, cx);
-            }
+            AppEvent::JobStarted { .. }
+            | AppEvent::JobEvent { .. }
+            | AppEvent::DecisionRequest { .. }
+            | AppEvent::JobCompleted { .. }
+            | AppEvent::JobCancelled { .. }
+            | AppEvent::JobFailed { .. } => {}
         }
     }
 
-    fn job_finished(
-        &mut self,
-        id: &str,
-        ending: Ending,
-        failure: Option<String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.finished_runs.insert(id.to_owned());
-        let run = self
-            .runs
-            .iter()
-            .position(|run| run.id == id)
-            .map(|index| self.runs.remove(index));
-        let kind = run.as_ref().map_or(RunKind::Unknown, |run| run.kind);
-        let title = run
-            .as_ref()
-            .map_or_else(|| "Job".to_owned(), |run| run.title.clone());
-        self.requests.retain(|request| request["job_id"] != id);
-        if self
-            .decision
-            .as_ref()
-            .is_some_and(|decision| decision["job_id"] == id)
-        {
-            self.decision = None;
-            self.chapter_rows.clear();
-            if let Some(next) = self.requests.first().cloned() {
-                self.open_decision(next, window, cx);
-            }
-        }
+    fn job_finished(&mut self, finished: Finished, window: &mut Window, cx: &mut Context<Self>) {
+        let Finished {
+            kind,
+            title,
+            ending,
+            failure,
+        } = finished;
         let job = job_label(kind, &title);
-        self.logs.push(short_text(&format!("{job} {ending}"), 180));
         let note = match (ending, &failure) {
             (Ending::Failed, failure) => Some(
                 Notification::error(failure.clone().unwrap_or_default())
@@ -806,7 +454,7 @@ impl Muzik {
             .watchlist
             .get("playlists")
             .and_then(|all| all.get(self.selected_playlist))
-            .map(|playlist| watch_table::rows(playlist, self.filter, &self.queued_items))
+            .map(|playlist| watch_table::rows(playlist, self.filter, self.activity.queued_items()))
             .unwrap_or_default();
         self.watch_table.update(cx, |state, cx| {
             state.delegate_mut().set_rows(rows);
@@ -854,9 +502,12 @@ impl Muzik {
         merge_thumbnail_paths(&mut self.watchlist, &visible, data);
     }
 
-    fn open_decision(&mut self, data: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn prepare_decision(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.chapter_rows.clear();
-        if choices::kind(&data) == Some(DecisionKind::ChapterEdit)
+        let Some(data) = self.activity.decision() else {
+            return;
+        };
+        if choices::kind(data) == Some(DecisionKind::ChapterEdit)
             && let Some(chapters) = data.pointer("/payload/chapters").and_then(Value::as_array)
         {
             for chapter in chapters {
@@ -876,40 +527,21 @@ impl Muzik {
                 });
             }
         }
-        self.decision = Some(data);
     }
 
-    fn open_waiting(&mut self, job: &Value, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_decision(
-            json!({"queue_job":job["id"],"title":job["title"],"kind":job["kind"],"payload":job["payload"]}),
-            window,
-            cx,
-        );
+    fn open_waiting(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.activity.open_waiting(id);
+        self.prepare_decision(window, cx);
         cx.notify();
     }
 
     fn reply(&mut self, value: Value, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(decision) = self.decision.take() else {
-            return;
-        };
-        self.chapter_rows.clear();
-        let field = |key: &str| decision.get(key).unwrap_or(&Value::Null);
-        let queue_job = field("queue_job");
-        if queue_job.is_null() {
-            let decision_id = field("decision_id");
-            self.requests
-                .retain(|request| request["decision_id"] != *decision_id);
-            self.send_reply(describe(decision_id), value, cx);
-            if let Some(job_id) = field("job_id").as_str() {
-                self.set_status(job_id, "Working");
-            }
-        } else {
-            self.waiting.retain(|job| job["id"] != *queue_job);
-            self.send_answer(queue_job.as_i64(), value, cx);
+        match self.activity.reply() {
+            Some(ReplyTarget::Live(id)) => self.send_reply(id, value, cx),
+            Some(ReplyTarget::Queue(id)) => self.send_answer(Some(id), value, cx),
+            None => return,
         }
-        if let Some(next) = self.requests.first().cloned() {
-            self.open_decision(next, window, cx);
-        }
+        self.prepare_decision(window, cx);
         cx.notify();
     }
 
@@ -1200,19 +832,24 @@ impl Muzik {
     }
 
     fn activity_summary(&self, running: usize) -> String {
-        let queued = self.runs.len().saturating_sub(running);
+        let queued = self.activity.runs().len().saturating_sub(running);
         let mut parts = vec![format!("{running} running")];
         if queued > 0 {
             parts.push(format!("{queued} queued"));
         }
-        if !self.waiting.is_empty() {
-            parts.push(format!("{} need you", self.waiting.len()));
+        if !self.activity.waiting().is_empty() {
+            parts.push(format!("{} need you", self.activity.waiting().len()));
         }
         parts.join(" · ")
     }
 
     fn job_panel(&self, width: Pixels, cx: &Context<Self>) -> AnyElement {
-        let running = self.runs.iter().filter(|run| !run.queued).count();
+        let running = self
+            .activity
+            .runs()
+            .iter()
+            .filter(|run| !run.queued)
+            .count();
         let summary = self.activity_summary(running);
         let mut panel = div()
             .v_flex()
@@ -1234,13 +871,13 @@ impl Muzik {
                     .child(style::meta(summary, cx)),
             )
             .when(self.gates.is_object(), |this| this.child(self.lanes(cx)));
-        if let Some(decision) = &self.decision {
+        if let Some(decision) = self.activity.decision() {
             panel = panel.child(self.decision_review(decision, cx));
         }
-        if !self.waiting.is_empty() {
+        if !self.activity.waiting().is_empty() {
             panel = panel.child(self.waiting_inbox(cx));
         }
-        panel = if self.runs.is_empty() {
+        panel = if self.activity.runs().is_empty() {
             panel.child(
                 div()
                     .v_flex()
@@ -1251,7 +888,7 @@ impl Muzik {
         } else {
             panel.child(self.jobs_list(running, cx))
         };
-        for (index, section) in self.activity_sections.iter().enumerate() {
+        for (index, section) in self.activity.sections().iter().enumerate() {
             panel = panel.child(activity_section_box(index, section, cx));
         }
         panel.child(self.recent_events(cx)).into_any_element()
@@ -1314,9 +951,9 @@ impl Muzik {
                         .ghost()
                         .small()
                         .label("Later")
-                        .on_click(cx.listener(|view, _, _, cx| {
-                            view.decision = None;
-                            view.chapter_rows.clear();
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            view.activity.defer();
+                            view.prepare_decision(window, cx);
                             cx.notify();
                         })),
                 ),
@@ -1350,18 +987,19 @@ impl Muzik {
 
     fn waiting_inbox(&self, cx: &Context<Self>) -> Div {
         let open = self
-            .decision
-            .as_ref()
+            .activity
+            .decision()
             .map_or(Value::Null, |decision| decision["queue_job"].clone());
         let mut inbox = div().v_flex().gap_1p5().child(style::overline(
-            format!("NEEDS YOU ({})", self.waiting.len()),
+            format!("NEEDS YOU ({})", self.activity.waiting().len()),
             cx,
         ));
-        for (index, waiting) in self.waiting.iter().enumerate() {
+        for (index, waiting) in self.activity.waiting().iter().enumerate() {
+            let waiting = &waiting.data;
             let kind = choices::kind(waiting);
-            let highlighted = waiting["id"] == open;
+            let highlighted = waiting["queue_job"] == open;
             let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
-            let job = waiting.clone();
+            let id = waiting["queue_job"].as_i64();
             inbox = inbox.child(
                 div()
                     .id(("waiting", index))
@@ -1381,7 +1019,9 @@ impl Muzik {
                     .child(div().text_sm().font_semibold().child(title))
                     .child(style::meta(choices::title(kind), cx))
                     .on_click(cx.listener(move |view, _, window, cx| {
-                        view.open_waiting(&job, window, cx);
+                        if let Some(id) = id {
+                            view.open_waiting(id, window, cx);
+                        }
                     })),
             );
         }
@@ -1392,14 +1032,15 @@ impl Muzik {
         let mut list = div().v_flex().gap_1p5().child(style::overline("JOBS", cx));
         let limit = running.saturating_add(5);
         let shown = self
-            .runs
+            .activity
+            .runs()
             .iter()
             .enumerate()
             .filter(|(index, run)| !run.queued || *index < limit);
         for (index, run) in shown {
             list = list.child(Self::run_row(index, run, cx));
         }
-        let hidden = self.runs.len().saturating_sub(limit);
+        let hidden = self.activity.runs().len().saturating_sub(limit);
         if hidden > 0 {
             list = list.child(style::meta(format!("{hidden} more in the queue"), cx));
         }
@@ -1408,10 +1049,10 @@ impl Muzik {
 
     fn recent_events(&self, cx: &App) -> Div {
         let mut log = div().v_flex().gap_1p5();
-        if self.logs.is_empty() {
+        if self.activity.logs().is_empty() {
             log = log.child(style::meta("Job updates will appear here.", cx));
         }
-        for (index, line) in self.logs.iter().rev().take(50).enumerate() {
+        for (index, line) in self.activity.logs().iter().rev().take(50).enumerate() {
             log = log.child(
                 div()
                     .id(("log", index))
@@ -1558,67 +1199,6 @@ impl Render for Muzik {
             .when(self.page != Page::Settings, |this| {
                 this.child(self.status_bar(cx))
             })
-    }
-}
-
-fn shorten_paths(line: &str) -> String {
-    let Some((head, tail)) = line
-        .find('/')
-        .and_then(|start| line.split_at_checked(start))
-        .filter(|(head, _)| head.is_empty() || head.ends_with(' '))
-    else {
-        return line.to_owned();
-    };
-    let path = std::path::Path::new(tail);
-    if path.components().count() < 3 {
-        return line.to_owned();
-    }
-    path.file_name().map_or_else(
-        || line.to_owned(),
-        |name| format!("{head}{}", name.to_string_lossy()),
-    )
-}
-
-fn short_text(value: &str, limit: usize) -> String {
-    let mut chars = value.chars();
-    let text: String = chars.by_ref().take(limit).collect();
-    if chars.next().is_some() {
-        format!("{text}…")
-    } else {
-        text
-    }
-}
-
-fn activity_section(
-    title: &'static str,
-    items: &[Value],
-    summary: fn(&Value) -> String,
-) -> ActivitySection {
-    ActivitySection {
-        title,
-        count: items.len(),
-        rows: items
-            .iter()
-            .take(4)
-            .map(|item| short_text(&summary(item), 120))
-            .collect(),
-    }
-}
-
-fn candidate_summary(candidate: &Value) -> String {
-    let title = candidate["title"].as_str().unwrap_or("Unknown title");
-    let format = candidate
-        .pointer("/quality/format")
-        .and_then(Value::as_str)
-        .unwrap_or("Unknown format");
-    let user = candidate["user"].as_str().unwrap_or("Unknown user");
-    format!("{title} · {format} · {user}")
-}
-
-fn job_label(kind: RunKind, title: &str) -> String {
-    match kind {
-        RunKind::Refresh | RunKind::SpotifyLogin => kind.label().into(),
-        _ => format!("{} “{}”", kind.label(), short_text(title, 60)),
     }
 }
 
@@ -1821,14 +1401,10 @@ fn check_backend() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ActivityProgress, Muzik, activity_section, candidate_summary, merge_thumbnail_paths,
-        shorten_paths, tool_path,
-    };
+    use super::{Muzik, merge_thumbnail_paths, tool_path};
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext, WindowOptions};
     use muzik_core::app_config::GuiDefaults;
-    use muzik_core::{JobEvent, Step};
     use serde_json::json;
     use std::collections::HashSet;
 
@@ -1872,52 +1448,42 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn job_events_show_candidates_and_status(cx: &TestAppContext) {
-        let main = cx.update(|cx| {
+    fn chapter_inputs_follow_the_active_choice_and_keep_edits_during_progress(
+        cx: &mut TestAppContext,
+    ) {
+        let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
-            let (_, main) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
                 cx.new(|cx| Muzik::new_with_backend(window, cx, false))
             })
-            .unwrap();
-            main
+            .unwrap()
         });
-        cx.update(|cx| {
-            main.update(cx, |view, _cx| {
-                let status = |view: &Muzik| {
-                    view.runs
-                        .iter()
-                        .find(|run| run.id == "queue-1")
-                        .map(|run| run.status.clone())
-                        .unwrap_or_default()
-                };
-                view.record_job_event("queue-1", &JobEvent::StepStarted(Step::Import));
-                assert_eq!(status(view), "import");
-                view.record_job_event(
-                    "queue-1",
-                    &JobEvent::CandidatesFound {
-                        source: "soulseek".into(),
-                        candidates: vec![json!({
-                            "title": "Album", "quality": {"format": "FLAC"}, "user": "peer"
-                        })],
-                    },
-                );
-                let section = view
-                    .activity_sections
-                    .iter()
-                    .find(|section| section.title == "Source candidates")
-                    .unwrap();
-                assert_eq!(section.count, 1);
-                assert!(section.rows[0].contains("Album"));
-                view.record_job_event("queue-1", &JobEvent::message("Writing tags"));
-                assert_eq!(status(view), "Writing tags");
-                assert!(view.logs.iter().any(|line| line == "Writing tags"));
-                assert!(
-                    view.logs
-                        .iter()
-                        .any(|line| line == "1 soulseek candidates found")
-                );
+        cx.update_window(handle, |_, window, cx| {
+            main.update(cx, |view, cx| {
+                view.app_event(muzik_runner::AppEvent::DecisionRequest {
+                    job_id: "queue-1".into(), decision_id: "live".into(),
+                    kind: muzik_core::DecisionKind::ChapterEdit,
+                    payload: json!({"chapters":[{"index":1,"start":0,"title":"Original"}]}),
+                }, window, cx);
+                view.chapter_rows[0].title.update(cx, |state, cx| state.set_value("Edited", window, cx));
+                view.app_event(muzik_runner::AppEvent::JobEvent {
+                    job_id: "queue-1".into(), source: muzik_runner::Source::Native,
+                    event: muzik_core::JobEvent::message("Still working"),
+                }, window, cx);
+                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Edited");
+                view.app_event(muzik_runner::AppEvent::JobsUpdated(json!({"waiting":[{
+                    "id":2,"kind":"chapter_edit", "payload":{"chapters":[{"index":1,"start":0,"title":"Saved"}]}
+                }]})), window, cx);
+                view.open_waiting(2, window, cx);
+                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Saved");
+                view.app_event(muzik_runner::AppEvent::JobsUpdated(json!({"waiting":[]})), window, cx);
+                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Original");
+                view.app_event(muzik_runner::AppEvent::JobCancelled { job_id: "queue-1".into() }, window, cx);
+                assert!(view.chapter_rows.is_empty());
             });
-        });
+            window.render_frame(cx);
+            assert!(window.try_find("decision").is_none());
+        }).unwrap();
     }
 
     #[test]
@@ -1938,45 +1504,6 @@ mod tests {
             "/cache/visible.jpg"
         );
         assert!(watchlist["playlists"][0]["items"][1]["thumbnail_path"].is_null());
-    }
-
-    #[test]
-    fn activity_summary_keeps_count_and_bounds_visible_rows() {
-        let candidates = (0..6)
-            .map(|index| {
-                json!({
-                    "title": format!("Album {index}"),
-                    "quality": {"format": "FLAC"},
-                    "user": "listener"
-                })
-            })
-            .collect::<Vec<_>>();
-        let section = activity_section("Source candidates", &candidates, candidate_summary);
-        assert_eq!(section.count, 6);
-        assert_eq!(section.rows.len(), 4);
-        assert_eq!(section.rows[0], "Album 0 · FLAC · listener");
-    }
-
-    #[test]
-    fn activity_progress_clamps_value_for_late_events() {
-        let progress = ActivityProgress {
-            completed: 12.,
-            total: Some(10.),
-            ..ActivityProgress::default()
-        };
-        assert!((progress.percentage() - 100.).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn event_lines_show_the_folder_name_instead_of_the_full_path() {
-        assert_eq!(
-            shorten_paths(
-                "Import group 1 of 1: /Users/tudor/Library/Application Support/muzik/splits/GENDEMA - sassy things [Full album] [wiih44Gfi2M]"
-            ),
-            "Import group 1 of 1: GENDEMA - sassy things [Full album] [wiih44Gfi2M]"
-        );
-        assert_eq!(shorten_paths("Split 3/12 tracks"), "Split 3/12 tracks");
-        assert_eq!(shorten_paths("Started import"), "Started import");
     }
 
     #[test]
