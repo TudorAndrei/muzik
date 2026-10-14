@@ -4828,6 +4828,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tracing",
+ "url",
  "usage-rs",
 ]
 

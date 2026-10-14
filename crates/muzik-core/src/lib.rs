@@ -10,6 +10,8 @@ pub mod downloads;
 mod error;
 mod job_event;
 pub mod paths;
+pub mod sidecar;
+pub mod source_reference;
 pub mod thumbnails;
 mod types;
 
