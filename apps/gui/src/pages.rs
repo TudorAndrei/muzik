@@ -169,11 +169,9 @@ impl Muzik {
     pub(crate) fn spotify(&self, cx: &Context<Self>) -> AnyElement {
         let saved_ids: HashSet<&str> = self
             .watchlist
-            .get("playlists")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|playlist| playlist["playlist_id"].as_str())
+            .playlists
+            .iter()
+            .map(|playlist| playlist.playlist_id.as_str())
             .collect();
         let connected = self.spotify.get("connected").and_then(Value::as_bool) == Some(true);
         let has_client_id = self

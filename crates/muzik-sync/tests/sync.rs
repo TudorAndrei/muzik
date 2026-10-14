@@ -250,6 +250,7 @@ fn stale_files_lists_unplanned_media_and_macos_leftovers() {
         "Album/02.flac",
         "Album/._01.mp3",
         "Album/.03.muzik-part.mp3",
+        "Album/.muzik-part.random.mp3",
         "Album/notes.txt",
     ] {
         fs::write(root.join(name), b"x").unwrap();
@@ -260,7 +261,39 @@ fn stale_files_lists_unplanned_media_and_macos_leftovers() {
         vec![
             root.join("Album/.03.muzik-part.mp3"),
             root.join("Album/._01.mp3"),
+            root.join("Album/.muzik-part.random.mp3"),
             root.join("Album/02.flac"),
         ]
     );
+}
+
+#[test]
+fn transfer_publishes_complete_output_and_preserves_it_on_failure() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("source.mp3");
+    let card = directory.path().join("card");
+    let destination = card.join(format!("{}.mp3", "x".repeat(240)));
+    fs::write(&source, b"complete audio").unwrap();
+    let transfer = sync::Transfer {
+        source: source.clone(),
+        destination: destination.clone(),
+        action: Action::Copy,
+        bytes: 14,
+        cover: false,
+        tags_in_stream: false,
+    };
+    sync::transfer(&transfer).unwrap();
+    assert_eq!(fs::read(&destination).unwrap(), b"complete audio");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode(),
+            fs::metadata(&source).unwrap().permissions().mode(),
+        );
+    }
+    fs::remove_file(source).unwrap();
+    assert!(sync::transfer(&transfer).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), b"complete audio");
+    assert_eq!(fs::read_dir(&card).unwrap().count(), 1);
 }

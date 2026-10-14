@@ -1,9 +1,8 @@
 use super::source::availability;
-use super::{AudioIndex, ItemAction, StageStatus, WatchItem, Watchlist};
-use crate::Result;
+use super::{AudioIndex, ItemAction, Playlist, StageStatus, WatchItem, Watchlist};
 use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::Path;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
@@ -53,59 +52,103 @@ impl Summary {
     }
 }
 
-/// # Errors
-/// Returns an error if the serialized watchlist does not have the expected shape.
-pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> Result<Value> {
-    let index = AudioIndex::scan(output);
-    let mut value = document.to_value();
-    let playlists = value
-        .get_mut("playlists")
-        .and_then(Value::as_array_mut)
-        .ok_or("watchlist playlists are missing")?;
-    for (playlist, saved) in playlists.iter_mut().zip(&document.playlists) {
-        let items = playlist
-            .get_mut("items")
-            .and_then(Value::as_array_mut)
-            .ok_or("playlist items are missing")?;
-        for (card, item) in items.iter_mut().zip(&saved.items) {
-            enrich(card, item, &index, cache)?;
-        }
-    }
-    Ok(value)
+pub type WatchlistView = Watchlist<ItemView>;
+pub type PlaylistView = Playlist<ItemView>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemView {
+    #[serde(flatten)]
+    pub item: WatchItem,
+    pub thumbnail_path: Option<String>,
+    pub summary: Summary,
+    pub primary_action: Option<PrimaryAction>,
+    pub actions: HashMap<ItemAction, Availability>,
 }
 
-fn enrich(card: &mut Value, item: &WatchItem, index: &AudioIndex, cache: &Path) -> Result<()> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrimaryAction {
+    pub action: ItemAction,
+    pub label: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Availability {
+    pub enabled: bool,
+    pub reason: Option<String>,
+}
+
+/// Builds the display data without changing the saved watchlist.
+#[must_use]
+pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> WatchlistView {
+    let index = AudioIndex::scan(output);
+    Watchlist {
+        version: document.version,
+        playlists: document
+            .playlists
+            .iter()
+            .map(|playlist| Playlist {
+                playlist_id: playlist.playlist_id.clone(),
+                url: playlist.url.clone(),
+                kind: playlist.kind,
+                title: playlist.title.clone(),
+                items: playlist
+                    .items
+                    .iter()
+                    .map(|item| enrich(item, &index, cache))
+                    .collect(),
+                processed_video_ids: playlist.processed_video_ids.clone(),
+                last_checked_at: playlist.last_checked_at.clone(),
+                last_error: playlist.last_error.clone(),
+                extra: playlist.extra.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn enrich(item: &WatchItem, index: &AudioIndex, cache: &Path) -> ItemView {
     let summary = Summary::of(item);
-    let primary = if matches!(
+    let primary_action = if matches!(
         summary,
         Summary::Unavailable | Summary::Processed | Summary::Waiting
     ) {
-        Value::Null
-    } else if item.statuses().any(|status| status == StageStatus::Failed) {
-        json!({"action": ItemAction::Retry, "label": "Retry"})
-    } else if item.statuses().any(|status| status == StageStatus::Stale) {
-        json!({"action": ItemAction::Run, "label": "Resume"})
+        None
     } else {
-        json!({"action": ItemAction::Run, "label": "Run"})
+        let (action, label) = if item.statuses().any(|status| status == StageStatus::Failed) {
+            (ItemAction::Retry, "Retry")
+        } else if item.statuses().any(|status| status == StageStatus::Stale) {
+            (ItemAction::Run, "Resume")
+        } else {
+            (ItemAction::Run, "Run")
+        };
+        Some(PrimaryAction {
+            action,
+            label: label.to_owned(),
+        })
     };
-    let thumbnail = item
+    let thumbnail_path = item
         .video_id
         .as_deref()
         .and_then(|id| thumbnails::cached_path(id, cache))
         .map(|path| path.to_string_lossy().into_owned());
     let audio = item.downloaded_audio(index);
-    let mut actions = serde_json::Map::new();
-    for action in ItemAction::ALL {
-        let (enabled, reason) = availability(item, *action, audio.as_deref());
-        actions.insert(
-            action.to_string(),
-            json!({"enabled": enabled, "reason": reason}),
-        );
+    let actions = ItemAction::ALL
+        .iter()
+        .map(|action| {
+            let (enabled, reason) = availability(item, *action, audio.as_deref());
+            (
+                *action,
+                Availability {
+                    enabled,
+                    reason: reason.map(str::to_owned),
+                },
+            )
+        })
+        .collect();
+    ItemView {
+        item: item.clone(),
+        thumbnail_path,
+        summary,
+        primary_action,
+        actions,
     }
-    let fields = card.as_object_mut().ok_or("item is not an object")?;
-    fields.insert("thumbnail_path".into(), json!(thumbnail));
-    fields.insert("summary".into(), json!(summary));
-    fields.insert("primary_action".into(), primary);
-    fields.insert("actions".into(), Value::Object(actions));
-    Ok(())
 }

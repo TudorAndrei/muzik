@@ -474,45 +474,27 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
 }
 
 fn extract_metadata(source: &Path) -> Metadata {
-    let source_json = read_json(&source.with_extension("muzik.json")).or_else(|| {
-        read_json(
-            &source
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join(".muzik.json"),
-        )
-    });
+    let source_json = muzik_core::sidecar::read(source, muzik_core::sidecar::Policy::Split)
+        .ok()
+        .flatten();
     let source_id = source_json
         .as_ref()
         .and_then(|data| data.get("source_id"))
         .and_then(Value::as_str)
         .map(str::to_owned);
     if let Some(data) = &source_json {
-        let empty = Value::Null;
-        let resolved = data
-            .get("resolved")
-            .filter(|value| value.is_object())
-            .unwrap_or(&empty);
-        let candidate = data
-            .get("candidate")
-            .filter(|value| value.is_object())
-            .unwrap_or(&empty);
-        let candidate_metadata = candidate
-            .get("metadata")
-            .filter(|value| value.is_object())
-            .unwrap_or(&empty);
-        let sources = [resolved, candidate_metadata, data, candidate];
-        if sources.iter().any(|source| {
-            ["title", "track", "artist", "album", "year"]
-                .iter()
-                .any(|key| field(source, key).is_some())
-        }) {
-            let artist =
-                first_field(&sources, &["artist"]).unwrap_or_else(|| "Unknown Artist".into());
-            let album = first_field(&sources, &["album"])
-                .or_else(|| field(resolved, "title"))
+        let first_field = |keys: &[&str]| {
+            muzik_core::sidecar::text(data, keys, muzik_core::sidecar::Policy::Split)
+        };
+        if first_field(&["title", "track", "artist", "album", "year"]).is_some() {
+            let artist = first_field(&["artist"]).unwrap_or_else(|| "Unknown Artist".into());
+            let album = first_field(&["album"])
+                .or_else(|| {
+                    data.get("resolved")
+                        .and_then(|resolved| field(resolved, "title"))
+                })
                 .unwrap_or_else(|| "Unknown Album".into());
-            let year = first_field(&sources, &["year"]).unwrap_or_else(|| "Unknown".into());
+            let year = first_field(&["year"]).unwrap_or_else(|| "Unknown".into());
             return Metadata {
                 artist,
                 album: clean_album_name(&album),
@@ -582,12 +564,6 @@ fn field(data: &Value, key: &str) -> Option<String> {
         Value::Number(number) => Some(number.to_string()),
         _ => None,
     }
-}
-
-fn first_field(sources: &[&Value], keys: &[&str]) -> Option<String> {
-    sources
-        .iter()
-        .find_map(|source| keys.iter().find_map(|key| field(source, key)))
 }
 
 fn parse_title(title: &str) -> (Option<String>, Option<String>, Option<String>) {

@@ -40,7 +40,9 @@ use muzik_core::{
 };
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
-use muzik_store::watchlist::{ItemAction, ItemId, SourceKind, Summary};
+use muzik_store::watchlist::{
+    ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
+};
 use requests::{Command, PendingAction, Read};
 use serde_json::{Value, json};
 use settings::ConfigView;
@@ -137,7 +139,7 @@ struct Muzik {
     activity: Activity,
     gates: Value,
     reload_watchlist: bool,
-    watchlist: Value,
+    watchlist: WatchlistView,
     selected_playlist: usize,
     filter: usize,
     watch_table: Entity<TableState<watch_table::WatchTable>>,
@@ -190,7 +192,7 @@ impl Muzik {
             activity: Activity::default(),
             gates: Value::Null,
             reload_watchlist: false,
-            watchlist: Value::Null,
+            watchlist: WatchlistView::default(),
             selected_playlist: 0,
             filter: 0,
             watch_table,
@@ -411,36 +413,34 @@ impl Muzik {
         }
     }
 
-    fn replace_watchlist(&mut self, incoming: Value, window: &mut Window, cx: &mut Context<Self>) {
-        let old = self
-            .watchlist
-            .get("playlists")
-            .and_then(|all| all.get(self.selected_playlist));
-        let old_id = old
-            .and_then(|playlist| playlist["playlist_id"].as_str())
-            .map(str::to_owned);
+    fn replace_watchlist(
+        &mut self,
+        incoming: WatchlistView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let old = self.watchlist.playlists.get(self.selected_playlist);
+        let old_id = old.map(|playlist| playlist.playlist_id.as_str());
         let old_title = old
-            .and_then(|playlist| playlist["title"].as_str())
+            .and_then(|playlist| playlist.title.as_deref())
             .unwrap_or("");
-        let playlists = incoming.get("playlists").and_then(Value::as_array);
-        let count = playlists.map_or(0, Vec::len);
+        let playlists = &incoming.playlists;
         let selected = old_id
-            .as_deref()
             .and_then(|id| {
-                playlists?
+                playlists
                     .iter()
-                    .position(|playlist| playlist["playlist_id"] == id)
+                    .position(|playlist| playlist.playlist_id == id)
             })
-            .unwrap_or_else(|| self.selected_playlist.min(count.saturating_sub(1)));
+            .unwrap_or_else(|| {
+                self.selected_playlist
+                    .min(playlists.len().saturating_sub(1))
+            });
         self.selected_playlist = selected;
-        let name = playlists
-            .and_then(|all| all.get(selected))
-            .and_then(|playlist| playlist["title"].as_str())
+        let playlist = playlists.get(selected);
+        let name = playlist
+            .and_then(|playlist| playlist.title.as_deref())
             .unwrap_or("");
-        let selected_id = playlists
-            .and_then(|all| all.get(selected))
-            .and_then(|playlist| playlist["playlist_id"].as_str());
-        if old_id.as_deref() != selected_id || old_title != name {
+        if old_id != playlist.map(|playlist| playlist.playlist_id.as_str()) || old_title != name {
             self.playlist_name.update(cx, |state, cx| {
                 state.set_value(name.to_string(), window, cx);
             });
@@ -452,8 +452,8 @@ impl Muzik {
     fn sync_watch_table(&self, cx: &mut Context<Self>) {
         let rows = self
             .watchlist
-            .get("playlists")
-            .and_then(|all| all.get(self.selected_playlist))
+            .playlists
+            .get(self.selected_playlist)
             .map(|playlist| watch_table::rows(playlist, self.filter, self.activity.queued_items()))
             .unwrap_or_default();
         self.watch_table.update(cx, |state, cx| {
@@ -467,16 +467,13 @@ impl Muzik {
             return Vec::new();
         };
         self.watchlist
-            .get("playlists")
-            .and_then(|all| all.get(self.selected_playlist))
-            .and_then(|playlist| playlist.get("items"))
-            .and_then(Value::as_array)
+            .playlists
+            .get(self.selected_playlist)
             .into_iter()
-            .flatten()
-            .filter(|item| item["video_id"] == open)
-            .filter(|item| item["thumbnail_path"].is_null())
-            .filter(|item| item["thumbnail_url"].is_string())
-            .filter_map(|item| item["video_id"].as_str().map(str::to_owned))
+            .flat_map(|playlist| &playlist.items)
+            .filter(|item| item.item.video_id.as_deref() == Some(open))
+            .filter(|item| item.thumbnail_path.is_none() && item.item.thumbnail_url.is_some())
+            .filter_map(|item| item.item.video_id.clone())
             .collect()
     }
 
@@ -1210,13 +1207,11 @@ fn describe(value: &Value) -> String {
     }
 }
 
-fn merge_thumbnail_paths(watchlist: &mut Value, visible: &HashSet<String>, data: &Value) {
+fn merge_thumbnail_paths(watchlist: &mut WatchlistView, visible: &HashSet<String>, data: &Value) {
     let Some(results) = data["thumbnails"].as_array() else {
         return;
     };
-    let Some(playlists) = watchlist["playlists"].as_array_mut() else {
-        return;
-    };
+    let playlists = &mut watchlist.playlists;
     for result in results {
         let (Some(video_id), Some(path)) = (result["video_id"].as_str(), result["path"].as_str())
         else {
@@ -1226,11 +1221,9 @@ fn merge_thumbnail_paths(watchlist: &mut Value, visible: &HashSet<String>, data:
             continue;
         }
         for playlist in playlists.iter_mut() {
-            if let Some(items) = playlist["items"].as_array_mut() {
-                for item in items {
-                    if item["video_id"] == video_id {
-                        item["thumbnail_path"] = json!(path);
-                    }
+            for item in &mut playlist.items {
+                if item.item.video_id.as_deref() == Some(video_id) {
+                    item.thumbnail_path = Some(path.to_owned());
                 }
             }
         }
@@ -1488,10 +1481,10 @@ mod tests {
 
     #[test]
     fn thumbnail_event_updates_only_current_visible_cards() {
-        let mut watchlist = json!({"playlists":[{"items":[
-            {"video_id":"visible", "thumbnail_path":null},
-            {"video_id":"other", "thumbnail_path":null}
-        ]}]});
+        let mut watchlist: super::WatchlistView = serde_json::from_value(json!({"playlists":[{"playlist_id":"PL1","url":"https://www.youtube.com/playlist?list=PL1","items":[
+            {"position":1,"title":"Visible","summary":"Pending","actions":{},"video_id":"visible", "thumbnail_path":null},
+            {"position":2,"title":"Other","summary":"Pending","actions":{},"video_id":"other", "thumbnail_path":null}
+        ]}]})).unwrap();
         let visible = HashSet::from(["visible".to_string()]);
         let event = json!({"thumbnails":[
             {"video_id":"visible", "path":"/cache/visible.jpg"},
@@ -1500,10 +1493,10 @@ mod tests {
         ]});
         merge_thumbnail_paths(&mut watchlist, &visible, &event);
         assert_eq!(
-            watchlist["playlists"][0]["items"][0]["thumbnail_path"],
-            "/cache/visible.jpg"
+            watchlist.playlists[0].items[0].thumbnail_path.as_deref(),
+            Some("/cache/visible.jpg")
         );
-        assert!(watchlist["playlists"][0]["items"][1]["thumbnail_path"].is_null());
+        assert!(watchlist.playlists[0].items[1].thumbnail_path.is_none());
     }
 
     #[test]

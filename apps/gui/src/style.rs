@@ -6,8 +6,7 @@ use gpui_kit::{
     AnyElement, App, AssetSource, Div, ElementId, Hsla, Image, ImageFormat, Result, SharedString,
     div, px,
 };
-use muzik_store::watchlist::{Stage, StageStatus, stage_status};
-use serde_json::Value;
+use muzik_store::watchlist::{Stage, StageStatus};
 
 const THEME: &str = include_str!("../themes/muzik.json");
 const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-64.png");
@@ -34,9 +33,8 @@ impl AssetSource for AppAssets {
     }
 }
 
-pub fn source_icon(playlist: &Value) -> gpui_kit::assets::IconName {
+pub fn source_icon(id: &str) -> gpui_kit::assets::IconName {
     use gpui_kit::assets::IconName;
-    let id = playlist["playlist_id"].as_str().unwrap_or("");
     if id.starts_with("bandcamp:") {
         IconName::ShoppingBag
     } else if id == "spotify:liked" {
@@ -141,15 +139,10 @@ pub const fn status_word(status: StageStatus) -> &'static str {
     }
 }
 
-pub fn stage_states(item: &Value) -> Vec<(Stage, StageStatus)> {
+pub fn stage_states(item: &muzik_store::watchlist::WatchItem) -> Vec<(Stage, StageStatus)> {
     Stage::ALL
         .iter()
-        .map(|stage| {
-            (
-                *stage,
-                stage_status(item, *stage).unwrap_or(StageStatus::NotStarted),
-            )
-        })
+        .map(|stage| (*stage, item.status(*stage)))
         .collect()
 }
 
@@ -185,7 +178,11 @@ pub fn stage_headline(states: &[(Stage, StageStatus)]) -> (String, Option<Tone>)
     (format!("{done} of {} stages done", states.len()), None)
 }
 
-pub fn stage_track(id: impl Into<ElementId>, item: &Value, cx: &App) -> AnyElement {
+pub fn stage_track(
+    id: impl Into<ElementId>,
+    item: &muzik_store::watchlist::WatchItem,
+    cx: &App,
+) -> AnyElement {
     let states = stage_states(item);
     let theme = cx.theme();
     let mut bars = div().id(id).flex().gap(px(3.)).flex_none();
@@ -242,7 +239,7 @@ mod tests {
             "spotify:playlist:abc",
             "bandcamp:collection",
         ] {
-            let path = source_icon(&json!({"playlist_id": id})).path();
+            let path = source_icon(id).path();
             assert!(
                 AppAssets.load(&path).unwrap().is_some(),
                 "{path} is missing"
@@ -253,13 +250,15 @@ mod tests {
 
     #[test]
     fn stage_headline_names_the_stage_that_needs_attention() {
-        let item = json!({"stages": {
-            "download": {"status": "complete"},
-            "quality": {"status": "skipped"},
-            "parse": {"status": "complete"},
-            "split": {"status": "failed"},
-            "organize": {"status": "stale"}
-        }});
+        let item: muzik_store::watchlist::WatchItem =
+            serde_json::from_value(json!({"position":1,"title":"Track","stages": {
+                "download": {"status": "complete"},
+                "quality": {"status": "skipped"},
+                "parse": {"status": "complete"},
+                "split": {"status": "failed"},
+                "organize": {"status": "stale"}
+            }}))
+            .unwrap();
         let states = stage_states(&item);
         assert_eq!(states[1], (Stage::Quality, StageStatus::Skipped));
         assert_eq!(
@@ -270,19 +269,23 @@ mod tests {
 
     #[test]
     fn stage_headline_is_quiet_when_every_stage_is_done() {
-        let item = json!({"stages": {
-            "download": {"status": "complete"},
-            "quality": {"status": "skipped"},
-            "parse": {"status": "complete"},
-            "split": {"status": "complete"},
-            "organize": {"status": "complete"}
-        }});
+        let item: muzik_store::watchlist::WatchItem =
+            serde_json::from_value(json!({"position":1,"title":"Track","stages": {
+                "download": {"status": "complete"},
+                "quality": {"status": "skipped"},
+                "parse": {"status": "complete"},
+                "split": {"status": "complete"},
+                "organize": {"status": "complete"}
+            }}))
+            .unwrap();
         assert_eq!(
             stage_headline(&stage_states(&item)),
             ("Done".to_string(), None)
         );
         assert_eq!(
-            stage_headline(&stage_states(&json!({}))),
+            stage_headline(&stage_states(
+                &serde_json::from_value(json!({"position":1,"title":"Track"})).unwrap()
+            )),
             ("Not started".to_string(), None)
         );
     }

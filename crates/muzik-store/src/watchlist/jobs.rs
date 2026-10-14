@@ -252,7 +252,7 @@ pub fn refresh(
         repository.load()?
     };
     let summary = json!({"playlists_checked":synced.checked, "pending_videos":synced.pending.len(), "completed_videos":completed, "failed_videos":failed, "waiting_videos":waiting, "playlist_errors":synced.errors});
-    Ok(json!({"summary":summary, "watchlist":view(&document, options.output, options.cache)?}))
+    Ok(json!({"summary":summary, "watchlist":view(&document, options.output, options.cache)}))
 }
 
 /// # Errors
@@ -272,7 +272,7 @@ pub fn action(
         check_available(item, action, options.output)?;
         return Ok(
             json!({"action":{"action":action,"planned_stage":action.stage(),"dry_run":true},
-            "watchlist":view(&document, options.output, options.cache)?}),
+            "watchlist":view(&document, options.output, options.cache)}),
         );
     }
     let outcome = run_item(repository, options, id, action, operations, cancelled)?;
@@ -281,7 +281,7 @@ pub fn action(
         ItemOutcome::Waiting { stage, .. } => json!({"action":action,"waiting_stage":stage}),
     };
     Ok(
-        json!({"action":summary, "watchlist":view(&repository.load()?, options.output, options.cache)?}),
+        json!({"action":summary, "watchlist":view(&repository.load()?, options.output, options.cache)}),
     )
 }
 

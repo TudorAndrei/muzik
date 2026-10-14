@@ -2,47 +2,34 @@ use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
 
-pub type ItemKey = (String, u64, String);
-
 pub struct WatchRow {
-    pub key: ItemKey,
-    pub item: Value,
+    pub key: ItemId,
+    pub item: ItemView,
     pub queued: bool,
 }
 
 impl WatchRow {
-    fn text(&self, key: &str) -> Option<&str> {
-        self.item.get(key).and_then(Value::as_str)
-    }
-
     fn title(&self) -> &str {
-        self.text("title").unwrap_or("Untitled")
+        &self.item.item.title
     }
-
     fn summary(&self) -> &str {
-        self.text("summary").unwrap_or("")
+        self.item.summary.as_ref()
     }
-
     fn error(&self) -> &str {
-        self.text("last_error").unwrap_or("")
+        self.item.item.last_error.as_deref().unwrap_or("")
     }
-
     fn primary(&self) -> Option<(ItemAction, String, bool)> {
-        let primary = self.item.get("primary_action")?;
-        let action = primary
-            .get("action")?
-            .as_str()?
-            .parse::<ItemAction>()
-            .ok()?;
-        let label = primary.get("label")?.as_str()?.to_string();
+        let primary = self.item.primary_action.as_ref()?;
         let enabled = self
             .item
-            .get("actions")
-            .and_then(|actions| actions.get(action.as_ref()))
-            .and_then(|availability| availability.get("enabled"))
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        Some((action, label, enabled && !self.queued))
+            .actions
+            .get(&primary.action)
+            .is_some_and(|availability| availability.enabled);
+        Some((
+            primary.action,
+            primary.label.clone(),
+            enabled && !self.queued,
+        ))
     }
 }
 
@@ -76,7 +63,7 @@ impl WatchTable {
         self.apply_sort();
     }
 
-    pub(crate) fn key(&self, row_ix: usize) -> Option<ItemKey> {
+    pub(crate) fn key(&self, row_ix: usize) -> Option<ItemId> {
         self.rows.get(row_ix).map(|row| row.key.clone())
     }
 
@@ -89,9 +76,9 @@ impl WatchTable {
             3 => self.rows.sort_by(|left, right| {
                 left.summary()
                     .cmp(right.summary())
-                    .then(left.key.1.cmp(&right.key.1))
+                    .then(left.key.position.cmp(&right.key.position))
             }),
-            _ => self.rows.sort_by_key(|row| row.key.1),
+            _ => self.rows.sort_by_key(|row| row.key.position),
         }
         if order == ColumnSort::Descending {
             self.rows.reverse();
@@ -99,14 +86,14 @@ impl WatchTable {
     }
 }
 
-fn run_item(view: &WeakEntity<Muzik>, key: &ItemKey, action: ItemAction, cx: &mut App) {
+fn run_item(view: &WeakEntity<Muzik>, key: &ItemId, action: ItemAction, cx: &mut App) {
     let _ = view.update(cx, |view, cx| {
-        let item = view.item_request(&key.0, key.1, &key.2, action);
+        let item = view.item_request(key.clone(), action);
         view.run_item(item, cx);
     });
 }
 
-pub fn open_item(view: &WeakEntity<Muzik>, key: ItemKey, window: &mut Window, cx: &mut App) {
+pub fn open_item(view: &WeakEntity<Muzik>, key: ItemId, window: &mut Window, cx: &mut App) {
     let _ = view.update(cx, |view, cx| view.open_item_sheet(key, window, cx));
 }
 
@@ -154,13 +141,13 @@ impl TableDelegate for WatchTable {
             return div().into_any_element();
         };
         match col_ix {
-            0 => div().child(row.key.1.to_string()).into_any_element(),
+            0 => div().child(row.key.position.to_string()).into_any_element(),
             1 => div()
                 .min_w_0()
                 .truncate()
                 .child(row.title().to_string())
                 .into_any_element(),
-            2 => style::stage_track(("watch-stages", row_ix), &row.item, cx),
+            2 => style::stage_track(("watch-stages", row_ix), &row.item.item, cx),
             3 => {
                 let status = if row.queued {
                     "In the queue".to_string()
@@ -224,7 +211,7 @@ impl TableDelegate for WatchTable {
             return String::new();
         };
         match col_ix {
-            0 => row.key.1.to_string(),
+            0 => row.key.position.to_string(),
             1 => row.title().to_string(),
             3 => row.summary().to_string(),
             5 => row.error().to_string(),
@@ -233,23 +220,16 @@ impl TableDelegate for WatchTable {
     }
 }
 
-pub fn rows(playlist: &Value, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
-    let id = watchlist_view::playlist_id(playlist);
-    playlist["items"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub fn rows(playlist: &PlaylistView, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
+    playlist
+        .items
+        .iter()
         .filter(|item| watchlist_view::matches_filter(item, filter))
         .map(|item| {
-            let position = item["position"].as_u64().unwrap_or(0);
-            let video_id = item["video_id"]
-                .as_str()
-                .or_else(|| item["id"].as_str())
-                .unwrap_or("")
-                .to_string();
-            let queued = queued.contains(&ItemId::new(&id, position, Some(&video_id)).to_string());
+            let key = ItemId::of(&playlist.playlist_id, &item.item);
+            let queued = queued.contains(&key.to_string());
             WatchRow {
-                key: (id.clone(), position, video_id),
+                key,
                 item: item.clone(),
                 queued,
             }
@@ -267,12 +247,12 @@ mod tests {
 
     #[test]
     fn rows_follow_the_filter_and_mark_queued_items() {
-        let playlist = json!({"playlist_id": "PL1", "items": [
-            {"position": 1, "title": "One", "video_id": "aaaaaaaaaaa", "summary": "Failed"},
-            {"position": 2, "title": "Two", "video_id": "bbbbbbbbbbb", "summary": "Processed"},
-            {"position": 3, "title": "Three", "video_id": "ccccccccccc", "summary": "Failed"},
-            {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "summary": "Unavailable"}
-        ]});
+        let playlist: super::PlaylistView = serde_json::from_value(json!({"playlist_id": "PL1", "url":"https://www.youtube.com/playlist?list=PL1", "items": [
+            {"position": 1, "title": "One", "video_id": "aaaaaaaaaaa", "actions":{}, "summary": "Failed"},
+            {"position": 2, "title": "Two", "video_id": "bbbbbbbbbbb", "actions":{}, "summary": "Processed"},
+            {"position": 3, "title": "Three", "video_id": "ccccccccccc", "actions":{}, "summary": "Failed"},
+            {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "actions":{}, "summary": "Unavailable"}
+        ]})).unwrap();
         let queued =
             HashSet::from([
                 muzik_store::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
@@ -284,26 +264,32 @@ mod tests {
                 .unwrap_or(0)
         };
         let list = rows(&playlist, tab(Summary::Failed), &queued);
-        assert_eq!(list.iter().map(|row| row.key.1).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(
+            list.iter().map(|row| row.key.position).collect::<Vec<_>>(),
+            [1, 3]
+        );
         assert!(!list[0].queued);
         assert!(list[1].queued);
         let all = rows(&playlist, 0, &queued);
         assert_eq!(
-            all.iter().map(|row| row.key.1).collect::<Vec<_>>(),
+            all.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [1, 2, 3]
         );
         let gone = rows(&playlist, tab(Summary::Unavailable), &queued);
-        assert_eq!(gone.iter().map(|row| row.key.1).collect::<Vec<_>>(), [4]);
+        assert_eq!(
+            gone.iter().map(|row| row.key.position).collect::<Vec<_>>(),
+            [4]
+        );
     }
 
     #[test]
     fn sorting_by_title_and_status_keeps_a_stable_order() {
         let mut table = WatchTable::new(WeakEntity::new_invalid());
-        let playlist = json!({"playlist_id": "PL1", "items": [
-            {"position": 1, "title": "beta", "video_id": "a", "summary": "Pending"},
-            {"position": 2, "title": "Alpha", "video_id": "b", "summary": "Failed"},
-            {"position": 3, "title": "gamma", "video_id": "c", "summary": "Failed"}
-        ]});
+        let playlist: super::PlaylistView = serde_json::from_value(json!({"playlist_id": "PL1", "url":"https://www.youtube.com/playlist?list=PL1", "items": [
+            {"position": 1, "title": "beta", "video_id": "a", "actions":{}, "summary": "Pending"},
+            {"position": 2, "title": "Alpha", "video_id": "b", "actions":{}, "summary": "Failed"},
+            {"position": 3, "title": "gamma", "video_id": "c", "actions":{}, "summary": "Failed"}
+        ]})).unwrap();
         table.set_rows(rows(&playlist, 0, &HashSet::new()));
         table.sort = Some((1, ColumnSort::Ascending));
         table.apply_sort();
@@ -318,13 +304,21 @@ mod tests {
         table.sort = Some((3, ColumnSort::Descending));
         table.apply_sort();
         assert_eq!(
-            table.rows.iter().map(|row| row.key.1).collect::<Vec<_>>(),
+            table
+                .rows
+                .iter()
+                .map(|row| row.key.position)
+                .collect::<Vec<_>>(),
             [1, 3, 2]
         );
         table.sort = Some((0, ColumnSort::Default));
         table.apply_sort();
         assert_eq!(
-            table.rows.iter().map(|row| row.key.1).collect::<Vec<_>>(),
+            table
+                .rows
+                .iter()
+                .map(|row| row.key.position)
+                .collect::<Vec<_>>(),
             [1, 2, 3]
         );
     }

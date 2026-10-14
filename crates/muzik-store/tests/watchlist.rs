@@ -218,16 +218,22 @@ fn view_adds_card_actions_and_cached_thumbnail_without_saving() {
     fs::create_dir(&cache).unwrap();
     fs::write(cache.join("yt_thumbnail_abcdefghijk.jpg"), b"image").unwrap();
     let document = json!({"version": 3, "playlists": [{
-        "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
-        "items": [{"position": 1, "title": "Song", "video_id": "abcdefghijk",
+        "source_extension": {"revision":7}, "playlist_id": "PL1", "url": "https://www.youtube.com/playlist?list=PL1",
+        "items": [{"item_extension": ["kept"], "position": 1, "title": "Song", "video_id": "abcdefghijk",
             "video_url": "https://www.youtube.com/watch?v=abcdefghijk"}]
     }]});
     repository
         .save(&Watchlist::from_value(document).unwrap())
         .unwrap();
     let saved = (repository.revision().unwrap(), repository.load().unwrap());
-    let cards = view(&repository.load().unwrap(), directory.path(), &cache).unwrap();
+    let cards =
+        serde_json::to_value(view(&repository.load().unwrap(), directory.path(), &cache)).unwrap();
     let item = &cards["playlists"][0]["items"][0];
+    assert_eq!(
+        cards["playlists"][0]["source_extension"],
+        json!({"revision":7})
+    );
+    assert_eq!(item["item_extension"], json!(["kept"]));
     assert_eq!(item["summary"], "Pending");
     assert_eq!(
         item["primary_action"],
@@ -500,7 +506,7 @@ fn removed_and_private_videos_leave_the_failed_list() {
         ]
     }]}))
     .unwrap();
-    let cards = view(&document, directory.path(), directory.path()).unwrap();
+    let cards = serde_json::to_value(view(&document, directory.path(), directory.path())).unwrap();
     let items = &cards["playlists"][0]["items"];
     for gone in [&items[0], &items[1]] {
         assert_eq!(gone["summary"], "Unavailable");
@@ -639,4 +645,34 @@ fn a_failed_checked_write_changes_nothing() {
     assert_eq!(saved.playlists[0].title, None);
     assert_eq!(saved.playlists[0].items.len(), 1);
     assert_eq!(repository.revision().unwrap(), revision);
+}
+
+#[test]
+fn registration_accepts_source_urls_and_rejects_other_hosts() {
+    use muzik_store::watchlist::parse_source;
+    for (input, expected) in [
+        (
+            "https://music.youtube.com/watch?v=abc&list=PL_ONE#tracks",
+            "PL_ONE",
+        ),
+        ("http://m.youtube.com/playlist?list=PL_TWO", "PL_TWO"),
+        ("https://youtu.be/video?list=PL_THREE", "PL_THREE"),
+        (
+            "https://open.spotify.com/intl-de/album/AL1/?si=abc",
+            "spotify:album:AL1",
+        ),
+        ("spotify:playlist:PL1", "spotify:playlist:PL1"),
+        ("Liked Songs", "spotify:liked"),
+    ] {
+        assert_eq!(parse_source(input).unwrap().playlist_id, expected);
+    }
+    for input in [
+        "https://example.test/playlist?list=PL1",
+        "https://example.test/open.spotify.com/playlist/PL1",
+        "https://open.spotify.com.example.test/playlist/PL1",
+        "ftp://youtube.com/playlist?list=PL1",
+        "http://open.spotify.com/playlist/PL1",
+    ] {
+        assert!(parse_source(input).is_err(), "accepted {input}");
+    }
 }

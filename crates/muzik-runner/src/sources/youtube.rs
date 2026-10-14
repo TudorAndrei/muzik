@@ -3,6 +3,7 @@ use super::{
 };
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
+use crate::workflow_result::WorkflowResult;
 use crate::{local_workflow, remote_workflow};
 use muzik_core::{ChapterAnswer, DecisionKind, chapters};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
@@ -86,32 +87,23 @@ impl Source for Youtube {
             updated.set(Stage::Download, StageStatus::Complete);
             updated.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         } else {
-            let split = result
-                .get("split_dirs")
-                .and_then(Value::as_array)
-                .is_some_and(|dirs| !dirs.is_empty());
+            let split = !result.split_dirs.is_empty();
             mark_full(&mut updated, &adapter.prepared.settings.options, split);
         }
         Ok(updated)
     }
 }
 
-fn save_output_paths(adapter: &Adapter<'_, '_>, item: &mut WatchItem, result: &Value) {
-    let paths = |key: &str| {
-        result[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>()
-    };
-    let audio = paths("audio_files")
-        .into_iter()
+fn save_output_paths(adapter: &Adapter<'_, '_>, item: &mut WatchItem, result: &WorkflowResult) {
+    let audio = result
+        .audio_files
+        .iter()
+        .flatten()
         .find(|path| path.is_file())
+        .cloned()
         .or_else(|| adapter.prepared.audio(item));
     item.set_path(Stage::Download, audio);
-    let split = paths("split_dirs").into_iter().find(|path| path.is_dir());
+    let split = result.split_dirs.iter().find(|path| path.is_dir()).cloned();
     item.set_path(Stage::Split, split);
 }
 
@@ -435,14 +427,20 @@ mod tests {
         with_adapter(&settings, |adapter, _| {
             let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
             item.video_id = Some("abcdefghijk".into());
-            super::save_output_paths(adapter, &mut item, &json!({"split_dirs":[split]}));
+            let mut result = crate::workflow_result::WorkflowResult {
+                albums: 1,
+                singles: 0,
+                split_dirs: vec![split.clone()],
+                audio_files: None,
+                items: None,
+                failures: None,
+            };
+            super::save_output_paths(adapter, &mut item, &result);
             assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
             assert_eq!(item.path(Stage::Split), Some(split.as_path()));
-            super::save_output_paths(
-                adapter,
-                &mut item,
-                &json!({"audio_files":[replacement],"split_dirs":[]}),
-            );
+            result.audio_files = Some(vec![replacement.clone()]);
+            result.split_dirs.clear();
+            super::save_output_paths(adapter, &mut item, &result);
             assert_eq!(adapter.prepared.audio(&item), Some(replacement.clone()));
         });
     }

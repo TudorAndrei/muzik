@@ -16,6 +16,7 @@ use url::Url;
 
 pub use error::{Error, Result};
 
+pub mod acquisition;
 pub mod discovery;
 mod error;
 pub mod playlist;
@@ -114,9 +115,7 @@ pub fn classify_input(raw: &str) -> WorkflowInput {
             host,
             "youtube.com" | "m.youtube.com" | "music.youtube.com" | "youtu.be"
         ) {
-            if let Some(playlist_id) = url.query_pairs().find_map(|(key, value)| {
-                (key == "list" && !value.is_empty()).then(|| value.into_owned())
-            }) {
+            if let Ok(playlist_id) = muzik_core::source_reference::youtube_playlist(raw) {
                 return WorkflowInput::YoutubePlaylist {
                     url: raw.to_owned(),
                     playlist_id,
@@ -330,18 +329,29 @@ pub trait WorkflowOperations {
 pub fn find_audio_inputs(paths: &[PathBuf]) -> Result<Vec<PathBuf>, Error> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
-    let mut pending = paths.to_vec();
-    while let Some(path) = pending.pop() {
-        if path.is_dir() {
-            let mut children = fs::read_dir(&path)?
-                .map(|entry| entry.map(|entry| entry.path()))
-                .collect::<Result<Vec<_>, _>>()?;
-            children.sort();
-            pending.extend(children.into_iter().rev());
-        } else if path.is_file() && muzik_core::audio::is_audio(&path) {
-            let identity = fs::canonicalize(&path)?;
-            if seen.insert(identity) {
-                result.push(path);
+    for root in paths.iter().rev() {
+        if !root.exists() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(root)
+            .follow_links(true)
+            .sort_by_file_name()
+        {
+            let entry = match entry {
+                Err(error)
+                    if error
+                        .io_error()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    continue;
+                }
+                entry => entry.map_err(std::io::Error::from)?,
+            };
+            if entry.file_type().is_file() && muzik_core::audio::is_audio(entry.path()) {
+                let identity = fs::canonicalize(entry.path())?;
+                if seen.insert(identity) {
+                    result.push(entry.into_path());
+                }
             }
         }
     }
@@ -633,14 +643,7 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
                     existing
                 }
             } else if options.audio_source == AudioSource::Soulseek {
-                match operations.acquire_soulseek(&url) {
-                    Ok(files) if !files.is_empty() => files,
-                    Ok(_) | Err(_) if options.fallback == AudioFallback::Youtube => operations
-                        .download_youtube(&url, &request.output, options.force)
-                        .map_err(|error| operation_error(error, cancelled))?,
-                    Ok(files) => files,
-                    Err(error) => return Err(operation_error(error, cancelled)),
-                }
+                acquire_audio(operations, &url, request, options, cancelled, true)?
             } else {
                 operations
                     .download_youtube(&url, &request.output, true)
@@ -650,21 +653,10 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
         WorkflowInput::Search(query) => {
             if options.dry_run {
                 Vec::new()
-            } else if matches!(options.audio_source, AudioSource::Soulseek)
-                || matches!(options.audio_source, AudioSource::Auto) && operations.soulseek_ready()
-            {
-                match operations.acquire_soulseek(&query) {
-                    Ok(files) if !files.is_empty() => files,
-                    Ok(_) | Err(_) if options.fallback == AudioFallback::Youtube => operations
-                        .download_youtube(&query, &request.output, options.force)
-                        .map_err(|error| operation_error(error, cancelled))?,
-                    Ok(files) => files,
-                    Err(error) => return Err(operation_error(error, cancelled)),
-                }
             } else {
-                operations
-                    .download_youtube(&query, &request.output, options.force)
-                    .map_err(|error| operation_error(error, cancelled))?
+                let soulseek = options.audio_source == AudioSource::Soulseek
+                    || options.audio_source == AudioSource::Auto && operations.soulseek_ready();
+                acquire_audio(operations, &query, request, options, cancelled, soulseek)?
             }
         }
         WorkflowInput::YoutubePlaylist { url, playlist_id } => {
@@ -707,6 +699,29 @@ pub fn run_workflow_with_events<O: WorkflowOperations>(
     )
 }
 
+fn acquire_audio<O: WorkflowOperations>(
+    operations: &mut O,
+    query: &str,
+    request: &WorkflowRequest,
+    options: &WorkflowOptions,
+    cancelled: &AtomicBool,
+    soulseek: bool,
+) -> Result<Vec<PathBuf>> {
+    use acquisition::AcquisitionSource;
+    let first = if soulseek {
+        AcquisitionSource::Soulseek
+    } else {
+        AcquisitionSource::Youtube
+    };
+    acquisition::acquire(first, options.fallback, cancelled, |source| match source {
+        AcquisitionSource::Soulseek => operations.acquire_soulseek(query),
+        AcquisitionSource::Youtube => {
+            operations.download_youtube(query, &request.output, options.force)
+        }
+    })
+    .map(|acquired| acquired.files)
+}
+
 fn operation_error(message: String, cancelled: &AtomicBool) -> Error {
     if cancelled.load(Ordering::SeqCst) {
         Error::Cancelled
@@ -715,7 +730,10 @@ fn operation_error(message: String, cancelled: &AtomicBool) -> Error {
     }
 }
 
-fn find_audio_by_youtube_id(directory: &Path, video_id: &str) -> Result<Vec<PathBuf>, Error> {
+pub(crate) fn find_audio_by_youtube_id(
+    directory: &Path,
+    video_id: &str,
+) -> Result<Vec<PathBuf>, Error> {
     if !directory.is_dir() {
         return Ok(Vec::new());
     }

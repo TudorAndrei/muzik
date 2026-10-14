@@ -3,11 +3,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::fields::tags_from_item;
 use muzik_core::BeetsConfig;
-use muzik_library::{Item, Library, SqlValue, path_from_sql, scalar_text};
+use muzik_library::{Library, path_from_sql};
 use muzik_match::MatchConfig;
 use muzik_metadata::MetadataClient;
-use muzik_tags::TagData;
 use serde_json::json;
 use serde_pickle::value::{HashableValue, Value};
 
@@ -415,60 +415,11 @@ pub fn write_library_tags(
     Ok(count)
 }
 
-fn tags_from_item(item: &Item) -> TagData {
-    let mut tags = TagData::default();
-    for field in muzik_tags::FIELDS {
-        if matches!(field.name, "date" | "original_date") {
-            continue;
-        }
-        if let Some(value) = item.field(field.name).and_then(scalar_text)
-            && !value.is_empty()
-        {
-            tags.fields.insert(field.name.to_owned(), value);
-        }
-    }
-    if let Some(value) = item.field("albumdisambig").and_then(scalar_text)
-        && !value.is_empty()
-    {
-        tags.fields.insert("albumdisambig".into(), value);
-    }
-    for name in ["rg_track_gain", "rg_album_gain"] {
-        if let Some(SqlValue::Real(value)) = item.field(name) {
-            tags.fields.insert(name.into(), format!("{value:.2} dB"));
-        }
-    }
-    for name in ["rg_track_peak", "rg_album_peak"] {
-        if let Some(SqlValue::Real(value)) = item.field(name) {
-            tags.fields.insert(name.into(), format!("{value:.6}"));
-        }
-    }
-    for (prefix, target) in [("", "date"), ("original_", "original_date")] {
-        let Some(year) = item.field(&format!("{prefix}year")).and_then(scalar_text) else {
-            continue;
-        };
-        let month = item.field(&format!("{prefix}month")).and_then(scalar_text);
-        let day = month
-            .as_ref()
-            .and_then(|_| item.field(&format!("{prefix}day")).and_then(scalar_text));
-        let date = match (month, day) {
-            (Some(month), Some(day)) => format!("{year:0>4}-{month:0>2}-{day:0>2}"),
-            (Some(month), None) => format!("{year:0>4}-{month:0>2}"),
-            (None, _) => format!("{year:0>4}"),
-        };
-        tags.fields.insert(target.to_owned(), date);
-    }
-    if let Some(comp) = item.field("comp").and_then(scalar_text) {
-        tags.fields
-            .insert("comp".into(), if comp == "0" { "0" } else { "1" }.into());
-    }
-    tags
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::apply::{AlbumDecision, MatchDecision};
-    use muzik_library::Fields;
+    use muzik_library::{Fields, SqlValue};
 
     #[test]
     fn reads_existing_beets_history() {
@@ -589,6 +540,14 @@ mod tests {
             SqlValue::Blob(audio.as_os_str().as_encoded_bytes().to_vec()),
         );
         fields.insert("title".into(), SqlValue::Text("Library title".into()));
+        fields.extend([
+            ("year".into(), SqlValue::Integer(2024)),
+            ("month".into(), SqlValue::Integer(3)),
+            ("day".into(), SqlValue::Integer(9)),
+            ("original_year".into(), SqlValue::Integer(1998)),
+            ("rg_track_gain".into(), SqlValue::Real(-5.25)),
+            ("rg_track_peak".into(), SqlValue::Real(0.75)),
+        ]);
         library.insert_item(&fields, &Fields::new()).unwrap();
         drop(library);
         let config_path = temp.path().join("config.yaml");
@@ -612,6 +571,18 @@ mod tests {
             1
         );
         let tags = muzik_tags::read(&audio, &[]).unwrap();
+        for (key, expected) in [
+            ("date", "2024-03-09"),
+            ("original_date", "1998"),
+            ("rg_track_gain", "-5.25 dB"),
+            ("rg_track_peak", "0.750000"),
+        ] {
+            assert_eq!(
+                tags.fields.get(key).map(String::as_str),
+                Some(expected),
+                "{key}"
+            );
+        }
         assert_eq!(
             tags.fields.get("title").map(String::as_str),
             Some("Library title")

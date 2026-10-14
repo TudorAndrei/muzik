@@ -2,6 +2,7 @@
 
 use crate::gates::{self, Gate};
 use crate::settings::Settings;
+use crate::workflow_result::WorkflowResult;
 use muzik_core::{
     ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, KEEP_CURRENT_TAGS, Step, Task,
     chapters::Chapter,
@@ -28,7 +29,7 @@ pub fn run(
     on_event: &mut dyn FnMut(JobEvent),
     on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-) -> Result<Value, muzik_workflow::Error> {
+) -> Result<WorkflowResult, muzik_workflow::Error> {
     let stage = Cell::new(Stage::Download);
     let mut operations = LocalOperations {
         decide,
@@ -43,11 +44,7 @@ pub fn run(
         cancelled,
         &mut |event| on_event(event_record(event)),
     )?;
-    Ok(json!({
-        "albums": result.plan.albums.len(),
-        "singles": result.plan.singles.len(),
-        "split_dirs": result.split_dirs,
-    }))
+    Ok(result.into())
 }
 
 pub struct LocalOperations<'a> {
@@ -458,7 +455,7 @@ mod tests {
             &mut |_, _| Err("unexpected decision".into()),
         )
         .unwrap();
-        assert_eq!(result["albums"], 1);
+        assert_eq!(result.albums, 1);
         assert!(
             events
                 .iter()
@@ -491,8 +488,8 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(result["albums"], 0);
-        assert_eq!(result["singles"], 1);
+        assert_eq!(result.albums, 0);
+        assert_eq!(result.singles, 1);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].0, DecisionKind::ChapterReview);
         assert_eq!(decisions[0].1["chapters"][0]["title"], "First");

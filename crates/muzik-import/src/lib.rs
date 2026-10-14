@@ -87,3 +87,5 @@ pub mod history;
 pub mod paths;
 pub mod plan;
 pub mod sync;
+
+mod fields;

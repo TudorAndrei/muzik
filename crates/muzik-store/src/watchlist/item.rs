@@ -8,13 +8,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Watchlist {
+pub struct Watchlist<T = WatchItem> {
     #[serde(default = "current_version")]
     pub version: u64,
-    pub playlists: Vec<Playlist>,
+    pub playlists: Vec<Playlist<T>>,
 }
 
-impl Default for Watchlist {
+impl<T> Default for Watchlist<T> {
     fn default() -> Self {
         Self {
             version: current_version(),
@@ -28,7 +28,8 @@ const fn current_version() -> u64 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Playlist {
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
+pub struct Playlist<T = WatchItem> {
     pub playlist_id: String,
     pub url: String,
     #[serde(default)]
@@ -36,7 +37,7 @@ pub struct Playlist {
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
-    pub items: Vec<WatchItem>,
+    pub items: Vec<T>,
     #[serde(default)]
     pub processed_video_ids: Vec<String>,
     #[serde(default)]

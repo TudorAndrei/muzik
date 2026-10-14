@@ -1,9 +1,9 @@
-use crate::jobs::{self, field, text};
+use crate::jobs;
 use anyhow::{Context, anyhow, bail};
 use muzik_core::paths::Paths;
 use muzik_runner::{Settings, job_id};
 use muzik_store::watchlist::{self, ItemAction, Repository, Summary};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 fn repository() -> Repository {
@@ -14,24 +14,20 @@ fn settings() -> anyhow::Result<Settings> {
     Ok(Settings::resolve(&Paths::user(), &json!({}))?)
 }
 
-fn list_of(value: &Value, key: &str) -> Vec<Value> {
-    field(value, key).as_array().cloned().unwrap_or_default()
-}
-
 pub fn list(items: bool) -> anyhow::Result<()> {
     let document = repository().load()?;
     let settings = settings()?;
-    let visible = watchlist::view(&document, &settings.request.output, &settings.paths.cache)?;
-    let playlists = list_of(&visible, "playlists");
+    let visible = watchlist::view(&document, &settings.request.output, &settings.paths.cache);
+    let playlists = &visible.playlists;
     if playlists.is_empty() {
         println!("The watchlist is empty. Add a playlist with `muzik watchlist add <url>`.");
         return Ok(());
     }
-    for playlist in &playlists {
-        let entries = list_of(playlist, "items");
+    for playlist in playlists {
+        let entries = &playlist.items;
         let mut counts = BTreeMap::<String, usize>::new();
-        for item in &entries {
-            let count = counts.entry(text(field(item, "summary"))).or_default();
+        for item in entries {
+            let count = counts.entry(item.summary.to_string()).or_default();
             *count = count.saturating_add(1);
         }
         let summary = Summary::ALL
@@ -45,20 +41,18 @@ pub fn list(items: bool) -> anyhow::Result<()> {
             .join(" · ");
         println!(
             "{}  {} ({}) · {} items{}{}",
-            text(field(playlist, "playlist_id")),
-            field(playlist, "title").as_str().unwrap_or("Untitled"),
-            text(field(playlist, "kind")),
+            playlist.playlist_id,
+            playlist.title.as_deref().unwrap_or("Untitled"),
+            playlist.kind,
             entries.len(),
             if summary.is_empty() { "" } else { " · " },
             summary
         );
         if items {
-            for item in &entries {
+            for item in entries {
                 println!(
                     "  {:>4}. {} · {}",
-                    text(field(item, "position")),
-                    field(item, "title").as_str().unwrap_or("Untitled"),
-                    text(field(item, "summary"))
+                    item.item.position, item.item.title, item.summary
                 );
             }
         }

@@ -13,12 +13,41 @@ pub enum Kind {
     Numeric,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Term {
-    pub field: Option<String>,
-    pub pattern: String,
-    pub kind: Kind,
-    pub negated: bool,
+    field: Option<String>,
+    pattern: String,
+    kind: Kind,
+    negated: bool,
+    matcher: Matcher,
+}
+
+#[derive(Clone, Debug)]
+enum Matcher {
+    Substring(String),
+    Regexp(Option<Regex>),
+    String(String),
+    Exact(String),
+    Numeric(Option<(Option<f64>, Option<f64>)>),
+}
+
+impl Term {
+    #[must_use]
+    pub fn field(&self) -> Option<&str> {
+        self.field.as_deref()
+    }
+    #[must_use]
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+    #[must_use]
+    pub const fn kind(&self) -> Kind {
+        self.kind
+    }
+    #[must_use]
+    pub const fn negated(&self) -> bool {
+        self.negated
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,7 +57,7 @@ pub struct Sort {
 }
 
 /// Comma-separated OR groups, each with space-separated AND terms.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Query {
     pub groups: Vec<Vec<Term>>,
     pub sorts: Vec<Sort>,
@@ -183,11 +212,24 @@ fn parse_term(part: &str) -> Result<Term, Error> {
     if kind == Kind::Numeric {
         parse_range(pattern, field.as_deref() == Some("length"))?;
     }
+    let pattern = pattern.replace("\\:", ":");
+    // Validate the input above, then prepare the exact normalized pattern used
+    // by beets matching. An invalid normalized pattern remains a non-match.
+    let matcher = match kind {
+        Kind::Regexp => Matcher::Regexp(Regex::new(&pattern.nfc().collect::<String>()).ok()),
+        Kind::Numeric => {
+            Matcher::Numeric(parse_range(&pattern, field.as_deref() == Some("length")).ok())
+        }
+        Kind::Exact => Matcher::Exact(pattern.clone()),
+        Kind::String => Matcher::String(pattern.to_lowercase()),
+        Kind::Substring => Matcher::Substring(pattern.to_lowercase()),
+    };
     Ok(Term {
         field,
-        pattern: pattern.replace("\\:", ":"),
+        pattern,
         kind,
         negated,
+        matcher,
     })
 }
 
@@ -237,8 +279,8 @@ fn value<'a>(fields: &'a Fields, attributes: &'a Fields, name: &str) -> Option<&
 }
 
 fn term_matches(term: &Term, value: &Value) -> bool {
-    match term.kind {
-        Kind::Numeric => {
+    match &term.matcher {
+        Matcher::Numeric(Some((min, max))) => {
             let number = match value {
                 Value::Integer(number) => integer_to_f64(*number),
                 Value::Real(number) => *number,
@@ -248,23 +290,16 @@ fn term_matches(term: &Term, value: &Value) -> bool {
                 },
                 _ => return false,
             };
-            let Ok((min, max)) =
-                parse_range(&term.pattern, term.field.as_deref() == Some("length"))
-            else {
-                return false;
-            };
             min.is_none_or(|min| number >= min) && max.is_none_or(|max| number <= max)
         }
-        Kind::Regexp => {
+        Matcher::Regexp(Some(regex)) => {
             let normalized: String = value_text(value).nfc().collect();
-            let pattern: String = term.pattern.nfc().collect();
-            Regex::new(&pattern).is_ok_and(|regex| regex.is_match(&normalized).unwrap_or(false))
+            regex.is_match(&normalized).unwrap_or(false)
         }
-        Kind::Exact => value_text(value) == term.pattern,
-        Kind::String => value_text(value).to_lowercase() == term.pattern.to_lowercase(),
-        Kind::Substring => value_text(value)
-            .to_lowercase()
-            .contains(&term.pattern.to_lowercase()),
+        Matcher::Numeric(None) | Matcher::Regexp(None) => false,
+        Matcher::Exact(pattern) => value_text(value) == *pattern,
+        Matcher::String(pattern) => value_text(value).to_lowercase() == *pattern,
+        Matcher::Substring(pattern) => value_text(value).to_lowercase().contains(pattern),
     }
 }
 

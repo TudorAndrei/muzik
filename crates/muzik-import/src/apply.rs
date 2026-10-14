@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::fields::{insert_dates, release_tags, sql_scalar};
 use crate::files::{self, Placement};
 use crate::ftclean;
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
@@ -578,46 +579,15 @@ fn apply_candidate_tags(
     index: usize,
     compilation: bool,
 ) {
-    let release = &candidate.release;
-    for (name, value) in [
-        ("album", Some(release.title.as_str())),
-        ("albumartist", Some(release.artist.as_str())),
-        ("mb_albumid", Some(release.id.0.as_str())),
-        ("mb_releasegroupid", release.release_group_id.as_deref()),
-        ("country", release.country.as_deref()),
-        ("media", release.media.as_deref()),
-        ("label", release.label.as_deref()),
-        ("catalognum", release.catalog_number.as_deref()),
-        ("albumdisambig", release.disambiguation.as_deref()),
-    ] {
-        if let Some(value) = value {
-            tags.fields.insert(name.into(), value.into());
-        }
-    }
-    if let Some(year) = release.year {
-        tags.fields.insert("date".into(), year.to_string());
-    }
-    tags.fields
-        .insert("comp".into(), if compilation { "1" } else { "0" }.into());
-    if let Some((_, track_index)) = candidate
+    let track = candidate
         .assignment
         .pairs
         .iter()
         .find(|(source, _)| *source == index)
-        && let Some(track) = release.tracks.get(*track_index)
-    {
-        tags.fields.insert("title".into(), track.title.clone());
-        tags.fields.insert("artist".into(), track.artist.clone());
-        tags.fields
-            .insert("track".into(), track.medium_index.to_string());
-        tags.fields.insert("disc".into(), track.medium.to_string());
-        if let Some(id) = &track.recording_id {
-            tags.fields.insert("mb_trackid".into(), id.0.clone());
-        }
-        if let Some(id) = &track.release_track_id {
-            tags.fields.insert("mb_releasetrackid".into(), id.clone());
-        }
-    }
+        .and_then(|(_, track_index)| candidate.release.tracks.get(*track_index));
+    tags.fields.extend(release_tags(&candidate.release, track));
+    tags.fields
+        .insert("comp".into(), if compilation { "1" } else { "0" }.into());
 }
 
 fn album_scalars(path_fields: &BTreeMap<String, String>) -> LibraryFields {
@@ -863,43 +833,6 @@ fn item_fields(
         fields.insert("channels".into(), SqlValue::Integer(i64::from(value)));
     }
     fields
-}
-
-fn sql_scalar(key: &str, value: &str) -> SqlValue {
-    if ["track", "tracktotal", "disc", "disctotal", "year", "comp"].contains(&key) {
-        SqlValue::Integer(value.parse().unwrap_or(0))
-    } else if [
-        "rg_track_gain",
-        "rg_track_peak",
-        "rg_album_gain",
-        "rg_album_peak",
-    ]
-    .contains(&key)
-    {
-        SqlValue::Real(
-            value
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .parse()
-                .unwrap_or(0.0),
-        )
-    } else {
-        SqlValue::Text(value.to_owned())
-    }
-}
-
-fn insert_dates(fields: &mut LibraryFields, tags: &TagData) {
-    for (tag_name, prefix) in [("date", ""), ("original_date", "original_")] {
-        let Some(value) = tags.fields.get(tag_name) else {
-            continue;
-        };
-        for (part, number) in ["year", "month", "day"].into_iter().zip(value.split('-')) {
-            if let Ok(number) = number.parse::<i64>() {
-                fields.insert(format!("{prefix}{part}"), SqlValue::Integer(number));
-            }
-        }
-    }
 }
 
 fn in_library(library: &Library, path: &Path, library_root: &Path) -> Result<bool, ApplyError> {

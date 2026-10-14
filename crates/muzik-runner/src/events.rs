@@ -41,7 +41,7 @@ pub enum AppEvent {
         payload: Value,
     },
     WatchlistSaved,
-    WatchlistUpdated(Value),
+    WatchlistUpdated(muzik_store::watchlist::WatchlistView),
     WatchlistError(String),
     RemoteRunner(String),
 }

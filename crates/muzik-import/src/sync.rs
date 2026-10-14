@@ -159,49 +159,36 @@ fn sync_album(
 }
 
 fn track_fields(track: &muzik_core::TrackCandidate, release: &ReleaseCandidate) -> Fields {
-    let (title, artist) = ftclean::clean(&track.title, &track.artist);
+    // Sync is a partial update: keep its existing set of writable fields.
+    let tags = crate::fields::release_tags(release, Some(track));
     let mut fields = Fields::new();
+    for key in [
+        "title",
+        "artist",
+        "album",
+        "albumartist",
+        "track",
+        "disc",
+        "mb_albumid",
+        "mb_trackid",
+        "mb_releasetrackid",
+        "mb_releasegroupid",
+        "date",
+    ] {
+        if let Some(value) = tags.get(key) {
+            let name = if key == "date" { "year" } else { key };
+            fields.insert(name.into(), crate::fields::sql_scalar(name, value));
+        }
+    }
+    let (title, artist) = ftclean::clean(&track.title, &track.artist);
     fields.insert("title".into(), SqlValue::Text(title));
     fields.insert("artist".into(), SqlValue::Text(artist));
-    fields.insert("album".into(), SqlValue::Text(release.title.clone()));
-    fields.insert("albumartist".into(), SqlValue::Text(release.artist.clone()));
-    fields.insert(
-        "track".into(),
-        SqlValue::Integer(i64::from(track.medium_index)),
-    );
-    fields.insert("disc".into(), SqlValue::Integer(i64::from(track.medium)));
-    fields.insert("mb_albumid".into(), SqlValue::Text(release.id.0.clone()));
-    if let Some(id) = &track.recording_id {
-        fields.insert("mb_trackid".into(), SqlValue::Text(id.0.clone()));
-    }
-    if let Some(id) = &track.release_track_id {
-        fields.insert("mb_releasetrackid".into(), SqlValue::Text(id.clone()));
-    }
-    if let Some(year) = release.year {
-        fields.insert("year".into(), SqlValue::Integer(i64::from(year)));
-    }
-    if let Some(id) = &release.release_group_id {
-        fields.insert("mb_releasegroupid".into(), SqlValue::Text(id.clone()));
-    }
     fields
 }
 
 fn write_fields_to_tags(path: &Path, fields: &Fields) -> Result<(), SyncError> {
     let mut tags = muzik_tags::read(path, &[])?;
-    for (name, value) in fields {
-        let tag_name = if name == "year" { "date" } else { name };
-        if let SqlValue::Text(value) = value {
-            tags.fields.insert(tag_name.into(), value.clone());
-        } else if name == "year" {
-            if let SqlValue::Integer(value) = value {
-                tags.fields.insert("date".into(), value.to_string());
-            }
-        } else if ["track", "disc"].contains(&name.as_str())
-            && let SqlValue::Integer(value) = value
-        {
-            tags.fields.insert(name.clone(), value.to_string());
-        }
-    }
+    crate::fields::apply_sync_fields(&mut tags, fields);
     muzik_tags::write(path, &tags)?;
     Ok(())
 }

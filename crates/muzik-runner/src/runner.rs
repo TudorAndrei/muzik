@@ -349,26 +349,27 @@ fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -
         return Err((false, "Enter a URL or path.".to_owned()));
     }
     let input = classify_input(&settings.request.raw);
-    if matches!(input, WorkflowInput::Local(_)) {
-        return local_workflow::run(
+    let result = if matches!(input, WorkflowInput::Local(_)) {
+        local_workflow::run(
             &settings,
             cancel,
             &mut workflow_event,
             &mut import_event,
             &mut decide,
         )
-        .map_err(workflow_failure);
+    } else {
+        remote_workflow::run(
+            input,
+            &settings,
+            cancel,
+            &Cell::new(Stage::Download),
+            &mut workflow_event,
+            &mut import_event,
+            &mut decide,
+        )
     }
-    remote_workflow::run(
-        input,
-        &settings,
-        cancel,
-        &Cell::new(Stage::Download),
-        &mut workflow_event,
-        &mut import_event,
-        &mut decide,
-    )
-    .map_err(workflow_failure)
+    .map_err(workflow_failure)?;
+    serde_json::to_value(result).map_err(|error| (false, error.to_string()))
 }
 
 fn ask_agent(
@@ -534,7 +535,7 @@ mod tests {
             } = receiver.recv_timeout(Duration::from_secs(20)).unwrap()
                 && done == job_id
             {
-                assert_eq!(result["singles"], 1);
+                assert_eq!(result, json!({"albums":0,"singles":1,"split_dirs":[]}));
                 break;
             }
         }
