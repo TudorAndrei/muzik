@@ -2,6 +2,36 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.13.0 - 2026-10-14
+#### Features
+- (**paths**) use etcetera for the standard app folders (#3) - (d7ed4ea) - Tudor Andrei Dumitrascu
+- (**sync**) let a target skip album cover images - (4cba5aa) - TudorAndrei
+- (**sync**) add an mp3 preset that converts all audio to MP3 - (df85a5b) - TudorAndrei
+- (**sync**) copy library tracks to devices in formats they play - (b28e6f0) - TudorAndrei
+#### Bug Fixes
+- (**gui**) keep activity visible and link waiting choices - (6837583) - TudorAndrei
+- (**sync**) convert a track again when its target encoding changes - (927bb4a) - TudorAndrei
+- (**sync**) keep device files when some library tracks cannot be read - (de0290e) - TudorAndrei
+- (**sync**) write only one track to each device file name - (a6836a0) - TudorAndrei
+- (**sync**) keep the embedded cover in converted tracks - (6836b85) - TudorAndrei
+- make queue and watchlist writes atomic and let sync own its checks (#6) - (22cc694) - Tudor Andrei Dumitrascu
+#### Documentation
+- (**plan**) remove the completed plan and checklist - (fef592f) - TudorAndrei
+#### Build system
+- (**hk**) run cargo fmt, then clippy, in the git hooks - (9ea21c0) - TudorAndrei
+#### Continuous Integration
+- (**cog**) ignore the merge commit that GitHub makes for pull requests - (820283f) - TudorAndrei
+- retry and time out the apt install for the GPUI libraries (#5) - (631b41a) - Tudor Andrei Dumitrascu
+#### Refactoring
+- (**core**) run sync and split ffmpeg calls through one typed module - (966ca12) - TudorAndrei
+- replace string values with enums (#7) - (918f1ba) - Tudor Andrei Dumitrascu
+- replace hand-written code with crates (#4) - (c8a1f74) - Tudor Andrei Dumitrascu
+- split muzik-core into a leaf crate and feature crates (#2) - (6a2d3fa) - Tudor Andrei Dumitrascu
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.12.0 - (f57a8c5) - github-actions[bot]
+
+- - -
+
 ## v2.12.0 - 2026-10-01
 #### Features
 - (**jobs**) store the job queue in muzik.db with one item identity - (bb50ef4) - TudorAndrei
