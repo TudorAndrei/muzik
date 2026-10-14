@@ -39,7 +39,7 @@ jobs:
       - uses: jdx/mise-action@v4
         with:
           install_args: rust cargo-binstall cargo:cargo-bolero
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ matrix.corpus }}
           key: fuzz-corpus-${{ matrix.package }}-${{ github.run_id }}
@@ -50,7 +50,7 @@ jobs:
           HARNESS: ${{ matrix.harness }}
           SECONDS_EACH: ${{ inputs.seconds || '600' }}
         run: cargo bolero test -p "$PACKAGE" --sanitizer NONE -T "${SECONDS_EACH}s" "$HARNESS"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: failure()
         with:
           name: fuzz-crashes-${{ matrix.package }}

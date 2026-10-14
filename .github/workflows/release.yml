@@ -159,7 +159,7 @@ jobs:
               shasum -a 256 "$archive" > "$archive.sha256"
             fi
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: muzik-${{ matrix.target }}
           path: |
@@ -175,7 +175,7 @@ jobs:
     permissions:
       contents: write # create the GitHub release
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: muzik-*
           merge-multiple: true
