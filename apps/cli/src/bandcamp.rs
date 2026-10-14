@@ -23,11 +23,7 @@ pub fn download(args: &Bandcamp) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| paths::data_dir().join("bandcamp"));
     let purchases = bandcamp::collection(&login)?;
-    println!(
-        "{} purchase(s) in the collection of {}",
-        purchases.len(),
-        login.user
-    );
+    println!("{} purchase(s) in the collection", purchases.len());
     let cancelled = AtomicBool::new(false);
     for purchase in &purchases {
         let label = purchase.label();
