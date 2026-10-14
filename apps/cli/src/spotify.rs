@@ -37,13 +37,7 @@ pub fn status() -> anyhow::Result<()> {
             .unwrap_or("")
     );
     if status.get("connected").and_then(serde_json::Value::as_bool) == Some(true) {
-        println!(
-            "Connection: connected as {}",
-            status
-                .get("account_name")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-        );
+        println!("Connection: connected");
         Ok(())
     } else if let Some(error) = status.get("error").and_then(serde_json::Value::as_str) {
         bail!("Connection: {error}")
@@ -112,12 +106,12 @@ pub fn login(port: Option<u16>) -> anyhow::Result<()> {
         settings.redirect_uri()
     );
     println!("Opening the browser for Spotify login...");
-    let name = spotify::login(
+    spotify::login(
         &config,
         &Paths::user().spotify_token(),
         port,
         &AtomicBool::new(false),
     )?;
-    println!("Connected as {name}.");
+    println!("Connected to Spotify.");
     Ok(())
 }

@@ -25,7 +25,6 @@ pub fn check() -> anyhow::Result<()> {
     let settings = SessionSettings::configured(&config).context(
         "Set MUZIK_SOULSEEK_USERNAME and MUZIK_SOULSEEK_PASSWORD, or save them with 'muzik config set-soulseek'.",
     )?;
-    let username = settings.username.clone();
     let host = settings
         .server_host
         .clone()
@@ -35,7 +34,6 @@ pub fn check() -> anyhow::Result<()> {
         .map_or_else(|| Paths::user().soulseek(), PathBuf::from);
     let _session = Session::connect(settings).context("Soulseek check failed")?;
     println!("Soulseek reachable");
-    println!("  Username: {username}");
     println!("  Server: {host}:{port}");
     println!("  Download dir: {}", download_dir.display());
     Ok(())
@@ -292,9 +290,8 @@ pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
     }
     if args.dry_run {
         println!(
-            "Would request {} file(s) from {}:",
-            saved.candidate.files.len(),
-            saved.candidate.username
+            "Would request {} file(s) from the selected peer:",
+            saved.candidate.files.len()
         );
         for (remote, local) in saved.candidate.files.iter().zip(&files) {
             println!("  {} -> {}", safe_display(&remote.name), local.display());

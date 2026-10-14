@@ -87,12 +87,15 @@ pub fn save_soulseek_account(config_file: &Path, account: &SoulseekAccount<'_>) 
 /// Returns an error when the config file cannot be read or written.
 pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
     let config = app_config::load(config_file)?;
-    let password = config
+    let Some(password) = config
         .pointer("/soulseek/password")
         .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    if password.is_empty() || session::save_password(password).is_err() {
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    if session::save_password(password).is_err() {
         return Ok(());
     }
     Ok(app_config::remove_section_key(
