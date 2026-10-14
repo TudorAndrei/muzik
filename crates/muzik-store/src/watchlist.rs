@@ -24,7 +24,7 @@ pub use check::{LocalCheck, LocalCheckOptions, LocalChecks};
 pub use item::{AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
 pub use reconcile::{ReconcileOptions, reconcile};
-pub use view::{Summary, view};
+pub use view::{Availability, ItemView, PlaylistView, PrimaryAction, Summary, WatchlistView, view};
 
 #[derive(
     Clone,
@@ -195,14 +195,6 @@ pub enum SourceKind {
 
 impl SourceKind {
     #[must_use]
-    pub fn of(value: &Value) -> Self {
-        value["kind"]
-            .as_str()
-            .and_then(|kind| kind.parse().ok())
-            .unwrap_or_default()
-    }
-
-    #[must_use]
     pub fn is_youtube(self) -> bool {
         self == Self::Youtube
     }
@@ -218,16 +210,6 @@ pub fn bandcamp_source(user: &str) -> Playlist {
         SourceKind::Bandcamp,
         Some("Bandcamp collection"),
     )
-}
-
-#[must_use]
-pub fn stage_status(item: &Value, stage: Stage) -> Option<StageStatus> {
-    item.get("stages")?
-        .get(stage.as_ref())?
-        .get("status")?
-        .as_str()?
-        .parse()
-        .ok()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -558,57 +540,32 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
 /// # Errors
 /// Returns an error if `input` is not a `YouTube` playlist, Spotify playlist or album, or liked songs.
 pub fn parse_source(input: &str) -> Result<Playlist> {
-    let text = input.trim();
-    let lower = text.to_ascii_lowercase();
-    if matches!(
-        lower.trim_end_matches('/'),
-        "liked" | "liked songs" | "spotify:liked" | "https://open.spotify.com/collection/tracks"
-    ) {
+    use muzik_core::source_reference::{SpotifyReference, youtube_playlist};
+    if let Ok(id) = youtube_playlist(input) {
         return Ok(Playlist::new(
-            "spotify:liked",
-            "https://open.spotify.com/collection/tracks",
-            SourceKind::Spotify,
-            Some("Liked Songs"),
-        ));
-    }
-    if let Some((_, query)) = text.split_once('?')
-        && let Some(id) = query.split('&').find_map(|pair| pair.strip_prefix("list="))
-        && !id.is_empty()
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        return Ok(Playlist::new(
-            id,
+            &id,
             &format!("https://www.youtube.com/playlist?list={id}"),
             SourceKind::Youtube,
             None,
         ));
     }
-    let spotify = text
-        .strip_prefix("spotify:playlist:")
-        .map(|id| ("playlist", id))
-        .or_else(|| text.strip_prefix("spotify:album:").map(|id| ("album", id)))
-        .or_else(|| {
-            let (_, rest) = text.split_once("open.spotify.com/")?;
-            let rest = rest
-                .strip_prefix("intl-")
-                .and_then(|part| part.split_once('/').map(|(_, path)| path))
-                .unwrap_or(rest);
-            let (kind, id) = rest.split_once('/')?;
-            Some((kind, id.split(['?', '/']).next()?))
-        });
-    if let Some((kind, id)) = spotify
-        && matches!(kind, "playlist" | "album")
-        && id.len() >= 10
-        && id.bytes().all(|byte| byte.is_ascii_alphanumeric())
-    {
-        return Ok(Playlist::new(
-            &format!("spotify:{kind}:{id}"),
-            &format!("https://open.spotify.com/{kind}/{id}"),
-            SourceKind::Spotify,
+    let reference = SpotifyReference::parse(input).map_err(|error| error.to_string())?;
+    let (id, url, title) = match reference {
+        SpotifyReference::Liked => (
+            "spotify:liked".to_owned(),
+            "https://open.spotify.com/collection/tracks".to_owned(),
+            Some("Liked Songs"),
+        ),
+        SpotifyReference::Playlist(id) => (
+            format!("spotify:playlist:{id}"),
+            format!("https://open.spotify.com/playlist/{id}"),
             None,
-        ));
-    }
-    Err("enter a YouTube playlist URL, Spotify playlist or album link, or liked".into())
+        ),
+        SpotifyReference::Album(id) => (
+            format!("spotify:album:{id}"),
+            format!("https://open.spotify.com/album/{id}"),
+            None,
+        ),
+    };
+    Ok(Playlist::new(&id, &url, SourceKind::Spotify, title))
 }

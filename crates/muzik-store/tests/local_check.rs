@@ -52,15 +52,15 @@ fn a_local_check_returns_saved_state_then_saves_and_publishes_checked_state() {
         .prepare::<muzik_store::Error>(fixture.repository(), || Ok(fixture.options().into()))
         .unwrap();
     assert_eq!(
-        saved["playlists"][0]["items"][0]["stages"]["download"]["status"],
-        "running"
+        saved.playlists[0].items[0].item.status(Stage::Download),
+        StageStatus::Running
     );
     let mut published = None;
     check.run(|| false, |result| published = Some(result.unwrap()));
     let visible = published.unwrap();
     assert_eq!(
-        visible["playlists"][0]["items"][0]["stages"]["download"]["status"],
-        "not_started"
+        visible.playlists[0].items[0].item.status(Stage::Download),
+        StageStatus::NotStarted
     );
     let saved = fixture.repository().load().unwrap();
     assert_eq!(
@@ -161,8 +161,8 @@ fn a_revision_conflict_reloads_the_source_edit_before_saving() {
         |result| published = Some(result.unwrap()),
     );
     assert_eq!(
-        published.unwrap()["playlists"][0]["title"],
-        "Edited by another process"
+        published.unwrap().playlists[0].title.as_deref(),
+        Some("Edited by another process")
     );
     let saved = fixture.repository().load().unwrap();
     assert_eq!(

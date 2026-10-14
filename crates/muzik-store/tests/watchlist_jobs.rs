@@ -580,11 +580,11 @@ fn a_private_video_is_not_queued_and_shows_as_unavailable() {
             .collect::<Vec<_>>(),
         [1]
     );
-    let visible = muzik_store::watchlist::view(
+    let visible = serde_json::to_value(muzik_store::watchlist::view(
         &repository.load().unwrap(),
         directory.path(),
         directory.path(),
-    )
+    ))
     .unwrap();
     let private = &visible["playlists"][0]["items"][1];
     assert_eq!(private["summary"], "Unavailable");

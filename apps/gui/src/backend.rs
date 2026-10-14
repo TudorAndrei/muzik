@@ -176,7 +176,9 @@ impl Backend {
         Ok(self.app.answer(id, value)?)
     }
 
-    pub fn load_watchlist(&self) -> anyhow::Result<(Value, WatchlistCheck)> {
+    pub fn load_watchlist(
+        &self,
+    ) -> anyhow::Result<(muzik_store::watchlist::WatchlistView, WatchlistCheck)> {
         let login = Arc::clone(&self.login);
         Ok(self
             .app
@@ -610,7 +612,7 @@ mod tests {
             .unwrap();
         assert_eq!(playlist.playlist_id, "PLnative123");
         let (saved, check) = backend.load_watchlist().unwrap();
-        assert_eq!(saved["playlists"][0]["playlist_id"], "PLnative123");
+        assert_eq!(saved.playlists[0].playlist_id, "PLnative123");
         check.run();
         let AppEvent::WatchlistUpdated(checked) = events
             .next(Duration::from_secs(5), |event| {
@@ -620,7 +622,7 @@ mod tests {
         else {
             panic!("no checked watchlist");
         };
-        assert_eq!(checked["playlists"][0]["playlist_id"], "PLnative123");
+        assert_eq!(checked.playlists[0].playlist_id, "PLnative123");
     }
 
     #[test]

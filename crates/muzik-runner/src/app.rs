@@ -196,7 +196,10 @@ impl App {
 
     /// # Errors
     /// Returns an error when the settings or the saved watchlist cannot be read.
-    pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
+    pub fn load_watchlist(
+        &self,
+        busy: Busy,
+    ) -> crate::Result<(muzik_store::watchlist::WatchlistView, WatchlistCheck)> {
         let (saved, check) = self.checks.prepare::<crate::Error>(self.repository(), || {
             if let Err(error) = watchlist::ensure_sources(&self.paths) {
                 (self.sink)(AppEvent::WatchlistError(error.to_string()));
@@ -320,7 +323,7 @@ mod tests {
         app.add_source("https://www.youtube.com/playlist?list=PLnative123")
             .unwrap();
         let (saved, check) = app.load_watchlist(Arc::new(|| false)).unwrap();
-        assert_eq!(saved["playlists"][0]["playlist_id"], "PLnative123");
+        assert_eq!(saved.playlists[0].playlist_id, "PLnative123");
         check.run();
         let checked = loop {
             match events.recv_timeout(Duration::from_secs(5)).unwrap() {
@@ -329,7 +332,7 @@ mod tests {
                 _ => {}
             }
         };
-        assert_eq!(checked["playlists"][0]["playlist_id"], "PLnative123");
+        assert_eq!(checked.playlists[0].playlist_id, "PLnative123");
     }
 
     #[test]

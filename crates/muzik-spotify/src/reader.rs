@@ -2,20 +2,13 @@
 
 use super::{Client, Result, utc};
 use chrono::{DateTime, Utc};
+use muzik_core::source_reference::SpotifyReference as Reference;
 use rspotify_model::{
     AlbumId, FullAlbum, FullPlaylist, FullTrack, Id, Image, PlayableItem, PlaylistId, PlaylistItem,
     SavedTrack, SimplifiedArtist, SimplifiedTrack,
 };
 use serde_json::{Map, Value, json};
 use std::path::Path;
-use url::Url;
-
-#[derive(Debug, PartialEq, Eq)]
-enum Reference {
-    Liked,
-    Playlist(String),
-    Album(String),
-}
 
 struct Track<'a> {
     name: &'a str,
@@ -104,40 +97,7 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
 }
 
 fn parse_reference(uri: &str) -> Result<Reference> {
-    let input = uri.trim();
-    let unreadable = || format!("muzik cannot read the Spotify reference {uri}");
-    let reference = if matches!(
-        input.to_ascii_lowercase().as_str(),
-        "liked" | "liked songs" | "spotify:liked"
-    ) {
-        Reference::Liked
-    } else if let Some(id) = input.strip_prefix("spotify:playlist:") {
-        Reference::Playlist(id.to_owned())
-    } else if let Some(id) = input.strip_prefix("spotify:album:") {
-        Reference::Album(id.to_owned())
-    } else {
-        let link = Url::parse(input).map_err(|_| unreadable())?;
-        if link.scheme() != "https" || link.host_str() != Some("open.spotify.com") {
-            return Err(unreadable().into());
-        }
-        let path: Vec<_> = link.path_segments().into_iter().flatten().collect();
-        let path = match path.as_slice() {
-            [locale, rest @ ..] if locale.starts_with("intl-") => rest,
-            path => path,
-        };
-        match path {
-            ["collection", "tracks"] => Reference::Liked,
-            ["playlist", id] => Reference::Playlist((*id).to_owned()),
-            ["album", id] => Reference::Album((*id).to_owned()),
-            _ => return Err(unreadable().into()),
-        }
-    };
-    if let Reference::Playlist(id) | Reference::Album(id) = &reference
-        && (id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_alphanumeric()))
-    {
-        return Err("Spotify ID must contain only letters and numbers".into());
-    }
-    Ok(reference)
+    Reference::parse(uri).map_err(|error| error.to_string().into())
 }
 
 fn full_entry(track: &FullTrack, added_at: Option<DateTime<Utc>>) -> Option<Map<String, Value>> {

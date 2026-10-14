@@ -1,10 +1,10 @@
 //! Local checks own revision retries and suppress results after a newer edit or load.
 
+use super::WatchlistView;
 use super::{CheckedWrite, ReconcileOptions, Repository, import_cache, reconcile, view};
 use crate::Result;
 use muzik_core::QualityPolicy;
 use parking_lot::Mutex;
-use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,13 +45,13 @@ impl LocalChecks {
         &self,
         repository: Repository,
         options: impl FnOnce() -> Result<LocalCheckOptions, E>,
-    ) -> Result<(Value, LocalCheck), E> {
+    ) -> Result<(WatchlistView, LocalCheck), E> {
         let generation = {
             let _gate = self.gate.lock();
             self.latest.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
         };
         let options = options()?;
-        let saved = view(&repository.load()?, &options.output, &options.cache)?;
+        let saved = view(&repository.load()?, &options.output, &options.cache);
         Ok((
             saved,
             LocalCheck {
@@ -81,7 +81,7 @@ impl LocalCheck {
 
     /// Runs the check and publishes its view or error if it is still current.
     /// The callbacks can run under the edit gate and must not call `LocalChecks`.
-    pub fn run(self, busy: impl Fn() -> bool, publish: impl FnOnce(Result<Value>)) {
+    pub fn run(self, busy: impl Fn() -> bool, publish: impl FnOnce(Result<WatchlistView>)) {
         let result = self.check(&busy);
         let _gate = self.gate.lock();
         if !busy() && self.current() {
@@ -93,7 +93,7 @@ impl LocalCheck {
         }
     }
 
-    fn check(&self, busy: &impl Fn() -> bool) -> Result<Option<Value>> {
+    fn check(&self, busy: &impl Fn() -> bool) -> Result<Option<WatchlistView>> {
         let options = self.options.borrowed();
         {
             let _gate = self.gate.lock();
@@ -118,7 +118,7 @@ impl LocalCheck {
             if written == CheckedWrite::Conflict {
                 continue;
             }
-            return view(&checked, options.output, options.cache).map(Some);
+            return Ok(Some(view(&checked, options.output, options.cache)));
         }
         Err("The watchlist changed during the local check. Reload it.".into())
     }
