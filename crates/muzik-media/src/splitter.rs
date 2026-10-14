@@ -703,7 +703,7 @@ fn file_hash(path: &Path) -> io::Result<String> {
             .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
         hash.update(chunk);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hex::encode(hash.finalize()))
 }
 
 fn place_cover(source: &Path, output: &Path) {

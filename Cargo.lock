@@ -4921,6 +4921,7 @@ name = "muzik-media"
 version = "2.13.0"
 dependencies = [
  "chrono",
+ "hex",
  "muzik-core",
  "muzik-tags",
  "parking_lot",
@@ -4929,7 +4930,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "unicode-normalization",
@@ -5001,7 +5002,7 @@ dependencies = [
  "rspotify-model",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
@@ -5063,6 +5064,7 @@ name = "muzik-workflow"
 version = "2.13.0"
 dependencies = [
  "csv",
+ "hex",
  "muzik-core",
  "muzik-library",
  "muzik-media",
@@ -5071,7 +5073,7 @@ dependencies = [
  "muzik-tags",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "url",
