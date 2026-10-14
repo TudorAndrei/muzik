@@ -11,6 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
+mod check;
 mod item;
 pub mod jobs;
 mod legacy;
@@ -19,6 +20,7 @@ mod reconcile;
 pub mod source;
 mod view;
 
+pub use check::{LocalCheck, LocalCheckOptions, LocalChecks};
 pub use item::{AudioIndex, ItemId, Playlist, StageRecord, Stages, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
 pub use reconcile::{ReconcileOptions, reconcile};
