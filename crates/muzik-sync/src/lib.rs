@@ -449,17 +449,25 @@ pub fn transfer(transfer: &Transfer) -> Result<()> {
         .ok_or("destination has no folder")?;
     fs::create_dir_all(parent)
         .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
-    let stem = transfer
-        .destination
-        .file_stem()
-        .ok_or("destination has no file name")?;
     let extension = transfer
         .destination
         .extension()
         .map(|extension| extension.to_string_lossy())
         .unwrap_or_default();
-    let partial = parent.join(format!(".{}.{PARTIAL}.{extension}", stem.to_string_lossy()));
-    let result = match &transfer.action {
+    // Keep the extension for ffmpeg and the marker for interrupted-run cleanup.
+    // Close the allocation handle before external tools open the path on Windows.
+    let prefix = format!(".{PARTIAL}.");
+    let suffix = format!(".{extension}");
+    let mut temporary = tempfile::Builder::new();
+    temporary.prefix(&prefix).suffix(&suffix);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Match File::create and ffmpeg output creation; the OS applies umask.
+        temporary.permissions(fs::Permissions::from_mode(0o666));
+    }
+    let partial = temporary.tempfile_in(parent)?.into_temp_path();
+    match &transfer.action {
         Action::Copy => copy(&transfer.source, &partial),
         Action::Convert(encoding) => Ffmpeg::default()
             .convert(&Convert {
@@ -476,12 +484,11 @@ pub fn transfer(transfer: &Transfer) -> Result<()> {
                     Ok(())
                 }
             }),
-    }
-    .and_then(|()| Ok(fs::rename(&partial, &transfer.destination)?));
-    if result.is_err() {
-        fs::remove_file(&partial).ok();
-    }
-    result
+    }?;
+    partial
+        .persist(&transfer.destination)
+        .map_err(|error| error.error)?;
+    Ok(())
 }
 
 fn copy_cover(source: &Path, destination: &Path) -> Result<()> {
