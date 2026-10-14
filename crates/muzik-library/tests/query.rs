@@ -18,15 +18,15 @@ fn parsed_queries_and_item_ids_match_beets() {
             let expected_terms = expected_terms.as_array().unwrap();
             assert_eq!(group.len(), expected_terms.len(), "{text}");
             for (term, expected) in group.iter().zip(expected_terms) {
-                assert_eq!(term.field.as_deref(), expected["field"].as_str(), "{text}");
+                assert_eq!(term.field(), expected["field"].as_str(), "{text}");
                 assert_eq!(
-                    term.pattern,
+                    term.pattern(),
                     expected["pattern"].as_str().unwrap(),
                     "{text}"
                 );
-                assert_eq!(format!("{:?}", term.kind), expected["kind"], "{text}");
+                assert_eq!(format!("{:?}", term.kind()), expected["kind"], "{text}");
                 assert_eq!(
-                    term.negated,
+                    term.negated(),
                     expected["negated"].as_bool().unwrap(),
                     "{text}"
                 );
@@ -105,7 +105,7 @@ fn default_item_sort_uses_beets_artist_sort_field() {
 #[test]
 fn query_with_non_ascii_final_character_is_a_search_term() {
     let query = Query::parse("Beyoncé").unwrap();
-    assert_eq!(query.groups[0][0].pattern, "Beyoncé");
+    assert_eq!(query.groups[0][0].pattern(), "Beyoncé");
     assert!(query.sorts.is_empty());
 
     let sorted = Query::parse("Beyoncé+").unwrap();
