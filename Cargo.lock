@@ -4778,6 +4778,7 @@ dependencies = [
  "thiserror 2.0.21",
  "ureq",
  "usage-rs",
+ "walkdir",
  "zip",
 ]
 
@@ -4812,6 +4813,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "usage-rs",
+ "walkdir",
 ]
 
 [[package]]
@@ -5078,6 +5080,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "url",
+ "walkdir",
 ]
 
 [[package]]

@@ -3,12 +3,14 @@
 use crate::gates::{self, Gate};
 use crate::local_workflow;
 use crate::settings::Settings;
+use crate::workflow_result::WorkflowResult;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent, PreferredAudio, Step, app_config, chapters::Chapter};
 use muzik_soulseek::fetch::Timeouts;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
 use muzik_soulseek::types::Candidate;
 use muzik_store::watchlist::Stage;
+use muzik_workflow::acquisition::{self, AcquiredAudio, AcquisitionSource};
 use muzik_workflow::ytdlp::{Download, YtDlp};
 use muzik_workflow::{
     AudioFallback, AudioSource, ChapterReview, QualityCheckedAudio, SplitProgress, SplitTask,
@@ -28,7 +30,7 @@ pub fn run(
     on_event: &mut dyn FnMut(JobEvent),
     on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-) -> Result<Value, muzik_workflow::Error> {
+) -> Result<WorkflowResult, muzik_workflow::Error> {
     if cancelled.load(Ordering::SeqCst) {
         return Err(muzik_workflow::Error::Cancelled);
     }
@@ -45,7 +47,7 @@ pub fn run(
         audio_source: settings.options.audio_source,
         fallback: settings.options.fallback,
         output: settings.request.output.clone(),
-        youtube_acquired: false,
+        acquired_from: None,
     };
     let mut report = |event| on_event(event_record(event));
     if let WorkflowInput::SpotifyExport(ref path) = input {
@@ -61,10 +63,9 @@ pub fn run(
             return Err(muzik_workflow::Error::Cancelled);
         }
         let result = result?;
-        let processing = result.processing;
-        return Ok(
-            json!({"albums":processing.plan.albums.len(),"singles":processing.plan.singles.len(),"split_dirs":processing.split_dirs,"items":result.items.len()}),
-        );
+        let mut summary = WorkflowResult::from(result.processing);
+        summary.items = Some(result.items.len());
+        return Ok(summary);
     }
     if let WorkflowInput::YoutubePlaylist { url, playlist_id } = input {
         let result = playlist::run_youtube_playlist(
@@ -76,16 +77,16 @@ pub fn run(
             &url,
             &mut report,
         )?;
-        let failures = result
-            .items
-            .iter()
-            .filter(|item| !item.completed)
-            .map(|item| json!({"id":item.id,"error":item.error}))
-            .collect::<Vec<_>>();
-        let processing = result.processing;
-        return Ok(
-            json!({"albums":processing.plan.albums.len(),"singles":processing.plan.singles.len(),"split_dirs":processing.split_dirs,"failures":failures}),
+        let mut summary = WorkflowResult::from(result.processing);
+        summary.failures = Some(
+            result
+                .items
+                .into_iter()
+                .filter(|item| !item.completed)
+                .map(Into::into)
+                .collect(),
         );
+        return Ok(summary);
     }
     let result = run_workflow_with_events(
         &settings.request,
@@ -99,10 +100,11 @@ pub fn run(
         .singles
         .iter()
         .chain(result.plan.albums.iter().map(|album| &album.source))
-        .collect::<Vec<_>>();
-    Ok(
-        json!({"albums":result.plan.albums.len(),"singles":result.plan.singles.len(),"split_dirs":result.split_dirs,"audio_files":audio_files}),
-    )
+        .cloned()
+        .collect();
+    let mut summary = WorkflowResult::from(result);
+    summary.audio_files = Some(audio_files);
+    Ok(summary)
 }
 
 struct RemoteOperations<'a> {
@@ -113,7 +115,7 @@ struct RemoteOperations<'a> {
     audio_source: AudioSource,
     fallback: AudioFallback,
     output: PathBuf,
-    youtube_acquired: bool,
+    acquired_from: Option<AcquisitionSource>,
 }
 
 impl WorkflowOperations for RemoteOperations<'_> {
@@ -125,13 +127,13 @@ impl WorkflowOperations for RemoteOperations<'_> {
     ) -> Result<Vec<PathBuf>, String> {
         self.local.stage.set(Stage::Download);
         let files = download(url, output, force, self.local.cancelled)?;
-        self.youtube_acquired = true;
+        self.acquired_from = Some(AcquisitionSource::Youtube);
         Ok(files)
     }
 
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
         self.local.stage.set(Stage::Download);
-        self.youtube_acquired = false;
+        self.acquired_from = Some(AcquisitionSource::Soulseek);
         let query = if matches!(classify_input(query), WorkflowInput::YoutubeVideo { .. }) {
             YtDlp::default().field(query, "title", self.local.cancelled)?
         } else {
@@ -167,10 +169,11 @@ impl WorkflowOperations for RemoteOperations<'_> {
         let interactive = self.interactive;
         let paths = &self.paths;
         let decide = &mut *self.local.decide;
-        let (files, from_youtube) = acquire_spotify_audio(
+        let acquired = acquire_spotify_audio(
             source,
             fallback,
             ready,
+            cancelled,
             || {
                 soulseek_download(
                     paths,
@@ -185,8 +188,8 @@ impl WorkflowOperations for RemoteOperations<'_> {
             },
             || Ok(download(&query, &output, false, cancelled)?),
         )?;
-        self.youtube_acquired = from_youtube;
-        Ok(files)
+        self.acquired_from = Some(acquired.source);
+        Ok(acquired.files)
     }
 
     fn soulseek_ready(&self) -> bool {
@@ -199,7 +202,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         options: &WorkflowOptions,
         cancelled: &AtomicBool,
     ) -> Result<QualityCheckedAudio, String> {
-        let from_youtube = std::mem::take(&mut self.youtube_acquired)
+        let from_youtube = self.acquired_from.take() == Some(AcquisitionSource::Youtube)
             || audio_files
                 .iter()
                 .any(|path| muzik_core::chapters::sidecar_path(path, ".info.json").is_file());
@@ -265,28 +268,31 @@ pub fn soulseek_ready(paths: &Paths) -> bool {
         .is_ok_and(|config| SessionSettings::configured(&config).is_some())
 }
 
-pub fn acquire_spotify_audio<S, Y>(
+fn acquire_spotify_audio<S, Y>(
     source: AudioSource,
     fallback: AudioFallback,
     soulseek_ready: bool,
+    cancelled: &AtomicBool,
     mut soulseek: S,
     mut youtube: Y,
-) -> crate::Result<(Vec<PathBuf>, bool)>
+) -> Result<AcquiredAudio, muzik_workflow::Error>
 where
     S: FnMut() -> crate::Result<Vec<PathBuf>>,
     Y: FnMut() -> crate::Result<Vec<PathBuf>>,
 {
-    if source == AudioSource::Youtube || source == AudioSource::Auto && !soulseek_ready {
-        return youtube().map(|files| (files, true));
-    }
-    match soulseek() {
-        Ok(files) if !files.is_empty() => Ok((files, false)),
-        Ok(_) | Err(_) if fallback == AudioFallback::Youtube => {
-            youtube().map(|files| (files, true))
+    let first = if source == AudioSource::Youtube || source == AudioSource::Auto && !soulseek_ready
+    {
+        AcquisitionSource::Youtube
+    } else {
+        AcquisitionSource::Soulseek
+    };
+    acquisition::acquire(first, fallback, cancelled, |source| {
+        match source {
+            AcquisitionSource::Soulseek => soulseek(),
+            AcquisitionSource::Youtube => youtube(),
         }
-        Ok(files) => Ok((files, false)),
-        Err(error) => Err(error),
-    }
+        .map_err(String::from)
+    })
 }
 
 fn event_record(event: WorkflowEvent) -> JobEvent {
@@ -406,35 +412,38 @@ mod tests {
     #[test]
     fn spotify_youtube_source_does_not_call_soulseek() {
         let audio = std::path::PathBuf::from("youtube-audio.flac");
-        let (files, from_youtube) = acquire_spotify_audio(
+        let acquired = acquire_spotify_audio(
             AudioSource::Youtube,
             AudioFallback::None,
             true,
+            &std::sync::atomic::AtomicBool::new(false),
             || Err("Soulseek must not run".into()),
             || Ok(vec![audio.clone()]),
         )
         .unwrap();
-        assert_eq!(files, vec![audio]);
-        assert!(from_youtube);
+        assert_eq!(acquired.files, vec![audio]);
+        assert_eq!(acquired.source, super::AcquisitionSource::Youtube);
     }
 
     #[test]
     fn spotify_soulseek_failure_uses_selected_fallback() {
         let audio = std::path::PathBuf::from("fallback-audio.flac");
-        let (files, from_youtube) = acquire_spotify_audio(
+        let acquired = acquire_spotify_audio(
             AudioSource::Soulseek,
             AudioFallback::Youtube,
             true,
+            &std::sync::atomic::AtomicBool::new(false),
             || Err("Soulseek is unavailable".into()),
             || Ok(vec![audio.clone()]),
         )
         .unwrap();
-        assert_eq!(files, vec![audio]);
-        assert!(from_youtube);
+        assert_eq!(acquired.files, vec![audio]);
+        assert_eq!(acquired.source, super::AcquisitionSource::Youtube);
         let error = acquire_spotify_audio(
             AudioSource::Soulseek,
             AudioFallback::None,
             true,
+            &std::sync::atomic::AtomicBool::new(false),
             || Err("Soulseek is unavailable".into()),
             || Err("YouTube must not run".into()),
         )

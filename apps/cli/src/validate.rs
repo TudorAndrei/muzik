@@ -71,15 +71,25 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
 }
 
 fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_file() {
-        files.push(path.to_path_buf());
-    } else if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let child = entry.path();
-            if child.is_file() || (recursive && child.is_dir()) {
-                collect(&child, recursive, files)?;
+    if !path.exists() {
+        return Ok(());
+    }
+    let walker = walkdir::WalkDir::new(path)
+        .follow_links(true)
+        .max_depth(if recursive { usize::MAX } else { 1 });
+    for entry in walker {
+        let entry = match entry {
+            Err(error)
+                if error
+                    .io_error()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                continue;
             }
+            entry => entry.map_err(std::io::Error::from)?,
+        };
+        if entry.file_type().is_file() {
+            files.push(entry.into_path());
         }
     }
     Ok(())

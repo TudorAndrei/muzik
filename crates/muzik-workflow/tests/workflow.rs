@@ -49,6 +49,7 @@ struct RecordingOperations {
     split_chapters: Vec<Vec<muzik_core::chapters::Chapter>>,
     quality_result: Option<QualityCheckedAudio>,
     quality_calls: usize,
+    cancel_during_soulseek: Option<std::sync::Arc<AtomicBool>>,
 }
 
 impl WorkflowOperations for RecordingOperations {
@@ -64,6 +65,10 @@ impl WorkflowOperations for RecordingOperations {
 
     fn acquire_soulseek(&mut self, query: &str) -> Result<Vec<PathBuf>, String> {
         self.soulseek_queries.push(query.to_owned());
+        if let Some(cancelled) = &self.cancel_during_soulseek {
+            cancelled.store(true, Ordering::SeqCst);
+            return Err("Soulseek cancelled".into());
+        }
         Ok(self.soulseek_files.clone())
     }
 
@@ -491,4 +496,55 @@ fn events_include_track_progress_and_completion() {
         }
     )));
     assert!(matches!(events.last(), Some(WorkflowEvent::Completed)));
+}
+
+#[test]
+fn cancellation_during_soulseek_stops_before_fallback_download() {
+    let directory = tempfile::tempdir().unwrap();
+    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+    let mut operations = RecordingOperations {
+        cancel_during_soulseek: Some(std::sync::Arc::clone(&cancelled)),
+        ..RecordingOperations::default()
+    };
+    let result = run_workflow(
+        &request("Artist - Song".into(), directory.path()),
+        &WorkflowOptions {
+            audio_source: AudioSource::Soulseek,
+            fallback: AudioFallback::Youtube,
+            ..WorkflowOptions::default()
+        },
+        &mut operations,
+        &cancelled,
+    );
+    assert!(matches!(result, Err(Error::Cancelled)));
+    assert_eq!(operations.soulseek_queries, ["Artist - Song"]);
+    assert!(operations.downloads.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn audio_discovery_follows_links_deduplicates_files_and_reports_loops() {
+    use std::os::unix::fs::symlink;
+    let directory = tempfile::tempdir().unwrap();
+    let audio = directory.path().join("album");
+    fs::create_dir(&audio).unwrap();
+    let track = audio.join("track.flac");
+    fs::write(&track, b"audio").unwrap();
+    fs::write(audio.join("notes.txt"), b"notes").unwrap();
+    let alias = directory.path().join("alias");
+    symlink(&audio, &alias).unwrap();
+    symlink(directory.path().join("missing"), audio.join("missing.flac")).unwrap();
+    let files = muzik_workflow::find_audio_inputs(&[
+        audio.clone(),
+        alias,
+        directory.path().join("missing"),
+    ])
+    .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        fs::canonicalize(&files[0]).unwrap(),
+        fs::canonicalize(track).unwrap()
+    );
+    symlink(&audio, audio.join("loop")).unwrap();
+    assert!(muzik_workflow::find_audio_inputs(&[audio]).is_err());
 }

@@ -108,29 +108,21 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
             } else {
                 let saved = checkpoint.cached_files(&id)?;
                 if saved.is_empty() {
-                    find_audio_by_id(&request.output, &id)?
+                    crate::find_audio_by_youtube_id(&request.output, &id)?
                 } else {
                     saved
                 }
             };
             let files = if files.is_empty() {
                 on_event(WorkflowEvent::AcquisitionStarted);
-                let acquired = if options.audio_source == AudioSource::Soulseek {
-                    match operations.acquire_soulseek(&video_url) {
-                        Ok(files) if !files.is_empty() => files,
-                        Ok(_) | Err(_) if options.fallback == crate::AudioFallback::Youtube => {
-                            operations.download_youtube(
-                                &video_url,
-                                &request.output,
-                                options.force,
-                            )?
-                        }
-                        Ok(files) => files,
-                        Err(error) => return Err(Error::Operation(error)),
-                    }
-                } else {
-                    operations.download_youtube(&video_url, &request.output, options.force)?
-                };
+                let acquired = crate::acquire_audio(
+                    operations,
+                    &video_url,
+                    request,
+                    options,
+                    cancelled,
+                    options.audio_source == AudioSource::Soulseek,
+                )?;
                 on_event(WorkflowEvent::AcquisitionCompleted {
                     files: acquired.clone(),
                 });
@@ -291,20 +283,6 @@ fn merge(into: &mut AudioProcessingResult, from: AudioProcessingResult) {
     into.plan.pre_split_dirs.extend(from.plan.pre_split_dirs);
     into.split_dirs.extend(from.split_dirs);
     into.organize_targets.extend(from.organize_targets);
-}
-
-fn find_audio_by_id(directory: &Path, id: &str) -> Result<Vec<PathBuf>, Error> {
-    if !directory.is_dir() {
-        return Ok(Vec::new());
-    }
-    Ok(find_audio_inputs(&[directory.to_path_buf()])?
-        .into_iter()
-        .filter(|path| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .is_some_and(|stem| stem.contains(&format!("[{id}]")))
-        })
-        .collect())
 }
 
 fn checkpoint_path(request: &WorkflowRequest, source: &str, id: &str) -> PathBuf {

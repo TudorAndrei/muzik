@@ -755,20 +755,14 @@ fn extract(archive: &Path, destination: &Path) -> Result<()> {
 }
 
 pub fn audio_files(directory: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    let mut pending = vec![directory.to_path_buf()];
-    while let Some(folder) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&folder) else {
-            continue;
-        };
-        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-            if path.is_dir() {
-                pending.push(path);
-            } else if muzik_core::audio::is_audio(&path) {
-                files.push(path);
-            }
-        }
-    }
+    let mut files = walkdir::WalkDir::new(directory)
+        .min_depth(1)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| muzik_core::audio::is_audio(entry.path()) && !entry.file_type().is_dir())
+        .map(walkdir::DirEntry::into_path)
+        .collect::<Vec<_>>();
     files.sort();
     files
 }

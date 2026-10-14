@@ -14,6 +14,7 @@ pub mod settings;
 pub mod setup;
 mod sources;
 pub mod watchlist;
+mod workflow_result;
 
 pub use app::{App, AppOptions};
 pub use error::{Error, Result};
