@@ -8,9 +8,7 @@ use crate::settings::Settings;
 use crate::{gates, watchlist};
 use muzik_core::paths::Paths;
 use muzik_store::jobs::CancelRequest;
-use muzik_store::watchlist::{
-    self as saved, CheckedWrite, ItemAction, ItemId, Playlist, Repository,
-};
+use muzik_store::watchlist::{ItemAction, ItemId, LocalCheck, LocalChecks, Playlist, Repository};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -36,8 +34,7 @@ pub struct App {
     runner: Option<Runner>,
     sink: Sink,
     decisions: Decisions,
-    generation: Arc<AtomicU64>,
-    gate: Arc<Mutex<()>>,
+    checks: LocalChecks,
     paths: Paths,
 }
 
@@ -82,8 +79,7 @@ impl App {
             runner,
             sink: options.sink,
             decisions,
-            generation,
-            gate: Arc::new(Mutex::new(())),
+            checks: LocalChecks::new(generation),
             paths: options.paths,
         })
     }
@@ -201,40 +197,24 @@ impl App {
     /// # Errors
     /// Returns an error when the settings or the saved watchlist cannot be read.
     pub fn load_watchlist(&self, busy: Busy) -> crate::Result<(Value, WatchlistCheck)> {
-        let generation = {
-            let _gate = self.gate.lock();
-            self.generation
-                .fetch_add(1, Ordering::SeqCst)
-                .wrapping_add(1)
-        };
-        let repository = self.repository();
-        if let Err(error) = watchlist::ensure_sources(&self.paths) {
-            (self.sink)(AppEvent::WatchlistError(error.to_string()));
-        }
-        let settings = Settings::resolve(&self.paths, &json!({}))?;
-        let saved = saved::view(
-            &repository.load()?,
-            &settings.request.output,
-            &settings.paths.cache,
-        )?;
+        let (saved, check) = self.checks.prepare::<crate::Error>(self.repository(), || {
+            if let Err(error) = watchlist::ensure_sources(&self.paths) {
+                (self.sink)(AppEvent::WatchlistError(error.to_string()));
+            }
+            let settings = Settings::resolve(&self.paths, &json!({}))?;
+            Ok(settings.reconcile().into())
+        })?;
         let check = WatchlistCheck {
-            repository,
-            settings,
+            check,
             jobs: Arc::clone(&self.jobs),
-            latest: Arc::clone(&self.generation),
-            gate: Arc::clone(&self.gate),
             sink: Arc::clone(&self.sink),
             busy,
-            generation,
         };
         Ok((saved, check))
     }
 
     fn edit<T>(&self, change: impl FnOnce(&Repository) -> crate::Result<T>) -> crate::Result<T> {
-        let _gate = self.gate.lock();
-        let result = change(&self.repository())?;
-        self.generation.fetch_add(1, Ordering::SeqCst);
-        Ok(result)
+        self.checks.edit(|| change(&self.repository()))
     }
 
     fn queued(&self, queued: Result<i64, EnqueueError>) -> Result<String, EnqueueError> {
@@ -254,71 +234,25 @@ impl App {
     }
 }
 
+/// Adapts the local check result to desktop events.
 pub struct WatchlistCheck {
-    repository: Repository,
-    settings: Settings,
+    check: LocalCheck,
     jobs: Arc<Jobs>,
-    latest: Arc<AtomicU64>,
-    gate: Arc<Mutex<()>>,
     sink: Sink,
     busy: Busy,
-    generation: u64,
 }
 
 impl WatchlistCheck {
     pub fn run(self) {
-        if let Err(error) = self.check()
-            && self.current()
-        {
-            (self.sink)(AppEvent::WatchlistError(error.to_string()));
-        }
-    }
-
-    fn current(&self) -> bool {
-        self.generation == self.latest.load(Ordering::SeqCst)
-    }
-
-    fn busy(&self) -> bool {
-        (self.busy)() || self.jobs.has_running() || !self.current()
-    }
-
-    fn check(&self) -> crate::Result<()> {
-        let options = self.settings.reconcile();
-        saved::import_cache(&self.repository, options)?;
-        for _ in 0..3 {
-            if self.busy() {
-                return Ok(());
-            }
-            let (mut checked, revision) = self.repository.load_revision()?;
-            saved::reconcile(&mut checked, options)?;
-            if self.busy() {
-                return Ok(());
-            }
-            let written = {
-                let _gate = self.gate.lock();
-                if !self.current() {
-                    return Ok(());
-                }
-                self.repository.save_at(revision, &checked)?
-            };
-            if written == CheckedWrite::Conflict {
-                continue;
-            }
-            if self.busy() {
-                return Ok(());
-            }
-            let visible = saved::view(
-                &checked,
-                &self.settings.request.output,
-                &self.settings.paths.cache,
-            )?;
-            let _gate = self.gate.lock();
-            if self.current() {
-                (self.sink)(AppEvent::WatchlistUpdated(visible));
-            }
-            return Ok(());
-        }
-        Err("The watchlist changed during the local check. Reload it.".into())
+        self.check.run(
+            || (self.busy)() || self.jobs.has_running(),
+            |result| {
+                (self.sink)(match result {
+                    Ok(visible) => AppEvent::WatchlistUpdated(visible),
+                    Err(error) => AppEvent::WatchlistError(error.to_string()),
+                });
+            },
+        );
     }
 }
 
