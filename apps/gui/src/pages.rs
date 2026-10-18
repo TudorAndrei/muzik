@@ -507,6 +507,7 @@ fn page_scroll(page: Div) -> AnyElement {
         .flex()
         .justify_center()
         .flex_1()
+        .min_w_0()
         .overflow_y_scrollbar()
         .child(page)
         .into_any_element()

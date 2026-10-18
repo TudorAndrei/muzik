@@ -36,7 +36,9 @@ impl Muzik {
         };
         div()
             .flex()
-            .size_full()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .child(self.sources_rail(playlists, has_playlists, cx))
             .child(
                 div()

@@ -696,7 +696,9 @@ impl Muzik {
         div()
             .flex()
             .flex_row()
-            .size_full()
+            .flex_1()
+            .min_w_0()
+            .h_full()
             .child(
                 div()
                     .flex()
