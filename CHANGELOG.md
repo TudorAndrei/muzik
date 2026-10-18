@@ -2,6 +2,37 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.14.0 - 2026-10-18
+#### Features
+- (**core**) add a MUZIK_HOME profile that isolates all state - (2b52f3d) - TudorAndrei
+#### Bug Fixes
+- (**deps**) update zip to 9 to resolve security advisories - (15df77f) - TudorAndrei
+- (**deps**) update rustls to resolve security advisories - (f6bc99d) - TudorAndrei
+- (**gui**) create the log folder before the log writer opens it - (e297763) - TudorAndrei
+- (**gui**) keep the layout stable across pages and job updates - (714f122) - TudorAndrei
+- (**gui**) keep the activity panel in view on every page - (c8a17b3) - TudorAndrei
+- (**security**) address account output and password fallback alerts (#15) - (ac37562) - Tudor Andrei Dumitrascu
+#### Build system
+- (**deny**) ignore the unmaintained zbus crates of gpui-kit - (8ece40c) - TudorAndrei
+- (**deps**) bump the cargo-minor group across 1 directory with 2 updates (#13) - (fbb2a1e) - dependabot[bot], *dependabot[bot]*, *Tudor Andrei Dumitrascu*
+- (**deps**) bump sha2 from 0.10.9 to 0.11.0 (#12) - (32e19b0) - dependabot[bot], *dependabot[bot]*, *Tudor Andrei Dumitrascu*, *TudorAndrei*
+- (**deps**) bump base64 from 0.22.1 to 0.23.1 (#11) - (23a639e) - dependabot[bot], *dependabot[bot]*
+- (**dev**) add an isolated .dev profile for development runs - (45af983) - TudorAndrei
+#### Continuous Integration
+- (**deps**) bump the actions group with 3 updates (#9) - (d63d713) - dependabot[bot], *dependabot[bot]*, *Tudor Andrei Dumitrascu*
+#### Refactoring
+- (**core**) share source parsing and sidecar rules - (a6f025c) - TudorAndrei
+- (**import**) consolidate metadata field conversion - (a407406) - TudorAndrei
+- (**library**) prepare query matchers once - (e9276df) - TudorAndrei
+- (**sync**) use managed temporary output files - (47d50a6) - TudorAndrei
+- (**watchlist**) keep view data typed through the UI - (fe8c12f) - TudorAndrei
+- (**workflow**) share acquisition and use typed results - (ab89a63) - TudorAndrei
+- centralize desktop activity and local watchlist checks (#14) - (a04ded7) - Tudor Andrei Dumitrascu
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.13.0 - (c47f06e) - github-actions[bot]
+
+- - -
+
 ## v2.13.0 - 2026-10-14
 #### Features
 - (**paths**) use etcetera for the standard app folders (#3) - (d7ed4ea) - Tudor Andrei Dumitrascu
