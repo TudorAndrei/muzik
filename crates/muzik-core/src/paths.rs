@@ -93,8 +93,26 @@ fn native() -> Option<impl AppStrategy> {
     .ok()
 }
 
+/// Return the isolated profile root that `MUZIK_HOME` names, if it is set.
+#[must_use]
+pub fn profile() -> Option<PathBuf> {
+    profile_from(std::env::var_os("MUZIK_HOME"))
+}
+
+fn profile_from(value: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let path = expand_home(Path::new(&value.filter(|value| !value.is_empty())?));
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(std::env::current_dir().unwrap_or_default().join(path))
+    }
+}
+
 #[must_use]
 pub fn data_dir() -> PathBuf {
+    if let Some(root) = profile() {
+        return Paths::under(&root).data;
+    }
     native().map_or_else(|| PathBuf::from("muzik"), |strategy| strategy.data_dir())
 }
 
@@ -105,6 +123,9 @@ pub fn download_dir() -> PathBuf {
 
 #[must_use]
 pub fn config_dir() -> PathBuf {
+    if let Some(root) = profile() {
+        return Paths::under(&root).config;
+    }
     if cfg!(target_os = "macos") {
         return data_dir();
     }
@@ -116,6 +137,9 @@ pub fn config_dir() -> PathBuf {
 
 #[must_use]
 pub fn cache_dir() -> PathBuf {
+    if let Some(root) = profile() {
+        return Paths::under(&root).cache;
+    }
     native().map_or_else(
         || PathBuf::from("muzik/cache"),
         |strategy| strategy.cache_dir(),
@@ -131,7 +155,7 @@ fn home() -> PathBuf {
 /// # Errors
 /// Returns an error if a folder cannot be moved or both the old and new data folders exist.
 pub fn migrate_legacy(paths: &Paths) -> io::Result<Vec<(PathBuf, PathBuf)>> {
-    if !cfg!(target_os = "macos") {
+    if !cfg!(target_os = "macos") || profile().is_some() {
         return Ok(Vec::new());
     }
     let Ok(home) = etcetera::home_dir() else {
@@ -204,9 +228,27 @@ fn move_dir(old: &Path, new: &Path) -> io::Result<Move> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Move, expand_home, home, move_dir};
+    use super::{Move, expand_home, home, move_dir, profile_from};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn profile_root_is_absolute_and_ignores_an_empty_value() {
+        assert_eq!(profile_from(None), None);
+        assert_eq!(profile_from(Some("".into())), None);
+        assert_eq!(
+            profile_from(Some("/tmp/muzik-dev".into())),
+            Some(PathBuf::from("/tmp/muzik-dev"))
+        );
+        assert_eq!(
+            profile_from(Some("~/muzik-dev".into())),
+            Some(home().join("muzik-dev"))
+        );
+        assert_eq!(
+            profile_from(Some("dev".into())),
+            Some(std::env::current_dir().unwrap().join("dev"))
+        );
+    }
 
     #[test]
     fn expand_home_replaces_only_a_leading_tilde() {

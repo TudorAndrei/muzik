@@ -8,6 +8,9 @@ const DEFAULTS: &str = include_str!("config_default.yaml");
 
 /// Find the existing library config at the legacy beets location.
 pub fn default_config_path() -> PathBuf {
+    if let Some(root) = crate::paths::profile() {
+        return crate::paths::Paths::under(&root).beets;
+    }
     if let Some(directory) = env::var_os("BEETSDIR") {
         let path = PathBuf::from(directory);
         let path = if path.starts_with("~") {

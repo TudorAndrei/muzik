@@ -148,6 +148,10 @@ so paths that you saved before continue to work. If the old and the new data
 folder both have files, muzik stops. Merge the two folders, then remove the old
 one.
 
+Set `MUZIK_HOME` to a folder to keep all state of a run in that folder. muzik
+then uses `data/`, `config/`, `cache/`, and `beets/config.yaml` under it, a
+separate keychain entry for the Soulseek password, and no folder migration.
+
 ## Development
 
 Run the locked checks that CI runs on each push:
@@ -162,6 +166,20 @@ and as individual pre-push hooks.
 Tests read and write only inside the repository. Temporary files go to `.tmp/`.
 On macOS, `mise run test-scoped` runs the tests in a sandbox that blocks the real
 muzik, beets, and music folders.
+
+To run a development build, use the `.dev/` profile. It has its own database,
+beets library, music folder, and Soulseek keychain entry:
+
+```sh
+mise run gui-dev                 # desktop app
+mise run cli-dev watchlist list  # command-line program
+mise run dev-profile copy        # replace the profile database with a copy of the real one
+mise run dev-profile reset       # remove the profile and start empty
+```
+
+`copy` also copies the Bandcamp sign-in. It does not copy the Spotify token,
+because a refresh in the profile can sign out the real app. Connect Spotify
+again in the profile.
 
 mise runs Cargo through [mr boxington](https://mr-boxington.jdx.dev/) (`mbx`), a
 shared build cache for checkouts, worktrees, and CI. Run `mbx doctor` to check

@@ -17,11 +17,24 @@ use crate::error::BridgeError;
 pub const DEFAULT_SERVER_HOST: &str = "server.slsknet.org";
 pub const DEFAULT_SERVER_PORT: u16 = 2416;
 const KEYCHAIN_SERVICE: &str = "com.tudorandrei.muzik";
+const KEYCHAIN_PROFILE_SERVICE: &str = "com.tudorandrei.muzik.profile";
 const KEYCHAIN_ACCOUNT: &str = "soulseek";
+
+fn keychain_entry() -> Result<keyring_core::Entry, keyring_core::Error> {
+    muzik_core::paths::profile().map_or_else(
+        || keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT),
+        |root| {
+            keyring_core::Entry::new(
+                KEYCHAIN_PROFILE_SERVICE,
+                &format!("{KEYCHAIN_ACCOUNT}:{}", root.display()),
+            )
+        },
+    )
+}
 
 #[must_use]
 pub fn saved_password() -> Option<String> {
-    keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)
+    keychain_entry()
         .and_then(|entry| entry.get_password())
         .ok()
         .filter(|password| !password.is_empty())
@@ -30,7 +43,7 @@ pub fn saved_password() -> Option<String> {
 /// # Errors
 /// Returns an error when the keychain entry cannot be opened or written.
 pub fn save_password(password: &str) -> Result<(), keyring_core::Error> {
-    keyring_core::Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?.set_password(password)
+    keychain_entry()?.set_password(password)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
