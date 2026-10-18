@@ -13,6 +13,7 @@ build/
 *.bak
 .DS_Store
 .rumdl_cache/
+.dev/
 muzik/bin/muzik-gpui
 __fuzz__/
 

@@ -27,6 +27,26 @@ postinstall = "hk install --mise"
 description = "Run the GPUI Kit desktop interface"
 run = "cargo run --locked -p muzik-gpui"
 
+[tasks.gui-dev]
+description = "Run the desktop interface with the isolated .dev profile"
+env = { MUZIK_HOME = "{{config_root}}/.dev" }
+run = """
+scripts/dev-profile.sh init
+cargo run --locked -p muzik-gpui
+"""
+
+[tasks.cli-dev]
+description = "Run the CLI with the isolated .dev profile"
+env = { MUZIK_HOME = "{{config_root}}/.dev" }
+raw_args = true
+run = "scripts/dev-profile.sh init && cargo run --locked -p muzik-cli --"
+
+[tasks.dev-profile]
+description = "Manage the .dev profile: init, copy the real database into it, or reset it"
+usage = 'arg "[action]" default="init" { choices "init" "copy" "reset" }'
+env = { MUZIK_HOME = "{{config_root}}/.dev" }
+run = 'scripts/dev-profile.sh "${usage_action}"'
+
 [tasks.develop]
 description = "Build the Rust CLI and desktop app"
 run = "cargo build --locked -p muzik-cli -p muzik-gpui"
