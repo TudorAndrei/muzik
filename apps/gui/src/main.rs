@@ -40,6 +40,7 @@ use muzik_core::{
 };
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
+use muzik_runner::gates::Gate;
 use muzik_store::watchlist::{
     ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
 };
@@ -668,12 +669,7 @@ impl Muzik {
                 }
                 view.start_workflow(params, cx);
             }));
-        let form = div()
-            .v_flex()
-            .gap_6()
-            .w_full()
-            .max_w(px(720.))
-            .p_6()
+        let form = pages::page_frame()
             .child(
                 div()
                     .v_flex()
@@ -693,30 +689,15 @@ impl Muzik {
                     .child(source),
             )
             .child(div().flex().justify_end().child(run));
-        div()
-            .flex()
-            .flex_row()
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_y_scrollbar()
-                    .child(form),
-            )
-            .into_any_element()
+        pages::page_scroll(form)
     }
 
     fn lanes(&self, cx: &App) -> Div {
         let mut lanes = div().v_flex().gap_1p5();
-        for (key, label) in [
-            ("download", "Download"),
-            ("process", "Process"),
-            ("import", "Import"),
+        for (key, label, gate) in [
+            ("download", "Download", Gate::Download),
+            ("process", "Process", Gate::Process),
+            ("import", "Import", Gate::Import),
         ] {
             let lane = self.gates.get(key).unwrap_or(&Value::Null);
             let active: Vec<&str> = lane["active"]
@@ -726,12 +707,13 @@ impl Muzik {
                 .filter_map(Value::as_str)
                 .collect();
             let waiting = lane["waiting"].as_array().map_or(0, Vec::len);
-            let limit = lane["limit"].as_u64().unwrap_or(1);
+            let limit = gate.limit();
             let counts = if waiting > 0 {
                 format!("{}/{limit} · {waiting} waiting", active.len())
             } else {
                 format!("{}/{limit}", active.len())
             };
+            let slots = limit.max(active.len());
             lanes = lanes.child(
                 div()
                     .v_flex()
@@ -743,11 +725,11 @@ impl Muzik {
                             .child(label)
                             .child(style::mono(counts, cx)),
                     )
-                    .children(
-                        active
-                            .into_iter()
-                            .map(|name| style::meta(short_text(name, 48), cx)),
-                    ),
+                    .children((0..slots).map(|slot| {
+                        style::meta(active.get(slot).copied().unwrap_or("Idle"), cx)
+                            .truncate()
+                            .when(slot >= active.len(), |this| this.opacity(0.5))
+                    })),
             );
         }
         lanes
@@ -779,7 +761,8 @@ impl Muzik {
                             .min_w_0()
                             .text_sm()
                             .font_semibold()
-                            .child(short_text(&run.title, 48)),
+                            .truncate()
+                            .child(run.title.clone()),
                     )
                     .child(
                         Button::new(("cancel-run", index))
@@ -806,27 +789,23 @@ impl Muzik {
                             })),
                     ),
             )
-            .child(style::meta(
-                format!("{} · {}", run.kind.label(), short_text(&run.status, 60)),
-                cx,
-            ))
-            .when(show_progress, |this| {
-                this.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div().flex_1().child(
-                                Progress::new(("run-progress", index))
-                                    .value(run.progress.percentage())
-                                    .loading(run.progress.total.is_none())
-                                    .accessibility_label("Job progress"),
-                            ),
-                        )
-                        .child(style::mono(run.progress_text(), cx)),
-                )
-            })
+            .child(style::meta(format!("{} · {}", run.kind.label(), run.status), cx).truncate())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(!show_progress, Styled::invisible)
+                    .child(
+                        div().flex_1().child(
+                            Progress::new(("run-progress", index))
+                                .value(run.progress.percentage())
+                                .loading(show_progress && run.progress.total.is_none())
+                                .accessibility_label("Job progress"),
+                        ),
+                    )
+                    .child(style::mono(run.progress_text(), cx)),
+            )
             .into_any_element()
     }
 
@@ -850,26 +829,23 @@ impl Muzik {
             .filter(|run| !run.queued)
             .count();
         let summary = self.activity_summary(running);
-        let mut panel = div()
+        let header = div()
             .v_flex()
             .gap_4()
             .p_4()
-            .w(width)
-            .h_full()
             .flex_none()
-            .overflow_y_scrollbar()
-            .border_l_1()
+            .border_b_1()
             .border_color(cx.theme().sidebar_border)
-            .bg(cx.theme().sidebar)
             .child(
                 div()
                     .id("activity-status")
                     .v_flex()
                     .gap_1()
                     .child(style::section_title("Activity"))
-                    .child(style::meta(summary, cx)),
+                    .child(style::meta(summary, cx).truncate()),
             )
-            .when(self.gates.is_object(), |this| this.child(self.lanes(cx)));
+            .child(self.lanes(cx));
+        let mut panel = div().v_flex().gap_4().p_4();
         if let Some(decision) = self.activity.decision() {
             panel = panel.child(self.decision_review(decision, cx));
         }
@@ -890,7 +866,23 @@ impl Muzik {
         for (index, section) in self.activity.sections().iter().enumerate() {
             panel = panel.child(activity_section_box(index, section, cx));
         }
-        panel.child(self.recent_events(cx)).into_any_element()
+        div()
+            .v_flex()
+            .w(width)
+            .h_full()
+            .flex_none()
+            .border_l_1()
+            .border_color(cx.theme().sidebar_border)
+            .bg(cx.theme().sidebar)
+            .child(header)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scrollbar()
+                    .child(panel.child(self.recent_events(cx))),
+            )
+            .into_any_element()
     }
 
     fn decision_review(&self, decision: &Value, cx: &Context<Self>) -> Stateful<Div> {
@@ -1195,9 +1187,7 @@ impl Render for Muzik {
                     .overflow_hidden()
                     .child(body),
             )
-            .when(self.page != Page::Settings, |this| {
-                this.child(self.status_bar(cx))
-            })
+            .child(self.status_bar(cx))
     }
 }
 

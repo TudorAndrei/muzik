@@ -488,7 +488,7 @@ fn spotify_playlists_table(
         .child(body)
 }
 
-fn page_frame() -> Div {
+pub fn page_frame() -> Div {
     div().v_flex().gap_4().p_6().w_full().max_w(px(960.))
 }
 
@@ -502,7 +502,7 @@ fn page_header(title: &'static str, action: impl IntoElement) -> Div {
         .child(action)
 }
 
-fn page_scroll(page: Div) -> AnyElement {
+pub fn page_scroll(page: Div) -> AnyElement {
     div()
         .flex()
         .justify_center()
