@@ -733,25 +733,48 @@ fn extract(archive: &Path, destination: &Path) -> Result<()> {
         let entry = zip
             .by_index_raw(index)
             .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))?;
+        let name = entry
+            .name()
+            .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))?
+            .into_owned();
         if entry.is_symlink() {
-            return Err(format!("The Bandcamp ZIP file contains a link: {}", entry.name()).into());
+            return Err(format!("The Bandcamp ZIP file contains a link: {name}").into());
         }
         if !entry.is_dir()
             && !files.insert(
                 entry
                     .enclosed_name()
-                    .unwrap_or_else(|| PathBuf::from(entry.name())),
+                    .unwrap_or_else(|| PathBuf::from(&name)),
             )
         {
-            return Err(format!(
-                "The Bandcamp ZIP file contains the same file twice: {}",
-                entry.name()
-            )
-            .into());
+            return Err(
+                format!("The Bandcamp ZIP file contains the same file twice: {name}").into(),
+            );
         }
     }
     zip.extract(destination)
+        .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}"))?;
+    open_folders(destination)
         .map_err(|error| format!("The Bandcamp ZIP file did not extract: {error}").into())
+}
+
+#[cfg(unix)]
+fn open_folders(folder: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = fs::symlink_metadata(folder)?.permissions().mode();
+    fs::set_permissions(folder, fs::Permissions::from_mode((mode & 0o777) | 0o700))?;
+    for entry in fs::read_dir(folder)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            open_folders(&entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn open_folders(_folder: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 pub fn audio_files(directory: &Path) -> Vec<PathBuf> {

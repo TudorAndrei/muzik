@@ -21,7 +21,7 @@ strum_macros = "0.28"
 thiserror = "2"
 ureq = { version = "3.4.2", features = ["json"] }
 usage = { package = "usage-rs", version = "6.11.1" }
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 walkdir = "2.5"
 
