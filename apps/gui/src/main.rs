@@ -1314,12 +1314,14 @@ fn main() -> std::process::ExitCode {
         }
         _ => {}
     }
-    if let Ok(appender) = tracing_appender::rolling::Builder::new()
-        .rotation(tracing_appender::rolling::Rotation::DAILY)
-        .filename_prefix("muzik")
-        .filename_suffix("log")
-        .max_log_files(7)
-        .build(muzik_core::paths::Paths::user().logs())
+    let logs = muzik_core::paths::Paths::user().logs();
+    if std::fs::create_dir_all(&logs).is_ok()
+        && let Ok(appender) = tracing_appender::rolling::Builder::new()
+            .rotation(tracing_appender::rolling::Rotation::DAILY)
+            .filename_prefix("muzik")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(logs)
     {
         tracing_subscriber::fmt()
             .with_env_filter(
