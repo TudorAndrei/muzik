@@ -56,7 +56,7 @@ impl From<Error> for String {
     Hash,
     PartialEq,
     Serialize,
-    usage::ValueEnum,
+    usage_rs::ValueEnum,
     AsRefStr,
     Display,
     EnumString,

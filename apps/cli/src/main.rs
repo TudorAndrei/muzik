@@ -19,7 +19,7 @@ mod workflow;
 
 use std::path::PathBuf;
 
-use usage::{Args, Cli, Subcommands};
+use usage_rs::{Args, Cli, Subcommands};
 
 /// Download, tag, and organize music.
 #[derive(Cli)]
