@@ -265,18 +265,18 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn scan_library(&mut self, cx: &Context<Self>) {
-        let output = self
+    pub(crate) fn load_library(&mut self, cx: &Context<Self>) {
+        let config = self
             .defaults
             .as_ref()
-            .map(|defaults| defaults.output.clone())
+            .map(|defaults| defaults.config.clone())
             .unwrap_or_default();
         self.read(
             Read::Library,
             cx,
-            move |backend| backend.library_scan(&output),
-            |view, library, _, _| {
-                view.library = library;
+            move |backend| backend.library(&config),
+            |view, library, _, cx| {
+                view.apply_library(library, cx);
                 view.status = "Library ready".into();
             },
         );

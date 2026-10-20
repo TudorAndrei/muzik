@@ -1,5 +1,6 @@
 mod activity;
 mod backend;
+mod library;
 mod pages;
 mod requests;
 mod settings;
@@ -17,7 +18,7 @@ use backend::{Backend, ItemRequest};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::scroll::ScrollableElement;
@@ -146,7 +147,9 @@ struct Muzik {
     watch_table: Entity<TableState<watch_table::WatchTable>>,
     sheet_item: Option<String>,
     thumbnail_attempted: HashSet<String>,
-    library: Value,
+    library: Option<library::LibraryInfo>,
+    library_table: Entity<TableState<library::LibraryTable>>,
+    library_search: Entity<InputState>,
     services: Value,
     spotify: Value,
     defaults: Option<GuiDefaults>,
@@ -170,6 +173,29 @@ impl Muzik {
                 && let Some(key) = table.read(cx).delegate().key(*row)
             {
                 view.open_item_sheet(key, window, cx);
+            }
+        })
+        .detach();
+        let library_table = cx.new(|cx| {
+            TableState::new(library::LibraryTable::new(), window, cx)
+                .col_movable(false)
+                .row_selectable(true)
+        });
+        cx.subscribe_in(&library_table, window, |_, table, event, window, cx| {
+            if let TableEvent::DoubleClickedRow(row) = event
+                && let Some(album) = table.read(cx).delegate().album(*row)
+            {
+                Self::open_album_sheet(album, window, cx);
+            }
+        })
+        .detach();
+        let library_search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder("Search artist, album, genre, label, or year")
+        });
+        cx.subscribe(&library_search, |view, _, event, cx| {
+            if matches!(event, InputEvent::Change) {
+                view.filter_library(cx);
+                cx.notify();
             }
         })
         .detach();
@@ -199,7 +225,9 @@ impl Muzik {
             watch_table,
             sheet_item: None,
             thumbnail_attempted: HashSet::new(),
-            library: Value::Null,
+            library: None,
+            library_table,
+            library_search,
             services: Value::Null,
             spotify: Value::Null,
             defaults: None,
@@ -282,7 +310,7 @@ impl Muzik {
         self.error = None;
         match page {
             Page::Watchlist => self.load_watchlist(cx),
-            Page::Library => self.scan_library(cx),
+            Page::Library => self.load_library(cx),
             Page::Spotify => {
                 self.load_watchlist(cx);
                 self.spotify_status(cx);

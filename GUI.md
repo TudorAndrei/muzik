@@ -33,7 +33,9 @@ into an app event.
   decisions for download, split, and import work.
 - **Watchlist** shows YouTube and Spotify sources, item states, filters, and
   item commands. The item sheet shows the thumbnail, IDs, and commands.
-- **Library** lists audio in the selected download directory.
+- **Library** shows the albums in the Beets library, with totals for tracks,
+  artists, playtime, and formats. The search field filters by artist, album,
+  genre, label, or year. Double-click an album to see its tracks.
 - **Settings** saves output paths, source choices, quality policy, and
   processing options in `config.yaml`, and checks external services.
 - **Spotify** stores a client ID, connects an account, and adds playlists or

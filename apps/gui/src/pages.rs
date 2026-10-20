@@ -5,106 +5,6 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 
 impl Muzik {
-    pub(crate) fn library(&self, cx: &Context<Self>) -> AnyElement {
-        let scanning = self.reading(Read::Library);
-        let items = self
-            .library
-            .get("items")
-            .and_then(Value::as_array)
-            .or_else(|| self.library.as_array());
-        let mut page = page_frame().child(page_header(
-            "Downloaded audio",
-            Button::new("library-refresh")
-                .ghost()
-                .icon(IconName::RefreshCw)
-                .label("Refresh")
-                .disabled(scanning)
-                .on_click(cx.listener(|view, _, _, cx| {
-                    view.scan_library(cx);
-                    cx.notify();
-                })),
-        ));
-        let output = self
-            .library
-            .get("output")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        match items {
-            Some(items) if !items.is_empty() => {
-                page = page.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(style::mono(output, cx).text_color(cx.theme().muted_foreground))
-                        .child(style::meta(
-                            format!(
-                                "· {} files · {}",
-                                items.len(),
-                                self.library
-                                    .get("total_size")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("0 B")
-                            ),
-                            cx,
-                        )),
-                );
-                let mut body = TableBody::new();
-                for item in items {
-                    body =
-                        body.child(
-                            TableRow::new()
-                                .child(TableCell::new().child(div().min_w_0().truncate().child(
-                                    item["title"].as_str().unwrap_or("Audio file").to_string(),
-                                )))
-                                .child(TableCell::new().child(style::mono(
-                                    item["ext"].as_str().unwrap_or("").to_string(),
-                                    cx,
-                                )))
-                                .child(TableCell::new().text_right().child(style::mono(
-                                    item["size_label"].as_str().unwrap_or("").to_string(),
-                                    cx,
-                                )))
-                                .child(TableCell::new().child(style::mono(
-                                    item["modified"].as_str().unwrap_or("").to_string(),
-                                    cx,
-                                ))),
-                        );
-                }
-                page = page.child(
-                    Table::new()
-                        .accessibility_label("Downloaded audio files")
-                        .child(
-                            TableHeader::new().child(
-                                TableRow::new()
-                                    .child(TableHead::new().child("Title"))
-                                    .child(TableHead::new().child("Format"))
-                                    .child(TableHead::new().text_right().child("Size"))
-                                    .child(TableHead::new().child("Modified")),
-                            ),
-                        )
-                        .child(body),
-                );
-            }
-            _ if scanning => {
-                page = page.child(empty_state(
-                    "Scanning downloads",
-                    "Reading the download folder.",
-                    true,
-                ));
-            }
-            _ => {
-                page = page.child(empty_state(
-                    "No downloads yet",
-                    "Run a workflow, or set the download folder in Settings.",
-                    false,
-                ));
-            }
-        }
-        page_scroll(page)
-    }
-
     pub(crate) fn services_section(main: WeakEntity<Self>, cx: &App) -> AnyElement {
         let Some(main_view) = main.upgrade() else {
             return div().into_any_element();
@@ -492,7 +392,7 @@ pub fn page_frame() -> Div {
     div().v_flex().gap_4().p_6().w_full().max_w(px(960.))
 }
 
-fn page_header(title: &'static str, action: impl IntoElement) -> Div {
+pub fn page_header(title: &'static str, action: impl IntoElement) -> Div {
     div()
         .flex()
         .items_center()

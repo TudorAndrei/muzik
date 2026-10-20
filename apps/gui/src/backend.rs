@@ -1,12 +1,11 @@
+use crate::library::{self, LibraryInfo};
 use crate::thumbnails;
 use anyhow::{Context, anyhow, bail};
 use async_channel::Receiver;
-use bytesize::ByteSize;
-use chrono::{DateTime, Local};
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config::{self, GuiDefaults};
-use muzik_core::downloads::scan;
 use muzik_core::paths::Paths;
+use muzik_import::beets;
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::app::WatchlistCheck;
 use muzik_runner::{App, AppEvent, AppOptions, setup};
@@ -222,8 +221,14 @@ impl Backend {
         Some(data)
     }
 
-    pub fn library_scan(&self, output: &Path) -> anyhow::Result<Value> {
-        library_scan(self.paths(), output)
+    pub fn library(&self, config: &Path) -> anyhow::Result<LibraryInfo> {
+        let config = if config.as_os_str().is_empty() {
+            self.paths().beets.clone()
+        } else {
+            config.to_path_buf()
+        };
+        let (_, paths) = beets::load_paths(Some(&config), json!({}))?;
+        library::read(&paths.library, &paths.directory)
     }
 
     pub fn services(&self) -> Value {
@@ -321,36 +326,6 @@ impl Backend {
     }
 }
 
-fn library_scan(paths: &Paths, output: &Path) -> anyhow::Result<Value> {
-    let output = if output.as_os_str().is_empty() {
-        paths.downloads()
-    } else {
-        output.to_path_buf()
-    };
-    let items = scan(&output)?;
-    let total = items
-        .iter()
-        .fold(0_u64, |size, item| size.saturating_add(item.size));
-    let items = items
-        .into_iter()
-        .map(|item| {
-            let modified: DateTime<Local> = item.modified_at.into();
-            let size_label = ByteSize(item.size).to_string();
-            let mut value = serde_json::to_value(item)?;
-            let fields = value
-                .as_object_mut()
-                .context("invalid audio inventory item")?;
-            fields.insert("size_label".into(), json!(size_label));
-            fields.insert(
-                "modified".into(),
-                json!(modified.format("%Y-%m-%d %H:%M").to_string()),
-            );
-            Ok(value)
-        })
-        .collect::<anyhow::Result<Vec<Value>>>()?;
-    Ok(json!({"output": output, "total_size": ByteSize(total).to_string(), "items": items}))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{ActiveLogin, Backend, ItemRequest};
@@ -443,22 +418,6 @@ mod tests {
             ),
         )?;
         Ok((audio, database, config))
-    }
-
-    #[test]
-    fn library_scan_reports_existing_audio() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("Track [dQw4w9WgXcQ].mp3"), b"audio").unwrap();
-        let (_state, backend, _) = started(true).unwrap();
-        let result = backend.library_scan(dir.path()).unwrap();
-        assert_eq!(result["total_size"], "5 B");
-        assert_eq!(result["items"][0]["title"], "Track");
-        assert_eq!(result["items"][0]["youtube_id"], "dQw4w9WgXcQ");
-        assert!(
-            result["items"][0]["modified"]
-                .as_str()
-                .is_some_and(|date| !date.is_empty())
-        );
     }
 
     #[test]
