@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.14.1 - 2026-10-20
+#### Bug Fixes
+- (**deps**) update gpui-kit, usage-rs, serde-saphyr and html-escape - (cad3e01) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.14.0 - (381831b) - github-actions[bot]
+
+- - -
+
 ## v2.14.0 - 2026-10-18
 #### Features
 - (**core**) add a MUZIK_HOME profile that isolates all state - (2b52f3d) - TudorAndrei

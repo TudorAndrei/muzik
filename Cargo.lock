@@ -4855,7 +4855,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-agent"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "muzik-core",
  "muzik-media",
@@ -4868,7 +4868,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-bandcamp"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "bolero",
  "html-escape",
@@ -4888,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-cli"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "anyhow",
  "bytesize",
@@ -4922,7 +4922,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-core"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "etcetera",
  "regex",
@@ -4940,7 +4940,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-gpui"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -4969,7 +4969,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-import"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "deunicode",
  "fancy-regex",
@@ -4992,7 +4992,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-library"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "deunicode",
  "fancy-regex",
@@ -5007,7 +5007,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-match"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "chrono",
  "deunicode",
@@ -5025,7 +5025,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-media"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "chrono",
  "hex",
@@ -5045,7 +5045,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-metadata"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "backon",
  "governor",
@@ -5059,7 +5059,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-runner"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "keyring-core",
  "muzik-agent",
@@ -5084,7 +5084,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-soulseek"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "bolero",
  "keyring-core",
@@ -5099,7 +5099,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-spotify"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -5118,7 +5118,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-store"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "chrono",
  "muzik-core",
@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-sync"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "muzik-core",
  "muzik-library",
@@ -5156,7 +5156,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-tags"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "lofty",
  "muzik-core",
@@ -5168,7 +5168,7 @@ dependencies = [
 
 [[package]]
 name = "muzik-workflow"
-version = "2.14.0"
+version = "2.14.1"
 dependencies = [
  "csv",
  "hex",
