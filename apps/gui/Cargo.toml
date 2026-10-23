@@ -26,7 +26,7 @@ muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
 muzik-spotify = { path = "../../crates/muzik-spotify" }
 chrono = "0.4"
-ureq = "3.4.2"
+ureq = "3.5.0"
 url = "2.5.8"
 strum = "0.28"
 strum_macros = "0.28"
