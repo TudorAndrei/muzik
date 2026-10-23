@@ -14,7 +14,7 @@ workspace = true
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-parking_lot = "0.12"
+parking_lot = "0.13"
 regex = "1"
 rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
 rusqlite_migration = "2.6"
