@@ -32,7 +32,7 @@ ctrlc = "3.5"
 dialoguer = { version = "0.12", default-features = false }
 edit = { version = "0.1.5", features = ["quoted-env"] }
 keyring = "4.2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 serde-saphyr = "2.0"

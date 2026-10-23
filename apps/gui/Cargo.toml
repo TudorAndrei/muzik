@@ -14,7 +14,7 @@ anyhow = "1"
 async-channel = "2.5"
 gpui-kit = "=0.8.0"
 keyring = "4.2"
-parking_lot = "0.12"
+parking_lot = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 muzik-bandcamp = { path = "../../crates/muzik-bandcamp" }
@@ -26,7 +26,7 @@ muzik-runner = { path = "../../crates/muzik-runner" }
 muzik-soulseek = { path = "../../crates/muzik-soulseek" }
 muzik-spotify = { path = "../../crates/muzik-spotify" }
 chrono = "0.4"
-ureq = "3.4.2"
+ureq = "3.5.0"
 url = "2.5.8"
 strum = "0.28"
 strum_macros = "0.28"
