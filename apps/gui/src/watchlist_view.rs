@@ -195,9 +195,16 @@ impl Muzik {
         }
         section
             .child(
-                div()
-                    .flex_1()
-                    .min_h(px(320.))
+                pages::table_frame()
+                    .on_action(cx.listener(|view, _: &OpenSelected, window, cx| {
+                        let table = view.watch_table.read(cx);
+                        let key = table
+                            .selected_row()
+                            .and_then(|row| table.delegate().key(row));
+                        if let Some(key) = key {
+                            view.open_item_sheet(key, window, cx);
+                        }
+                    }))
                     .child(DataTable::new(&self.watch_table).stripe(true)),
             )
             .into_any_element()

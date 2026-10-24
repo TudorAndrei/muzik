@@ -135,7 +135,7 @@ fn input_item(label: &'static str, state: &Entity<InputState>) -> SettingItem {
     SettingItem::new(
         label,
         SettingField::render(move |options, _, _| {
-            control_width(Input::new(&state), options, px(256.))
+            control_width(Input::new(&state).aria_label(label), options, px(256.))
         }),
     )
 }
@@ -358,7 +358,7 @@ impl ConfigView {
                                 .items_center()
                                 .gap_2()
                                 .w_full()
-                                .child(div().flex_1().child(Input::new(&state)))
+                                .child(div().flex_1().child(Input::new(&state).aria_label(label)))
                                 .child(
                                     Button::new(("config-pick", index))
                                         .icon(IconName::FolderOpen)
@@ -502,7 +502,11 @@ impl ConfigView {
             .item(SettingItem::new(
                 "Port",
                 SettingField::render(move |options, _, _| {
-                    control_width(NumberInput::new(&port), options, px(140.))
+                    control_width(
+                        NumberInput::new(&port).accessibility_label("Port"),
+                        options,
+                        px(140.),
+                    )
                 }),
             ));
         let cookies = self.bandcamp.cookies.clone();
@@ -517,7 +521,10 @@ impl ConfigView {
                 SettingItem::new(
                     "Login cookie",
                     SettingField::render(move |_, _, _| {
-                        Textarea::new(&cookies).w_full().h(px(96.))
+                        Textarea::new(&cookies)
+                            .aria_label("Login cookie")
+                            .w_full()
+                            .h(px(96.))
                     }),
                 )
                 .layout(Axis::Vertical),

@@ -319,8 +319,7 @@ fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
         .child(
             style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
                 .flex_1()
-                .min_w_0()
-                .truncate(),
+                .min_w_0(),
         )
         .child(
             div()
@@ -400,6 +399,14 @@ pub fn page_header(title: &'static str, action: impl IntoElement) -> Div {
         .gap_3()
         .child(style::page_title(title))
         .child(action)
+}
+
+pub fn table_frame() -> Div {
+    div()
+        .flex_1()
+        .min_h(px(320.))
+        .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
+        .on_action(|_: &FocusPrev, window, cx| window.focus_prev(cx))
 }
 
 pub fn page_scroll(page: Div) -> AnyElement {
