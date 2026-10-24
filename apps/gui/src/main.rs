@@ -1028,13 +1028,14 @@ impl Muzik {
             let waiting = &waiting.data;
             let kind = choices::kind(waiting);
             let highlighted = waiting["queue_job"] == open;
-            let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
+            let full_title = waiting["title"].as_str().unwrap_or("Item");
+            let title = short_text(full_title, 60);
             let id = waiting["queue_job"].as_i64();
             inbox = inbox.child(
                 Button::new(("waiting", index))
                     .outline()
                     .selected(highlighted)
-                    .accessibility_label(format!("{title}, {}", choices::title(kind)))
+                    .accessibility_label(format!("{full_title}, {}", choices::title(kind)))
                     .w_full()
                     .h_auto()
                     .p_2()
