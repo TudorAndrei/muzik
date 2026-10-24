@@ -166,7 +166,7 @@ impl TableDelegate for WatchTable {
                 Some((action, label, enabled)) => {
                     let key = row.key.clone();
                     let view = self.view.clone();
-                    Button::new(("watch-action", row_ix))
+                    Button::new(SharedString::from(format!("watch-action-{key}")))
                         .xsmall()
                         .label(label)
                         .disabled(!enabled)
