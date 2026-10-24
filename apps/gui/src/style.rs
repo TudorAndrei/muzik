@@ -4,7 +4,7 @@ use gpui_kit::component::{ActiveTheme as _, StyledExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, AssetSource, Div, ElementId, Hsla, Image, ImageFormat, Result, SharedString,
-    div, px,
+    div, px, rems,
 };
 use muzik_store::watchlist::{Stage, StageStatus};
 
@@ -111,7 +111,7 @@ pub fn mono(text: impl Into<SharedString>, cx: &App) -> Div {
 pub fn overline(text: impl Into<SharedString>, cx: &App) -> Div {
     let text = text.into();
     div()
-        .text_size(px(11.))
+        .text_size(rems(0.6875))
         .font_semibold()
         .text_color(cx.theme().muted_foreground)
         .child(text)

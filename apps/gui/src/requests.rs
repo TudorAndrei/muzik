@@ -265,7 +265,7 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn load_library(&mut self, cx: &Context<Self>) {
+    pub(crate) fn load_library(&mut self, cx: &mut Context<Self>) {
         let config = self
             .defaults
             .as_ref()
@@ -280,6 +280,12 @@ impl Muzik {
                 view.status = "Library ready".into();
             },
         );
+        if self.library.is_none() && self.reading(Read::Library) {
+            self.library_table.update(cx, |state, cx| {
+                state.delegate_mut().set_loading(true);
+                cx.notify();
+            });
+        }
     }
 
     pub(crate) fn load_watchlist(&mut self, cx: &Context<Self>) {

@@ -2,6 +2,7 @@ use super::*;
 use crate::watchlist_view::empty_state;
 use chrono::{DateTime, Local};
 use gpui_kit::component::sheet::Sheet;
+use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::table::{
     Column, ColumnSort, DataTable, Table, TableBody, TableCell, TableDelegate, TableHead,
     TableHeader, TableRow,
@@ -230,6 +231,7 @@ pub struct LibraryTable {
     rows: Vec<Arc<AlbumRow>>,
     filter: String,
     sort: Option<(usize, ColumnSort)>,
+    loading: bool,
 }
 
 impl LibraryTable {
@@ -239,12 +241,18 @@ impl LibraryTable {
             rows: Vec::new(),
             filter: String::new(),
             sort: None,
+            loading: false,
         }
     }
 
     pub(crate) fn set_albums(&mut self, albums: Vec<Arc<AlbumRow>>) {
         self.albums = albums;
+        self.loading = false;
         self.apply();
+    }
+
+    pub(crate) const fn set_loading(&mut self, loading: bool) {
+        self.loading = loading;
     }
 
     pub(crate) fn set_filter(&mut self, filter: &str) {
@@ -322,6 +330,10 @@ impl TableDelegate for LibraryTable {
 
     fn rows_count(&self, _: &App) -> usize {
         self.rows.len()
+    }
+
+    fn loading(&self, _: &App) -> bool {
+        self.loading
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
@@ -409,11 +421,16 @@ impl Muzik {
                 ),
                 false,
             )),
-            None if loading => page.child(empty_state(
-                "Reading the library",
-                "Reading albums and tracks from the library database.",
-                true,
-            )),
+            None if loading => page
+                .child(Self::library_summary_skeleton(cx))
+                .child(
+                    Input::new(&self.library_search)
+                        .cleanable(true)
+                        .disabled(true),
+                )
+                .child(
+                    pages::table_frame().child(DataTable::new(&self.library_table).stripe(true)),
+                ),
             None => page.child(empty_state(
                 "No library",
                 "Muzik cannot read the library database. Check the Beets config in Settings.",
@@ -428,6 +445,26 @@ impl Muzik {
             .min_h_0()
             .child(page)
             .into_any_element()
+    }
+
+    fn library_summary_skeleton(cx: &App) -> Div {
+        let line = |width: f32| {
+            style::meta("\u{a0}", cx).relative().child(
+                Skeleton::new()
+                    .absolute()
+                    .top(px(3.))
+                    .bottom(px(3.))
+                    .left_0()
+                    .w(px(width))
+                    .rounded_sm(),
+            )
+        };
+        div()
+            .v_flex()
+            .gap_1()
+            .child(line(360.))
+            .child(line(220.))
+            .child(line(280.))
     }
 
     fn library_summary(&self, info: &LibraryInfo, cx: &Context<Self>) -> Div {

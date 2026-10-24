@@ -1,5 +1,6 @@
 mod activity;
 mod backend;
+mod commands;
 mod library;
 mod pages;
 mod requests;
@@ -15,7 +16,10 @@ use activity::{
 };
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
+use commands::{AppCommand, FocusNext, FocusPrev, OpenCommands, OpenSelected};
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::command::CommandState;
 use gpui_kit::component::description_list::DescriptionList;
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -25,6 +29,7 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, StyledExt as _,
@@ -32,9 +37,9 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, AnyWindowHandle, App, Axis, Div, Entity, Image, KeyBinding, Menu, MenuItem,
+    AnyElement, AnyWindowHandle, App, Axis, Div, Entity, FocusHandle, Image, MouseButton,
     ObjectFit, PathPromptOptions, Pixels, SharedString, Stateful, Task, WeakEntity, Window,
-    WindowOptions, actions, div, img, px,
+    WindowOptions, div, img, px, size,
 };
 use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
@@ -55,21 +60,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
-actions!(
-    muzik,
-    [
-        #[derive(Eq)]
-        Quit,
-        #[derive(Eq)]
-        OpenSelected,
-        #[derive(Eq)]
-        FocusNext,
-        #[derive(Eq)]
-        FocusPrev
-    ]
-);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Page {
     Workflow,
     Watchlist,
@@ -131,6 +122,8 @@ const fn action_label(action: ItemAction) -> &'static str {
 
 struct Muzik {
     page: Page,
+    focus_handle: FocusHandle,
+    palette: Entity<CommandState>,
     raw: Entity<InputState>,
     config_view: Option<Entity<ConfigView>>,
     watch_url: Entity<InputState>,
@@ -208,6 +201,8 @@ impl Muzik {
         .detach();
         let mut this = Self {
             page: Page::Workflow,
+            focus_handle: cx.focus_handle(),
+            palette: cx.new(|cx| CommandState::new(window, cx)),
             raw: cx.new(|cx| InputState::new(window, cx).placeholder("URL or path")),
             config_view: None,
             watch_url: cx.new(|cx| InputState::new(window, cx).placeholder("Playlist URL")),
@@ -255,7 +250,54 @@ impl Muzik {
             Theme::sync_system_appearance(Some(window), cx);
         })
         .detach();
+        window.focus(&this.focus_handle, cx);
         this
+    }
+
+    fn run_command(&mut self, command: AppCommand, window: &mut Window, cx: &mut Context<Self>) {
+        match command {
+            AppCommand::Show(page) => self.set_page(page, window, cx),
+            AppCommand::RunWorkflow => {
+                self.set_page(Page::Workflow, window, cx);
+                self.run_workflow(cx);
+            }
+            AppCommand::SearchLibrary => {
+                self.set_page(Page::Library, window, cx);
+                self.library_search
+                    .update(cx, |state, cx| state.focus(window, cx));
+            }
+            AppCommand::Refresh => self.refresh_page(cx),
+        }
+    }
+
+    fn refresh_page(&mut self, cx: &mut Context<Self>) {
+        match self.page {
+            Page::Workflow => self.load_jobs(cx),
+            Page::Watchlist => self.load_watchlist(cx),
+            Page::Library => self.load_library(cx),
+            Page::Settings => self.check_services(cx),
+            Page::Spotify => {
+                self.load_watchlist(cx);
+                self.spotify_status(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    fn run_workflow(&mut self, cx: &mut Context<Self>) {
+        let params = self.launcher_params(cx);
+        if params
+            .get("raw")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .is_empty()
+        {
+            self.status = "Enter a URL or local path".into();
+            cx.notify();
+            return;
+        }
+        self.start_workflow(params, cx);
     }
 
     fn listen(events: Receiver<AppEvent>, window: &Window, cx: &Context<Self>) -> Task<()> {
@@ -309,6 +351,7 @@ impl Muzik {
     }
 
     fn set_page(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle, cx);
         if page == Page::Settings {
             self.open_config(window, cx);
             return;
@@ -434,6 +477,11 @@ impl Muzik {
             (Ending::Completed, _) => None,
         };
         if let Some(note) = note {
+            let note = if window.is_window_active() {
+                note
+            } else {
+                note.in_app_and_system()
+            };
             window.push_notification(note, cx);
         }
         if kind == RunKind::SpotifyLogin {
@@ -616,33 +664,52 @@ impl Muzik {
             .iter()
             .position(|(page, _)| *page == self.page)
             .unwrap_or(0);
-        div()
-            .flex()
-            .items_center()
-            .gap_8()
-            .px_6()
-            .py_3()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+        TitleBar::new()
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(img(self.logo.clone()).size(px(24.)))
-                    .child(div().text_lg().font_bold().child("muzik")),
+                    .gap_6()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(img(self.logo.clone()).size(px(18.)))
+                            .child(div().text_sm().font_bold().child("muzik")),
+                    )
+                    .child(
+                        no_window_drag().child(
+                            TabBar::new("pages")
+                                .segmented()
+                                .small()
+                                .selected_index(selected)
+                                .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
+                                .on_click(cx.listener(|view, index: &usize, window, cx| {
+                                    if let Some((page, _)) = PAGES.get(*index) {
+                                        view.set_page(*page, window, cx);
+                                    }
+                                })),
+                        ),
+                    ),
             )
             .child(
-                TabBar::new("pages")
-                    .segmented()
-                    .selected_index(selected)
-                    .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
-                    .on_click(cx.listener(|view, index: &usize, window, cx| {
-                        if let Some((page, _)) = PAGES.get(*index) {
-                            view.set_page(*page, window, cx);
-                        }
-                    })),
+                no_window_drag().pr_2().child(
+                    Button::new("open-commands")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Search)
+                        .label("Commands")
+                        .tooltip_with_action("Open the command palette", &OpenCommands, None)
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            commands::open_palette(
+                                &view.palette,
+                                cx.entity().downgrade(),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -689,21 +756,7 @@ impl Muzik {
             .primary()
             .icon(IconName::Play)
             .label("Run workflow")
-            .on_click(cx.listener(|view, _, _, cx| {
-                let params = view.launcher_params(cx);
-                if params
-                    .get("raw")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .trim()
-                    .is_empty()
-                {
-                    view.status = "Enter a URL or local path".into();
-                    cx.notify();
-                    return;
-                }
-                view.start_workflow(params, cx);
-            }));
+            .on_click(cx.listener(|view, _, _, cx| view.run_workflow(cx)));
         let form = pages::page_frame()
             .child(
                 div()
@@ -770,13 +823,13 @@ impl Muzik {
         lanes
     }
 
-    fn run_row(index: usize, run: &Run, cx: &Context<Self>) -> AnyElement {
+    fn run_row(run: &Run, cx: &Context<Self>) -> AnyElement {
         let id = run.id.clone();
         let label = job_label(run.kind, &run.title);
         let queued = run.queued;
         let show_progress = !queued && (run.progress.total.is_some() || run.kind != RunKind::Item);
         div()
-            .id(("run", index))
+            .id(SharedString::from(format!("run-{id}")))
             .v_flex()
             .gap_1()
             .p_2()
@@ -800,7 +853,7 @@ impl Muzik {
                             .child(run.title.clone()),
                     )
                     .child(
-                        Button::new(("cancel-run", index))
+                        Button::new(SharedString::from(format!("cancel-run-{id}")))
                             .ghost()
                             .xsmall()
                             .label(if queued { "Remove" } else { "Cancel" })
@@ -833,7 +886,7 @@ impl Muzik {
                     .when(!show_progress, Styled::invisible)
                     .child(
                         div().flex_1().child(
-                            Progress::new(("run-progress", index))
+                            Progress::new(SharedString::from(format!("run-progress-{}", run.id)))
                                 .value(run.progress.percentage())
                                 .loading(show_progress && run.progress.total.is_none())
                                 .accessibility_label("Job progress"),
@@ -1031,8 +1084,12 @@ impl Muzik {
             let full_title = waiting["title"].as_str().unwrap_or("Item");
             let title = short_text(full_title, 60);
             let id = waiting["queue_job"].as_i64();
+            let key = id.map_or_else(
+                || format!("waiting-ix-{index}"),
+                |id| format!("waiting-{id}"),
+            );
             inbox = inbox.child(
-                Button::new(("waiting", index))
+                Button::new(SharedString::from(key))
                     .outline()
                     .selected(highlighted)
                     .accessibility_label(format!("{full_title}, {}", choices::title(kind)))
@@ -1069,8 +1126,8 @@ impl Muzik {
             .iter()
             .enumerate()
             .filter(|(index, run)| !run.queued || *index < limit);
-        for (index, run) in shown {
-            list = list.child(Self::run_row(index, run, cx));
+        for (_, run) in shown {
+            list = list.child(Self::run_row(run, cx));
         }
         let hidden = self.activity.runs().len().saturating_sub(limit);
         if hidden > 0 {
@@ -1087,7 +1144,6 @@ impl Muzik {
         for (index, line) in self.activity.logs().iter().rev().take(50).enumerate() {
             log = log.child(
                 div()
-                    .id(("log", index))
                     .text_xs()
                     .text_color(if index == 0 {
                         cx.theme().foreground
@@ -1216,6 +1272,34 @@ impl Render for Muzik {
                 cx,
             ));
         div()
+            .id("muzik")
+            .track_focus(&self.focus_handle)
+            .key_context("Muzik")
+            .on_action(cx.listener(|view, _: &commands::ShowWorkflow, window, cx| {
+                view.set_page(Page::Workflow, window, cx);
+            }))
+            .on_action(
+                cx.listener(|view, _: &commands::ShowWatchlist, window, cx| {
+                    view.set_page(Page::Watchlist, window, cx);
+                }),
+            )
+            .on_action(cx.listener(|view, _: &commands::ShowLibrary, window, cx| {
+                view.set_page(Page::Library, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &commands::ShowSettings, window, cx| {
+                view.set_page(Page::Settings, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &commands::ShowSpotify, window, cx| {
+                view.set_page(Page::Spotify, window, cx);
+            }))
+            .on_action(cx.listener(|view, _: &commands::Refresh, _, cx| {
+                view.refresh_page(cx);
+            }))
+            .on_action(cx.listener(|view, _: &commands::OpenCommands, window, cx| {
+                commands::open_palette(&view.palette, cx.entity().downgrade(), window, cx);
+            }))
+            .on_action(|_: &commands::Minimize, window, _| window.minimize_window())
+            .on_action(|_: &commands::Zoom, window, _| window.zoom_window())
             .v_flex()
             .size_full()
             .bg(cx.theme().muted)
@@ -1230,6 +1314,10 @@ impl Render for Muzik {
             )
             .child(self.status_bar(cx))
     }
+}
+
+fn no_window_drag() -> Div {
+    div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
 }
 
 fn describe(value: &Value) -> String {
@@ -1300,10 +1388,8 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
                 .when(highlight, |column| {
                     column.child(
                         div()
-                            .text_xs()
-                            .font_semibold()
-                            .text_color(theme.primary)
-                            .child("SUGGESTED"),
+                            .flex()
+                            .child(Tag::primary().small().child("Suggested")),
                     )
                 })
                 .child(label)
@@ -1388,16 +1474,18 @@ fn main() -> std::process::ExitCode {
     app.run(|cx| {
         gpui_kit::init(cx);
         style::apply_theme(cx);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        bind_keys(cx);
-        cx.set_menus([Menu::new("Muzik").items([MenuItem::action("Quit Muzik", Quit)])]);
+        commands::init(cx);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
                 cx.quit();
             }
         })
         .detach();
-        if let Err(error) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+        let options = WindowOptions {
+            window_min_size: Some(size(px(960.), px(600.))),
+            ..TitleBar::window_options()
+        };
+        if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| Muzik::new(window, cx))
         }) {
             tracing::error!(%error, "the main window did not open");
@@ -1406,15 +1494,6 @@ fn main() -> std::process::ExitCode {
         }
     });
     std::process::ExitCode::SUCCESS
-}
-
-fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("enter", OpenSelected, Some("DataTable")),
-        KeyBinding::new("tab", FocusNext, Some("DataTable")),
-        KeyBinding::new("shift-tab", FocusPrev, Some("DataTable")),
-    ]);
 }
 
 fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
@@ -1454,7 +1533,7 @@ mod tests {
     fn the_keyboard_opens_the_selected_album_and_leaves_the_table(cx: &mut TestAppContext) {
         let (handle, main) = cx.update(|cx| {
             gpui_kit::init(cx);
-            super::bind_keys(cx);
+            super::commands::init(cx);
             gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
                 cx.new(|cx| Muzik::new_with_backend(window, cx, false))
             })
@@ -1578,6 +1657,31 @@ mod tests {
             window.render_frame(cx);
             assert!(window.try_find("decision").is_none());
         }).unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn keyboard_shortcuts_and_command_palette_switch_pages(cx: &mut TestAppContext) {
+        let (window, main) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::commands::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Muzik::new_with_backend(window, cx, false))
+            })
+            .unwrap()
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "secondary-3");
+        assert!(main.read_with(cx, |view, _| view.page == super::Page::Library));
+        cx.simulate_keystrokes(window, "secondary-k");
+        cx.run_until_parked();
+        cx.simulate_keystrokes(window, "w a t c h enter");
+        cx.run_until_parked();
+        assert!(main.read_with(cx, |view, _| view.page == super::Page::Watchlist));
+        cx.update_window(window, |_, window, cx| {
+            use gpui_kit::component::WindowExt as _;
+            assert!(!window.has_active_dialog(cx));
+        })
+        .unwrap();
     }
 
     #[test]
