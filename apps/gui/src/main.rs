@@ -27,7 +27,8 @@ use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, StyledExt as _,
+    WindowExt as _,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -1026,23 +1027,24 @@ impl Muzik {
             let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
             let id = waiting["queue_job"].as_i64();
             inbox = inbox.child(
-                div()
-                    .id(("waiting", index))
-                    .v_flex()
-                    .gap_0p5()
+                Button::new(("waiting", index))
+                    .outline()
+                    .selected(highlighted)
+                    .accessibility_label(format!("{title}, {}", choices::title(kind)))
+                    .w_full()
+                    .h_auto()
                     .p_2()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(if highlighted {
-                        cx.theme().warning
-                    } else {
-                        cx.theme().border
-                    })
-                    .bg(cx.theme().background)
-                    .cursor_pointer()
-                    .hover(|this| this.bg(cx.theme().accent))
-                    .child(div().text_sm().font_semibold().child(title))
-                    .child(style::meta(choices::title(kind), cx))
+                    .when(highlighted, |this| this.border_color(cx.theme().warning))
+                    .child(
+                        div()
+                            .v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap_0p5()
+                            .whitespace_normal()
+                            .child(div().text_sm().font_semibold().child(title))
+                            .child(style::meta(choices::title(kind), cx)),
+                    )
                     .on_click(cx.listener(move |view, _, window, cx| {
                         if let Some(id) = id {
                             view.open_waiting(id, window, cx);
@@ -1256,36 +1258,40 @@ fn merge_thumbnail_paths(watchlist: &mut WatchlistView, visible: &HashSet<String
     }
 }
 
-fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App) -> Stateful<Div> {
+fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App) -> Button {
     let theme = cx.theme();
     let score_color = match option.score {
         Some(score) if score >= 85 => theme.success,
         Some(score) if score >= 60 => theme.warning,
         _ => theme.muted_foreground,
     };
+    let name = [
+        Some(option.label.clone()),
+        highlight.then(|| "suggested".to_string()),
+        (!option.meta.is_empty()).then(|| option.meta.clone()),
+        option.score.map(|score| format!("{score}%")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
     let label = div().text_sm().font_semibold().child(option.label.clone());
-    let mut row = div()
-        .id(("decision", index))
-        .flex()
-        .items_center()
+    let mut row = Button::new(("decision", index))
+        .outline()
+        .accessibility_label(name)
+        .w_full()
+        .h_auto()
         .gap_3()
         .px_3()
         .py_2()
-        .rounded_md()
-        .border_1()
-        .border_color(if highlight {
-            theme.primary
-        } else {
-            theme.border
-        })
-        .cursor_pointer()
-        .hover(|row| row.bg(theme.accent))
+        .when(highlight, |row| row.border_color(theme.primary))
         .child(
             div()
                 .v_flex()
                 .flex_1()
                 .min_w_0()
                 .gap_0p5()
+                .whitespace_normal()
                 .when(highlight, |column| {
                     column.child(
                         div()
