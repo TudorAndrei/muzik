@@ -991,21 +991,25 @@ impl Muzik {
     fn chapter_rows_view(&self) -> Div {
         let mut rows = div().v_flex().gap_2().max_h(px(300.));
         for (index, chapter) in self.chapter_rows.iter().enumerate() {
+            let heading = format!("Chapter {}", index.saturating_add(1));
+            let field = |state: &Entity<InputState>, name: &str| {
+                Input::new(state).aria_label(format!("{heading} {name}"))
+            };
             rows = rows.child(
                 div()
                     .id(("chapter", index))
                     .v_flex()
                     .gap_1()
-                    .child(format!("Chapter {}", index.saturating_add(1)))
+                    .child(heading.clone())
                     .child(
                         div()
                             .flex()
                             .gap_1()
-                            .child(Input::new(&chapter.index))
-                            .child(Input::new(&chapter.start))
-                            .child(Input::new(&chapter.end)),
+                            .child(field(&chapter.index, "index"))
+                            .child(field(&chapter.start, "start seconds"))
+                            .child(field(&chapter.end, "end seconds")),
                     )
-                    .child(Input::new(&chapter.title)),
+                    .child(field(&chapter.title, "title")),
             );
         }
         rows
