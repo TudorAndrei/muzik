@@ -58,7 +58,13 @@ actions!(
     muzik,
     [
         #[derive(Eq)]
-        Quit
+        Quit,
+        #[derive(Eq)]
+        OpenSelected,
+        #[derive(Eq)]
+        FocusNext,
+        #[derive(Eq)]
+        FocusPrev
     ]
 );
 
@@ -1372,7 +1378,7 @@ fn main() -> std::process::ExitCode {
         gpui_kit::init(cx);
         style::apply_theme(cx);
         cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        bind_keys(cx);
         cx.set_menus([Menu::new("Muzik").items([MenuItem::action("Quit Muzik", Quit)])]);
         cx.on_window_closed(|cx, _| {
             if cx.windows().is_empty() {
@@ -1389,6 +1395,15 @@ fn main() -> std::process::ExitCode {
         }
     });
     std::process::ExitCode::SUCCESS
+}
+
+fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("enter", OpenSelected, Some("DataTable")),
+        KeyBinding::new("tab", FocusNext, Some("DataTable")),
+        KeyBinding::new("shift-tab", FocusPrev, Some("DataTable")),
+    ]);
 }
 
 fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
@@ -1417,11 +1432,64 @@ fn check_backend() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{Muzik, merge_thumbnail_paths, tool_path};
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+    use gpui_kit::{AppContext, Focusable as _, TestAppContext, WindowOptions};
     use muzik_core::app_config::GuiDefaults;
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[gpui_kit::test]
+    fn the_keyboard_opens_the_selected_album_and_leaves_the_table(cx: &mut TestAppContext) {
+        let (handle, main) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::bind_keys(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Muzik::new_with_backend(window, cx, false))
+            })
+            .unwrap()
+        });
+        cx.update(|cx| {
+            main.update(cx, |view, cx| {
+                view.apply_library(
+                    super::library::LibraryInfo {
+                        albums: vec![std::sync::Arc::new(super::library::AlbumRow {
+                            artist: "Phoniks".into(),
+                            title: "Down To Earth".into(),
+                            ..Default::default()
+                        })],
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            });
+        });
+        let table = cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.within("pages").click(2usize, cx);
+            window.render_frame(cx);
+            let table = main.read(cx).library_table.clone();
+            table.update(cx, |state, cx| state.set_selected_row(0, cx));
+            let focus = table.focus_handle(cx);
+            focus.focus(window, cx);
+            window.render_frame(cx);
+            focus
+        });
+        let table = table.unwrap();
+        cx.simulate_keystrokes(handle, "enter");
+        cx.update_window(handle, |_, window, cx| {
+            assert!(window.has_active_sheet(cx));
+            window.close_sheet(cx);
+            table.focus(window, cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle, "tab");
+        cx.update_window(handle, |_, window, cx| {
+            assert!(!table.contains_focused(window, cx));
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn settings_tab_saves_config_without_repeating_workflow_fields(cx: &mut TestAppContext) {

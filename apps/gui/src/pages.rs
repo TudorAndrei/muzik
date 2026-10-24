@@ -402,6 +402,14 @@ pub fn page_header(title: &'static str, action: impl IntoElement) -> Div {
         .child(action)
 }
 
+pub fn table_frame() -> Div {
+    div()
+        .flex_1()
+        .min_h(px(320.))
+        .on_action(|_: &FocusNext, window, cx| window.focus_next(cx))
+        .on_action(|_: &FocusPrev, window, cx| window.focus_prev(cx))
+}
+
 pub fn page_scroll(page: Div) -> AnyElement {
     div()
         .flex()
