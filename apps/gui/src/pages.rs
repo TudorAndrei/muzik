@@ -3,6 +3,7 @@ use crate::watchlist_view::empty_state;
 use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
+use gpui_kit::component::tag::Tag;
 
 impl Muzik {
     pub(crate) fn services_section(main: WeakEntity<Self>, cx: &App) -> AnyElement {
@@ -290,16 +291,11 @@ impl Muzik {
 
 fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
-    let (word, color) = match service["available"].as_bool() {
-        Some(true) => ("Available", theme.muted_foreground),
-        Some(false) if service["optional"] == true => ("Optional", theme.warning),
-        Some(false) => ("Unavailable", theme.danger),
-        None => ("Not set up", theme.muted_foreground),
-    };
-    let dot = match service["available"].as_bool() {
-        Some(true) => theme.success,
-        Some(false) => color,
-        None => theme.border,
+    let (word, tag) = match service["available"].as_bool() {
+        Some(true) => ("Available", Tag::success()),
+        Some(false) if service["optional"] == true => ("Optional", Tag::warning()),
+        Some(false) => ("Unavailable", Tag::danger()),
+        None => ("Not set up", Tag::secondary().outline()),
     };
     div()
         .id(("service", index))
@@ -322,15 +318,7 @@ fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
                 .min_w_0()
                 .truncate(),
         )
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap_1p5()
-                .child(div().size(px(6.)).rounded_full().bg(dot))
-                .child(div().text_xs().text_color(color).child(word)),
-        )
+        .child(div().flex().flex_none().child(tag.small().child(word)))
 }
 
 fn spotify_playlists_table(

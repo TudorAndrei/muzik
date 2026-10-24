@@ -1,6 +1,18 @@
 use super::*;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
 use gpui_kit::component::table::{Column, ColumnSort, TableDelegate, TableState};
+use gpui_kit::component::tag::Tag;
+
+fn summary_tag(summary: Summary) -> Tag {
+    match summary {
+        Summary::Pending => Tag::secondary(),
+        Summary::Processing => Tag::info(),
+        Summary::Waiting => Tag::warning(),
+        Summary::Failed => Tag::danger(),
+        Summary::Processed => Tag::success(),
+        Summary::Unavailable => Tag::secondary().outline(),
+    }
+}
 
 pub struct WatchRow {
     pub key: ItemId,
@@ -147,14 +159,18 @@ impl TableDelegate for WatchTable {
                 .truncate()
                 .child(row.title().to_string())
                 .into_any_element(),
-            2 => style::stage_track(("watch-stages", row_ix), &row.item.item, cx),
+            2 => style::stage_track(
+                SharedString::from(format!("watch-stages-{}", row.key)),
+                &row.item.item,
+                cx,
+            ),
             3 => {
-                let status = if row.queued {
-                    "In the queue".to_string()
+                let tag = if row.queued {
+                    Tag::info().outline().child("In the queue")
                 } else {
-                    row.summary().to_string()
+                    summary_tag(row.item.summary).child(row.summary().to_string())
                 };
-                div().child(status).into_any_element()
+                div().flex().child(tag.small()).into_any_element()
             }
             5 => div()
                 .min_w_0()
