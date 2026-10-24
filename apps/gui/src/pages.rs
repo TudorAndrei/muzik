@@ -319,8 +319,7 @@ fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
         .child(
             style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
                 .flex_1()
-                .min_w_0()
-                .truncate(),
+                .min_w_0(),
         )
         .child(
             div()
