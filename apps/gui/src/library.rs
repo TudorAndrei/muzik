@@ -401,9 +401,16 @@ impl Muzik {
                 .child(self.library_summary(info, cx))
                 .child(Input::new(&self.library_search).cleanable(true))
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h(px(320.))
+                    pages::table_frame()
+                        .on_action(cx.listener(|view, _: &OpenSelected, window, cx| {
+                            let table = view.library_table.read(cx);
+                            let album = table
+                                .selected_row()
+                                .and_then(|row| table.delegate().album(row));
+                            if let Some(album) = album {
+                                Self::open_album_sheet(album, window, cx);
+                            }
+                        }))
                         .child(DataTable::new(&self.library_table).stripe(true)),
                 ),
             Some(info) => page.child(empty_state(
@@ -422,10 +429,7 @@ impl Muzik {
                         .disabled(true),
                 )
                 .child(
-                    div()
-                        .flex_1()
-                        .min_h(px(320.))
-                        .child(DataTable::new(&self.library_table).stripe(true)),
+                    pages::table_frame().child(DataTable::new(&self.library_table).stripe(true)),
                 ),
             None => page.child(empty_state(
                 "No library",

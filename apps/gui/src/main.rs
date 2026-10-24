@@ -16,7 +16,7 @@ use activity::{
 };
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
-use commands::{AppCommand, OpenCommands};
+use commands::{AppCommand, FocusNext, FocusPrev, OpenCommands, OpenSelected};
 use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::command::CommandState;
@@ -32,7 +32,8 @@ use gpui_kit::component::table::{TableEvent, TableState};
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, WindowExt as _,
+    ActiveTheme as _, Disableable as _, IconName, Selectable as _, Sizable as _, StyledExt as _,
+    WindowExt as _,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
@@ -1043,21 +1044,25 @@ impl Muzik {
     fn chapter_rows_view(&self) -> Div {
         let mut rows = div().v_flex().gap_2().max_h(px(300.));
         for (index, chapter) in self.chapter_rows.iter().enumerate() {
+            let heading = format!("Chapter {}", index.saturating_add(1));
+            let field = |state: &Entity<InputState>, name: &str| {
+                Input::new(state).aria_label(format!("{heading} {name}"))
+            };
             rows = rows.child(
                 div()
                     .id(("chapter", index))
                     .v_flex()
                     .gap_1()
-                    .child(format!("Chapter {}", index.saturating_add(1)))
+                    .child(heading.clone())
                     .child(
                         div()
                             .flex()
                             .gap_1()
-                            .child(Input::new(&chapter.index))
-                            .child(Input::new(&chapter.start))
-                            .child(Input::new(&chapter.end)),
+                            .child(field(&chapter.index, "index"))
+                            .child(field(&chapter.start, "start seconds"))
+                            .child(field(&chapter.end, "end seconds")),
                     )
-                    .child(Input::new(&chapter.title)),
+                    .child(field(&chapter.title, "title")),
             );
         }
         rows
@@ -1076,7 +1081,8 @@ impl Muzik {
             let waiting = &waiting.data;
             let kind = choices::kind(waiting);
             let highlighted = waiting["queue_job"] == open;
-            let title = short_text(waiting["title"].as_str().unwrap_or("Item"), 60);
+            let full_title = waiting["title"].as_str().unwrap_or("Item");
+            let title = short_text(full_title, 60);
             let id = waiting["queue_job"].as_i64();
             let key = id.map_or_else(
                 || format!("waiting-ix-{index}"),
@@ -1084,11 +1090,12 @@ impl Muzik {
             );
             inbox = inbox.child(
                 Button::new(SharedString::from(key))
+                    .outline()
+                    .selected(highlighted)
+                    .accessibility_label(format!("{full_title}, {}", choices::title(kind)))
                     .w_full()
                     .h_auto()
                     .p_2()
-                    .justify_start()
-                    .accessibility_label(format!("{title}, {}", choices::title(kind)))
                     .when(highlighted, |this| this.border_color(cx.theme().warning))
                     .child(
                         div()
@@ -1096,7 +1103,8 @@ impl Muzik {
                             .flex_1()
                             .min_w_0()
                             .gap_0p5()
-                            .child(div().text_sm().font_semibold().truncate().child(title))
+                            .whitespace_normal()
+                            .child(div().text_sm().font_semibold().child(title))
                             .child(style::meta(choices::title(kind), cx)),
                     )
                     .on_click(cx.listener(move |view, _, window, cx| {
@@ -1350,23 +1358,25 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
         Some(score) if score >= 60 => theme.warning,
         _ => theme.muted_foreground,
     };
-    let label = div()
-        .text_sm()
-        .font_semibold()
-        .whitespace_normal()
-        .child(option.label.clone());
-    let spoken = match option.score {
-        Some(score) if highlight => format!("Suggested: {}, {score}%", option.label),
-        Some(score) => format!("{}, {score}%", option.label),
-        None if highlight => format!("Suggested: {}", option.label),
-        None => option.label.clone(),
-    };
+    let name = [
+        Some(option.label.clone()),
+        highlight.then(|| "suggested".to_string()),
+        (!option.meta.is_empty()).then(|| option.meta.clone()),
+        option.score.map(|score| format!("{score}%")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(", ");
+    let label = div().text_sm().font_semibold().child(option.label.clone());
     let mut row = Button::new(("decision", index))
+        .outline()
+        .accessibility_label(name)
         .w_full()
         .h_auto()
+        .gap_3()
         .px_3()
         .py_2()
-        .accessibility_label(spoken)
         .when(highlight, |row| row.border_color(theme.primary))
         .child(
             div()
@@ -1374,6 +1384,7 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
                 .flex_1()
                 .min_w_0()
                 .gap_0p5()
+                .whitespace_normal()
                 .when(highlight, |column| {
                     column.child(
                         div()
@@ -1511,11 +1522,64 @@ fn check_backend() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{Muzik, merge_thumbnail_paths, tool_path};
+    use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{AppContext, TestAppContext, WindowOptions};
+    use gpui_kit::{AppContext, Focusable as _, TestAppContext, WindowOptions};
     use muzik_core::app_config::GuiDefaults;
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[gpui_kit::test]
+    fn the_keyboard_opens_the_selected_album_and_leaves_the_table(cx: &mut TestAppContext) {
+        let (handle, main) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            super::commands::init(cx);
+            gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| Muzik::new_with_backend(window, cx, false))
+            })
+            .unwrap()
+        });
+        cx.update(|cx| {
+            main.update(cx, |view, cx| {
+                view.apply_library(
+                    super::library::LibraryInfo {
+                        albums: vec![std::sync::Arc::new(super::library::AlbumRow {
+                            artist: "Phoniks".into(),
+                            title: "Down To Earth".into(),
+                            ..Default::default()
+                        })],
+                        ..Default::default()
+                    },
+                    cx,
+                );
+            });
+        });
+        let table = cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.within("pages").click(2usize, cx);
+            window.render_frame(cx);
+            let table = main.read(cx).library_table.clone();
+            table.update(cx, |state, cx| state.set_selected_row(0, cx));
+            let focus = table.focus_handle(cx);
+            focus.focus(window, cx);
+            window.render_frame(cx);
+            focus
+        });
+        let table = table.unwrap();
+        cx.simulate_keystrokes(handle, "enter");
+        cx.update_window(handle, |_, window, cx| {
+            assert!(window.has_active_sheet(cx));
+            window.close_sheet(cx);
+            table.focus(window, cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(handle, "tab");
+        cx.update_window(handle, |_, window, cx| {
+            assert!(!table.contains_focused(window, cx));
+        })
+        .unwrap();
+    }
 
     #[gpui_kit::test]
     fn settings_tab_saves_config_without_repeating_workflow_fields(cx: &mut TestAppContext) {

@@ -29,7 +29,13 @@ actions!(
         #[derive(Eq)]
         Minimize,
         #[derive(Eq)]
-        Zoom
+        Zoom,
+        #[derive(Eq)]
+        OpenSelected,
+        #[derive(Eq)]
+        FocusNext,
+        #[derive(Eq)]
+        FocusPrev
     ]
 );
 
@@ -129,6 +135,9 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-shift-p", OpenCommands, None),
         KeyBinding::new("secondary-r", Refresh, None),
         KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("enter", OpenSelected, Some("DataTable")),
+        KeyBinding::new("tab", FocusNext, Some("DataTable")),
+        KeyBinding::new("shift-tab", FocusPrev, Some("DataTable")),
     ]);
     cx.set_menus([
         Menu::new("Muzik").items([
