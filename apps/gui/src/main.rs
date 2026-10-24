@@ -16,7 +16,8 @@ use activity::{
 };
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
-use commands::AppCommand;
+use commands::{AppCommand, OpenCommands};
+use gpui_kit::component::TitleBar;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
 use gpui_kit::component::command::CommandState;
 use gpui_kit::component::description_list::DescriptionList;
@@ -28,15 +29,16 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::status_bar::StatusBar;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::table::{TableEvent, TableState};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::theme::Theme;
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, IconName, Sizable as _, StyledExt as _, WindowExt as _,
 };
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    AnyElement, AnyWindowHandle, App, Axis, Div, Entity, FocusHandle, Image, ObjectFit,
-    PathPromptOptions, Pixels, SharedString, Stateful, Task, WeakEntity, Window, WindowOptions,
-    div, img, px, size,
+    AnyElement, AnyWindowHandle, App, Axis, Div, Entity, FocusHandle, Image, MouseButton,
+    ObjectFit, PathPromptOptions, Pixels, SharedString, Stateful, Task, WeakEntity, Window,
+    WindowOptions, div, img, px, size,
 };
 use muzik_core::app_config::GuiDefaults;
 use muzik_core::{
@@ -661,33 +663,52 @@ impl Muzik {
             .iter()
             .position(|(page, _)| *page == self.page)
             .unwrap_or(0);
-        div()
-            .flex()
-            .items_center()
-            .gap_8()
-            .px_6()
-            .py_3()
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+        TitleBar::new()
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .child(img(self.logo.clone()).size(px(24.)))
-                    .child(div().text_lg().font_bold().child("muzik")),
+                    .gap_6()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(img(self.logo.clone()).size(px(18.)))
+                            .child(div().text_sm().font_bold().child("muzik")),
+                    )
+                    .child(
+                        no_window_drag().child(
+                            TabBar::new("pages")
+                                .segmented()
+                                .small()
+                                .selected_index(selected)
+                                .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
+                                .on_click(cx.listener(|view, index: &usize, window, cx| {
+                                    if let Some((page, _)) = PAGES.get(*index) {
+                                        view.set_page(*page, window, cx);
+                                    }
+                                })),
+                        ),
+                    ),
             )
             .child(
-                TabBar::new("pages")
-                    .segmented()
-                    .selected_index(selected)
-                    .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
-                    .on_click(cx.listener(|view, index: &usize, window, cx| {
-                        if let Some((page, _)) = PAGES.get(*index) {
-                            view.set_page(*page, window, cx);
-                        }
-                    })),
+                no_window_drag().pr_2().child(
+                    Button::new("open-commands")
+                        .ghost()
+                        .small()
+                        .icon(IconName::Search)
+                        .label("Commands")
+                        .tooltip_with_action("Open the command palette", &OpenCommands, None)
+                        .on_click(cx.listener(|view, _, window, cx| {
+                            commands::open_palette(
+                                &view.palette,
+                                cx.entity().downgrade(),
+                                window,
+                                cx,
+                            );
+                        })),
+                ),
             )
             .into_any_element()
     }
@@ -1287,6 +1308,10 @@ impl Render for Muzik {
     }
 }
 
+fn no_window_drag() -> Div {
+    div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+}
+
 fn describe(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -1352,10 +1377,8 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
                 .when(highlight, |column| {
                     column.child(
                         div()
-                            .text_xs()
-                            .font_semibold()
-                            .text_color(theme.primary)
-                            .child("SUGGESTED"),
+                            .flex()
+                            .child(Tag::primary().small().child("Suggested")),
                     )
                 })
                 .child(label)
@@ -1449,7 +1472,7 @@ fn main() -> std::process::ExitCode {
         .detach();
         let options = WindowOptions {
             window_min_size: Some(size(px(960.), px(600.))),
-            ..WindowOptions::default()
+            ..TitleBar::window_options()
         };
         if let Err(error) = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| Muzik::new(window, cx))
