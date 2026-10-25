@@ -118,10 +118,10 @@ impl Runner {
         gates::listen(move |snapshot| sink(AppEvent::QueuesUpdated(snapshot)));
         for _ in 0..options.workers.max(1) {
             let shared = Arc::clone(&shared);
-            thread::spawn(move || work(&shared));
+            thread::spawn(move || shared.work());
         }
         let watcher = Arc::clone(&shared);
-        thread::spawn(move || watch(&watcher));
+        thread::spawn(move || watcher.watch());
         Ok(Some(Self {
             shared,
             _lock: lock,
@@ -178,236 +178,239 @@ impl Runner {
     }
 }
 
-fn work(shared: &Arc<Shared>) {
-    while !shared.stop.load(Ordering::SeqCst) {
-        let claimed = shared.store().claim_any(&QUEUES).ok().flatten();
-        let Some(job) = claimed else {
-            let mut idle = shared.idle.lock();
-            shared.wake.wait_for(&mut idle, Duration::from_secs(1));
-            continue;
-        };
-        run_job(shared, &job);
+impl Shared {
+    fn work(&self) {
+        while !self.stop.load(Ordering::SeqCst) {
+            let claimed = self.store().claim_any(&QUEUES).ok().flatten();
+            let Some(job) = claimed else {
+                let mut idle = self.idle.lock();
+                self.wake.wait_for(&mut idle, Duration::from_secs(1));
+                continue;
+            };
+            self.run_job(&job);
+        }
     }
-}
 
-fn watch(shared: &Arc<Shared>) {
-    let mut last = Value::Null;
-    while !shared.stop.load(Ordering::SeqCst) {
-        let requests = shared.store().cancel_requests().unwrap_or_default();
-        {
-            let running = shared.running();
-            for id in requests {
-                if let Some(cancel) = running.get(&id) {
-                    cancel.store(true, Ordering::SeqCst);
+    fn watch(&self) {
+        let mut last = Value::Null;
+        while !self.stop.load(Ordering::SeqCst) {
+            let requests = self.store().cancel_requests().unwrap_or_default();
+            {
+                let running = self.running();
+                for id in requests {
+                    if let Some(cancel) = running.get(&id) {
+                        cancel.store(true, Ordering::SeqCst);
+                    }
                 }
             }
-        }
-        let snapshot = shared.jobs.snapshot();
-        if snapshot != last {
-            (shared.sink)(AppEvent::JobsUpdated(snapshot.clone()));
-            last = snapshot;
-        }
-        thread::sleep(Duration::from_secs(1));
-    }
-}
-
-fn run_job(shared: &Arc<Shared>, job: &Job) {
-    let id = job_id(job.id);
-    let cancel = Arc::new(AtomicBool::new(false));
-    shared.running().insert(job.id, Arc::clone(&cancel));
-    shared.generation.fetch_add(1, Ordering::SeqCst);
-    gates::set_label(&job.title);
-    (shared.sink)(AppEvent::JobStarted {
-        job_id: id.clone(),
-        title: job.title.clone(),
-        kind: job.kind,
-    });
-    shared.publish();
-    let result = match job.kind {
-        Kind::Refresh => run_refresh(shared, job, &id, &cancel),
-        Kind::Item => run_item(shared, job, &id, &cancel),
-        Kind::Workflow => run_workflow(shared, job, &id, &cancel),
-    };
-    {
-        let store = shared.store();
-        let _ = match &result {
-            Ok(_) => store.finish(job.id),
-            Err((true, _)) if job.question.is_some() => store.reopen(job.id),
-            Err((true, _)) => store.cancel(job.id),
-            Err((false, message)) => store.fail(job.id, message),
-        };
-    }
-    shared.running().remove(&job.id);
-    shared.generation.fetch_add(1, Ordering::SeqCst);
-    (shared.sink)(match result {
-        Ok(result) => AppEvent::JobCompleted { job_id: id, result },
-        Err((true, _)) => AppEvent::JobCancelled { job_id: id },
-        Err((false, message)) => AppEvent::JobFailed {
-            job_id: id,
-            message,
-        },
-    });
-    shared.publish();
-}
-
-fn settings(shared: &Shared, job: &Job) -> Result<Settings, (bool, String)> {
-    Settings::resolve(shared.jobs.paths(), &job.params).map_err(|error| (false, error.to_string()))
-}
-
-fn run_refresh(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let settings = settings(shared, job)?;
-    let pending = watchlist::sync(
-        &settings,
-        job.params.get("playlist_id").and_then(Value::as_str),
-        cancel,
-        &mut |event| shared.event(job_id, Source::Workflow, event),
-    )
-    .map_err(|error| job_error(&error))?;
-    let queued = shared
-        .jobs
-        .queue_pending(&job.params, &pending)
-        .map_err(|error| (false, error.to_string()))?;
-    shared.event(
-        job_id,
-        Source::Workflow,
-        JobEvent::message(format!("Queued {queued} item(s).")),
-    );
-    shared.wake.notify_all();
-    Ok(json!({"pending":pending.len(),"queued":queued}))
-}
-
-fn run_item(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let settings = settings(shared, job)?;
-    let model = settings.agent_model.as_deref();
-    let parked = RefCell::new(None);
-    let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
-        let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
-        Some((kind, answer["value"].clone()))
-    }));
-    let mut workflow_event = |event: JobEvent| {
-        if matches!(event, JobEvent::ItemWaiting { .. }) {
-            shared.publish();
-        }
-        shared.event(job_id, Source::Workflow, event);
-    };
-    let mut import_event = |event: JobEvent| shared.event(job_id, Source::Native, event);
-    let mut decide = |kind: DecisionKind, mut payload: Value| {
-        let answered = {
-            let mut resume = resume.borrow_mut();
-            match resume.as_ref() {
-                Some((asked, _)) if *asked == kind => resume.take(),
-                _ => None,
+            let snapshot = self.jobs.snapshot();
+            if snapshot != last {
+                (self.sink)(AppEvent::JobsUpdated(snapshot.clone()));
+                last = snapshot;
             }
+            thread::sleep(Duration::from_secs(1));
+        }
+    }
+
+    fn run_job(&self, job: &Job) {
+        let id = job_id(job.id);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.running().insert(job.id, Arc::clone(&cancel));
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        gates::set_label(&job.title);
+        (self.sink)(AppEvent::JobStarted {
+            job_id: id.clone(),
+            title: job.title.clone(),
+            kind: job.kind,
+        });
+        self.publish();
+        let result = match job.kind {
+            Kind::Refresh => self.run_refresh(job, &id, &cancel),
+            Kind::Item => self.run_item(job, &id, &cancel),
+            Kind::Workflow => self.run_workflow(job, &id, &cancel),
         };
-        if let Some((_, value)) = answered {
-            return Ok(value);
+        {
+            let store = self.store();
+            let _ = match &result {
+                Ok(_) => store.finish(job.id),
+                Err((true, _)) if job.question.is_some() => store.reopen(job.id),
+                Err((true, _)) => store.cancel(job.id),
+                Err((false, message)) => store.fail(job.id, message),
+            };
         }
-        if let Some(value) = ask_agent(shared, job_id, model, kind, &mut payload) {
-            return Ok(value);
-        }
-        parked.replace(Some(watchlist::Parked { kind, payload }));
-        Err("waiting for a choice".to_owned())
-    };
-    watchlist::action(
-        &settings,
-        &job.params,
-        cancel,
-        &mut workflow_event,
-        &mut import_event,
-        &mut decide,
-        &parked,
-    )
-    .map_err(|error| job_error(&error))
-}
+        self.running().remove(&job.id);
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        (self.sink)(match result {
+            Ok(result) => AppEvent::JobCompleted { job_id: id, result },
+            Err((true, _)) => AppEvent::JobCancelled { job_id: id },
+            Err((false, message)) => AppEvent::JobFailed {
+                job_id: id,
+                message,
+            },
+        });
+        self.publish();
+    }
 
-fn run_workflow(shared: &Shared, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-    let settings = settings(shared, job)?;
-    let model = settings.agent_model.as_deref();
-    let mut workflow_event = |event: JobEvent| shared.event(job_id, Source::Workflow, event);
-    let mut import_event = |event: JobEvent| shared.event(job_id, Source::Native, event);
-    let mut decide = |kind: DecisionKind, mut payload: Value| {
-        if let Some(value) = ask_agent(shared, job_id, model, kind, &mut payload) {
-            return Ok(value);
-        }
-        gates::suspended(|| {
-            (shared.ask)(Prompt {
-                job_id,
-                title: &job.title,
-                kind,
-                payload,
-                cancelled: cancel,
+    fn settings(&self, job: &Job) -> Result<Settings, (bool, String)> {
+        Settings::resolve(self.jobs.paths(), &job.params)
+            .map_err(|error| (false, error.to_string()))
+    }
+
+    fn run_refresh(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+        let settings = self.settings(job)?;
+        let pending = watchlist::sync(
+            &settings,
+            job.params.get("playlist_id").and_then(Value::as_str),
+            cancel,
+            &mut |event| self.event(job_id, Source::Workflow, event),
+        )
+        .map_err(|error| job_error(&error))?;
+        let queued = self
+            .jobs
+            .queue_pending(&job.params, &pending)
+            .map_err(|error| (false, error.to_string()))?;
+        self.event(
+            job_id,
+            Source::Workflow,
+            JobEvent::message(format!("Queued {queued} item(s).")),
+        );
+        self.wake.notify_all();
+        Ok(json!({"pending":pending.len(),"queued":queued}))
+    }
+
+    fn run_item(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+        let settings = self.settings(job)?;
+        let model = settings.agent_model.as_deref();
+        let parked = RefCell::new(None);
+        let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
+            let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
+            Some((kind, answer["value"].clone()))
+        }));
+        let mut workflow_event = |event: JobEvent| {
+            if matches!(event, JobEvent::ItemWaiting { .. }) {
+                self.publish();
+            }
+            self.event(job_id, Source::Workflow, event);
+        };
+        let mut import_event = |event: JobEvent| self.event(job_id, Source::Native, event);
+        let mut decide = |kind: DecisionKind, mut payload: Value| {
+            let answered = {
+                let mut resume = resume.borrow_mut();
+                match resume.as_ref() {
+                    Some((asked, _)) if *asked == kind => resume.take(),
+                    _ => None,
+                }
+            };
+            if let Some((_, value)) = answered {
+                return Ok(value);
+            }
+            if let Some(value) = self.ask_agent(job_id, model, kind, &mut payload) {
+                return Ok(value);
+            }
+            parked.replace(Some(watchlist::Parked { kind, payload }));
+            Err("waiting for a choice".to_owned())
+        };
+        watchlist::action(
+            &settings,
+            &job.params,
+            cancel,
+            &mut workflow_event,
+            &mut import_event,
+            &mut decide,
+            &parked,
+        )
+        .map_err(|error| job_error(&error))
+    }
+
+    fn run_workflow(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+        let settings = self.settings(job)?;
+        let model = settings.agent_model.as_deref();
+        let mut workflow_event = |event: JobEvent| self.event(job_id, Source::Workflow, event);
+        let mut import_event = |event: JobEvent| self.event(job_id, Source::Native, event);
+        let mut decide = |kind: DecisionKind, mut payload: Value| {
+            if let Some(value) = self.ask_agent(job_id, model, kind, &mut payload) {
+                return Ok(value);
+            }
+            gates::suspended(|| {
+                (self.ask)(Prompt {
+                    job_id,
+                    title: &job.title,
+                    kind,
+                    payload,
+                    cancelled: cancel,
+                })
             })
-        })
-    };
-    let workflow_failure = |error: muzik_workflow::Error| {
-        (
-            matches!(error, muzik_workflow::Error::Cancelled),
-            error.to_string(),
-        )
-    };
-    if settings.request.raw.is_empty() {
-        return Err((false, "Enter a URL or path.".to_owned()));
+        };
+        let workflow_failure = |error: muzik_workflow::Error| {
+            (
+                matches!(error, muzik_workflow::Error::Cancelled),
+                error.to_string(),
+            )
+        };
+        if settings.request.raw.is_empty() {
+            return Err((false, "Enter a URL or path.".to_owned()));
+        }
+        let input = classify_input(&settings.request.raw);
+        let result = if matches!(input, WorkflowInput::Local(_)) {
+            local_workflow::run(
+                &settings,
+                cancel,
+                &mut workflow_event,
+                &mut import_event,
+                &mut decide,
+            )
+        } else {
+            remote_workflow::run(
+                input,
+                &settings,
+                cancel,
+                &Cell::new(Stage::Download),
+                &mut workflow_event,
+                &mut import_event,
+                &mut decide,
+            )
+        }
+        .map_err(workflow_failure)?;
+        serde_json::to_value(result).map_err(|error| (false, error.to_string()))
     }
-    let input = classify_input(&settings.request.raw);
-    let result = if matches!(input, WorkflowInput::Local(_)) {
-        local_workflow::run(
-            &settings,
-            cancel,
-            &mut workflow_event,
-            &mut import_event,
-            &mut decide,
-        )
-    } else {
-        remote_workflow::run(
-            input,
-            &settings,
-            cancel,
-            &Cell::new(Stage::Download),
-            &mut workflow_event,
-            &mut import_event,
-            &mut decide,
-        )
-    }
-    .map_err(workflow_failure)?;
-    serde_json::to_value(result).map_err(|error| (false, error.to_string()))
-}
 
-fn ask_agent(
-    shared: &Shared,
-    job_id: &str,
-    model: Option<&str>,
-    kind: DecisionKind,
-    payload: &mut Value,
-) -> Option<Value> {
-    if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
-        return None;
-    }
-    let model = model?;
-    let chooser = shared.chooser.as_ref()?;
-    let message = |event: JobEvent| shared.event(job_id, Source::Agent, event);
-    if muzik_agent::strong_match(kind, payload).is_none() {
-        message(JobEvent::message(format!("Asking {model} to choose.")));
-    }
-    match chooser.choose(kind, payload, model) {
-        Ok(muzik_agent::Outcome::Decided(choice)) => {
-            message(JobEvent::AgentDecided {
-                label: choice.label,
-                confidence: choice.confidence,
-                reason: choice.reason,
-            });
-            Some(choice.value)
+    fn ask_agent(
+        &self,
+        job_id: &str,
+        model: Option<&str>,
+        kind: DecisionKind,
+        payload: &mut Value,
+    ) -> Option<Value> {
+        if !muzik_agent::supports(kind) || muzik_agent::options(kind, payload).is_empty() {
+            return None;
         }
-        Ok(muzik_agent::Outcome::Unsure {
-            suggestion,
-            confidence,
-            reason,
-        }) => {
-            payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
-            None
+        let model = model?;
+        let chooser = self.chooser.as_ref()?;
+        let message = |event: JobEvent| self.event(job_id, Source::Agent, event);
+        if muzik_agent::strong_match(kind, payload).is_none() {
+            message(JobEvent::message(format!("Asking {model} to choose.")));
         }
-        Err(error) => {
-            payload["agent"] = json!({"model":model,"error":error.to_string()});
-            None
+        match chooser.choose(kind, payload, model) {
+            Ok(muzik_agent::Outcome::Decided(choice)) => {
+                message(JobEvent::AgentDecided {
+                    label: choice.label,
+                    confidence: choice.confidence,
+                    reason: choice.reason,
+                });
+                Some(choice.value)
+            }
+            Ok(muzik_agent::Outcome::Unsure {
+                suggestion,
+                confidence,
+                reason,
+            }) => {
+                payload["agent"] = json!({"model":model,"suggestion":suggestion,"confidence":confidence,"reason":reason});
+                None
+            }
+            Err(error) => {
+                payload["agent"] = json!({"model":model,"error":error.to_string()});
+                None
+            }
         }
     }
 }
