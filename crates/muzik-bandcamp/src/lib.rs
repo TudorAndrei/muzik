@@ -130,13 +130,12 @@ fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
 fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
     let value: Value = serde_json::from_str(text)
         .map_err(|error| format!("The cookie JSON is not valid: {error}"))?;
-    let list = match &value {
-        Value::Array(list) => list.clone(),
-        Value::Object(map) => map
-            .get("cookies")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+    let list = match value {
+        Value::Array(list) => list,
+        Value::Object(mut map) => match map.remove("cookies") {
+            Some(Value::Array(list)) => list,
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     };
     Ok(list
