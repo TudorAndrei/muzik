@@ -11,7 +11,8 @@
         "album": "Dummy",
         "title": "Mysterons",
         "track": "01",
-        "year": "1994"
+        "year": "1994",
+        "label": ""
       },
       "destination": "Portishead/Dummy [1994]/01 Mysterons.flac"
     },
@@ -25,7 +26,8 @@
         "album": "Dummy",
         "title": "Sour Times",
         "track": "02",
-        "year": "2008"
+        "year": "2008",
+        "label": ""
       },
       "destination": "Portishead/Dummy [2008]/02 Sour Times.flac"
     },
@@ -39,7 +41,8 @@
         "album": "Sampler",
         "title": "Hidden Place",
         "track": "01",
-        "year": "0000"
+        "year": "0000",
+        "label": ""
       },
       "destination": "Compilations/Sampler/01 Hidden Place.flac"
     },
@@ -53,9 +56,115 @@
         "album": "",
         "title": "Hidden Place",
         "track": "00",
-        "year": "0000"
+        "year": "0000",
+        "label": ""
       },
       "destination": "Non-Album/Bj\u00f6rk/Hidden Place.flac"
+    },
+    {
+      "name": "separators in fields",
+      "path_format": "default",
+      "album_id": 4,
+      "fields": {
+        "albumartist": "AC/DC",
+        "artist": "AC/DC",
+        "album": "Live/Wire",
+        "title": "Back\\In/Black",
+        "track": "01",
+        "year": "1980",
+        "label": ""
+      },
+      "destination": "AC_DC/Live_Wire/01 Back_In_Black.flac"
+    },
+    {
+      "name": "drive letters in fields",
+      "path_format": "default",
+      "album_id": 5,
+      "fields": {
+        "albumartist": "C:Drive",
+        "artist": "C:Drive",
+        "album": "d:/Side A:B",
+        "title": "E:F:G",
+        "track": "02",
+        "year": "1990",
+        "label": ""
+      },
+      "destination": "C_Drive/d__Side A_B/02 E_F_G.flac"
+    },
+    {
+      "name": "compilation separators",
+      "path_format": "comp",
+      "album_id": 6,
+      "fields": {
+        "albumartist": "Various Artists",
+        "artist": "X/Y",
+        "album": "Now/Then",
+        "title": "Track/One",
+        "track": "03",
+        "year": "0000",
+        "label": ""
+      },
+      "destination": "Compilations/Now_Then/03 Track_One.flac"
+    },
+    {
+      "name": "singleton separators",
+      "path_format": "singleton",
+      "album_id": null,
+      "fields": {
+        "albumartist": "",
+        "artist": "Simon/Garfunkel",
+        "album": "",
+        "title": "A/B\\C",
+        "track": "00",
+        "year": "0000",
+        "label": ""
+      },
+      "destination": "Non-Album/Simon_Garfunkel/A_B_C.flac"
+    },
+    {
+      "name": "disambiguator with separator",
+      "path_format": "default",
+      "album_id": 7,
+      "fields": {
+        "albumartist": "Separator Band",
+        "artist": "Separator Band",
+        "album": "Same Name",
+        "title": "Song",
+        "track": "01",
+        "year": "2000",
+        "label": "Left/Right"
+      },
+      "destination": "Separator Band/Same Name [Left_Right]/01 Song.flac"
+    },
+    {
+      "name": "second disambiguator with separator",
+      "path_format": "default",
+      "album_id": 8,
+      "fields": {
+        "albumartist": "Separator Band",
+        "artist": "Separator Band",
+        "album": "Same Name",
+        "title": "Song",
+        "track": "01",
+        "year": "2000",
+        "label": "Up/Down"
+      },
+      "destination": "Separator Band/Same Name [Up_Down]/01 Song.flac"
+    },
+    {
+      "name": "only separators",
+      "path_format": "default",
+      "album_id": 9,
+      "fields": {
+        "albumartist": "/",
+        "artist": "/",
+        "album": "//",
+        "title": "/ /",
+        "track": "04",
+        "year": "2001",
+        "label": ""
+      },
+      "destination": "_/__/04 _ _.flac"
     }
   ],
   "sanitization": [

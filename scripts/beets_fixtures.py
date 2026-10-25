@@ -446,9 +446,10 @@ PATH_FORMATS = [
     ("singleton:true", "Non-Album/$artist/$title"),
 ]
 
-PATH_FIELDS = ["albumartist", "artist", "album", "title", "track", "year"]
+PATH_FIELDS = ["albumartist", "artist", "album", "title", "track", "year", "label"]
 
-def album_track(albumartist, album, title, track, year=0, artist=None):
+
+def album_track(albumartist, album, title, track, year=0, artist=None, label=""):
     return {
         "albumartist": albumartist,
         "artist": albumartist if artist is None else artist,
@@ -456,6 +457,7 @@ def album_track(albumartist, album, title, track, year=0, artist=None):
         "title": title,
         "track": track,
         "year": year,
+        "label": label,
     }
 
 
@@ -468,6 +470,37 @@ PATH_CASES = [
         album_track("Various Artists", "Sampler", "Hidden Place", 1, artist="Björk"),
     ),
     ("singleton", "singleton", {"artist": "Björk", "title": "Hidden Place"}),
+    (
+        "separators in fields",
+        "default",
+        album_track("AC/DC", "Live/Wire", "Back\\In/Black", 1, 1980),
+    ),
+    (
+        "drive letters in fields",
+        "default",
+        album_track("C:Drive", "d:/Side A:B", "E:F:G", 2, 1990),
+    ),
+    (
+        "compilation separators",
+        "comp",
+        album_track("Various Artists", "Now/Then", "Track/One", 3, artist="X/Y"),
+    ),
+    ("singleton separators", "singleton", {"artist": "Simon/Garfunkel", "title": "A/B\\C"}),
+    (
+        "disambiguator with separator",
+        "default",
+        album_track("Separator Band", "Same Name", "Song", 1, 2000, label="Left/Right"),
+    ),
+    (
+        "second disambiguator with separator",
+        "default",
+        album_track("Separator Band", "Same Name", "Song", 1, 2000, label="Up/Down"),
+    ),
+    (
+        "only separators",
+        "default",
+        album_track("/", "//", "/ /", 4, 2001),
+    ),
 ]
 
 SANITIZATION_CASES = [

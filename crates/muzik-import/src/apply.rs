@@ -50,6 +50,8 @@ pub struct ApplyOptions {
     pub aunique_keys: Vec<String>,
     pub aunique_disambiguators: Vec<String>,
     pub aunique_bracket: String,
+    pub path_sep_replace: String,
+    pub drive_sep_replace: String,
 }
 
 impl ApplyOptions {
@@ -116,6 +118,8 @@ impl ApplyOptions {
                 .map(str::to_owned)
                 .collect(),
             aunique_bracket: text(&["aunique", "bracket"], "[]"),
+            path_sep_replace: text(&["path_sep_replace"], "_"),
+            drive_sep_replace: text(&["drive_sep_replace"], "_"),
         })
     }
 }
@@ -471,6 +475,8 @@ fn prepare(
             aunique_keys: &options.aunique_keys,
             aunique_disambiguators: &options.aunique_disambiguators,
             aunique_bracket: &options.aunique_bracket,
+            path_sep_replace: &options.path_sep_replace,
+            drive_sep_replace: &options.drive_sep_replace,
         };
         let destination = item_destination(options, kind, &context, &item.source)?;
         claim_destination(

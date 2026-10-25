@@ -4981,6 +4981,7 @@ dependencies = [
 name = "muzik-import"
 version = "2.14.1"
 dependencies = [
+ "bolero",
  "deunicode",
  "fancy-regex",
  "muzik-core",
