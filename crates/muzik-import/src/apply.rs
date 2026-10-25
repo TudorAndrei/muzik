@@ -560,9 +560,10 @@ fn item_tags(
     if let Some(candidate) = candidate {
         apply_candidate_tags(&mut tags, candidate, index, compilation);
     }
-    let title = tags.fields.get("title").cloned().unwrap_or_default();
-    let artist = tags.fields.get("artist").cloned().unwrap_or_default();
-    let (title, artist) = ftclean::clean(&title, &artist);
+    let (title, artist) = {
+        let field = |name| tags.fields.get(name).map_or("", String::as_str);
+        ftclean::clean(field("title"), field("artist"))
+    };
     tags.fields.insert("title".into(), title);
     tags.fields.insert("artist".into(), artist);
     tags
