@@ -107,8 +107,7 @@ impl YtDlp {
         if request.force {
             args.push("--force-overwrites".to_owned());
         }
-        args.push(target);
-        let printed = self.print(args, "after_move:filepath", DOWNLOAD, cancelled)?;
+        let printed = self.print(args, &target, "after_move:filepath", DOWNLOAD, cancelled)?;
         let files = printed
             .lines()
             .map(str::trim)
@@ -137,7 +136,8 @@ impl YtDlp {
     /// video IDs.
     pub fn playlist_ids(&self, url: &str, cancelled: &AtomicBool) -> Result<Vec<String>, Error> {
         let printed = self.print(
-            vec!["--flat-playlist".to_owned(), url.to_owned()],
+            vec!["--flat-playlist".to_owned()],
+            url,
             "id",
             LOOKUP,
             cancelled,
@@ -186,7 +186,8 @@ impl YtDlp {
         cancelled: &AtomicBool,
     ) -> Result<String, Error> {
         let value = self.print(
-            vec!["--skip-download".to_owned(), target.to_owned()],
+            vec!["--skip-download".to_owned()],
+            target,
             field,
             SHORT_LOOKUP,
             cancelled,
@@ -213,20 +214,18 @@ impl YtDlp {
     fn print(
         &self,
         mut args: Vec<String>,
+        target: &str,
         template: &str,
         timeout: Duration,
         cancelled: &AtomicBool,
     ) -> Result<String, Error> {
         let printed = tempfile::NamedTempFile::new()?;
-        let target = args
-            .pop()
-            .ok_or_else(|| Error::Operation("yt-dlp target is missing".into()))?;
         args.extend([
             "--quiet".to_owned(),
             "--print-to-file".to_owned(),
             template.to_owned(),
             printed.path().to_string_lossy().into_owned(),
-            target,
+            target.to_owned(),
         ]);
         self.run(&args, timeout, cancelled)?;
         Ok(std::fs::read_to_string(printed.path())?)
