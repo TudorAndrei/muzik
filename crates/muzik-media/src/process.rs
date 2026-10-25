@@ -57,7 +57,7 @@ pub fn spawn(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
 /// # Errors
 /// Returns an error when `cancelled` becomes true, the timeout passes, or the status cannot be read.
 pub fn wait(
-    child: &mut Box<dyn ChildWrapper>,
+    child: &mut dyn ChildWrapper,
     timeout: Option<Duration>,
     cancelled: &AtomicBool,
 ) -> Result<ExitStatus, Stopped> {
@@ -115,7 +115,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let stopped = wait(
-            &mut child,
+            &mut *child,
             Some(Duration::from_millis(100)),
             &AtomicBool::new(false),
         );
@@ -131,7 +131,7 @@ mod tests {
 
         let mut child = spawn(Command::new("true")).unwrap();
         assert!(
-            wait(&mut child, None, &AtomicBool::new(false))
+            wait(&mut *child, None, &AtomicBool::new(false))
                 .unwrap()
                 .success()
         );
@@ -139,7 +139,7 @@ mod tests {
         sleep.arg("30");
         let mut child = spawn(sleep).unwrap();
         assert!(matches!(
-            wait(&mut child, None, &AtomicBool::new(true)),
+            wait(&mut *child, None, &AtomicBool::new(true)),
             Err(Stopped::Cancelled)
         ));
     }

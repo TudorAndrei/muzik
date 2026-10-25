@@ -324,7 +324,7 @@ fn run_codex(prompt: &str, model: &str) -> Result<Answer> {
             .write_all(prompt.as_bytes())
             .map_err(|error| format!("Cannot send the question to Codex: {error}"))?;
     }
-    let status = match process::wait(&mut child, Some(TIMEOUT), &AtomicBool::new(false)) {
+    let status = match process::wait(&mut *child, Some(TIMEOUT), &AtomicBool::new(false)) {
         Ok(status) => status,
         Err(Stopped::TimedOut | Stopped::Cancelled) => {
             return Err("Codex did not answer within 2 minutes.".into());

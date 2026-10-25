@@ -249,7 +249,7 @@ impl YtDlp {
             .stderr(stderr.try_clone()?);
         let mut child = process::spawn(command)
             .map_err(|error| Error::Operation(format!("cannot start yt-dlp: {error}")))?;
-        let status = match process::wait(&mut child, Some(timeout), cancelled) {
+        let status = match process::wait(&mut *child, Some(timeout), cancelled) {
             Ok(status) => status,
             Err(Stopped::Cancelled) => return Err(Error::Cancelled),
             Err(Stopped::TimedOut) => return Err(Error::Operation("yt-dlp timed out".into())),

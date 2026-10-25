@@ -126,7 +126,7 @@ impl Ffmpeg {
             .stdout(Stdio::null())
             .stderr(errors.try_clone().map_err(Error::Run)?);
         let mut child = process::spawn(command).map_err(Error::Run)?;
-        let status = match process::wait(&mut child, None, cancelled) {
+        let status = match process::wait(&mut *child, None, cancelled) {
             Ok(status) => status,
             Err(Stopped::Io(error)) => return Err(Error::Run(error)),
             Err(Stopped::Cancelled | Stopped::TimedOut) => {
