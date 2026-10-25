@@ -11,7 +11,8 @@
         "album": "Dummy",
         "title": "Mysterons",
         "track": "01",
-        "year": "1994"
+        "year": "1994",
+        "label": ""
       },
       "destination": "Portishead/Dummy [1994]/01 Mysterons.flac"
     },
@@ -25,7 +26,8 @@
         "album": "Dummy",
         "title": "Sour Times",
         "track": "02",
-        "year": "2008"
+        "year": "2008",
+        "label": ""
       },
       "destination": "Portishead/Dummy [2008]/02 Sour Times.flac"
     },
@@ -39,7 +41,8 @@
         "album": "Sampler",
         "title": "Hidden Place",
         "track": "01",
-        "year": "0000"
+        "year": "0000",
+        "label": ""
       },
       "destination": "Compilations/Sampler/01 Hidden Place.flac"
     },
@@ -53,9 +56,160 @@
         "album": "",
         "title": "Hidden Place",
         "track": "00",
-        "year": "0000"
+        "year": "0000",
+        "label": ""
       },
       "destination": "Non-Album/Bj\u00f6rk/Hidden Place.flac"
+    },
+    {
+      "name": "separators in fields",
+      "path_format": "default",
+      "album_id": 4,
+      "fields": {
+        "albumartist": "AC/DC",
+        "artist": "AC/DC",
+        "album": "Live/Wire",
+        "title": "Back\\In/Black",
+        "track": "01",
+        "year": "1980",
+        "label": ""
+      },
+      "destination": "AC_DC/Live_Wire/01 Back_In_Black.flac"
+    },
+    {
+      "name": "drive letters in fields",
+      "path_format": "default",
+      "album_id": 5,
+      "fields": {
+        "albumartist": "C:Drive",
+        "artist": "C:Drive",
+        "album": "d:/Side A:B",
+        "title": "E:F:G",
+        "track": "02",
+        "year": "1990",
+        "label": ""
+      },
+      "destination": "C_Drive/d__Side A_B/02 E_F_G.flac"
+    },
+    {
+      "name": "compilation separators",
+      "path_format": "comp",
+      "album_id": 6,
+      "fields": {
+        "albumartist": "Various Artists",
+        "artist": "X/Y",
+        "album": "Now/Then",
+        "title": "Track/One",
+        "track": "03",
+        "year": "0000",
+        "label": ""
+      },
+      "destination": "Compilations/Now_Then/03 Track_One.flac"
+    },
+    {
+      "name": "singleton separators",
+      "path_format": "singleton",
+      "album_id": null,
+      "fields": {
+        "albumartist": "",
+        "artist": "Simon/Garfunkel",
+        "album": "",
+        "title": "A/B\\C",
+        "track": "00",
+        "year": "0000",
+        "label": ""
+      },
+      "destination": "Non-Album/Simon_Garfunkel/A_B_C.flac"
+    },
+    {
+      "name": "disambiguator with separator",
+      "path_format": "default",
+      "album_id": 7,
+      "fields": {
+        "albumartist": "Separator Band",
+        "artist": "Separator Band",
+        "album": "Same Name",
+        "title": "Song",
+        "track": "01",
+        "year": "2000",
+        "label": "Left/Right"
+      },
+      "destination": "Separator Band/Same Name [Left_Right]/01 Song.flac"
+    },
+    {
+      "name": "second disambiguator with separator",
+      "path_format": "default",
+      "album_id": 8,
+      "fields": {
+        "albumartist": "Separator Band",
+        "artist": "Separator Band",
+        "album": "Same Name",
+        "title": "Song",
+        "track": "01",
+        "year": "2000",
+        "label": "Up/Down"
+      },
+      "destination": "Separator Band/Same Name [Up_Down]/01 Song.flac"
+    },
+    {
+      "name": "only separators",
+      "path_format": "default",
+      "album_id": 9,
+      "fields": {
+        "albumartist": "/",
+        "artist": "/",
+        "album": "//",
+        "title": "/ /",
+        "track": "04",
+        "year": "2001",
+        "label": ""
+      },
+      "destination": "_/__/04 _ _.flac"
+    },
+    {
+      "name": "long names",
+      "path_format": "default",
+      "album_id": 10,
+      "fields": {
+        "albumartist": "Long Artist",
+        "artist": "Long Artist",
+        "album": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "title": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "track": "05",
+        "year": "2002",
+        "label": ""
+      },
+      "destination": "Long Artist/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/05 TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT.flac"
+    },
+    {
+      "name": "long multibyte names",
+      "path_format": "default",
+      "album_id": 11,
+      "fields": {
+        "albumartist": "Long Artist",
+        "artist": "Long Artist",
+        "album": "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9",
+        "title": "\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6",
+        "track": "06",
+        "year": "2003",
+        "label": ""
+      },
+      "destination": "Long Artist/\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9/06 \u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6.flac"
+    },
+    {
+      "name": "colons without a drive letter",
+      "path_format": "default",
+      "album_id": 12,
+      "fields": {
+        "albumartist": "Ab:c",
+        "artist": "Ab:c",
+        "album": "1:2",
+        "title": "Mix: Two",
+        "track": "07",
+        "year": "2004",
+        "label": ""
+      },
+      "destination": "Ab_c/1_2/07 Mix_ Two.flac"
     }
   ],
   "sanitization": [
@@ -73,6 +227,130 @@
       "subpath": "Artist/Name\\slash",
       "extension": ".ogg",
       "destination": "Artist/Name_slash.ogg"
+    },
+    {
+      "subpath": "\u0001eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/x",
+      "extension": ".flac",
+      "replacements": [
+        [
+          "e",
+          "ee"
+        ]
+      ],
+      "destination": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/x.flac"
+    },
+    {
+      "subpath": "\u0001eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/x",
+      "extension": ".flac",
+      "replacements": [
+        [
+          "z",
+          "z"
+        ]
+      ],
+      "destination": "\u0001eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee/x.flac"
+    }
+  ],
+  "templates": [
+    {
+      "case": "first",
+      "template": "%left{$title,4}",
+      "rendered": "Myst"
+    },
+    {
+      "case": "first",
+      "template": "%right{$title,4}",
+      "rendered": "rons"
+    },
+    {
+      "case": "first",
+      "template": "%lower{$albumartist}",
+      "rendered": "portishead"
+    },
+    {
+      "case": "first",
+      "template": "%upper{$album}",
+      "rendered": "DUMMY"
+    },
+    {
+      "case": "first",
+      "template": "%title{$title}",
+      "rendered": "Mysterons"
+    },
+    {
+      "case": "first",
+      "template": "%asciify{Bj\u00f6rk Gu\u00f0mundsd\u00f3ttir}",
+      "rendered": "Bjork Gudmundsdottir"
+    },
+    {
+      "case": "first",
+      "template": "%if{1,yes,no}",
+      "rendered": "yes"
+    },
+    {
+      "case": "first",
+      "template": "%if{0,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{false,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{$track,a$,b,c}",
+      "rendered": "a,b"
+    },
+    {
+      "case": "first",
+      "template": "%lower{A$}B}",
+      "rendered": "a}b"
+    },
+    {
+      "case": "first",
+      "template": "$$title ${title}",
+      "rendered": "$title Mysterons"
+    },
+    {
+      "case": "first",
+      "template": "${}",
+      "rendered": "${}"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{albumartist album,year,()}",
+      "rendered": " (1994)"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{albumartist album,label,[]}",
+      "rendered": " [1]"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{album,year}",
+      "rendered": " [1994]"
+    },
+    {
+      "case": "drive letters in fields",
+      "template": "$albumartist|$album|$title",
+      "rendered": "C_Drive|d__Side A_B|E_F_G"
+    },
+    {
+      "case": "colons without a drive letter",
+      "template": "$albumartist|$album|$title",
+      "rendered": "Ab:c|1:2|Mix: Two"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{year,label}",
+      "rendered": ""
     }
   ]
 }

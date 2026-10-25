@@ -34,7 +34,13 @@ struct RankingCase {
     name: String,
     items: Vec<MatchItem>,
     albums: Vec<MatchAlbum>,
+    #[serde(default = "no_overrides")]
+    config: serde_json::Value,
     expected: ExpectedRanking,
+}
+
+fn no_overrides() -> serde_json::Value {
+    json!({})
 }
 
 #[derive(Deserialize)]
@@ -93,6 +99,8 @@ fn matches_beets_assignment_and_ranking() {
         }
     }
     for case in fixture.rankings {
+        let beets = BeetsConfig::from_layers("", json!({"match": case.config})).unwrap();
+        let config = MatchConfig::from_beets(&beets).unwrap();
         let actual = rank_albums(&case.items, &case.albums, &config).unwrap();
         let ids: Vec<_> = actual
             .candidates

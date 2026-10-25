@@ -1,8 +1,9 @@
+extern crate bolero as _;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use muzik_tags::{TagData, read, write};
+use muzik_tags::{ListField, TagData, read, write};
 use serde_json::Value;
 
 const SUFFIXES: &[&str] = &["mp3", "flac", "m4a", "opus", "ogg"];
@@ -74,12 +75,12 @@ fn reads_mediafile_tags_in_five_formats() {
             "{suffix}: custom"
         );
         assert_eq!(
-            actual.lists.get("artists"),
+            actual.lists.get(&ListField::Artists),
             Some(&vec!["Mara Vale".into(), "Lio Hart".into()]),
             "{suffix}: artists"
         );
         assert_eq!(
-            actual.lists.get("albumartists"),
+            actual.lists.get(&ListField::AlbumArtists),
             Some(&vec!["Mara Vale".into(), "Lio Hart".into()]),
             "{suffix}: albumartists"
         );
@@ -100,11 +101,11 @@ fn writes_tags_for_mediafile_to_read() {
         fields: expected_fields().unwrap(),
         lists: BTreeMap::from([
             (
-                "artists".into(),
+                ListField::Artists,
                 vec!["Mara Vale".into(), "Lio Hart".into()],
             ),
             (
-                "albumartists".into(),
+                ListField::AlbumArtists,
                 vec!["Mara Vale".into(), "Lio Hart".into()],
             ),
         ]),

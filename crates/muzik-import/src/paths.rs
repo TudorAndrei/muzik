@@ -26,7 +26,7 @@ impl PathFormats {
     pub(crate) fn destination(
         &self,
         kind: PathKind,
-        context: &TemplateContext,
+        context: &TemplateContext<'_>,
         extension: &str,
         sanitizer: &PathSanitizer,
     ) -> Result<String, fancy_regex::Error> {
@@ -39,6 +39,8 @@ impl PathFormats {
     }
 }
 
+const DEFAULT_MAX_FILENAME_LENGTH: usize = 200;
+
 /// One configured path replacement, applied to each path component.
 #[derive(Debug)]
 pub struct PathSanitizer {
@@ -47,7 +49,10 @@ pub struct PathSanitizer {
 }
 
 impl PathSanitizer {
-    pub(crate) fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
+    pub(crate) fn new(
+        replacements: &[(String, String)],
+        max_filename_length: usize,
+    ) -> Result<Self, fancy_regex::Error> {
         let replacements = if replacements.is_empty() {
             configured_default_replacements()?
         } else {
@@ -60,7 +65,11 @@ impl PathSanitizer {
         };
         Ok(Self {
             replacements,
-            max_component_bytes: 255,
+            max_component_bytes: if max_filename_length == 0 {
+                DEFAULT_MAX_FILENAME_LENGTH
+            } else {
+                max_filename_length
+            },
         })
     }
 
@@ -163,20 +172,72 @@ pub struct AlbumFields {
     pub fields: Fields,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct TemplateContext {
+const PATH_SEPARATORS: &[char] = if cfg!(windows) { &['\\', '/'] } else { &['/'] };
+
+#[derive(Clone, Debug)]
+pub struct TemplateContext<'a> {
     pub fields: Fields,
     pub album_id: Option<i64>,
-    pub albums: Vec<AlbumFields>,
-    pub aunique_keys: Vec<String>,
-    pub aunique_disambiguators: Vec<String>,
-    pub aunique_bracket: String,
+    pub albums: &'a [AlbumFields],
+    pub aunique_keys: &'a [String],
+    pub aunique_disambiguators: &'a [String],
+    pub aunique_bracket: &'a str,
+    pub path_sep_replace: &'a str,
+    pub drive_sep_replace: &'a str,
 }
 
-impl TemplateContext {
+impl Default for TemplateContext<'_> {
+    fn default() -> Self {
+        Self {
+            fields: Fields::new(),
+            album_id: None,
+            albums: &[],
+            aunique_keys: &[],
+            aunique_disambiguators: &[],
+            aunique_bracket: "",
+            path_sep_replace: "_",
+            drive_sep_replace: "_",
+        }
+    }
+}
+
+impl TemplateContext<'_> {
     #[must_use]
     pub fn render(&self, template: &str) -> String {
         render_expression(template, self)
+    }
+
+    fn field(&self, key: &str) -> Option<String> {
+        self.fields.get(key).map(|value| self.for_path(value))
+    }
+
+    fn for_path(&self, value: &str) -> String {
+        let mut chars = value.chars();
+        let drive = chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphabetic())
+            && chars.next() == Some(':');
+        let mut value = if drive {
+            let mut output = String::with_capacity(value.len());
+            let mut previous = None;
+            for character in value.chars() {
+                if character == ':'
+                    && previous.is_some_and(|before: char| before.is_ascii_alphabetic())
+                {
+                    output.push_str(self.drive_sep_replace);
+                } else {
+                    output.push(character);
+                }
+                previous = Some(character);
+            }
+            output
+        } else {
+            value.to_owned()
+        };
+        for separator in PATH_SEPARATORS {
+            value = value.replace(*separator, self.path_sep_replace);
+        }
+        value
     }
 
     fn aunique(&self, args: &[String]) -> String {
@@ -199,9 +260,7 @@ impl TemplateContext {
             },
             |value| value.split_whitespace().collect::<Vec<_>>(),
         );
-        let bracket = args
-            .get(2)
-            .map_or(self.aunique_bracket.as_str(), String::as_str);
+        let bracket = args.get(2).map_or(self.aunique_bracket, String::as_str);
         let duplicates: Vec<_> = self
             .albums
             .iter()
@@ -226,7 +285,11 @@ impl TemplateContext {
                 .map(|candidate| candidate.fields.get(key).map_or("", String::as_str))
                 .collect();
             if values.len() == duplicates.len() {
-                let value = album.fields.get(key).map_or("", String::as_str);
+                let value = album
+                    .fields
+                    .get(key)
+                    .map(|value| self.for_path(value))
+                    .unwrap_or_default();
                 return if value.is_empty() {
                     String::new()
                 } else {
@@ -279,8 +342,8 @@ fn render_expression(input: &str, context: &TemplateContext) -> String {
                 if let Some((key, tail)) = braced.split_once('}')
                     && !key.is_empty()
                 {
-                    if let Some(value) = context.fields.get(key) {
-                        output.push_str(value);
+                    if let Some(value) = context.field(key) {
+                        output.push_str(&value);
                     } else {
                         output.push_str("${");
                         output.push_str(key);
@@ -292,8 +355,8 @@ fn render_expression(input: &str, context: &TemplateContext) -> String {
             } else {
                 let (key, tail) = split_identifier(after);
                 if !key.is_empty() {
-                    if let Some(value) = context.fields.get(key) {
-                        output.push_str(value);
+                    if let Some(value) = context.field(key) {
+                        output.push_str(&value);
                     } else {
                         output.push('$');
                         output.push_str(key);
@@ -464,6 +527,52 @@ mod tests {
     }
 
     #[test]
+    fn rendered_paths_keep_the_template_components_for_any_field_values() {
+        let formats = PathFormats {
+            default: "$albumartist/$album%aunique{}/$track $title".into(),
+            compilation: "Compilations/$album%aunique{}/$track $title".into(),
+            singleton: "Non-Album/$artist/$title".into(),
+        };
+        let sanitizer = PathSanitizer::new(&[], 0).unwrap();
+        let alphabet = [
+            'a', '/', '\\', ':', ' ', '.', '\0', 'é', '$', '%', '{', '}', ',', '-', '\n', 'C',
+        ];
+        bolero::check!()
+            .with_type::<[Vec<u8>; 5]>()
+            .for_each(|raw| {
+                let [albumartist, artist, album, title, track] = raw.clone().map(|bytes| {
+                    let mut value = String::from("x");
+                    value.extend(bytes.iter().map(|byte| alphabet[usize::from(*byte & 15)]));
+                    value
+                });
+                let context = TemplateContext {
+                    fields: Fields::from([
+                        ("albumartist".into(), albumartist),
+                        ("artist".into(), artist),
+                        ("album".into(), album),
+                        ("title".into(), title),
+                        ("track".into(), track),
+                    ]),
+                    ..Default::default()
+                };
+                for (kind, template) in [
+                    (PathKind::Album, &formats.default),
+                    (PathKind::Compilation, &formats.compilation),
+                    (PathKind::Singleton, &formats.singleton),
+                ] {
+                    let path = formats
+                        .destination(kind, &context, ".flac", &sanitizer)
+                        .unwrap();
+                    assert_eq!(
+                        path.split('/').count(),
+                        template.split('/').count(),
+                        "{path:?}"
+                    );
+                }
+            });
+    }
+
+    #[test]
     fn aunique_uses_first_field_that_separates_albums() {
         let albums = vec![
             AlbumFields {
@@ -485,10 +594,10 @@ mod tests {
         ];
         let context = TemplateContext {
             album_id: Some(1),
-            albums,
-            aunique_keys: vec!["albumartist".into(), "album".into()],
-            aunique_disambiguators: vec!["year".into()],
-            aunique_bracket: "[]".into(),
+            albums: &albums,
+            aunique_keys: &["albumartist".into(), "album".into()],
+            aunique_disambiguators: &["year".into()],
+            aunique_bracket: "[]",
             ..Default::default()
         };
         assert_eq!(context.render("Album%aunique{}"), "Album [2001]");
@@ -505,7 +614,7 @@ mod tests {
             compilation: "Compilations/$album%aunique{}/$track $title".into(),
             singleton: "Non-Album/$artist/$title".into(),
         };
-        let sanitizer = PathSanitizer::new(&[]).unwrap();
+        let sanitizer = PathSanitizer::new(&[], 0).unwrap();
         let albums = cases
             .iter()
             .filter_map(|case| {
@@ -515,6 +624,21 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        let keys = ["albumartist".to_owned(), "album".to_owned()];
+        let disambiguators = [
+            "year".to_owned(),
+            "label".to_owned(),
+            "catalognum".to_owned(),
+        ];
+        let context = |case: &Value| TemplateContext {
+            fields: serde_json::from_value(case["fields"].clone()).unwrap(),
+            album_id: case["album_id"].as_i64(),
+            albums: &albums,
+            aunique_keys: &keys,
+            aunique_disambiguators: &disambiguators,
+            aunique_bracket: "[]",
+            ..Default::default()
+        };
         for case in cases {
             let kind = match case["path_format"].as_str().unwrap() {
                 "default" => PathKind::Album,
@@ -522,32 +646,43 @@ mod tests {
                 "singleton" => PathKind::Singleton,
                 other => panic!("unknown path format: {other}"),
             };
-            let context = TemplateContext {
-                fields: serde_json::from_value(case["fields"].clone()).unwrap(),
-                album_id: case["album_id"].as_i64(),
-                albums: albums.clone(),
-                aunique_keys: vec!["albumartist".into(), "album".into()],
-                aunique_disambiguators: vec!["year".into()],
-                aunique_bracket: "[]".into(),
-            };
             assert_eq!(
                 formats
-                    .destination(kind, &context, ".flac", &sanitizer)
+                    .destination(kind, &context(case), ".flac", &sanitizer)
                     .unwrap(),
                 case["destination"].as_str().unwrap(),
                 "{}",
                 case["name"]
             );
         }
-        for case in fixture["sanitization"].as_array().unwrap() {
+        for case in fixture["templates"].as_array().unwrap() {
+            let source = cases
+                .iter()
+                .find(|source| source["name"] == case["case"])
+                .unwrap();
             assert_eq!(
-                sanitizer
+                context(source).render(case["template"].as_str().unwrap()),
+                case["rendered"].as_str().unwrap(),
+                "{}",
+                case["template"]
+            );
+        }
+        for case in fixture["sanitization"].as_array().unwrap() {
+            let replacements: Vec<(String, String)> = case
+                .get("replacements")
+                .map(|rules| serde_json::from_value(rules.clone()).unwrap())
+                .unwrap_or_default();
+            assert_eq!(
+                PathSanitizer::new(&replacements, 0)
+                    .unwrap()
                     .legalize(
                         case["subpath"].as_str().unwrap(),
                         case["extension"].as_str().unwrap()
                     )
                     .unwrap(),
-                case["destination"].as_str().unwrap()
+                case["destination"].as_str().unwrap(),
+                "{}",
+                case["subpath"]
             );
         }
     }

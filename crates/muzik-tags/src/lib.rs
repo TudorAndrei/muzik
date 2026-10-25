@@ -2,7 +2,8 @@
 
 pub mod cover;
 pub mod probe;
-pub use cover::{embed_cover, find_cover, front_cover, has_front_cover};
+pub use cover::{cover_mime_type, embed_cover, find_cover, front_cover, has_front_cover};
+pub use lofty::picture::MimeType;
 pub use probe::{AudioProperties, probe};
 
 use std::collections::BTreeMap;
@@ -139,12 +140,29 @@ pub const FIELDS: &[Field] = &[
     },
 ];
 
+/// The multi-value artist fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ListField {
+    Artists,
+    AlbumArtists,
+}
+
+impl ListField {
+    pub const ALL: [Self; 2] = [Self::Artists, Self::AlbumArtists];
+
+    const fn key(self) -> ItemKey {
+        match self {
+            Self::Artists => ItemKey::TrackArtists,
+            Self::AlbumArtists => ItemKey::AlbumArtists,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagData {
     /// Field names follow mediafile (for example, `mb_albumid`).
     pub fields: BTreeMap<String, String>,
-    /// Multi-value artist fields.
-    pub lists: BTreeMap<String, Vec<String>>,
+    pub lists: BTreeMap<ListField, Vec<String>>,
     /// User text fields use TXXX, MP4 freeform atoms, or Vorbis comments.
     pub custom: BTreeMap<String, String>,
 }
@@ -186,13 +204,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
         {
             data.fields.insert("label".into(), value.into());
         }
-        for (name, key) in [
-            ("artists", ItemKey::TrackArtists),
-            ("albumartists", ItemKey::AlbumArtists),
-        ] {
-            let values: Vec<String> = tag.get_strings(key).map(str::to_owned).collect();
+        for field in ListField::ALL {
+            let values: Vec<String> = tag.get_strings(field.key()).map(str::to_owned).collect();
             if !values.is_empty() {
-                data.lists.insert(name.into(), values);
+                data.lists.insert(field, values);
             }
         }
         let disambig_key = album_disambig_key(file.file_type());
@@ -244,12 +259,8 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
             .ok_or_else(|| TagsError::UnknownField(name.clone()))?;
         tag.insert_text(field.key, value.clone());
     }
-    for (name, values) in &data.lists {
-        let key = match name.as_str() {
-            "artists" => ItemKey::TrackArtists,
-            "albumartists" => ItemKey::AlbumArtists,
-            _ => return Err(TagsError::UnknownField(name.clone())),
-        };
+    for (field, values) in &data.lists {
+        let key = field.key();
         tag.remove_key(key);
         for value in values {
             tag.push(TagItem::new(key, ItemValue::Text(value.clone())));
@@ -411,4 +422,61 @@ fn merge_vorbis_existing(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    const OPUS: &[u8] = include_bytes!("../tests/fixtures/mediafile.opus");
+
+    const SAMPLES: [(&str, &[u8]); 4] = [
+        ("mp3", include_bytes!("../tests/fixtures/mediafile.mp3")),
+        ("flac", include_bytes!("../tests/fixtures/mediafile.flac")),
+        ("m4a", include_bytes!("../tests/fixtures/mediafile.m4a")),
+        ("ogg", include_bytes!("../tests/fixtures/mediafile.ogg")),
+    ];
+
+    #[test]
+    #[ignore = "lofty 0.25.4 panics with \"Channel count is valid\" in ogg/opus/properties.rs:132"]
+    fn reading_opus_with_zero_channels_does_not_panic() {
+        let root = std::env::temp_dir().join(format!("muzik-tags-opus-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let mut bytes = OPUS.to_vec();
+        bytes[37] = 0;
+        let path = root.join("zero-channels.opus");
+        fs::write(&path, &bytes).unwrap();
+        let result = std::panic::catch_unwind(|| crate::read(&path, &[]).is_ok());
+        fs::remove_dir_all(root).unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn reading_any_bytes_does_not_panic() {
+        let root = std::env::temp_dir().join(format!("muzik-tags-read-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        bolero::check!()
+            .with_type::<(Vec<u8>, Vec<(u16, u8)>, u16)>()
+            .for_each(|(raw, edits, length)| {
+                for (suffix, sample) in SAMPLES {
+                    let path = root.join(format!("raw.{suffix}"));
+                    fs::write(&path, raw).unwrap();
+                    drop(crate::read(&path, &["MUZIK_MOOD"]));
+                    let mut mutated = sample.to_vec();
+                    for (offset, value) in edits {
+                        if let Some(byte) = usize::from(*offset)
+                            .checked_rem(mutated.len())
+                            .and_then(|index| mutated.get_mut(index))
+                        {
+                            *byte = *value;
+                        }
+                    }
+                    mutated.truncate(usize::from(*length));
+                    let path = root.join(format!("mutated.{suffix}"));
+                    fs::write(&path, &mutated).unwrap();
+                    drop(crate::read(&path, &["MUZIK_MOOD"]));
+                }
+            });
+        fs::remove_dir_all(root).unwrap();
+    }
 }

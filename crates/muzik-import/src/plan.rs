@@ -365,7 +365,7 @@ fn group_audio_paths(
     Ok(groups)
 }
 
-fn number(value: Option<&String>) -> u32 {
+fn number(value: Option<&str>) -> u32 {
     value
         .and_then(|value| value.split('/').next())
         .and_then(|value| value.parse().ok())
@@ -384,9 +384,9 @@ fn match_item(tags: &TagData) -> MatchItem {
         label: field("label"),
         catalog_number: field("catalognum"),
         album_disambiguation: field("albumdisambig"),
-        track: number(tags.fields.get("track")),
-        disc: number(tags.fields.get("disc")),
-        disc_total: number(tags.fields.get("disctotal")),
+        track: number(tags.fields.get("track").map(String::as_str)),
+        disc: number(tags.fields.get("disc").map(String::as_str)),
+        disc_total: number(tags.fields.get("disctotal").map(String::as_str)),
         year: field("date")
             .get(0..4)
             .and_then(|year| year.parse().ok())
