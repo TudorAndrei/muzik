@@ -4,6 +4,7 @@ use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tag::Tag;
+use muzik_core::source_reference::SpotifyReference;
 use muzik_spotify::PlaylistRef;
 
 impl Muzik {
@@ -104,7 +105,7 @@ impl Muzik {
             .playlists
             .iter()
             .flatten()
-            .filter(|playlist| playlist.uri != "spotify:liked")
+            .filter(|playlist| playlist.uri != SpotifyReference::Liked)
             .collect();
         if self.reading(Read::SpotifyPlaylists) {
             return page_scroll(page.child(empty_state(
@@ -318,7 +319,7 @@ fn spotify_playlists_table(
 ) -> Table {
     let mut body = TableBody::new();
     for (index, playlist) in playlists.iter().enumerate() {
-        let uri = playlist.uri.clone();
+        let uri = playlist.uri.to_string();
         let saved = saved_ids.contains(uri.as_str());
         body = body.child(
             TableRow::new()
