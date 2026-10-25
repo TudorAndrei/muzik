@@ -467,10 +467,10 @@ fn prepare(
         let context = TemplateContext {
             fields: path_fields,
             album_id: (album.kind == ImportMode::Album).then_some(next_id),
-            albums: known.clone(),
-            aunique_keys: options.aunique_keys.clone(),
-            aunique_disambiguators: options.aunique_disambiguators.clone(),
-            aunique_bracket: options.aunique_bracket.clone(),
+            albums: &known,
+            aunique_keys: &options.aunique_keys,
+            aunique_disambiguators: &options.aunique_disambiguators,
+            aunique_bracket: &options.aunique_bracket,
         };
         let destination = item_destination(options, kind, &context, &item.source)?;
         claim_destination(
@@ -622,7 +622,7 @@ const fn path_kind(mode: ImportMode, compilation: bool) -> PathKind {
 fn item_destination(
     options: &ApplyOptions,
     kind: PathKind,
-    context: &TemplateContext,
+    context: &TemplateContext<'_>,
     source: &Path,
 ) -> Result<PathBuf, ApplyError> {
     let extension = source

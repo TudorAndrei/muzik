@@ -26,7 +26,7 @@ impl PathFormats {
     pub(crate) fn destination(
         &self,
         kind: PathKind,
-        context: &TemplateContext,
+        context: &TemplateContext<'_>,
         extension: &str,
         sanitizer: &PathSanitizer,
     ) -> Result<String, fancy_regex::Error> {
@@ -164,16 +164,16 @@ pub struct AlbumFields {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct TemplateContext {
+pub struct TemplateContext<'a> {
     pub fields: Fields,
     pub album_id: Option<i64>,
-    pub albums: Vec<AlbumFields>,
-    pub aunique_keys: Vec<String>,
-    pub aunique_disambiguators: Vec<String>,
-    pub aunique_bracket: String,
+    pub albums: &'a [AlbumFields],
+    pub aunique_keys: &'a [String],
+    pub aunique_disambiguators: &'a [String],
+    pub aunique_bracket: &'a str,
 }
 
-impl TemplateContext {
+impl TemplateContext<'_> {
     #[must_use]
     pub fn render(&self, template: &str) -> String {
         render_expression(template, self)
@@ -199,9 +199,7 @@ impl TemplateContext {
             },
             |value| value.split_whitespace().collect::<Vec<_>>(),
         );
-        let bracket = args
-            .get(2)
-            .map_or(self.aunique_bracket.as_str(), String::as_str);
+        let bracket = args.get(2).map_or(self.aunique_bracket, String::as_str);
         let duplicates: Vec<_> = self
             .albums
             .iter()
@@ -485,10 +483,10 @@ mod tests {
         ];
         let context = TemplateContext {
             album_id: Some(1),
-            albums,
-            aunique_keys: vec!["albumartist".into(), "album".into()],
-            aunique_disambiguators: vec!["year".into()],
-            aunique_bracket: "[]".into(),
+            albums: &albums,
+            aunique_keys: &["albumartist".into(), "album".into()],
+            aunique_disambiguators: &["year".into()],
+            aunique_bracket: "[]",
             ..Default::default()
         };
         assert_eq!(context.render("Album%aunique{}"), "Album [2001]");
@@ -515,6 +513,8 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
+        let keys = ["albumartist".to_owned(), "album".to_owned()];
+        let disambiguators = ["year".to_owned()];
         for case in cases {
             let kind = match case["path_format"].as_str().unwrap() {
                 "default" => PathKind::Album,
@@ -525,10 +525,10 @@ mod tests {
             let context = TemplateContext {
                 fields: serde_json::from_value(case["fields"].clone()).unwrap(),
                 album_id: case["album_id"].as_i64(),
-                albums: albums.clone(),
-                aunique_keys: vec!["albumartist".into(), "album".into()],
-                aunique_disambiguators: vec!["year".into()],
-                aunique_bracket: "[]".into(),
+                albums: &albums,
+                aunique_keys: &keys,
+                aunique_disambiguators: &disambiguators,
+                aunique_bracket: "[]",
             };
             assert_eq!(
                 formats
