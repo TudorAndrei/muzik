@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 pub struct Choice {
     pub label: String,
-    pub meta: String,
+    pub meta: Option<String>,
     pub score: Option<u64>,
     pub value: Value,
 }
@@ -12,7 +12,7 @@ impl Choice {
     fn plain(label: &str, value: Value) -> Self {
         Self {
             label: label.to_owned(),
-            meta: String::new(),
+            meta: None,
             score: None,
             value,
         }
@@ -310,12 +310,12 @@ pub(crate) fn percent(fraction: f64) -> u64 {
     (fraction.clamp(0.0, 1.0) * 100.0).round() as u64
 }
 
-fn joined_facts(parts: impl IntoIterator<Item = String>) -> String {
-    parts
+fn joined_facts(parts: impl IntoIterator<Item = String>) -> Option<String> {
+    let facts = parts
         .into_iter()
         .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ")
+        .collect::<Vec<_>>();
+    (!facts.is_empty()).then(|| facts.join(" · "))
 }
 
 fn fact(value: &Value) -> String {
@@ -366,7 +366,12 @@ mod tests {
         let options = choices(&decision);
         assert_eq!(options[0].value, json!(0));
         assert_eq!(options[0].score, Some(100));
-        assert!(options[0].meta.contains("FLAC"));
+        assert!(
+            options[0]
+                .meta
+                .as_deref()
+                .is_some_and(|meta| meta.contains("FLAC"))
+        );
         assert_eq!(
             options.last().map(|option| &option.value),
             Some(&json!(null))

@@ -1171,7 +1171,7 @@ fn decision_buttons(decision: &Value, cx: &Context<Muzik>) -> Div {
         let value = option.value.clone();
         let reply = cx.listener(move |view, _, window, cx| view.reply(value.clone(), window, cx));
         let highlight = suggested == Some(index);
-        if option.score.is_none() && option.meta.is_empty() {
+        if option.score.is_none() && option.meta.is_none() {
             let button = Button::new(("decision", index))
                 .label(option.label)
                 .w_full()
@@ -1361,7 +1361,7 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
     let name = [
         Some(option.label.clone()),
         highlight.then(|| "suggested".to_string()),
-        (!option.meta.is_empty()).then(|| option.meta.clone()),
+        option.meta.clone(),
         option.score.map(|score| format!("{score}%")),
     ]
     .into_iter()
@@ -1393,8 +1393,8 @@ fn decision_row(index: usize, option: &DecisionChoice, highlight: bool, cx: &App
                     )
                 })
                 .child(label)
-                .when(!option.meta.is_empty(), |column| {
-                    column.child(style::meta(option.meta.clone(), cx))
+                .when_some(option.meta.clone(), |column, meta| {
+                    column.child(style::meta(meta, cx))
                 }),
         );
     if let Some(score) = option.score {

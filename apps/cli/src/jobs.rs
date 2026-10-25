@@ -289,8 +289,8 @@ fn option_lines(question: &Value) -> Vec<String> {
         .enumerate()
         .map(|(index, option)| {
             let mut line = option.label.clone();
-            if !option.meta.is_empty() {
-                let _ = write!(line, " · {}", option.meta);
+            if let Some(meta) = &option.meta {
+                let _ = write!(line, " · {meta}");
             }
             if let Some(score) = option.score {
                 let _ = write!(line, " · {score}%");
