@@ -4933,6 +4933,7 @@ dependencies = [
 name = "muzik-core"
 version = "2.14.1"
 dependencies = [
+ "bolero",
  "etcetera",
  "regex",
  "serde",

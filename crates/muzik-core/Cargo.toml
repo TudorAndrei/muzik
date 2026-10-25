@@ -23,3 +23,6 @@ usage-rs = "7.1"
 strum = "0.28"
 strum_macros = "0.28"
 url = "2.5.8"
+
+[dev-dependencies]
+bolero = "0.13"

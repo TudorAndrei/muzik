@@ -39,27 +39,42 @@ pub enum Error {
 /// Parse editable `MM:SS Title` or `HH:MM:SS Title` lines.
 #[must_use]
 pub fn parse_chapters(text: &str) -> Vec<Chapter> {
-    let entries: Vec<_> = text
-        .lines()
-        .filter_map(|line| {
-            let captures = CHAPTER_LINE.as_ref()?.captures(line.trim())?;
-            let start = timestamp_seconds(captures.get(1)?.as_str())?;
-            Some((start, captures.get(2)?.as_str().trim().to_owned()))
-        })
-        .collect();
-    entries
+    ordered(
+        text.lines()
+            .filter_map(|line| {
+                let captures = CHAPTER_LINE.as_ref()?.captures(line.trim())?;
+                let start = timestamp_seconds(captures.get(1)?.as_str())?;
+                Some(Chapter {
+                    index: 0,
+                    start,
+                    end: None,
+                    title: captures.get(2)?.as_str().trim().to_owned(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn ordered(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
+    for chapter in &mut chapters {
+        chapter.start = chapter.start.max(0);
+    }
+    chapters.sort_by_key(|chapter| chapter.start);
+    chapters.dedup_by_key(|chapter| chapter.start);
+    let next_starts: Vec<_> = chapters
         .iter()
-        .enumerate()
-        .map(|(position, (start, title))| Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
-            start: *start,
-            end: position
-                .checked_add(1)
-                .and_then(|next| entries.get(next))
-                .map(|entry| entry.0),
-            title: title.clone(),
-        })
-        .collect()
+        .skip(1)
+        .map(|chapter| Some(chapter.start))
+        .chain([None])
+        .collect();
+    for ((position, chapter), next_start) in chapters.iter_mut().enumerate().zip(next_starts) {
+        chapter.index = u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1));
+        chapter.end = chapter
+            .end
+            .filter(|end| *end > chapter.start)
+            .or(next_start);
+    }
+    chapters
 }
 
 /// Read a track list from a video description or comment.
@@ -96,25 +111,20 @@ pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
                 .trim_matches(|character: char| "-–—•|:. \t".contains(character))
                 .trim();
             if let Some(start) = timestamp_seconds(time).filter(|_| !title.is_empty()) {
-                entries.push((start, title.to_owned()));
+                entries.push(Chapter {
+                    index: 0,
+                    start,
+                    end: None,
+                    title: title.to_owned(),
+                });
             }
         }
     }
-    entries.sort_by_key(|entry| entry.0);
-    entries.dedup_by_key(|entry| entry.0);
-    if entries.len() < 2 {
+    let chapters = ordered(entries);
+    if chapters.len() < 2 {
         return Vec::new();
     }
-    entries
-        .iter()
-        .enumerate()
-        .map(|(position, (start, title))| Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
-            start: *start,
-            end: entries.get(position.saturating_add(1)).map(|entry| entry.0),
-            title: title.clone(),
-        })
-        .collect()
+    chapters
 }
 
 /// Select a useful track list from `YouTube` comments, with pinned comments first.
@@ -153,7 +163,7 @@ pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
     };
     let entries = raw.as_array().ok_or(Error::InvalidValue("chapters"))?;
     let mut chapters = Vec::with_capacity(entries.len());
-    for (position, entry) in entries.iter().enumerate() {
+    for entry in entries {
         let start = json_seconds(entry.get("start_time"), 0)?;
         let end = entry
             .get("end_time")
@@ -163,26 +173,19 @@ pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
         let title = entry
             .get("title")
             .and_then(Value::as_str)
-            .filter(|title| !title.is_empty())
-            .map_or_else(
-                || format!("Track {}", position.saturating_add(1)),
-                str::to_owned,
-            );
+            .unwrap_or_default()
+            .to_owned();
         chapters.push(Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
+            index: 0,
             start,
             end,
             title,
         });
     }
-    let next_starts: Vec<_> = chapters
-        .iter()
-        .skip(1)
-        .map(|chapter| chapter.start)
-        .collect();
-    for (chapter, next_start) in chapters.iter_mut().zip(next_starts) {
-        if chapter.end.is_none() {
-            chapter.end = Some(next_start);
+    let mut chapters = ordered(chapters);
+    for chapter in &mut chapters {
+        if chapter.title.is_empty() {
+            chapter.title = format!("Track {}", chapter.index);
         }
     }
     Ok(chapters)
@@ -248,16 +251,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
             title,
         });
     }
-    entries.sort_by_key(|chapter| chapter.index);
-    let next_starts: Vec<_> = entries
-        .iter()
-        .skip(1)
-        .map(|chapter| chapter.start)
-        .collect();
-    for (chapter, next_start) in entries.iter_mut().zip(next_starts) {
-        chapter.end = Some(next_start);
-    }
-    entries
+    ordered(entries)
 }
 
 /// Find chapters in the configured sidecar order.
@@ -389,6 +383,115 @@ fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
 mod tests {
     use super::*;
 
+    fn assert_well_formed(chapters: &[Chapter]) {
+        for (chapter, index) in chapters.iter().zip(1_u32..) {
+            assert_eq!(chapter.index, index, "{chapters:?}");
+            assert!(chapter.start >= 0, "{chapters:?}");
+            assert!(
+                chapter.end.is_none_or(|end| end > chapter.start),
+                "{chapters:?}"
+            );
+        }
+        assert!(
+            chapters
+                .windows(2)
+                .all(|pair| pair[0].start < pair[1].start),
+            "{chapters:?}"
+        );
+    }
+
+    fn time_text(hours: u8, minutes: u8, seconds: u8) -> String {
+        if hours.is_multiple_of(3) {
+            format!("{}:{:02}", minutes, seconds % 100)
+        } else {
+            format!("{}:{:02}:{:02}", hours, minutes % 100, seconds % 100)
+        }
+    }
+
+    #[test]
+    fn any_chapter_text_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(u8, u8, u8, String)>, String)>()
+            .for_each(|(lines, raw)| {
+                let mut text = lines
+                    .iter()
+                    .map(|(hours, minutes, seconds, title)| {
+                        format!("{} {title}", time_text(*hours, *minutes, *seconds))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                text.push('\n');
+                text.push_str(raw);
+                assert_well_formed(&parse_chapters(&text));
+            });
+    }
+
+    #[test]
+    fn any_tracklist_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(u8, u8, u8, u8, String)>, String)>()
+            .for_each(|(lines, raw)| {
+                let mut text: String = lines
+                    .iter()
+                    .map(|(shape, hours, minutes, seconds, title)| {
+                        let time = time_text(*hours, *minutes, *seconds);
+                        match shape % 4 {
+                            0 => format!("{time} {title}\n"),
+                            1 => format!("{title} - {time}\n"),
+                            2 => format!("{shape}. {title} ({time} - {time})\n"),
+                            _ => format!("[{time}] | {title}\n"),
+                        }
+                    })
+                    .collect();
+                text.push_str(raw);
+                assert_well_formed(&parse_tracklist(&text));
+            });
+    }
+
+    #[test]
+    fn any_cue_sheet_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<Vec<(u8, u8, u8, u8, String)>>()
+            .for_each(|lines| {
+                let text: String = lines
+                    .iter()
+                    .map(|(kind, first, second, third, text)| match kind % 4 {
+                        0 => format!("  TRACK {first:02} AUDIO\n"),
+                        1 => format!("    TITLE \"{text}\"\n"),
+                        2 => format!(
+                            "    INDEX 01 {:02}:{:02}:{:02}\n",
+                            first % 100,
+                            second % 100,
+                            third % 100
+                        ),
+                        _ => format!("{text}\n"),
+                    })
+                    .collect();
+                assert_well_formed(&parse_cue(&text));
+            });
+    }
+
+    #[test]
+    fn any_info_json_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(Option<f64>, Option<f64>, Option<String>)>, String)>()
+            .for_each(|(entries, raw)| {
+                let chapters: Vec<Value> = entries
+                    .iter()
+                    .map(|(start, end, title)| {
+                        serde_json::json!({"start_time": start, "end_time": end, "title": title})
+                    })
+                    .collect();
+                let text = serde_json::json!({ "chapters": chapters }).to_string();
+                if let Ok(chapters) = parse_info_json(&text) {
+                    assert_well_formed(&chapters);
+                }
+                if let Ok(chapters) = parse_info_json(raw) {
+                    assert_well_formed(&chapters);
+                }
+            });
+    }
+
     #[test]
     fn text_times_and_titles() {
         assert_eq!(
@@ -412,6 +515,44 @@ mod tests {
                     end: None,
                     title: "Third".into()
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn unordered_and_repeated_starts_become_ordered_chapters() {
+        let chapters = parse_chapters("03:00 Late\n00:00 First\n00:00 Again\n");
+        assert_eq!(
+            chapters
+                .iter()
+                .map(|chapter| (
+                    chapter.index,
+                    chapter.start,
+                    chapter.end,
+                    chapter.title.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [(1, 0, Some(180), "First"), (2, 180, None, "Late")]
+        );
+        let chapters = parse_info_json(
+            r#"{"chapters":[{"start_time":60,"end_time":60},{"start_time":-5,"end_time":30,"title":"One"}]}"#,
+        )
+        .expect("valid JSON");
+        assert_eq!(
+            chapters,
+            [
+                Chapter {
+                    index: 1,
+                    start: 0,
+                    end: Some(30),
+                    title: "One".into()
+                },
+                Chapter {
+                    index: 2,
+                    start: 60,
+                    end: None,
+                    title: "Track 2".into()
+                }
             ]
         );
     }
