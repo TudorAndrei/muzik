@@ -1,6 +1,6 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
-use crate::ffmpeg::{self, Cut, Ffmpeg};
+use crate::ffmpeg::{self, Cut, Ffmpeg, TrackTags};
 use muzik_core::chapters::{Chapter, Sidecar};
 use parking_lot::Mutex;
 use rayon::prelude::*;
@@ -453,15 +453,16 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<(),
         destination: &destination,
         start: chapter.start,
         end: chapter.end,
-        tags: &[
-            ("title", title),
-            ("artist", artist),
-            ("albumartist", albumartist.to_owned()),
-            ("album", metadata.album.clone()),
-            ("date", metadata.year.clone()),
-            ("track", format!("{}/{}", chapter.index, count)),
-            ("compilation", u8::from(compilation).to_string()),
-        ],
+        tags: &TrackTags {
+            title,
+            artist,
+            album_artist: albumartist.to_owned(),
+            album: metadata.album.clone(),
+            date: metadata.year.clone(),
+            track: chapter.index,
+            track_total: count,
+            compilation,
+        },
     };
     match ffmpeg.cut(&cut, cancelled) {
         Ok(()) => {}

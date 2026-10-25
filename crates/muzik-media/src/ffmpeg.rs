@@ -40,7 +40,33 @@ pub struct Cut<'a> {
     /// `None` keeps all audio after `start`.
     pub end: Option<i64>,
     /// Replaces all source tags.
-    pub tags: &'a [(&'a str, String)],
+    pub tags: &'a TrackTags,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrackTags {
+    pub title: String,
+    pub artist: String,
+    pub album_artist: String,
+    pub album: String,
+    pub date: String,
+    pub track: u32,
+    pub track_total: usize,
+    pub compilation: bool,
+}
+
+impl TrackTags {
+    fn metadata_args(&self) -> [String; 7] {
+        [
+            format!("title={}", self.title),
+            format!("artist={}", self.artist),
+            format!("albumartist={}", self.album_artist),
+            format!("album={}", self.album),
+            format!("date={}", self.date),
+            format!("track={}/{}", self.track, self.track_total),
+            format!("compilation={}", u8::from(self.compilation)),
+        ]
+    }
 }
 
 /// Re-encode the first audio stream and keep the source tags.
@@ -91,8 +117,8 @@ impl Ffmpeg {
             command.arg("-to").arg(timestamp(end));
         }
         command.args(["-vn", "-c:a", "copy", "-map_metadata", "-1"]);
-        for (key, value) in cut.tags {
-            command.arg("-metadata").arg(format!("{key}={value}"));
+        for tag in cut.tags.metadata_args() {
+            command.arg("-metadata").arg(tag);
         }
         command
             .arg(cut.destination)
