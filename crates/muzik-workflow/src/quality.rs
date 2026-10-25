@@ -149,7 +149,7 @@ fn check_with_backend(
         return Ok(keep);
     };
     on_event(JobEvent::CandidatesFound {
-        source: "soulseek".into(),
+        source: muzik_core::CandidateSource::Soulseek,
         candidates: vec![candidate_payload(&candidate)],
     });
     if quality_decision == QualityDecision::Ask {

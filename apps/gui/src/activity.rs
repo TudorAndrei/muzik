@@ -706,7 +706,7 @@ mod tests {
         activity.apply(&job_event(JobEvent::StepStarted(muzik_core::Step::Import)));
         assert_eq!(activity.runs()[0].status, "import");
         activity.apply(&job_event(JobEvent::CandidatesFound {
-            source: "soulseek".into(),
+            source: muzik_core::CandidateSource::Soulseek,
             candidates: (0..6).map(|index| json!({"title":format!("Album {index}"),"quality":{"format":"FLAC"},"user":"listener"})).collect(),
         }));
         let section = &activity.sections()[0];

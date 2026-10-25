@@ -16,6 +16,12 @@ pub enum Step {
     Import,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+#[strum(serialize_all = "snake_case")]
+pub enum CandidateSource {
+    Soulseek,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Task {
     LocalSplit,
@@ -55,7 +61,7 @@ pub enum JobEvent {
         reason: String,
     },
     CandidatesFound {
-        source: String,
+        source: CandidateSource,
         candidates: Vec<Value>,
     },
     WatchlistSaved,

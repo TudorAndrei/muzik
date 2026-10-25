@@ -22,5 +22,5 @@ pub use config_choices::{
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, MatchAnswer};
 pub use error::{Error, Result};
-pub use job_event::{JobEvent, Severity, Step, Task};
+pub use job_event::{CandidateSource, JobEvent, Severity, Step, Task};
 pub use types::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};
