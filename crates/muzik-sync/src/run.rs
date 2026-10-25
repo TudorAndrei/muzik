@@ -48,7 +48,7 @@ pub struct Done<'a> {
 }
 
 pub struct Report {
-    pub written: usize,
+    pub total: usize,
     pub failed: usize,
     pub unrecorded: usize,
 }
@@ -242,7 +242,7 @@ pub fn apply(
     };
     let failed = transfer_all(&plan.pending, options.jobs, &finished);
     Ok(Report {
-        written: total,
+        total,
         failed,
         unrecorded: unrecorded.load(Ordering::Relaxed),
     })
