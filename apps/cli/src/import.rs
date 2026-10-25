@@ -4,7 +4,7 @@ use std::path::Path;
 
 use anyhow::bail;
 use muzik_import::apply::{AlbumDecision, MatchDecision};
-use muzik_import::beets::{self, ImportRequest, SyncOutcome};
+use muzik_import::beets::{self, ImportRequest, Placement, SyncOutcome};
 use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
 
 use crate::Import;
@@ -25,6 +25,15 @@ impl<'a> Target<'a> {
     }
 }
 
+fn placement(args: &Import) -> anyhow::Result<Placement> {
+    match (args.copy, args.link) {
+        (true, true) => bail!("--link and --copy cannot be used together"),
+        (true, false) => Ok(Placement::Copy),
+        (false, true) => Ok(Placement::Link),
+        (false, false) => Ok(Placement::Move),
+    }
+}
+
 pub fn run(args: &Import) -> anyhow::Result<()> {
     let source = match Target::of(args)? {
         Target::Audio(source) => source,
@@ -33,8 +42,7 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
     let preview = beets::plan_import(ImportRequest {
         source: source.to_path_buf(),
         config_path: args.config.clone(),
-        copy: args.copy,
-        link: args.link,
+        placement: placement(args)?,
         nowrite: args.nowrite,
         dry_run: args.dry_run,
         force: false,

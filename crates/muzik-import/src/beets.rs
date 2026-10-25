@@ -19,6 +19,14 @@ use crate::{Error, Result};
 
 const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Placement {
+    #[default]
+    Move,
+    Copy,
+    Link,
+}
+
 #[derive(Clone, Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -27,8 +35,7 @@ const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 pub struct ImportRequest {
     pub source: PathBuf,
     pub config_path: Option<PathBuf>,
-    pub copy: bool,
-    pub link: bool,
+    pub placement: Placement,
     pub nowrite: bool,
     pub dry_run: bool,
     pub force: bool,
@@ -121,16 +128,13 @@ pub fn plan_import_with_cancel(
     if request.source.as_os_str().is_empty() {
         return Err("audio path is missing".into());
     }
-    if request.link && !request.nowrite {
+    if request.placement == Placement::Link && !request.nowrite {
         return Err("--link requires --nowrite".into());
     }
-    if request.link && request.copy {
-        return Err("--link and --copy cannot be used together".into());
-    }
     let overrides = json!({"import": {
-        "copy": request.copy,
-        "link": request.link,
-        "move": !request.copy && !request.link,
+        "copy": request.placement == Placement::Copy,
+        "link": request.placement == Placement::Link,
+        "move": request.placement == Placement::Move,
         "write": !request.nowrite,
         "pretend": request.dry_run,
         "incremental": !request.force
@@ -227,8 +231,7 @@ pub fn apply_import_with_cancel(
         prune_error: None,
     };
     if !cancelled()
-        && !preview.request.copy
-        && !preview.request.link
+        && preview.request.placement == Placement::Move
         && !preview.request.dry_run
         && !preview.request.no_prune
     {
