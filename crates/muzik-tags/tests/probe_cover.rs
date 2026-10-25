@@ -1,3 +1,4 @@
+extern crate bolero as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
