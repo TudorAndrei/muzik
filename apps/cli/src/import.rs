@@ -1,22 +1,37 @@
 //! CLI presentation for the shared Beets import service.
 
-use anyhow::{Context, bail};
+use std::path::Path;
+
+use anyhow::bail;
 use muzik_import::apply::{AlbumDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest, SyncOutcome};
 use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
 
 use crate::Import;
 
-pub fn run(args: &Import) -> anyhow::Result<()> {
-    match (&args.directory, &args.library) {
-        (None, None) => bail!("give an audio path or --library QUERY"),
-        (Some(_), Some(_)) => bail!("choose an audio path or --library QUERY"),
-        (None, Some(query)) => return sync(query, args),
-        (Some(_), None) => {}
+enum Target<'a> {
+    Audio(&'a Path),
+    Library(&'a str),
+}
+
+impl<'a> Target<'a> {
+    fn of(args: &'a Import) -> anyhow::Result<Self> {
+        match (&args.directory, &args.library) {
+            (None, None) => bail!("give an audio path or --library QUERY"),
+            (Some(_), Some(_)) => bail!("choose an audio path or --library QUERY"),
+            (Some(path), None) => Ok(Self::Audio(path)),
+            (None, Some(query)) => Ok(Self::Library(query)),
+        }
     }
-    let source = args.directory.as_ref().context("audio path is missing")?;
+}
+
+pub fn run(args: &Import) -> anyhow::Result<()> {
+    let source = match Target::of(args)? {
+        Target::Audio(source) => source,
+        Target::Library(query) => return sync(query, args),
+    };
     let preview = beets::plan_import(ImportRequest {
-        source: source.clone(),
+        source: source.to_path_buf(),
         config_path: args.config.clone(),
         copy: args.copy,
         link: args.link,
