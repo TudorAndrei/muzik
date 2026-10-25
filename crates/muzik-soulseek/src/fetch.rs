@@ -63,6 +63,9 @@ impl Candidate {
     #[must_use]
     pub fn audio_only(&self, limit: usize) -> Self {
         Self {
+            username: self.username.clone(),
+            slots: self.slots,
+            speed: self.speed,
             files: self
                 .files
                 .iter()
@@ -70,7 +73,6 @@ impl Candidate {
                 .take(limit)
                 .cloned()
                 .collect(),
-            ..self.clone()
         }
     }
 }
