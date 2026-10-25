@@ -285,10 +285,10 @@ impl Playlist {
     }
 
     pub fn merge_items(&mut self, discovered: Vec<WatchItem>) {
-        let mut old = HashMap::<(String, usize), WatchItem>::new();
-        let mut counts = HashMap::<String, usize>::new();
+        let mut old = HashMap::<(Option<String>, usize), WatchItem>::new();
+        let mut counts = HashMap::<Option<String>, usize>::new();
         for item in self.items.drain(..) {
-            let key = item.key().unwrap_or("").to_owned();
+            let key = item.key().map(str::to_owned);
             let occurrence = counts.entry(key.clone()).or_default();
             old.insert((key, *occurrence), item);
             *occurrence = occurrence.saturating_add(1);
@@ -297,7 +297,7 @@ impl Playlist {
         self.items = discovered
             .into_iter()
             .map(|mut item| {
-                let key = item.key().unwrap_or("").to_owned();
+                let key = item.key().map(str::to_owned);
                 let occurrence = counts.entry(key.clone()).or_default();
                 if let Some(previous) = old.remove(&(key, *occurrence)) {
                     item.stages = previous.stages;
