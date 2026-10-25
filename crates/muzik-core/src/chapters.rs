@@ -341,8 +341,7 @@ impl Sidecar {
     }
 }
 
-#[must_use]
-pub fn sidecar_path(audio: &Path, extension: &str) -> PathBuf {
+fn sidecar_path(audio: &Path, extension: &str) -> PathBuf {
     let stem = audio
         .file_stem()
         .unwrap_or_else(|| std::ffi::OsStr::new(""))

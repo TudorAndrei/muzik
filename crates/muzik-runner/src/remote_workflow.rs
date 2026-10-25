@@ -205,7 +205,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
         let from_youtube = self.acquired_from.take() == Some(AcquisitionSource::Youtube)
             || audio_files
                 .iter()
-                .any(|path| muzik_core::chapters::sidecar_path(path, ".info.json").is_file());
+                .any(|path| muzik_core::chapters::Sidecar::Info.path(path).is_file());
         if !from_youtube {
             return Ok(QualityCheckedAudio {
                 audio_files: audio_files.to_vec(),
