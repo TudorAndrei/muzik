@@ -24,12 +24,19 @@ pub fn background_command(program: impl AsRef<OsStr>) -> Command {
         .arg("-n")
         .arg(BACKGROUND_NICENESS.to_string())
         .arg(program);
-    command
+    with_tool_path(command)
 }
 
 #[cfg(not(unix))]
 pub fn background_command(program: impl AsRef<OsStr>) -> Command {
-    Command::new(program)
+    with_tool_path(Command::new(program))
+}
+
+fn with_tool_path(mut command: Command) -> Command {
+    if let Some(path) = muzik_core::paths::tool_search_path() {
+        command.env("PATH", path);
+    }
+    command
 }
 
 /// # Errors

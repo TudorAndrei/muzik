@@ -13,6 +13,7 @@ use muzik_soulseek::types::FileEntry;
 use muzik_workflow::upgrade::{
     CachedCandidate, candidate_id, load_candidate, save_candidate, scan_library, select_upgrade,
 };
+use serde::Serialize;
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -107,20 +108,20 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
                 ),
                 Some((candidate, score)) => {
                     let id = candidate_id(&candidate)?;
-                    save_candidate(
-                        &paths::cache_dir(),
-                        &id,
-                        &CachedCandidate {
-                            query: query.clone(),
-                            score,
-                            candidate: candidate.clone(),
-                        },
-                    )?;
                     let suggested = candidate
                         .files
                         .first()
                         .map(file_quality_label)
                         .unwrap_or_default();
+                    save_candidate(
+                        &paths::cache_dir(),
+                        &id,
+                        &CachedCandidate {
+                            query,
+                            score,
+                            candidate,
+                        },
+                    )?;
                     println!(
                         "{}\t{}\t{}\treplacement found\t{}\t{}",
                         safe_display(&track.artist),
@@ -209,7 +210,7 @@ fn show_candidates(
                 candidate: item.candidate.clone(),
             },
         )?;
-        rows.push(candidate_row(item, &id));
+        rows.push(candidate_row(item, id));
     }
     if json_output {
         println!(
@@ -224,19 +225,29 @@ fn show_candidates(
             println!(
                 "{}\t{}\t{:.1}\t{}\t{}\t{}\t{}",
                 index.saturating_add(1),
-                row["id"].as_str().unwrap_or(""),
-                row["score"].as_f64().unwrap_or(0.0),
-                row["format"].as_str().unwrap_or("?"),
-                row["file_count"].as_u64().unwrap_or(0),
-                safe_display(row["username"].as_str().unwrap_or("")),
-                safe_display(row["path"].as_str().unwrap_or(""))
+                row.id,
+                row.score,
+                row.format,
+                row.file_count,
+                safe_display(row.username),
+                safe_display(row.path)
             );
         }
     }
     Ok(())
 }
 
-fn candidate_row(item: &RankedCandidate, id: &str) -> Value {
+#[derive(Serialize)]
+struct CandidateRow<'a> {
+    id: String,
+    score: f64,
+    format: String,
+    file_count: usize,
+    username: &'a str,
+    path: &'a str,
+}
+
+fn candidate_row(item: &RankedCandidate, id: String) -> CandidateRow<'_> {
     let format = item
         .candidate
         .files
@@ -248,9 +259,14 @@ fn candidate_row(item: &RankedCandidate, id: &str) -> Value {
         .files
         .first()
         .map_or("", |file| file.name.as_str());
-    json!({"id": id, "score": item.score, "format": format,
-        "file_count": item.candidate.files.len(), "username": item.candidate.username,
-        "path": path})
+    CandidateRow {
+        id,
+        score: item.score,
+        format,
+        file_count: item.candidate.files.len(),
+        username: &item.candidate.username,
+        path,
+    }
 }
 
 pub fn download(args: &SoulseekDownload) -> anyhow::Result<()> {
@@ -448,6 +464,7 @@ mod tests {
     use muzik_library::Library;
     use muzik_soulseek::ranking::RankedCandidate;
     use muzik_soulseek::types::{Candidate, FileEntry};
+    use serde_json::json;
     use std::fs;
 
     fn candidate(names: &[&str]) -> Candidate {
@@ -472,17 +489,16 @@ mod tests {
 
     #[test]
     fn search_result_has_a_small_structured_row() {
-        let result = candidate_row(
-            &RankedCandidate {
-                candidate: candidate(&["Album\\01 Song.flac"]),
-                score: 120.0,
-            },
-            "0123456789abcdef",
+        let ranked = RankedCandidate {
+            candidate: candidate(&["Album\\01 Song.flac"]),
+            score: 120.0,
+        };
+        let result = candidate_row(&ranked, "0123456789abcdef".into());
+        assert_eq!(
+            serde_json::to_value(&result).unwrap(),
+            json!({"id": "0123456789abcdef", "score": 120.0, "format": "flac",
+                "file_count": 1, "username": "peer", "path": "Album\\01 Song.flac"})
         );
-        assert_eq!(result["id"], "0123456789abcdef");
-        assert_eq!(result["format"], "flac");
-        assert_eq!(result["file_count"], 1);
-        assert_eq!(result["username"], "peer");
     }
 
     #[test]

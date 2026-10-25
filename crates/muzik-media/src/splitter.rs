@@ -1,7 +1,7 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
-use crate::ffmpeg::{self, Cut, Ffmpeg};
-use muzik_core::chapters::{Chapter, sidecar_path};
+use crate::ffmpeg::{self, Cut, Ffmpeg, TrackTags};
+use muzik_core::chapters::{Chapter, Sidecar};
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use regex::Regex;
@@ -13,8 +13,6 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use unicode_normalization::UnicodeNormalization;
-
-const THUMB_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp"];
 
 #[derive(Clone, Debug, Default)]
 pub struct SplitOptions {
@@ -178,7 +176,7 @@ fn split_audio_with_binary(
 }
 
 fn split_cache_file(source: &Path, options: &SplitOptions) -> Result<Option<PathBuf>, SplitError> {
-    let chapter_sidecar = sidecar_path(source, ".chapters.txt");
+    let chapter_sidecar = Sidecar::Chapters.path(source);
     if !chapter_sidecar.exists() {
         return Ok(None);
     }
@@ -261,15 +259,20 @@ fn split_tracks(
                         if cancelled.load(Ordering::SeqCst) {
                             return Err(SplitError::Cancelled);
                         }
-                        if split_track(track_context, chapter)? {
-                            let count = completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
-                            let _ = sender.send(SplitProgress {
-                                completed: count,
-                                total: chapters.len(),
-                                chapter_index: chapter.index,
-                            });
-                        } else {
-                            failures.lock().push(chapter.title.clone());
+                        match split_track(track_context, chapter) {
+                            Ok(()) => {
+                                let count =
+                                    completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
+                                let _ = sender.send(SplitProgress {
+                                    completed: count,
+                                    total: chapters.len(),
+                                    chapter_index: chapter.index,
+                                });
+                            }
+                            Err(TrackError::Failed(reason)) => {
+                                failures.lock().push(format!("{}: {reason}", chapter.title));
+                            }
+                            Err(TrackError::Stop(error)) => return Err(error),
                         }
                         Ok(())
                     })
@@ -287,7 +290,7 @@ fn split_tracks(
     split?;
     let failed = failures.into_inner();
     if !failed.is_empty() {
-        return Err(SplitError::TracksFailed(failed.len(), failed.join(", ")));
+        return Err(SplitError::TracksFailed(failed.len(), failed.join("; ")));
     }
     Ok(())
 }
@@ -307,16 +310,11 @@ fn finish(
     }
     if !keep_source {
         fs::remove_file(source)?;
-        for extension in [
-            ".chapters.txt",
-            ".info.json",
-            ".metadata.txt",
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp",
-        ] {
-            let sidecar = sidecar_path(source, extension);
+        for kind in [Sidecar::Chapters, Sidecar::Info, Sidecar::Metadata]
+            .into_iter()
+            .chain(Sidecar::THUMBNAILS)
+        {
+            let sidecar = kind.path(source);
             if sidecar.exists() {
                 fs::remove_file(sidecar)?;
             }
@@ -409,7 +407,18 @@ fn expected_track_name(source: &Path, chapter: &Chapter, compilation: bool) -> S
     track_file_name(source, chapter.index, &title)
 }
 
-fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, SplitError> {
+enum TrackError {
+    Failed(String),
+    Stop(SplitError),
+}
+
+impl<E: Into<SplitError>> From<E> for TrackError {
+    fn from(error: E) -> Self {
+        Self::Stop(error.into())
+    }
+}
+
+fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<(), TrackError> {
     let SplitTrackContext {
         source,
         output,
@@ -444,21 +453,22 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         destination: &destination,
         start: chapter.start,
         end: chapter.end,
-        tags: &[
-            ("title", title),
-            ("artist", artist),
-            ("albumartist", albumartist.to_owned()),
-            ("album", metadata.album.clone()),
-            ("date", metadata.year.clone()),
-            ("track", format!("{}/{}", chapter.index, count)),
-            ("compilation", u8::from(compilation).to_string()),
-        ],
+        tags: &TrackTags {
+            title,
+            artist,
+            album_artist: albumartist.to_owned(),
+            album: metadata.album.clone(),
+            date: metadata.year.clone(),
+            track: chapter.index,
+            track_total: count,
+            compilation,
+        },
     };
     match ffmpeg.cut(&cut, cancelled) {
         Ok(()) => {}
-        Err(ffmpeg::Error::Failed(_)) => return Ok(false),
-        Err(ffmpeg::Error::Cancelled) => return Err(SplitError::Cancelled),
-        Err(error) => return Err(SplitError::Ffmpeg(error)),
+        Err(ffmpeg::Error::Failed(reason)) => return Err(TrackError::Failed(reason)),
+        Err(ffmpeg::Error::Cancelled) => return Err(SplitError::Cancelled.into()),
+        Err(error) => return Err(SplitError::Ffmpeg(error).into()),
     }
     if let Some(source_id) = &metadata.source_id {
         let sidecar = destination.with_extension("muzik.json");
@@ -470,7 +480,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         let text = serde_json::to_string_pretty(&payload).map_err(io::Error::other)?;
         fs::write(sidecar, format!("{text}\n"))?;
     }
-    Ok(true)
+    Ok(())
 }
 
 fn extract_metadata(source: &Path) -> Metadata {
@@ -503,7 +513,7 @@ fn extract_metadata(source: &Path) -> Metadata {
             };
         }
     }
-    if let Some(info) = read_json(&sidecar_path(source, ".info.json")) {
+    if let Some(info) = read_json(&Sidecar::Info.path(source)) {
         let title = field(&info, "title").unwrap_or_else(|| {
             source
                 .file_stem()
@@ -511,7 +521,7 @@ fn extract_metadata(source: &Path) -> Metadata {
                 .to_string_lossy()
                 .into_owned()
         });
-        let explicit_artist = field(&info, "artist").filter(|artist| artist != "null");
+        let explicit_artist = field(&info, "artist");
         let (parsed_artist, parsed_album, parsed_year) = parse_title(&title);
         let artist = explicit_artist
             .clone()
@@ -658,10 +668,11 @@ fn safe_filename(title: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("-");
+    let slug = slug.trim_start_matches(['.', '-']);
     if slug.is_empty() {
         "unknown".into()
     } else {
-        slug
+        slug.to_owned()
     }
 }
 
@@ -683,10 +694,10 @@ fn file_hash(path: &Path) -> io::Result<String> {
 }
 
 fn place_cover(source: &Path, output: &Path) {
-    for extension in THUMB_EXTS {
-        let thumbnail = sidecar_path(source, extension);
+    for kind in Sidecar::THUMBNAILS {
+        let thumbnail = kind.path(source);
         if thumbnail.exists() {
-            let _ = fs::copy(thumbnail, output.join(format!("cover{extension}")));
+            let _ = fs::copy(thumbnail, output.join(format!("cover{}", kind.suffix())));
             break;
         }
     }
@@ -705,7 +716,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("album.mp3");
-        let sidecar = sidecar_path(&source, ".chapters.txt");
+        let sidecar = Sidecar::Chapters.path(&source);
         fs::write(&source, b"source audio").unwrap();
         fs::write(&sidecar, b"0:00 Song\n").unwrap();
         let marker = temp.path().join("started");
@@ -758,11 +769,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("album.opus");
         fs::write(&source, b"downloaded again").unwrap();
-        fs::write(
-            sidecar_path(&source, ".chapters.txt"),
-            "0:00 One\n1:00 Two\n",
-        )
-        .unwrap();
+        fs::write(Sidecar::Chapters.path(&source), "0:00 One\n1:00 Two\n").unwrap();
         let binary = temp.path().join("ffmpeg");
         fs::write(&binary, "#!/bin/sh\nexit 1\n").unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -815,6 +822,42 @@ mod tests {
         assert!(!source.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_track_reports_the_ffmpeg_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("album.opus");
+        fs::write(&source, b"audio").unwrap();
+        let binary = temp.path().join("ffmpeg");
+        fs::write(
+            &binary,
+            "#!/bin/sh\necho 'Invalid data found' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = split_audio_with_binary(
+            &source,
+            &[Chapter {
+                index: 1,
+                start: 0,
+                end: None,
+                title: "Song".into(),
+            }],
+            &temp.path().join("output"),
+            &SplitOptions::default(),
+            &AtomicBool::new(false),
+            &mut |_| {},
+            &Ffmpeg::at(&binary),
+        );
+        assert!(
+            matches!(&result, Err(SplitError::TracksFailed(1, reasons)) if reasons == "Song: Invalid data found"),
+            "{result:?}"
+        );
+        assert!(source.exists());
+    }
+
     #[test]
     fn chapter_validation_keeps_input_safe() {
         let chapters = [Chapter {
@@ -830,6 +873,27 @@ mod tests {
     }
 
     #[test]
+    fn dot_names_stay_inside_the_splits_folder() {
+        assert_eq!(safe_filename(".."), "unknown");
+        assert_eq!(safe_filename(". ."), "unknown");
+        assert_eq!(safe_filename(".hidden album"), "hidden-album");
+        assert_eq!(safe_filename("Vol. 1"), "vol.-1");
+    }
+
+    #[test]
+    fn any_title_gives_one_normal_file_name() {
+        bolero::check!().with_type::<String>().for_each(|title| {
+            let name = safe_filename(title);
+            let components: Vec<_> = Path::new(&name).components().collect();
+            assert!(
+                matches!(components.as_slice(), [std::path::Component::Normal(part)] if *part == name.as_str()),
+                "{title:?} -> {name:?}"
+            );
+            assert!(!name.starts_with('.'), "{title:?} -> {name:?}");
+        });
+    }
+
+    #[test]
     fn compilation_title_and_featured_credit() {
         assert_eq!(
             parse_artist_title("Jean-Luc – Song (feat. A & B)"),
@@ -839,6 +903,22 @@ mod tests {
             strip_featured("Song (feat. A & B)"),
             ("Song".into(), vec!["A".into(), "B".into()])
         );
+    }
+
+    #[test]
+    fn a_null_info_artist_falls_back_to_the_video_title() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("Video.opus");
+        fs::write(&source, []).unwrap();
+        fs::write(
+            Sidecar::Info.path(&source),
+            r#"{"title":"Band - Record (1999)","artist":null,"uploader":"Channel"}"#,
+        )
+        .unwrap();
+        let metadata = extract_metadata(&source);
+        assert_eq!(metadata.artist, "Band");
+        assert_eq!(metadata.album, "Record");
+        assert_eq!(metadata.year, "1999");
     }
 
     #[test]
@@ -852,7 +932,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            sidecar_path(&source, ".info.json"),
+            Sidecar::Info.path(&source),
             r#"{"artist":"Other","album":"Other"}"#,
         )
         .unwrap();
@@ -886,12 +966,8 @@ mod tests {
             r#"{"source_id":"vid1","resolved":{"artist":"Main","album":"Record","year":2005}}"#,
         )
         .unwrap();
-        fs::write(
-            sidecar_path(&source, ".chapters.txt"),
-            "00:00 One\n00:01 Two\n",
-        )
-        .unwrap();
-        fs::write(sidecar_path(&source, ".jpg"), b"cover").unwrap();
+        fs::write(Sidecar::Chapters.path(&source), "00:00 One\n00:01 Two\n").unwrap();
+        fs::write(Sidecar::Jpg.path(&source), b"cover").unwrap();
         let chapters = vec![
             Chapter {
                 index: 1,
@@ -949,8 +1025,8 @@ mod tests {
             output
         );
         assert!(!source.exists());
-        assert!(!sidecar_path(&source, ".chapters.txt").exists());
-        assert!(!sidecar_path(&source, ".jpg").exists());
+        assert!(!Sidecar::Chapters.path(&source).exists());
+        assert!(!Sidecar::Jpg.path(&source).exists());
         assert!(output.join("01-one.mp3").exists());
     }
 }

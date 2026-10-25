@@ -124,21 +124,15 @@ pub fn classify_input(raw: &str) -> WorkflowInput {
             let id = if host == "youtu.be" {
                 url.path_segments()
                     .and_then(|mut parts| parts.next())
-                    .unwrap_or("")
-                    .to_owned()
+                    .map(str::to_owned)
             } else {
                 url.query_pairs()
                     .find_map(|(key, value)| (key == "v").then(|| value.into_owned()))
-                    .unwrap_or_default()
             };
-            if id.len() == 11
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-            {
+            if let Some(video_id) = id.filter(|id| ytdlp::is_video_id(id)) {
                 return WorkflowInput::YoutubeVideo {
                     url: raw.to_owned(),
-                    video_id: id,
+                    video_id,
                 };
             }
         }

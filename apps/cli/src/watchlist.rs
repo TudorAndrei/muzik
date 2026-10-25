@@ -1,10 +1,10 @@
 use crate::jobs;
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use muzik_core::paths::Paths;
 use muzik_runner::{Settings, job_id};
 use muzik_store::watchlist::{self, ItemAction, Repository, Summary};
 use serde_json::json;
-use std::collections::BTreeMap;
+use std::collections::HashMap;
 
 fn repository() -> Repository {
     Repository::open(&Paths::user())
@@ -25,16 +25,16 @@ pub fn list(items: bool) -> anyhow::Result<()> {
     }
     for playlist in playlists {
         let entries = &playlist.items;
-        let mut counts = BTreeMap::<String, usize>::new();
+        let mut counts = HashMap::<Summary, usize>::new();
         for item in entries {
-            let count = counts.entry(item.summary.to_string()).or_default();
+            let count = counts.entry(item.summary).or_default();
             *count = count.saturating_add(1);
         }
         let summary = Summary::ALL
             .iter()
             .filter_map(|state| {
                 counts
-                    .get(state.as_ref())
+                    .get(state)
                     .map(|count| format!("{count} {}", state.as_ref().to_lowercase()))
             })
             .collect::<Vec<_>>()
@@ -91,17 +91,9 @@ pub fn refresh(queue_only: bool) -> anyhow::Result<()> {
 pub fn item(
     playlist_id: &str,
     position: u64,
-    action: &str,
+    action: ItemAction,
     queue_only: bool,
 ) -> anyhow::Result<()> {
-    let action: ItemAction = action.parse().map_err(|_| {
-        let names = ItemAction::ALL
-            .iter()
-            .map(AsRef::as_ref)
-            .collect::<Vec<_>>()
-            .join(", ");
-        anyhow!("Unknown action {action}. Use one of: {names}.")
-    })?;
     let document = repository().load()?;
     let playlist = document
         .playlist(playlist_id)

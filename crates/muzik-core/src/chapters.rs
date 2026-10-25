@@ -6,17 +6,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-static CHAPTER_LINE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^(\d+:\d{2}(?::\d{2})?)\s+(.+)$").ok());
-static CUE_TRACK: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"(?i)^\s*TRACK\s+(\d+)\s+\S+").ok());
-static CUE_TITLE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r#"(?i)^\s*TITLE\s+"?(.*?)"?\s*$"#).ok());
-static CUE_INDEX: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"(?i)^\s*INDEX\s+01\s+(\d{2}):(\d{2}):(\d{2})").ok());
-static TRACK_PREFIX: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^\s*\d{1,3}\s*[.):\-]\s+").ok());
-static YTDLP_RANGE_SUFFIX: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\.\)\s*$").ok());
+static CHAPTER_LINE: LazyLock<Regex> = LazyLock::new(|| fixed(r"^(\d+:\d{2}(?::\d{2})?)\s+(.+)$"));
+static CUE_TRACK: LazyLock<Regex> = LazyLock::new(|| fixed(r"(?i)^\s*TRACK\s+(\d+)\s+\S+"));
+static CUE_TITLE: LazyLock<Regex> = LazyLock::new(|| fixed(r#"(?i)^\s*TITLE\s+"?(.*?)"?\s*$"#));
+static CUE_INDEX: LazyLock<Regex> =
+    LazyLock::new(|| fixed(r"(?i)^\s*INDEX\s+01\s+(\d{2}):(\d{2}):(\d{2})"));
+static TRACK_PREFIX: LazyLock<Regex> = LazyLock::new(|| fixed(r"^\s*\d{1,3}\s*[.):\-]\s+"));
+static YTDLP_RANGE_SUFFIX: LazyLock<Regex> = LazyLock::new(|| fixed(r"\.\)\s*$"));
+
+#[expect(
+    clippy::expect_used,
+    reason = "the patterns are fixed literals covered by tests"
+)]
+fn fixed(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("fixed chapter pattern")
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Chapter {
@@ -39,55 +43,73 @@ pub enum Error {
 /// Parse editable `MM:SS Title` or `HH:MM:SS Title` lines.
 #[must_use]
 pub fn parse_chapters(text: &str) -> Vec<Chapter> {
-    let entries: Vec<_> = text
-        .lines()
-        .filter_map(|line| {
-            let captures = CHAPTER_LINE.as_ref()?.captures(line.trim())?;
-            let start = timestamp_seconds(captures.get(1)?.as_str())?;
-            Some((start, captures.get(2)?.as_str().trim().to_owned()))
-        })
-        .collect();
-    entries
+    ordered(
+        text.lines()
+            .filter_map(|line| {
+                let captures = CHAPTER_LINE.captures(line.trim())?;
+                let start = timestamp_seconds(captures.get(1)?.as_str())?;
+                Some(Chapter {
+                    index: 0,
+                    start,
+                    end: None,
+                    title: captures.get(2)?.as_str().trim().to_owned(),
+                })
+            })
+            .collect(),
+    )
+}
+
+fn ordered(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
+    for chapter in &mut chapters {
+        chapter.start = chapter.start.max(0);
+    }
+    chapters.sort_by_key(|chapter| chapter.start);
+    chapters.dedup_by_key(|chapter| chapter.start);
+    let next_starts: Vec<_> = chapters
         .iter()
-        .enumerate()
-        .map(|(position, (start, title))| Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
-            start: *start,
-            end: position
-                .checked_add(1)
-                .and_then(|next| entries.get(next))
-                .map(|entry| entry.0),
-            title: title.clone(),
-        })
-        .collect()
+        .skip(1)
+        .map(|chapter| Some(chapter.start))
+        .chain([None])
+        .collect();
+    for ((position, chapter), next_start) in chapters.iter_mut().enumerate().zip(next_starts) {
+        chapter.index = u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1));
+        chapter.end = chapter
+            .end
+            .filter(|end| *end > chapter.start)
+            .or(next_start);
+    }
+    chapters
 }
 
 /// Read a track list from a video description or comment.
 pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
-    static START: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?[\s\-–—•|:.)\]]*(.+?)\s*$").ok()
+    static START: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?[\s\-–—•|:.)\]]*(.+?)\s*$",
+        )
     });
-    static END: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*$").ok()
+    static END: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*$",
+        )
     });
-    static RANGE: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]\s*$").ok()
+    static RANGE: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]\s*$",
+        )
     });
     let mut entries = Vec::new();
     for line in text.lines() {
         let pair = RANGE
-            .as_ref()
-            .and_then(|regex| regex.captures(line))
+            .captures(line)
             .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
             .or_else(|| {
                 START
-                    .as_ref()
-                    .and_then(|regex| regex.captures(line))
+                    .captures(line)
                     .and_then(|capture| Some((capture.get(1)?.as_str(), capture.get(2)?.as_str())))
             })
             .or_else(|| {
-                END.as_ref()
-                    .and_then(|regex| regex.captures(line))
+                END.captures(line)
                     .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
             });
         if let Some((time, title)) = pair {
@@ -96,25 +118,20 @@ pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
                 .trim_matches(|character: char| "-–—•|:. \t".contains(character))
                 .trim();
             if let Some(start) = timestamp_seconds(time).filter(|_| !title.is_empty()) {
-                entries.push((start, title.to_owned()));
+                entries.push(Chapter {
+                    index: 0,
+                    start,
+                    end: None,
+                    title: title.to_owned(),
+                });
             }
         }
     }
-    entries.sort_by_key(|entry| entry.0);
-    entries.dedup_by_key(|entry| entry.0);
-    if entries.len() < 2 {
+    let chapters = ordered(entries);
+    if chapters.len() < 2 {
         return Vec::new();
     }
-    entries
-        .iter()
-        .enumerate()
-        .map(|(position, (start, title))| Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
-            start: *start,
-            end: entries.get(position.saturating_add(1)).map(|entry| entry.0),
-            title: title.clone(),
-        })
-        .collect()
+    chapters
 }
 
 /// Select a useful track list from `YouTube` comments, with pinned comments first.
@@ -153,7 +170,7 @@ pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
     };
     let entries = raw.as_array().ok_or(Error::InvalidValue("chapters"))?;
     let mut chapters = Vec::with_capacity(entries.len());
-    for (position, entry) in entries.iter().enumerate() {
+    for entry in entries {
         let start = json_seconds(entry.get("start_time"), 0)?;
         let end = entry
             .get("end_time")
@@ -163,26 +180,19 @@ pub fn parse_info_json(text: &str) -> Result<Vec<Chapter>, Error> {
         let title = entry
             .get("title")
             .and_then(Value::as_str)
-            .filter(|title| !title.is_empty())
-            .map_or_else(
-                || format!("Track {}", position.saturating_add(1)),
-                str::to_owned,
-            );
+            .unwrap_or_default()
+            .to_owned();
         chapters.push(Chapter {
-            index: u32::try_from(position).map_or(u32::MAX, |index| index.saturating_add(1)),
+            index: 0,
             start,
             end,
             title,
         });
     }
-    let next_starts: Vec<_> = chapters
-        .iter()
-        .skip(1)
-        .map(|chapter| chapter.start)
-        .collect();
-    for (chapter, next_start) in chapters.iter_mut().zip(next_starts) {
-        if chapter.end.is_none() {
-            chapter.end = Some(next_start);
+    let mut chapters = ordered(chapters);
+    for chapter in &mut chapters {
+        if chapter.title.is_empty() {
+            chapter.title = format!("Track {}", chapter.index);
         }
     }
     Ok(chapters)
@@ -193,10 +203,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
     let mut entries: Vec<Chapter> = Vec::new();
     let mut current: Option<(u32, String, Option<i64>)> = None;
     for line in text.lines() {
-        if let Some(captures) = CUE_TRACK
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        if let Some(captures) = CUE_TRACK.captures(line) {
             if let Some((index, title, Some(start))) = current.take() {
                 entries.push(Chapter {
                     index,
@@ -214,10 +221,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
         let Some((_, title, start)) = current.as_mut() else {
             continue;
         };
-        if let Some(captures) = CUE_TITLE
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        if let Some(captures) = CUE_TITLE.captures(line) {
             let parsed = captures
                 .get(1)
                 .map_or("", |capture| capture.as_str())
@@ -225,10 +229,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
             if !parsed.is_empty() {
                 parsed.clone_into(title);
             }
-        } else if let Some(captures) = CUE_INDEX
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        } else if let Some(captures) = CUE_INDEX.captures(line) {
             let parts: Option<Vec<i64>> = (1..=3)
                 .map(|position| captures.get(position)?.as_str().parse::<i64>().ok())
                 .collect();
@@ -248,16 +249,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
             title,
         });
     }
-    entries.sort_by_key(|chapter| chapter.index);
-    let next_starts: Vec<_> = entries
-        .iter()
-        .skip(1)
-        .map(|chapter| chapter.start)
-        .collect();
-    for (chapter, next_start) in entries.iter_mut().zip(next_starts) {
-        chapter.end = Some(next_start);
-    }
-    entries
+    ordered(entries)
 }
 
 /// Find chapters in the configured sidecar order.
@@ -273,12 +265,12 @@ pub fn find_chapters(audio: &Path) -> Result<Vec<Chapter>, Error> {
 /// # Errors
 /// Returns an error if a sidecar cannot be read or parsed.
 pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<Chapter>, Error> {
-    let txt = sidecar_path(audio, ".chapters.txt");
+    let txt = Sidecar::Chapters.path(audio);
     if txt.metadata().is_ok_and(|metadata| metadata.len() > 0) {
         return Ok(normalize(parse_chapters(&read_text(&txt)?)));
     }
 
-    let info = sidecar_path(audio, ".info.json");
+    let info = Sidecar::Info.path(audio);
     if include_info && info.exists() {
         let chapters = parse_info_json(&read_text(&info)?)?;
         if !chapters.is_empty() {
@@ -286,7 +278,7 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
         }
     }
 
-    let cue = sidecar_path(audio, ".cue");
+    let cue = Sidecar::Cue.path(audio);
     let cue = if cue.exists() {
         Some(cue)
     } else {
@@ -310,6 +302,43 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
         }
     }
     Ok(Vec::new())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Sidecar {
+    Chapters,
+    Info,
+    Metadata,
+    Muzik,
+    Cue,
+    Jpg,
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl Sidecar {
+    pub const THUMBNAILS: [Self; 4] = [Self::Jpg, Self::Jpeg, Self::Png, Self::Webp];
+
+    #[must_use]
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Self::Chapters => ".chapters.txt",
+            Self::Info => ".info.json",
+            Self::Metadata => ".metadata.txt",
+            Self::Muzik => ".muzik.json",
+            Self::Cue => ".cue",
+            Self::Jpg => ".jpg",
+            Self::Jpeg => ".jpeg",
+            Self::Png => ".png",
+            Self::Webp => ".webp",
+        }
+    }
+
+    #[must_use]
+    pub fn path(self, audio: &Path) -> PathBuf {
+        sidecar_path(audio, self.suffix())
+    }
 }
 
 #[must_use]
@@ -368,18 +397,11 @@ fn truncate_to_i64(number: f64) -> Option<i64> {
 
 fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
     for chapter in &mut chapters {
-        let original = chapter.title.clone();
-        let without_prefix = TRACK_PREFIX.as_ref().map_or_else(
-            || original.clone().into(),
-            |pattern| pattern.replace(&original, ""),
-        );
-        let cleaned = YTDLP_RANGE_SUFFIX.as_ref().map_or_else(
-            || without_prefix.clone(),
-            |pattern| pattern.replace(without_prefix.trim(), ""),
-        );
+        let without_prefix = TRACK_PREFIX.replace(&chapter.title, "");
+        let cleaned = YTDLP_RANGE_SUFFIX.replace(without_prefix.trim(), "");
         let cleaned = cleaned.trim();
-        if !cleaned.is_empty() {
-            cleaned.clone_into(&mut chapter.title);
+        if !cleaned.is_empty() && cleaned != chapter.title {
+            chapter.title = cleaned.to_owned();
         }
     }
     chapters
@@ -388,6 +410,115 @@ fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_well_formed(chapters: &[Chapter]) {
+        for (chapter, index) in chapters.iter().zip(1_u32..) {
+            assert_eq!(chapter.index, index, "{chapters:?}");
+            assert!(chapter.start >= 0, "{chapters:?}");
+            assert!(
+                chapter.end.is_none_or(|end| end > chapter.start),
+                "{chapters:?}"
+            );
+        }
+        assert!(
+            chapters
+                .windows(2)
+                .all(|pair| pair[0].start < pair[1].start),
+            "{chapters:?}"
+        );
+    }
+
+    fn time_text(hours: u8, minutes: u8, seconds: u8) -> String {
+        if hours.is_multiple_of(3) {
+            format!("{}:{:02}", minutes, seconds % 100)
+        } else {
+            format!("{}:{:02}:{:02}", hours, minutes % 100, seconds % 100)
+        }
+    }
+
+    #[test]
+    fn any_chapter_text_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(u8, u8, u8, String)>, String)>()
+            .for_each(|(lines, raw)| {
+                let mut text = lines
+                    .iter()
+                    .map(|(hours, minutes, seconds, title)| {
+                        format!("{} {title}", time_text(*hours, *minutes, *seconds))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                text.push('\n');
+                text.push_str(raw);
+                assert_well_formed(&parse_chapters(&text));
+            });
+    }
+
+    #[test]
+    fn any_tracklist_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(u8, u8, u8, u8, String)>, String)>()
+            .for_each(|(lines, raw)| {
+                let mut text: String = lines
+                    .iter()
+                    .map(|(shape, hours, minutes, seconds, title)| {
+                        let time = time_text(*hours, *minutes, *seconds);
+                        match shape % 4 {
+                            0 => format!("{time} {title}\n"),
+                            1 => format!("{title} - {time}\n"),
+                            2 => format!("{shape}. {title} ({time} - {time})\n"),
+                            _ => format!("[{time}] | {title}\n"),
+                        }
+                    })
+                    .collect();
+                text.push_str(raw);
+                assert_well_formed(&parse_tracklist(&text));
+            });
+    }
+
+    #[test]
+    fn any_cue_sheet_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<Vec<(u8, u8, u8, u8, String)>>()
+            .for_each(|lines| {
+                let text: String = lines
+                    .iter()
+                    .map(|(kind, first, second, third, text)| match kind % 4 {
+                        0 => format!("  TRACK {first:02} AUDIO\n"),
+                        1 => format!("    TITLE \"{text}\"\n"),
+                        2 => format!(
+                            "    INDEX 01 {:02}:{:02}:{:02}\n",
+                            first % 100,
+                            second % 100,
+                            third % 100
+                        ),
+                        _ => format!("{text}\n"),
+                    })
+                    .collect();
+                assert_well_formed(&parse_cue(&text));
+            });
+    }
+
+    #[test]
+    fn any_info_json_gives_ordered_chapters() {
+        bolero::check!()
+            .with_type::<(Vec<(Option<f64>, Option<f64>, Option<String>)>, String)>()
+            .for_each(|(entries, raw)| {
+                let chapters: Vec<Value> = entries
+                    .iter()
+                    .map(|(start, end, title)| {
+                        serde_json::json!({"start_time": start, "end_time": end, "title": title})
+                    })
+                    .collect();
+                let text = serde_json::json!({ "chapters": chapters }).to_string();
+                if let Ok(chapters) = parse_info_json(&text) {
+                    assert_well_formed(&chapters);
+                }
+                if let Ok(chapters) = parse_info_json(raw) {
+                    assert_well_formed(&chapters);
+                }
+            });
+    }
 
     #[test]
     fn text_times_and_titles() {
@@ -412,6 +543,44 @@ mod tests {
                     end: None,
                     title: "Third".into()
                 },
+            ]
+        );
+    }
+
+    #[test]
+    fn unordered_and_repeated_starts_become_ordered_chapters() {
+        let chapters = parse_chapters("03:00 Late\n00:00 First\n00:00 Again\n");
+        assert_eq!(
+            chapters
+                .iter()
+                .map(|chapter| (
+                    chapter.index,
+                    chapter.start,
+                    chapter.end,
+                    chapter.title.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            [(1, 0, Some(180), "First"), (2, 180, None, "Late")]
+        );
+        let chapters = parse_info_json(
+            r#"{"chapters":[{"start_time":60,"end_time":60},{"start_time":-5,"end_time":30,"title":"One"}]}"#,
+        )
+        .expect("valid JSON");
+        assert_eq!(
+            chapters,
+            [
+                Chapter {
+                    index: 1,
+                    start: 0,
+                    end: Some(30),
+                    title: "One".into()
+                },
+                Chapter {
+                    index: 2,
+                    start: 60,
+                    end: None,
+                    title: "Track 2".into()
+                }
             ]
         );
     }
@@ -457,7 +626,7 @@ mod tests {
             "Cued"
         );
         fs::write(
-            sidecar_path(&audio, ".info.json"),
+            Sidecar::Info.path(&audio),
             r#"{"chapters":[{"start_time":0,"title":"02) JSON"}]}"#,
         )
         .expect("info file");
@@ -465,12 +634,12 @@ mod tests {
             find_chapters(&audio).expect("JSON chapters")[0].title,
             "JSON"
         );
-        fs::write(sidecar_path(&audio, ".chapters.txt"), "00:00 03 - Text\n").expect("text file");
+        fs::write(Sidecar::Chapters.path(&audio), "00:00 03 - Text\n").expect("text file");
         assert_eq!(
             find_chapters(&audio).expect("text chapters")[0].title,
             "Text"
         );
-        fs::write(sidecar_path(&audio, ".chapters.txt"), "invalid\n").expect("text file");
+        fs::write(Sidecar::Chapters.path(&audio), "invalid\n").expect("text file");
         assert!(find_chapters(&audio).expect("invalid text").is_empty());
     }
 
@@ -479,7 +648,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let audio = temp.path().join("Audio.flac");
         fs::write(&audio, []).expect("audio file");
-        fs::write(sidecar_path(&audio, ".chapters.txt"), []).expect("empty text file");
+        fs::write(Sidecar::Chapters.path(&audio), []).expect("empty text file");
         fs::write(
             temp.path().join("One.cue"),
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",
@@ -492,7 +661,7 @@ mod tests {
         .expect("second cue");
         assert!(find_chapters(&audio).expect("ambiguous cues").is_empty());
         fs::write(
-            sidecar_path(&audio, ".cue"),
+            Sidecar::Cue.path(&audio),
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",
         )
         .expect("matching cue");

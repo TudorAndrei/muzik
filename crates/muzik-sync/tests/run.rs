@@ -159,7 +159,7 @@ fn apply_deletes_stale_files_and_copies_pending() {
     for destination in &destinations {
         assert!(destination.is_file());
     }
-    assert_eq!(report.written, pending);
+    assert_eq!(report.total, pending);
     assert_eq!(report.failed, 0);
     assert_eq!(calls.load(Ordering::Relaxed), pending);
 }
@@ -180,7 +180,7 @@ fn apply_skips_stale_files_that_are_already_gone() {
     for destination in &destinations {
         assert!(destination.is_file());
     }
-    assert_eq!(report.written, pending);
+    assert_eq!(report.total, pending);
     assert_eq!(report.failed, 0);
 }
 
@@ -201,7 +201,7 @@ fn apply_counts_transfers_whose_encoding_was_not_saved() {
     })
     .unwrap();
     assert_eq!(pending, 2);
-    assert_eq!(report.written, pending);
+    assert_eq!(report.total, pending);
     assert_eq!(report.failed, 0);
     assert_eq!(report.unrecorded, pending);
     assert_eq!(unsaved.load(Ordering::Relaxed), pending);
