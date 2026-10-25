@@ -8,28 +8,18 @@ use muzik_store::watchlist::{ItemAction, ItemId, Repository};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Value, json};
 use std::collections::HashSet;
-use std::fmt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnqueueError {
+    #[error("{0}")]
     Invalid(String),
+    #[error("{0}")]
     Busy(String),
+    #[error("{0}")]
     Store(String),
 }
-
-impl fmt::Display for EnqueueError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid(message) | Self::Busy(message) | Self::Store(message) => {
-                formatter.write_str(message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for EnqueueError {}
 
 impl From<String> for EnqueueError {
     fn from(message: String) -> Self {
