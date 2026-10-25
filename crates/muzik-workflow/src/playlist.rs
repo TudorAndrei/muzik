@@ -5,8 +5,9 @@ use crate::{
     WorkflowOperations, WorkflowOptions, WorkflowRequest, check_cancelled, find_audio_inputs,
     process_audio_plan_with_events,
 };
-use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -94,7 +95,11 @@ pub fn run_youtube_playlist<O: WorkflowOperations>(
             "playlist contains no available videos".into(),
         ));
     }
-    let mut checkpoint = Checkpoint::load(&checkpoint_path(request, "youtube", playlist_id))?;
+    let mut checkpoint = Checkpoint::load(&checkpoint_path(
+        request,
+        PlaylistSource::Youtube,
+        playlist_id,
+    ))?;
     let mut result = empty_result();
     for id in ids {
         check_cancelled(cancelled)?;
@@ -175,8 +180,11 @@ pub fn run_spotify_export<O: WorkflowOperations>(
 ) -> Result<PlaylistRunResult, Error> {
     check_cancelled(cancelled)?;
     let playlist = load_spotify_export(path)?;
-    let mut checkpoint =
-        Checkpoint::load(&checkpoint_path(request, "spotify", &playlist.source_id))?;
+    let mut checkpoint = Checkpoint::load(&checkpoint_path(
+        request,
+        PlaylistSource::Spotify,
+        &playlist.source_id,
+    ))?;
     let mut result = empty_result();
     let mut occurrences = HashMap::<String, usize>::new();
     for track in playlist.tracks {
@@ -285,7 +293,22 @@ fn merge(into: &mut AudioProcessingResult, from: AudioProcessingResult) {
     into.organize_targets.extend(from.organize_targets);
 }
 
-fn checkpoint_path(request: &WorkflowRequest, source: &str, id: &str) -> PathBuf {
+#[derive(Clone, Copy)]
+enum PlaylistSource {
+    Youtube,
+    Spotify,
+}
+
+impl PlaylistSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Youtube => "youtube",
+            Self::Spotify => "spotify",
+        }
+    }
+}
+
+fn checkpoint_path(request: &WorkflowRequest, source: PlaylistSource, id: &str) -> PathBuf {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in id.as_bytes() {
         hash ^= u64::from(*byte);
@@ -294,25 +317,52 @@ fn checkpoint_path(request: &WorkflowRequest, source: &str, id: &str) -> PathBuf
     request
         .output
         .join(".playlist-state")
-        .join(format!("{source}_{hash:016x}.json"))
+        .join(format!("{}_{hash:016x}.json", source.as_str()))
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ItemStatus {
+    Downloaded,
+    Processed,
+    Complete,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CheckpointEntry {
+    #[serde(default)]
+    status: ItemStatus,
+    #[serde(default)]
+    files: Vec<PathBuf>,
+}
+
+#[derive(Deserialize)]
+struct StoredCheckpoint {
+    entries: BTreeMap<String, CheckpointEntry>,
+}
+
+#[derive(Serialize)]
+struct SavedCheckpoint<'a> {
+    version: u32,
+    entries: &'a BTreeMap<String, CheckpointEntry>,
 }
 
 struct Checkpoint {
     path: PathBuf,
-    entries: serde_json::Map<String, Value>,
+    entries: BTreeMap<String, CheckpointEntry>,
 }
 
 impl Checkpoint {
     fn load(path: &Path) -> Result<Self, Error> {
         let entries = if path.exists() {
-            let data: Value = serde_json::from_slice(&fs::read(path)?)
-                .map_err(|error| Error::Operation(format!("invalid playlist state: {error}")))?;
-            data.get("entries")
-                .and_then(Value::as_object)
-                .cloned()
-                .ok_or_else(|| Error::Operation("playlist state has no entries object".into()))?
+            serde_json::from_slice::<StoredCheckpoint>(&fs::read(path)?)
+                .map_err(|error| Error::Operation(format!("invalid playlist state: {error}")))?
+                .entries
         } else {
-            serde_json::Map::new()
+            BTreeMap::new()
         };
         Ok(Self {
             path: path.to_path_buf(),
@@ -321,39 +371,36 @@ impl Checkpoint {
     }
 
     fn is_complete(&self, id: &str, no_organize: bool) -> bool {
-        let status = self
-            .entries
-            .get(id)
-            .and_then(|entry| entry.get("status"))
-            .and_then(Value::as_str);
-        status == Some("complete") || no_organize && status == Some("processed")
+        let status = self.entries.get(id).map(|entry| entry.status);
+        status == Some(ItemStatus::Complete) || no_organize && status == Some(ItemStatus::Processed)
     }
 
     fn cached_files(&self, id: &str) -> Result<Vec<PathBuf>, Error> {
-        let files = self
-            .entries
-            .get(id)
-            .and_then(|entry| entry.get("files"))
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(PathBuf::from)
-            .collect::<Vec<_>>();
-        find_audio_inputs(&files)
+        find_audio_inputs(
+            self.entries
+                .get(id)
+                .map_or(&[][..], |entry| entry.files.as_slice()),
+        )
     }
 
     fn save_files(&mut self, id: &str, files: &[PathBuf]) -> Result<(), Error> {
         self.entries.insert(
             id.to_owned(),
-            json!({"status": "downloaded", "files": files}),
+            CheckpointEntry {
+                status: ItemStatus::Downloaded,
+                files: files.to_vec(),
+            },
         );
         self.save()
     }
 
     fn complete(&mut self, id: &str, no_organize: bool) -> Result<(), Error> {
         if let Some(entry) = self.entries.get_mut(id) {
-            entry["status"] = json!(if no_organize { "processed" } else { "complete" });
+            entry.status = if no_organize {
+                ItemStatus::Processed
+            } else {
+                ItemStatus::Complete
+            };
         }
         self.save()
     }
@@ -367,7 +414,10 @@ impl Checkpoint {
         let temp = self.path.with_extension("json.tmp");
         fs::write(
             &temp,
-            serde_json::to_vec(&json!({"version": 1, "entries": self.entries}))?,
+            serde_json::to_vec(&SavedCheckpoint {
+                version: 1,
+                entries: &self.entries,
+            })?,
         )?;
         fs::rename(temp, &self.path)?;
         Ok(())
@@ -558,4 +608,50 @@ fn validate_tracks(tracks: &[SpotifyTrack]) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn checkpoint_keeps_the_stored_format() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("youtube_0.json");
+        let song = temp.path().join("song.opus");
+        fs::write(&song, b"audio").unwrap();
+        fs::write(
+            &path,
+            json!({"version": 1, "entries": {
+                "a": {"status": "complete", "files": []},
+                "b": {"status": "processed", "files": []},
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mut checkpoint = Checkpoint::load(&path).unwrap();
+        assert!(checkpoint.is_complete("a", false));
+        assert!(!checkpoint.is_complete("b", false));
+        assert!(checkpoint.is_complete("b", true));
+        checkpoint
+            .save_files("c", std::slice::from_ref(&song))
+            .unwrap();
+        assert_eq!(
+            checkpoint.cached_files("c").unwrap(),
+            std::slice::from_ref(&song)
+        );
+        let stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            stored,
+            json!({"version": 1, "entries": {
+                "a": {"status": "complete", "files": []},
+                "b": {"status": "processed", "files": []},
+                "c": {"status": "downloaded", "files": [song]},
+            }})
+        );
+        checkpoint.complete("c", true).unwrap();
+        let stored: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(stored["entries"]["c"]["status"], "processed");
+    }
 }
