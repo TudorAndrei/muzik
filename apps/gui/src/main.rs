@@ -285,18 +285,12 @@ impl Muzik {
     }
 
     fn run_workflow(&mut self, cx: &mut Context<Self>) {
-        let params = self.launcher_params(cx);
-        if params
-            .get("raw")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        {
+        if self.raw.read(cx).value().trim().is_empty() {
             self.status = "Enter a URL or local path".into();
             cx.notify();
             return;
         }
+        let params = self.launcher_params(cx);
         self.start_workflow(params, cx);
     }
 
