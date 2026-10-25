@@ -4,9 +4,10 @@ use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::jobs::PendingItem;
-use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
+use muzik_store::watchlist::{ItemAction, ItemId, Repository};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use std::fmt;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -207,6 +208,13 @@ impl Jobs {
     }
 
     pub(crate) fn release_import_questions(&self) -> crate::Result<usize> {
+        let keeping: HashSet<String> = Repository::open(&self.paths)
+            .load()?
+            .playlists
+            .into_iter()
+            .filter(|playlist| playlist.kind.keeps_current_tags())
+            .map(|playlist| playlist.playlist_id)
+            .collect();
         let store = self.store();
         let mut released = 0_usize;
         for job in store.list(Status::Waiting)? {
@@ -214,7 +222,7 @@ impl Jobs {
                 .params
                 .get("playlist_id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| SourceKind::of_playlist_id(id).keeps_current_tags());
+                .is_some_and(|id| keeping.contains(id));
             let kind = job
                 .question
                 .as_ref()
@@ -311,8 +319,8 @@ mod tests {
     use super::{EnqueueError, Jobs, parse_job_id};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
-    use muzik_store::watchlist::ItemId;
     use muzik_store::watchlist::jobs::PendingItem;
+    use muzik_store::watchlist::{ItemId, Playlist, Repository, SourceKind};
     use serde_json::json;
     use std::path::Path;
 
@@ -429,7 +437,19 @@ mod tests {
 
     #[test]
     fn waiting_spotify_import_questions_go_back_to_the_queue() {
-        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        Repository::open(&paths)
+            .update(|document| {
+                document.playlists = vec![
+                    Playlist::new("spotify:liked", "u", SourceKind::Spotify, None),
+                    Playlist::new("PL1", "u", SourceKind::Youtube, None),
+                    Playlist::new("spotify:album:a", "u", SourceKind::Spotify, None),
+                ];
+                Ok(())
+            })
+            .unwrap();
+        let jobs = Jobs::in_memory(&paths).unwrap();
         let park = |playlist: &str, kind: &str| {
             jobs.store().park(
                 &muzik_store::jobs::NewJob {
