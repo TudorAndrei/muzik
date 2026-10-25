@@ -12,11 +12,13 @@ pub enum ReplyTarget {
     Queue(i64),
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Decision {
     target: ReplyTarget,
     job_id: String,
-    pub data: Value,
+    pub title: Option<String>,
+    pub item: Option<String>,
+    pub question: Value,
 }
 impl Decision {
     fn saved(job: &Value) -> Option<Self> {
@@ -24,8 +26,17 @@ impl Decision {
         Some(Self {
             target: ReplyTarget::Queue(id),
             job_id: muzik_runner::job_id(id),
-            data: json!({"queue_job":id,"item":job["item"],"title":job["title"],"kind":job["kind"],"payload":job["payload"]}),
+            title: job["title"].as_str().map(str::to_owned),
+            item: job["item"].as_str().map(str::to_owned),
+            question: json!({"kind":job["kind"],"payload":job["payload"]}),
         })
+    }
+
+    pub const fn queue_job(&self) -> Option<i64> {
+        match self.target {
+            ReplyTarget::Queue(id) => Some(id),
+            ReplyTarget::Live(_) => None,
+        }
     }
 }
 pub struct Finished {
@@ -178,8 +189,8 @@ impl Activity {
     pub fn waiting(&self) -> &[Decision] {
         &self.waiting
     }
-    pub fn decision(&self) -> Option<&Value> {
-        self.decision.as_ref().map(|choice| &choice.data)
+    pub const fn decision(&self) -> Option<&Decision> {
+        self.decision.as_ref()
     }
 
     pub fn start_login(&mut self, id: &str) {
@@ -251,7 +262,13 @@ impl Activity {
             } => {
                 let target = ReplyTarget::Live(decision_id.clone());
                 if !self.requests.iter().any(|choice| choice.target == target) {
-                    self.requests.push(Decision { target, job_id: job_id.clone(), data: json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload}) });
+                    self.requests.push(Decision {
+                        target,
+                        job_id: job_id.clone(),
+                        title: None,
+                        item: None,
+                        question: json!({"kind":kind,"payload":payload}),
+                    });
                 }
                 self.set_status(job_id, "Decision needed");
                 if self.decision.is_none() {
@@ -634,13 +651,23 @@ mod tests {
         activity.apply(&request("queue-2", "second"));
         activity.apply_jobs(&json!({"waiting":[{"id":3,"item":"PL1:3:video", "kind":"chapter_edit", "payload":{"chapters":[]}}]}));
         activity.open_waiting(3);
-        assert_eq!(activity.decision().unwrap()["queue_job"], 3);
+        assert_eq!(activity.decision().unwrap().queue_job(), Some(3));
+        assert_eq!(
+            activity.decision().unwrap().item.as_deref(),
+            Some("PL1:3:video")
+        );
         activity.defer();
-        assert_eq!(activity.decision().unwrap()["decision_id"], "first");
+        assert_eq!(
+            activity.decision().unwrap().target,
+            ReplyTarget::Live("first".into())
+        );
         activity.apply(&AppEvent::JobCancelled {
             job_id: "queue-1".into(),
         });
-        assert_eq!(activity.decision().unwrap()["decision_id"], "second");
+        assert_eq!(
+            activity.decision().unwrap().target,
+            ReplyTarget::Live("second".into())
+        );
         activity.open_waiting(3);
         assert_eq!(activity.reply(), Some(ReplyTarget::Queue(3)));
         assert!(activity.waiting().is_empty());

@@ -474,8 +474,8 @@ fn item_sheet(
         .activity
         .waiting()
         .iter()
-        .find(|job| job.data.get("item").and_then(Value::as_str) == Some(item_id.as_str()))
-        .and_then(|job| job.data.get("queue_job").and_then(Value::as_i64));
+        .find(|job| job.item.as_deref() == Some(item_id.as_str()))
+        .and_then(Decision::queue_job);
     let waiting_stage = style::stage_states(&item.item)
         .into_iter()
         .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)

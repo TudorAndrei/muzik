@@ -11,8 +11,8 @@ mod watch_table;
 mod watchlist_view;
 
 use activity::{
-    Activity, ActivitySection, Ending, Finished, ReplyTarget, Run, RunKind, job_label, short_text,
-    u64_to_f64,
+    Activity, ActivitySection, Decision, Ending, Finished, ReplyTarget, Run, RunKind, job_label,
+    short_text, u64_to_f64,
 };
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
@@ -573,7 +573,7 @@ impl Muzik {
 
     fn prepare_decision(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.chapter_rows.clear();
-        let Some(data) = self.activity.decision() else {
+        let Some(data) = self.activity.decision().map(|decision| &decision.question) else {
             return;
         };
         if choices::kind(data) == Some(DecisionKind::ChapterEdit)
@@ -961,8 +961,9 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn decision_review(&self, decision: &Value, cx: &Context<Self>) -> Stateful<Div> {
-        let kind = choices::kind(decision);
+    fn decision_review(&self, decision: &Decision, cx: &Context<Self>) -> Stateful<Div> {
+        let question = &decision.question;
+        let kind = choices::kind(question);
         let mut review = div()
             .id("decision")
             .v_flex()
@@ -978,20 +979,20 @@ impl Muzik {
                     .gap_1()
                     .child(style::overline("DECISION NEEDED", cx))
                     .child(div().text_sm().font_semibold().child(choices::title(kind)))
-                    .when_some(decision["title"].as_str(), |this, title| {
+                    .when_some(decision.title.as_deref(), |this, title| {
                         this.child(style::meta(short_text(title, 80), cx))
                     }),
             );
-        if let Some(note) = choices::note(decision) {
+        if let Some(note) = choices::note(question) {
             review = review.child(style::meta(note, cx));
         }
         if let Some(note) =
-            choices::agent_note(decision.pointer("/payload/agent").unwrap_or(&Value::Null))
+            choices::agent_note(question.pointer("/payload/agent").unwrap_or(&Value::Null))
         {
             review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
         }
-        review = review.child(decision_buttons(decision, cx));
-        let details = choices::details(decision);
+        review = review.child(decision_buttons(question, cx));
+        let details = choices::details(question);
         if !details.is_empty() {
             review = review.child(decision_details(&details, cx));
         }
@@ -1011,7 +1012,7 @@ impl Muzik {
                             ),
                     );
         }
-        if !decision["queue_job"].is_null() {
+        if decision.queue_job().is_some() {
             review = review.child(
                 div().flex().child(
                     Button::new("decision-later")
@@ -1057,21 +1058,17 @@ impl Muzik {
     }
 
     fn waiting_inbox(&self, cx: &Context<Self>) -> Div {
-        let open = self
-            .activity
-            .decision()
-            .map_or(Value::Null, |decision| decision["queue_job"].clone());
+        let open = self.activity.decision().and_then(Decision::queue_job);
         let mut inbox = div().v_flex().gap_1p5().child(style::overline(
             format!("NEEDS YOU ({})", self.activity.waiting().len()),
             cx,
         ));
         for (index, waiting) in self.activity.waiting().iter().enumerate() {
-            let waiting = &waiting.data;
-            let kind = choices::kind(waiting);
-            let highlighted = waiting["queue_job"] == open;
-            let full_title = waiting["title"].as_str().unwrap_or("Item");
+            let kind = choices::kind(&waiting.question);
+            let id = waiting.queue_job();
+            let highlighted = id == open;
+            let full_title = waiting.title.as_deref().unwrap_or("Item");
             let title = short_text(full_title, 60);
-            let id = waiting["queue_job"].as_i64();
             let key = id.map_or_else(
                 || format!("waiting-ix-{index}"),
                 |id| format!("waiting-{id}"),
