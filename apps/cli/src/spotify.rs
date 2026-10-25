@@ -21,25 +21,30 @@ pub fn logout() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct Status {
+    client_id: Option<String>,
+    redirect_uri: String,
+    connected: bool,
+    error: Option<String>,
+}
+
 pub fn status() -> anyhow::Result<()> {
-    let status = spotify::status(&app_config::path(), &Paths::user().spotify_token())?;
+    let status: Status = serde_json::from_value(spotify::status(
+        &app_config::path(),
+        &Paths::user().spotify_token(),
+    )?)?;
     let client_id = status
-        .get("client_id")
-        .and_then(serde_json::Value::as_str)
+        .client_id
+        .as_deref()
         .filter(|value| !value.is_empty())
         .unwrap_or("not set");
     println!("Client ID: {client_id}");
-    println!(
-        "Redirect URI: {}",
-        status
-            .get("redirect_uri")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-    );
-    if status.get("connected").and_then(serde_json::Value::as_bool) == Some(true) {
+    println!("Redirect URI: {}", status.redirect_uri);
+    if status.connected {
         println!("Connection: connected");
         Ok(())
-    } else if let Some(error) = status.get("error").and_then(serde_json::Value::as_str) {
+    } else if let Some(error) = status.error {
         bail!("Connection: {error}")
     } else {
         println!("Connection: not connected");
