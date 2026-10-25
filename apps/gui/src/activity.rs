@@ -356,10 +356,12 @@ impl Activity {
         self.runs
             .retain(|run| !run.queued || listed.contains(run.id.as_str()));
         for job in &open {
-            let id = job["job_id"].as_str().unwrap_or("");
-            if id.is_empty() || self.finished_runs.contains(id) {
+            let Some(id) = job["job_id"]
+                .as_str()
+                .filter(|id| !id.is_empty() && !self.finished_runs.contains(*id))
+            else {
                 continue;
-            }
+            };
             let queued = job["status"]
                 .as_str()
                 .and_then(|status| status.parse::<JobStatus>().ok())
