@@ -39,6 +39,8 @@ impl PathFormats {
     }
 }
 
+const DEFAULT_MAX_FILENAME_LENGTH: usize = 200;
+
 /// One configured path replacement, applied to each path component.
 #[derive(Debug)]
 pub struct PathSanitizer {
@@ -47,7 +49,10 @@ pub struct PathSanitizer {
 }
 
 impl PathSanitizer {
-    pub(crate) fn new(replacements: &[(String, String)]) -> Result<Self, fancy_regex::Error> {
+    pub(crate) fn new(
+        replacements: &[(String, String)],
+        max_filename_length: usize,
+    ) -> Result<Self, fancy_regex::Error> {
         let replacements = if replacements.is_empty() {
             configured_default_replacements()?
         } else {
@@ -60,7 +65,11 @@ impl PathSanitizer {
         };
         Ok(Self {
             replacements,
-            max_component_bytes: 255,
+            max_component_bytes: if max_filename_length == 0 {
+                DEFAULT_MAX_FILENAME_LENGTH
+            } else {
+                max_filename_length
+            },
         })
     }
 
@@ -524,7 +533,7 @@ mod tests {
             compilation: "Compilations/$album%aunique{}/$track $title".into(),
             singleton: "Non-Album/$artist/$title".into(),
         };
-        let sanitizer = PathSanitizer::new(&[]).unwrap();
+        let sanitizer = PathSanitizer::new(&[], 0).unwrap();
         let alphabet = [
             'a', '/', '\\', ':', ' ', '.', '\0', 'é', '$', '%', '{', '}', ',', '-', '\n', 'C',
         ];
@@ -605,7 +614,7 @@ mod tests {
             compilation: "Compilations/$album%aunique{}/$track $title".into(),
             singleton: "Non-Album/$artist/$title".into(),
         };
-        let sanitizer = PathSanitizer::new(&[]).unwrap();
+        let sanitizer = PathSanitizer::new(&[], 0).unwrap();
         let albums = cases
             .iter()
             .filter_map(|case| {
@@ -664,7 +673,7 @@ mod tests {
                 .map(|rules| serde_json::from_value(rules.clone()).unwrap())
                 .unwrap_or_default();
             assert_eq!(
-                PathSanitizer::new(&replacements)
+                PathSanitizer::new(&replacements, 0)
                     .unwrap()
                     .legalize(
                         case["subpath"].as_str().unwrap(),

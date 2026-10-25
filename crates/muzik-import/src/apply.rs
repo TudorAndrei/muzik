@@ -108,6 +108,11 @@ impl ApplyOptions {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default(),
+                config
+                    .get(&["max_filename_length"])
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|length| usize::try_from(length).ok())
+                    .unwrap_or(0),
             )?,
             aunique_keys: text(&["aunique", "keys"], "albumartist album")
                 .split_whitespace()

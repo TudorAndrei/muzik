@@ -719,6 +719,16 @@ PATH_CASES = [
         "default",
         album_track("/", "//", "/ /", 4, 2001),
     ),
+    (
+        "long names",
+        "default",
+        album_track("Long Artist", "A" * 300, "T" * 300, 5, 2002),
+    ),
+    (
+        "long multibyte names",
+        "default",
+        album_track("Long Artist", "é" * 200, "ö" * 200, 6, 2003),
+    ),
 ]
 
 TEMPLATE_CASE = "first"
@@ -747,6 +757,8 @@ SANITIZATION_CASES = [
     ("Artist/Bad: title?", ".FLAC", None),
     (".Hidden/ -track. ", ".mp3", None),
     ("Artist/Name\\slash", ".ogg", None),
+    ("\x01" + "e" * 300 + "/x", ".flac", [["e", "ee"]]),
+    ("\x01" + "e" * 199 + "/x", ".flac", [["z", "z"]]),
 ]
 
 
