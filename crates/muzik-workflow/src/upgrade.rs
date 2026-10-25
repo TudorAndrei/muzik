@@ -131,8 +131,10 @@ pub fn select_upgrade(
         })
         .filter_map(|(ranked, file)| {
             let one_file = Candidate {
+                username: ranked.candidate.username.clone(),
+                slots: ranked.candidate.slots,
+                speed: ranked.candidate.speed,
                 files: vec![file.clone()],
-                ..ranked.candidate.clone()
             };
             let wanted = Wanted {
                 artist: &track.artist,
