@@ -175,7 +175,7 @@ impl Jobs {
         let mut queued = 0_usize;
         for item in pending {
             let mut params = params.clone();
-            item.id.write(&mut params);
+            item.id.write(&mut params)?;
             if let Some(fields) = params.as_object_mut() {
                 fields.insert("title".into(), json!(item.title));
                 fields.insert("action".into(), json!(ItemAction::Run));

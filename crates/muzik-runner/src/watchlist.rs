@@ -185,7 +185,7 @@ impl Operations for Adapter<'_, '_> {
         question: &Value,
     ) -> muzik_store::Result<()> {
         let mut params = self.params.clone();
-        id.write(&mut params);
+        id.write(&mut params)?;
         if let Some(fields) = params.as_object_mut() {
             fields.insert("action".into(), json!(stage.resume_action()));
         }

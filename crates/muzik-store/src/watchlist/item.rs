@@ -162,25 +162,51 @@ impl ItemId {
     /// # Errors
     /// Returns an error if `playlist_id` is missing or blank, or `position` is not a positive integer.
     pub fn from_params(params: &Value) -> Result<Self> {
-        let playlist_id = params["playlist_id"]
-            .as_str()
-            .filter(|id| !id.trim().is_empty())
-            .ok_or("playlist_id must be a non-empty string.")?;
-        let position = params["position"]
-            .as_u64()
-            .filter(|position| *position > 0)
-            .ok_or("position must be a positive integer.")?;
+        let params = ItemParams::read(params)?;
+        if params.playlist_id.trim().is_empty() {
+            return Err("playlist_id must be a non-empty string.".into());
+        }
+        if params.position == 0 {
+            return Err("position must be a positive integer.".into());
+        }
         Ok(Self::new(
-            playlist_id,
-            position,
-            params["video_id"].as_str(),
+            &params.playlist_id,
+            params.position,
+            params.video_id.as_deref(),
         ))
     }
 
-    pub fn write(&self, params: &mut Value) {
-        params["playlist_id"] = Value::from(self.playlist_id.as_str());
-        params["position"] = Value::from(self.position);
-        params["video_id"] = Value::from(self.video_id.as_deref().unwrap_or(""));
+    /// # Errors
+    /// Returns an error if `params` is not an object or holds item fields of the wrong type.
+    pub fn write(&self, params: &mut Value) -> Result<()> {
+        let mut fields = if params.is_null() {
+            ItemParams::default()
+        } else {
+            ItemParams::read(params)?
+        };
+        self.playlist_id.clone_into(&mut fields.playlist_id);
+        fields.position = self.position;
+        fields.video_id.clone_from(&self.video_id);
+        *params = serde_json::to_value(fields)?;
+        Ok(())
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct ItemParams {
+    #[serde(default)]
+    playlist_id: String,
+    #[serde(default)]
+    position: u64,
+    #[serde(default)]
+    video_id: Option<String>,
+    #[serde(flatten)]
+    rest: Map<String, Value>,
+}
+
+impl ItemParams {
+    fn read(params: &Value) -> Result<Self> {
+        Self::deserialize(params).map_err(|error| format!("invalid item params: {error}").into())
     }
 }
 
@@ -625,14 +651,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(id.to_string(), "PL1:3:abcdefghijk");
-        let mut params = json!({"output":"/music"});
-        id.write(&mut params);
+        let mut params = json!({"output":"/music","position":9});
+        id.write(&mut params).unwrap();
+        assert_eq!(
+            params,
+            json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","output":"/music"})
+        );
         assert_eq!(super::ItemId::from_params(&params).unwrap(), id);
         let bare =
             super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))
                 .unwrap();
         assert_eq!(bare.to_string(), "PL1:2:");
         assert_eq!(bare.video_id, None);
+        let mut params = serde_json::Value::Null;
+        bare.write(&mut params).unwrap();
+        assert_eq!(
+            params,
+            json!({"playlist_id":"PL1","position":2,"video_id":null})
+        );
+        assert_eq!(super::ItemId::from_params(&params).unwrap(), bare);
         assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
         assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
     }

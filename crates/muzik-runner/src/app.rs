@@ -129,7 +129,7 @@ impl App {
         action: ItemAction,
     ) -> Result<String, EnqueueError> {
         let mut params = json!({"title": title, "action": action});
-        id.write(&mut params);
+        id.write(&mut params)?;
         self.queued(self.jobs.item(&params))
     }
 
