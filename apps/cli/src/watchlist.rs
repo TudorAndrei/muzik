@@ -1,5 +1,5 @@
 use crate::jobs;
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use muzik_core::paths::Paths;
 use muzik_runner::{Settings, job_id};
 use muzik_store::watchlist::{self, ItemAction, Repository, Summary};
@@ -91,17 +91,9 @@ pub fn refresh(queue_only: bool) -> anyhow::Result<()> {
 pub fn item(
     playlist_id: &str,
     position: u64,
-    action: &str,
+    action: ItemAction,
     queue_only: bool,
 ) -> anyhow::Result<()> {
-    let action: ItemAction = action.parse().map_err(|_| {
-        let names = ItemAction::ALL
-            .iter()
-            .map(AsRef::as_ref)
-            .collect::<Vec<_>>()
-            .join(", ");
-        anyhow!("Unknown action {action}. Use one of: {names}.")
-    })?;
     let document = repository().load()?;
     let playlist = document
         .playlist(playlist_id)

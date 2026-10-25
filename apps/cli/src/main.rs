@@ -379,16 +379,40 @@ struct WatchlistItem {
     playlist_id: String,
     /// Item position shown by `muzik watchlist list --items`.
     position: u64,
-    #[usage(
-        long,
-        short = 'a',
-        default = "run",
-        help = "Command: run, retry, download_again, check_quality_again, parse_again, split_again, organize_again, or run_all_again."
-    )]
-    action: String,
+    /// Command to queue for the item.
+    #[usage(long, short = 'a', value_enum, default = "run")]
+    action: ItemAction,
     /// Only add the job to the queue.
     #[usage(long)]
     queue_only: bool,
+}
+
+#[derive(Clone, Copy, usage_rs::ValueEnum)]
+#[usage(rename_all = "snake_case")]
+enum ItemAction {
+    Run,
+    Retry,
+    DownloadAgain,
+    CheckQualityAgain,
+    ParseAgain,
+    SplitAgain,
+    OrganizeAgain,
+    RunAllAgain,
+}
+
+impl From<ItemAction> for muzik_store::watchlist::ItemAction {
+    fn from(action: ItemAction) -> Self {
+        match action {
+            ItemAction::Run => Self::Run,
+            ItemAction::Retry => Self::Retry,
+            ItemAction::DownloadAgain => Self::DownloadAgain,
+            ItemAction::CheckQualityAgain => Self::CheckQualityAgain,
+            ItemAction::ParseAgain => Self::ParseAgain,
+            ItemAction::SplitAgain => Self::SplitAgain,
+            ItemAction::OrganizeAgain => Self::OrganizeAgain,
+            ItemAction::RunAllAgain => Self::RunAllAgain,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -748,7 +772,7 @@ fn run(command: Command) -> anyhow::Result<()> {
             WatchlistCommand::Item(args) => watchlist::item(
                 &args.playlist_id,
                 args.position,
-                &args.action,
+                args.action.into(),
                 args.queue_only,
             ),
         },
