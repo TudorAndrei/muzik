@@ -683,9 +683,23 @@ fn saved_bytes(partial: &Path) -> u64 {
 }
 
 fn content_range(header: &str) -> Option<(u64, Option<u64>)> {
-    let (range, total) = header.strip_prefix("bytes ")?.split_once('/')?;
-    let start = range.split_once('-')?.0.trim().parse().ok()?;
-    Some((start, total.trim().parse().ok()))
+    let number = |text: &str| {
+        (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| text.parse::<u64>().ok())
+            .flatten()
+    };
+    let (unit, range) = header.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (range, total) = range.split_once('/')?;
+    let (first, last) = range.split_once('-')?;
+    let (first, last) = (number(first)?, number(last)?);
+    let total = match total {
+        "*" => None,
+        total => Some(number(total)?),
+    };
+    (first <= last && total.is_none_or(|total| last < total)).then_some((first, total))
 }
 
 fn wait(duration: Duration, cancelled: &AtomicBool) {
@@ -1012,6 +1026,69 @@ mod tests {
         );
         assert_eq!(disposition_name(r#"attachment; filename="../x.zip""#), None);
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
+    }
+
+    #[test]
+    fn resumed_ranges_follow_the_content_range_grammar() {
+        assert_eq!(content_range("bytes 100-199/200"), Some((100, Some(200))));
+        assert_eq!(content_range("bytes 0-0/*"), Some((0, None)));
+        for malformed in [
+            "bytes 100-/200",
+            "bytes -199/200",
+            "bytes 100-199",
+            "bytes 200-100/300",
+            "bytes 100-200/200",
+            "bytes +1-2/3",
+            "bytes  1-2/3",
+            "bytes 1 -2/3",
+            "bytes 1-2/abc",
+            "bytes */200",
+            "items 1-2/3",
+            "bytes 1-18446744073709551616/*",
+        ] {
+            assert_eq!(content_range(malformed), None, "{malformed}");
+        }
+    }
+
+    #[test]
+    fn any_accepted_content_range_is_well_formed() {
+        bolero::check!().with_type::<String>().for_each(|header| {
+            let Some((start, total)) = content_range(header) else {
+                return;
+            };
+            let rest = header.trim();
+            assert!(rest.get(..6).unwrap().eq_ignore_ascii_case("bytes "));
+            let (range, length) = rest.get(6..).unwrap().split_once('/').unwrap();
+            let (first, last) = range.split_once('-').unwrap();
+            for part in [first, last] {
+                assert!(!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+            }
+            assert_eq!(first.parse::<u64>().unwrap(), start);
+            let last = last.parse::<u64>().unwrap();
+            assert!(start <= last);
+            match total {
+                Some(total) => {
+                    assert_eq!(length.parse::<u64>().unwrap(), total);
+                    assert!(length.bytes().all(|byte| byte.is_ascii_digit()));
+                    assert!(last < total);
+                }
+                None => assert_eq!(length, "*"),
+            }
+        });
+    }
+
+    #[test]
+    fn any_numeric_content_range_is_accepted_only_inside_the_length() {
+        bolero::check!()
+            .with_type::<(u64, u64, Option<u64>)>()
+            .for_each(|&(first, last, total)| {
+                let length = total.map_or_else(|| "*".to_owned(), |total| total.to_string());
+                let valid = first <= last && total.is_none_or(|total| last < total);
+                assert_eq!(
+                    content_range(&format!("bytes {first}-{last}/{length}")),
+                    valid.then_some((first, total))
+                );
+            });
     }
 
     #[test]
