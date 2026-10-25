@@ -483,8 +483,15 @@ impl Backend for SoulseekBackend {
     }
 
     fn track(&mut self, path: &Path) -> Result<Option<Track>> {
-        let mut artist = String::new();
-        let mut title = String::new();
+        let mut artist: Option<String> = None;
+        let mut title: Option<String> = None;
+        let text = |source: &Value, key: &str| {
+            source
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
         for kind in [Sidecar::Muzik, Sidecar::Info] {
             let sidecar = kind.path(path);
             if let Ok(bytes) = std::fs::read(sidecar)
@@ -496,32 +503,28 @@ impl Backend for SoulseekBackend {
                     Some(&value),
                 ];
                 for source in sources.into_iter().flatten() {
-                    if artist.is_empty() {
-                        source
-                            .get("artist")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .clone_into(&mut artist);
-                    }
-                    if title.is_empty() {
-                        source
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .or_else(|| source.get("track").and_then(Value::as_str))
-                            .unwrap_or("")
-                            .clone_into(&mut title);
-                    }
+                    artist = artist.or_else(|| text(source, "artist"));
+                    title = title
+                        .or_else(|| text(source, "title"))
+                        .or_else(|| text(source, "track"));
                 }
             }
         }
-        if let Ok(tags) = muzik_tags::read(path, &[]) {
-            if artist.is_empty() {
-                artist = tags.fields.get("artist").cloned().unwrap_or_default();
-            }
-            if title.is_empty() {
-                title = tags.fields.get("title").cloned().unwrap_or_default();
-            }
+        if (artist.is_none() || title.is_none())
+            && let Ok(tags) = muzik_tags::read(path, &[])
+        {
+            let tag = |key: &str| {
+                tags.fields
+                    .get(key)
+                    .filter(|text| !text.is_empty())
+                    .cloned()
+            };
+            artist = artist.or_else(|| tag("artist"));
+            title = title.or_else(|| tag("title"));
         }
+        let (Some(artist), Some(title)) = (artist, title) else {
+            return Ok(None);
+        };
         let duration = muzik_tags::probe(path)?.duration_seconds;
         Ok(duration.map(|duration| Track {
             artist,
