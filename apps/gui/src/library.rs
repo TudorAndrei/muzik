@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Track {
     pub disc: i64,
-    pub number: i64,
+    pub number: Option<i64>,
     pub title: String,
     pub artist: String,
     pub length: f64,
@@ -27,7 +27,7 @@ pub struct Track {
 pub struct AlbumRow {
     pub artist: String,
     pub title: String,
-    pub year: i64,
+    pub year: Option<i64>,
     pub genre: String,
     pub label: String,
     pub added: f64,
@@ -55,7 +55,7 @@ impl AlbumRow {
         [&self.artist, &self.title, &self.genre, &self.label]
             .iter()
             .any(|text| text.to_lowercase().contains(needle))
-            || (self.year > 0 && self.year.to_string() == needle)
+            || self.year.is_some_and(|year| year.to_string() == needle)
     }
 }
 
@@ -85,6 +85,10 @@ fn integer(value: Option<&SqlValue>) -> i64 {
     }
 }
 
+fn positive(value: Option<&SqlValue>) -> Option<i64> {
+    Some(integer(value)).filter(|number| *number > 0)
+}
+
 fn real(value: Option<&SqlValue>) -> f64 {
     match value {
         Some(SqlValue::Real(number)) => *number,
@@ -97,7 +101,7 @@ fn real(value: Option<&SqlValue>) -> f64 {
 fn track(item: &Item) -> Track {
     Track {
         disc: integer(item.field("disc")),
-        number: integer(item.field("track")),
+        number: positive(item.field("track")),
         title: text(item.field("title")),
         artist: text(item.field("artist")),
         length: real(item.field("length")),
@@ -110,7 +114,7 @@ fn album_row(album: &Album, tracks: Vec<Track>) -> AlbumRow {
     AlbumRow {
         artist: text(album.field("albumartist")),
         title: text(album.field("album")),
-        year: integer(album.field("year")),
+        year: positive(album.field("year")),
         genre: text(album.field("genre")),
         label: text(album.field("label")),
         added: real(album.field("added")),
@@ -378,8 +382,7 @@ impl LibraryTable {
         match column {
             LibraryColumn::Artist => album.artist.clone(),
             LibraryColumn::Album => album.title.clone(),
-            LibraryColumn::Year if album.year > 0 => album.year.to_string(),
-            LibraryColumn::Year => String::new(),
+            LibraryColumn::Year => album.year.map(|year| year.to_string()).unwrap_or_default(),
             LibraryColumn::Tracks => album.tracks.len().to_string(),
             LibraryColumn::Length => duration(album.length()),
             LibraryColumn::Format => album.format(),
@@ -603,7 +606,7 @@ fn album_sheet(sheet: Sheet, album: &AlbumRow, cx: &App) -> Sheet {
         .label_width(px(90.))
         .item("Artist", album.artist.clone(), 1);
     for (label, value) in [
-        ("Year", (album.year > 0).then(|| album.year.to_string())),
+        ("Year", album.year.map(|year| year.to_string())),
         ("Genre", Some(album.genre.clone())),
         ("Label", Some(album.label.clone())),
         ("Format", Some(album.format())),
@@ -619,9 +622,9 @@ fn album_sheet(sheet: Sheet, album: &AlbumRow, cx: &App) -> Sheet {
     let mut body = TableBody::new();
     for track in &album.tracks {
         let number = match (discs, track.number) {
-            (_, 0) => String::new(),
-            (true, number) => format!("{}-{number}", track.disc),
-            (false, number) => number.to_string(),
+            (_, None) => String::new(),
+            (true, Some(number)) => format!("{}-{number}", track.disc),
+            (false, Some(number)) => number.to_string(),
         };
         let mut title = div()
             .v_flex()
@@ -675,7 +678,7 @@ mod tests {
         AlbumRow {
             artist: artist.into(),
             title: title.into(),
-            year,
+            year: Some(year),
             added,
             ..AlbumRow::default()
         }
@@ -748,6 +751,8 @@ mod tests {
         assert_eq!(duration(row.length()), "3:05");
         assert_eq!(row.format(), "FLAC");
         assert_eq!(row.path, "/Music/Phoniks");
+        assert_eq!(row.year, Some(2015));
+        assert_eq!(row.tracks[0].number, Some(1));
         assert_eq!(
             info.formats,
             [("FLAC".to_string(), 2), ("MP3".to_string(), 1)]
