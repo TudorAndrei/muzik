@@ -78,7 +78,7 @@ pub fn load_playlist_document(config_path: &Path, token_path: &Path, uri: &str) 
             for track in spotify.pages::<SimplifiedTrack>(&tracks)? {
                 push(entry(&simple_track(&track), &fields, None));
             }
-            let title = Some(album.name.clone()).filter(|name| !name.is_empty());
+            let title = Some(album.name).filter(|name| !name.is_empty());
             (id.clone(), title.unwrap_or(id), None)
         }
     };
