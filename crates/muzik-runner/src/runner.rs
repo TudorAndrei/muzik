@@ -1,4 +1,5 @@
 use crate::agent::Chooser;
+use crate::error::JobFailure;
 use crate::events::{AppEvent, Source};
 use crate::queue::{Jobs, RunnerClaim, job_id};
 use crate::settings::Settings;
@@ -6,7 +7,6 @@ use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
 use muzik_store::watchlist::Stage;
-use muzik_store::watchlist::jobs::JobError;
 use muzik_workflow::{WorkflowInput, classify_input};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{Value, json};
@@ -40,7 +40,7 @@ pub struct Options {
     pub generation: Arc<AtomicU64>,
 }
 
-type Outcome = Result<Value, (bool, String)>;
+type Outcome = Result<Value, JobFailure>;
 
 struct Shared {
     jobs: Arc<Jobs>,
@@ -233,27 +233,26 @@ impl Shared {
             let store = self.store();
             let _ = match &result {
                 Ok(_) => store.finish(job.id),
-                Err((true, _)) if job.question.is_some() => store.reopen(job.id),
-                Err((true, _)) => store.cancel(job.id),
-                Err((false, message)) => store.fail(job.id, message),
+                Err(JobFailure::Cancelled) if job.question.is_some() => store.reopen(job.id),
+                Err(JobFailure::Cancelled) => store.cancel(job.id),
+                Err(JobFailure::Failed(error)) => store.fail(job.id, &error.to_string()),
             };
         }
         self.running().remove(&job.id);
         self.generation.fetch_add(1, Ordering::SeqCst);
         (self.sink)(match result {
             Ok(result) => AppEvent::JobCompleted { job_id: id, result },
-            Err((true, _)) => AppEvent::JobCancelled { job_id: id },
-            Err((false, message)) => AppEvent::JobFailed {
+            Err(JobFailure::Cancelled) => AppEvent::JobCancelled { job_id: id },
+            Err(JobFailure::Failed(error)) => AppEvent::JobFailed {
                 job_id: id,
-                message,
+                message: error.to_string(),
             },
         });
         self.publish();
     }
 
-    fn settings(&self, job: &Job) -> Result<Settings, (bool, String)> {
+    fn settings(&self, job: &Job) -> crate::Result<Settings> {
         Settings::resolve(self.jobs.paths(), &job.params)
-            .map_err(|error| (false, error.to_string()))
     }
 
     fn run_refresh(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
@@ -263,12 +262,8 @@ impl Shared {
             job.params.get("playlist_id").and_then(Value::as_str),
             cancel,
             &mut |event| self.event(job_id, Source::Workflow, event),
-        )
-        .map_err(|error| job_error(&error))?;
-        let queued = self
-            .jobs
-            .queue_pending(&job.params, &pending)
-            .map_err(|error| (false, error.to_string()))?;
+        )?;
+        let queued = self.jobs.queue_pending(&job.params, &pending)?;
         self.event(
             job_id,
             Source::Workflow,
@@ -319,7 +314,7 @@ impl Shared {
             &mut decide,
             &parked,
         )
-        .map_err(|error| job_error(&error))
+        .map_err(JobFailure::from)
     }
 
     fn run_workflow(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
@@ -341,14 +336,8 @@ impl Shared {
                 })
             })
         };
-        let workflow_failure = |error: muzik_workflow::Error| {
-            (
-                matches!(error, muzik_workflow::Error::Cancelled),
-                error.to_string(),
-            )
-        };
         if settings.request.raw.is_empty() {
-            return Err((false, "Enter a URL or path.".to_owned()));
+            return Err(crate::Error::from("Enter a URL or path.").into());
         }
         let input = classify_input(&settings.request.raw);
         let result = if matches!(input, WorkflowInput::Local(_)) {
@@ -369,9 +358,8 @@ impl Shared {
                 &mut import_event,
                 &mut decide,
             )
-        }
-        .map_err(workflow_failure)?;
-        serde_json::to_value(result).map_err(|error| (false, error.to_string()))
+        }?;
+        Ok(serde_json::to_value(result)?)
     }
 
     fn ask_agent(
@@ -413,10 +401,6 @@ impl Shared {
             }
         }
     }
-}
-
-fn job_error(error: &JobError) -> (bool, String) {
-    (matches!(error, JobError::Cancelled), error.to_string())
 }
 
 #[cfg(test)]
