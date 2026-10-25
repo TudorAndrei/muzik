@@ -1,5 +1,6 @@
 //! Watchlist jobs on the queue. Each source kind is one module in `sources`.
 
+use crate::queue::item_request;
 use crate::settings::Settings;
 use crate::sources;
 use muzik_core::{DecisionKind, JobEvent, Task};
@@ -70,13 +71,7 @@ pub(crate) fn action(
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(settings);
-    let id = ItemId::from_params(params)?;
-    let name = params["action"]
-        .as_str()
-        .ok_or_else(|| JobError::Operation("action must be a non-empty string".into()))?;
-    let name: ItemAction = name
-        .parse()
-        .map_err(|_| JobError::Operation(format!("Unknown item action: {name}")))?;
+    let (id, action) = item_request(params)?;
     let events = RefCell::new(on_event);
     let mut adapter = Adapter {
         prepared: &prepared,
@@ -91,7 +86,7 @@ pub(crate) fn action(
         &prepared.repository,
         prepared.job_options(),
         &id,
-        name,
+        action,
         &mut adapter,
         cancelled,
     )

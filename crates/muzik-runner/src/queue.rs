@@ -139,9 +139,9 @@ impl Jobs {
     /// # Errors
     /// Returns an error when the item is invalid, already has an open job, or cannot be added to the queue.
     pub fn item(&self, params: &Value) -> Result<i64, EnqueueError> {
-        let key = validate_item(params)
-            .map_err(|error| EnqueueError::Invalid(error.to_string()))?
-            .to_string();
+        let (id, _) =
+            item_request(params).map_err(|error| EnqueueError::Invalid(error.to_string()))?;
+        let key = id.to_string();
         let title = params["title"]
             .as_str()
             .or_else(|| params["video_id"].as_str())
@@ -285,17 +285,17 @@ pub fn parse_job_id(text: &str) -> Option<i64> {
     text.strip_prefix("queue-").unwrap_or(text).parse().ok()
 }
 
-fn validate_item(params: &Value) -> crate::Result<ItemId> {
+pub fn item_request(params: &Value) -> crate::Result<(ItemId, ItemAction)> {
     let id = ItemId::from_params(params)?;
     let action = params
         .get("action")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or("action must be a non-empty string.")?;
-    action
+    let action = action
         .parse::<ItemAction>()
         .map_err(|_| format!("'{action}' is not a valid ItemAction"))?;
-    Ok(id)
+    Ok((id, action))
 }
 
 fn unique() -> u128 {
