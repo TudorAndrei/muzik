@@ -156,11 +156,11 @@ impl Store {
             )?;
             let rows = statement.query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
+                    row.get::<_, Queue>(0)?,
+                    row.get::<_, Kind>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
+                    row.get::<_, Status>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<String>>(7)?,
@@ -171,10 +171,9 @@ impl Store {
         };
         let time = now();
         for (queue, kind, item_key, title, status, params, question, answer, created) in &jobs {
-            let status = if status == "running" {
-                "queued"
-            } else {
-                status
+            let status = match status {
+                Status::Running => Status::Queued,
+                status => *status,
             };
             self.connection
                 .execute(
