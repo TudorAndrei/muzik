@@ -93,6 +93,10 @@ cargo bolero test -p muzik-core --sanitizer NONE -T "${usage_seconds}s" \
   chapters::tests::any_cue_sheet_gives_ordered_chapters
 cargo bolero test -p muzik-core --sanitizer NONE -T "${usage_seconds}s" \
   chapters::tests::any_info_json_gives_ordered_chapters
+cargo bolero test -p muzik-import --sanitizer NONE -T "${usage_seconds}s" \
+  paths::tests::rendered_paths_keep_the_template_components_for_any_field_values
+cargo bolero test -p muzik-tags --sanitizer NONE -T "${usage_seconds}s" \
+  tests::reading_any_bytes_does_not_panic
 """
 
 [tasks.check-release]

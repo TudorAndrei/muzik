@@ -66,6 +66,14 @@ jobs:
             package: muzik-core
             harness: chapters::tests::any_info_json_gives_ordered_chapters
             corpus: crates/muzik-core/src/__fuzz__
+          - id: import-path-components
+            package: muzik-import
+            harness: paths::tests::rendered_paths_keep_the_template_components_for_any_field_values
+            corpus: crates/muzik-import/src/__fuzz__
+          - id: tags-read
+            package: muzik-tags
+            harness: tests::reading_any_bytes_does_not_panic
+            corpus: crates/muzik-tags/src/__fuzz__
     steps:
       - uses: actions/checkout@v7
         with:
