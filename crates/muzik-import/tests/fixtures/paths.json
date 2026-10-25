@@ -183,5 +183,92 @@
       "extension": ".ogg",
       "destination": "Artist/Name_slash.ogg"
     }
+  ],
+  "templates": [
+    {
+      "case": "first",
+      "template": "%left{$title,4}",
+      "rendered": "Myst"
+    },
+    {
+      "case": "first",
+      "template": "%right{$title,4}",
+      "rendered": "rons"
+    },
+    {
+      "case": "first",
+      "template": "%lower{$albumartist}",
+      "rendered": "portishead"
+    },
+    {
+      "case": "first",
+      "template": "%upper{$album}",
+      "rendered": "DUMMY"
+    },
+    {
+      "case": "first",
+      "template": "%title{$title}",
+      "rendered": "Mysterons"
+    },
+    {
+      "case": "first",
+      "template": "%asciify{Bj\u00f6rk Gu\u00f0mundsd\u00f3ttir}",
+      "rendered": "Bjork Gudmundsdottir"
+    },
+    {
+      "case": "first",
+      "template": "%if{1,yes,no}",
+      "rendered": "yes"
+    },
+    {
+      "case": "first",
+      "template": "%if{0,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{false,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{,yes,no}",
+      "rendered": "no"
+    },
+    {
+      "case": "first",
+      "template": "%if{$track,a$,b,c}",
+      "rendered": "a,b"
+    },
+    {
+      "case": "first",
+      "template": "%lower{A$}B}",
+      "rendered": "a}b"
+    },
+    {
+      "case": "first",
+      "template": "$$title ${title}",
+      "rendered": "$title Mysterons"
+    },
+    {
+      "case": "first",
+      "template": "${}",
+      "rendered": "${}"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{albumartist album,year,()}",
+      "rendered": " (1994)"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{albumartist album,label,[]}",
+      "rendered": " [1]"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{album,year}",
+      "rendered": " [1994]"
+    }
   ]
 }

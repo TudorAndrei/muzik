@@ -3,6 +3,7 @@
 import datetime
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -720,10 +721,32 @@ PATH_CASES = [
     ),
 ]
 
+TEMPLATE_CASE = "first"
+
+TEMPLATES = [
+    "%left{$title,4}",
+    "%right{$title,4}",
+    "%lower{$albumartist}",
+    "%upper{$album}",
+    "%title{$title}",
+    "%asciify{Björk Guðmundsdóttir}",
+    "%if{1,yes,no}",
+    "%if{0,yes,no}",
+    "%if{false,yes,no}",
+    "%if{,yes,no}",
+    "%if{$track,a$,b,c}",
+    "%lower{A$}B}",
+    "$$title ${title}",
+    "${}",
+    "%aunique{albumartist album,year,()}",
+    "%aunique{albumartist album,label,[]}",
+    "%aunique{album,year}",
+]
+
 SANITIZATION_CASES = [
-    ("Artist/Bad: title?", ".FLAC"),
-    (".Hidden/ -track. ", ".mp3"),
-    ("Artist/Name\\slash", ".ogg"),
+    ("Artist/Bad: title?", ".FLAC", None),
+    (".Hidden/ -track. ", ".mp3", None),
+    ("Artist/Name\\slash", ".ogg", None),
 ]
 
 
@@ -755,15 +778,31 @@ def paths_fixture():
                 "destination": item.destination(relative_to_libdir=True).decode(),
             }
         )
-    sanitization = [
+    sanitization = []
+    for subpath, extension, replacements in SANITIZATION_CASES:
+        case = {"subpath": subpath, "extension": extension}
+        if replacements is None:
+            rules = library.replacements
+        else:
+            case["replacements"] = replacements
+            rules = [(re.compile(pattern), value) for pattern, value in replacements]
+        case["destination"] = legalize_path(subpath, rules, extension)[0]
+        sanitization.append(case)
+    item = next(item for name, _, item, _ in stored if name == TEMPLATE_CASE)
+    templates = [
         {
-            "subpath": subpath,
-            "extension": extension,
-            "destination": legalize_path(subpath, library.replacements, extension)[0],
+            "case": TEMPLATE_CASE,
+            "template": template,
+            "rendered": item.evaluate_template(template, for_path=True),
         }
-        for subpath, extension in SANITIZATION_CASES
+        for template in TEMPLATES
     ]
-    return {"beets_version": BEETS_VERSION, "cases": cases, "sanitization": sanitization}
+    return {
+        "beets_version": BEETS_VERSION,
+        "cases": cases,
+        "sanitization": sanitization,
+        "templates": templates,
+    }
 
 
 TAG_SUFFIXES = ["flac", "m4a", "mp3", "ogg", "opus"]

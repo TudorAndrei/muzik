@@ -621,6 +621,15 @@ mod tests {
             "label".to_owned(),
             "catalognum".to_owned(),
         ];
+        let context = |case: &Value| TemplateContext {
+            fields: serde_json::from_value(case["fields"].clone()).unwrap(),
+            album_id: case["album_id"].as_i64(),
+            albums: &albums,
+            aunique_keys: &keys,
+            aunique_disambiguators: &disambiguators,
+            aunique_bracket: "[]",
+            ..Default::default()
+        };
         for case in cases {
             let kind = match case["path_format"].as_str().unwrap() {
                 "default" => PathKind::Album,
@@ -628,33 +637,43 @@ mod tests {
                 "singleton" => PathKind::Singleton,
                 other => panic!("unknown path format: {other}"),
             };
-            let context = TemplateContext {
-                fields: serde_json::from_value(case["fields"].clone()).unwrap(),
-                album_id: case["album_id"].as_i64(),
-                albums: &albums,
-                aunique_keys: &keys,
-                aunique_disambiguators: &disambiguators,
-                aunique_bracket: "[]",
-                ..Default::default()
-            };
             assert_eq!(
                 formats
-                    .destination(kind, &context, ".flac", &sanitizer)
+                    .destination(kind, &context(case), ".flac", &sanitizer)
                     .unwrap(),
                 case["destination"].as_str().unwrap(),
                 "{}",
                 case["name"]
             );
         }
-        for case in fixture["sanitization"].as_array().unwrap() {
+        for case in fixture["templates"].as_array().unwrap() {
+            let source = cases
+                .iter()
+                .find(|source| source["name"] == case["case"])
+                .unwrap();
             assert_eq!(
-                sanitizer
+                context(source).render(case["template"].as_str().unwrap()),
+                case["rendered"].as_str().unwrap(),
+                "{}",
+                case["template"]
+            );
+        }
+        for case in fixture["sanitization"].as_array().unwrap() {
+            let replacements: Vec<(String, String)> = case
+                .get("replacements")
+                .map(|rules| serde_json::from_value(rules.clone()).unwrap())
+                .unwrap_or_default();
+            assert_eq!(
+                PathSanitizer::new(&replacements)
+                    .unwrap()
                     .legalize(
                         case["subpath"].as_str().unwrap(),
                         case["extension"].as_str().unwrap()
                     )
                     .unwrap(),
-                case["destination"].as_str().unwrap()
+                case["destination"].as_str().unwrap(),
+                "{}",
+                case["subpath"]
             );
         }
     }
