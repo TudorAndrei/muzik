@@ -366,7 +366,7 @@ impl Muzik {
     fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
         self.activity
             .queued_items()
-            .contains(&ItemId::new(playlist_id, position, Some(video_id)).to_string())
+            .contains(&ItemId::new(playlist_id, position, Some(video_id)))
     }
 
     pub(crate) fn item_request(&self, id: ItemId, action: ItemAction) -> ItemRequest {

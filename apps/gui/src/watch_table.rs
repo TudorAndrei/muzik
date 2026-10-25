@@ -300,7 +300,7 @@ impl TableDelegate for WatchTable {
 pub fn rows(
     playlist: &PlaylistView,
     filter: Option<Summary>,
-    queued: &HashSet<String>,
+    queued: &HashSet<ItemId>,
 ) -> Vec<WatchRow> {
     playlist
         .items
@@ -308,7 +308,7 @@ pub fn rows(
         .filter(|item| watchlist_view::matches_filter(item, filter))
         .map(|item| {
             let key = ItemId::of(&playlist.playlist_id, &item.item);
-            let queued = queued.contains(&key.to_string());
+            let queued = queued.contains(&key);
             WatchRow {
                 key,
                 item: item.clone(),
@@ -334,10 +334,11 @@ mod tests {
             {"position": 3, "title": "Three", "video_id": "ccccccccccc", "actions":{}, "summary": "Failed"},
             {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "actions":{}, "summary": "Unavailable"}
         ]})).unwrap();
-        let queued =
-            HashSet::from([
-                muzik_store::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
-            ]);
+        let queued = HashSet::from([muzik_store::watchlist::ItemId::new(
+            "PL1",
+            3,
+            Some("ccccccccccc"),
+        )]);
         let list = rows(&playlist, Some(Summary::Failed), &queued);
         assert_eq!(
             list.iter().map(|row| row.key.position).collect::<Vec<_>>(),

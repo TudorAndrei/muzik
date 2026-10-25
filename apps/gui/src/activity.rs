@@ -2,6 +2,7 @@
 use muzik_core::{JobEvent, Task as JobTask};
 use muzik_runner::{AppEvent, choices};
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
+use muzik_store::watchlist::ItemId;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use strum_macros::{Display, EnumString};
@@ -53,7 +54,7 @@ pub struct Finished {
 pub struct Activity {
     runs: Vec<Run>,
     finished_runs: HashSet<String>,
-    queued_items: HashSet<String>,
+    queued_items: HashSet<ItemId>,
     sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Decision>,
@@ -181,7 +182,7 @@ impl Activity {
     pub fn runs(&self) -> &[Run] {
         &self.runs
     }
-    pub const fn queued_items(&self) -> &HashSet<String> {
+    pub const fn queued_items(&self) -> &HashSet<ItemId> {
         &self.queued_items
     }
     pub fn sections(&self) -> &[ActivitySection] {
@@ -368,7 +369,7 @@ impl Activity {
         let open: &[Value] = snapshot["open"].as_array().map_or(&[], Vec::as_slice);
         self.queued_items = open
             .iter()
-            .filter_map(|job| job["item"].as_str().map(str::to_owned))
+            .filter_map(|job| job["item"].as_str()?.parse().ok())
             .collect();
         let listed: HashSet<&str> = open
             .iter()
@@ -596,7 +597,11 @@ mod tests {
         let mut activity = Activity::default();
         let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":"PL1:1:video"}], "waiting":[]});
         activity.apply_jobs(&snapshot);
-        assert!(activity.queued_items().contains("PL1:1:video"));
+        assert!(
+            activity
+                .queued_items()
+                .contains(&ItemId::new("PL1", 1, Some("video")))
+        );
         activity.apply(&job_event(JobEvent::ProgressStarted {
             task: JobTask::LocalSplit,
             description: "Split tracks".into(),
