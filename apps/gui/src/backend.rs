@@ -266,7 +266,7 @@ impl Backend {
 
     pub fn save_bandcamp(&self, user: &str, cookies: &str) -> anyhow::Result<Value> {
         let _write = self.writes.lock();
-        bandcamp::Login::save(self.paths(), user, cookies)?;
+        bandcamp::Login::save(self.paths(), Some(user), cookies)?;
         muzik_runner::watchlist::ensure_sources(self.paths())?;
         Ok(bandcamp::status(self.paths()))
     }

@@ -12,7 +12,7 @@ pub fn download(args: &Bandcamp) -> anyhow::Result<()> {
         Some(file) => {
             let text = fs::read_to_string(file)
                 .with_context(|| format!("cannot read {}", file.display()))?;
-            bandcamp::Login::save(&Paths::user(), args.user.as_deref().unwrap_or(""), &text)?
+            bandcamp::Login::save(&Paths::user(), args.user.as_deref(), &text)?
         }
         None => bandcamp::Login::load(&Paths::user()).context(
             "Save the Bandcamp login first: give --cookies <file>, or use Settings in the app.",

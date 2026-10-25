@@ -226,7 +226,7 @@ impl Login {
 
     /// # Errors
     /// Returns an error when the cookies or user name are not valid, or when the files cannot be written.
-    pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self> {
+    pub fn save(paths: &Paths, user: Option<&str>, cookie_text: &str) -> Result<Self> {
         Self::save_to(
             &paths.bandcamp_user(),
             &paths.bandcamp_cookies(),
@@ -238,7 +238,7 @@ impl Login {
     fn save_to(
         user_file: &Path,
         cookie_file: &Path,
-        user: &str,
+        user: Option<&str>,
         cookie_text: &str,
     ) -> Result<Self> {
         let cookies = if cookie_text.trim().is_empty() {
@@ -248,15 +248,12 @@ impl Login {
         } else {
             parse_cookies(cookie_text)?
         };
-        let user = user.trim().trim_start_matches('@');
-        let user = if user.is_empty() {
-            Self {
-                user: String::new(),
-                cookies: cookies.clone(),
-            }
-            .account_user()?
-        } else {
-            user.to_owned()
+        let user = match user
+            .map(|user| user.trim().trim_start_matches('@'))
+            .filter(|user| !user.is_empty())
+        {
+            Some(user) => user.to_owned(),
+            None => Self::account_user(&cookies)?,
         };
         if !user
             .bytes()
@@ -272,9 +269,8 @@ impl Login {
         Ok(Self { user, cookies })
     }
 
-    fn account_user(&self) -> Result<String> {
-        let summary: Value = self
-            .get("https://bandcamp.com/api/fan/2/collection_summary")?
+    fn account_user(cookies: &[Cookie]) -> Result<String> {
+        let summary: Value = request("https://bandcamp.com/api/fan/2/collection_summary", cookies)?
             .body_mut()
             .read_json()
             .map_err(|error| {
@@ -303,27 +299,11 @@ impl Login {
     }
 
     fn header(&self) -> String {
-        self.cookies
-            .iter()
-            .map(|cookie| format!("{}={}", cookie.name, cookie.value))
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-        ureq::get(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Cookie", self.header())
-            .config()
-            .timeout_global(Some(Duration::from_secs(60)))
-            .build()
-            .call()
-            .map_err(|error| format!("Bandcamp did not answer {url}: {error}").into())
+        cookie_header(&self.cookies)
     }
 
     fn page_blob(&self, url: &str) -> Result<Value> {
-        let html = self
-            .get(url)?
+        let html = request(url, &self.cookies)?
             .body_mut()
             .with_config()
             .limit(PAGE_LIMIT)
@@ -331,6 +311,25 @@ impl Login {
             .map_err(|error| format!("Bandcamp sent a page that is not valid: {error}"))?;
         page_blob(&html).ok_or_else(|| format!("Bandcamp sent no page data for {url}.").into())
     }
+}
+
+fn cookie_header(cookies: &[Cookie]) -> String {
+    cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn request(url: &str, cookies: &[Cookie]) -> Result<ureq::http::Response<ureq::Body>> {
+    ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Cookie", cookie_header(cookies))
+        .config()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .build()
+        .call()
+        .map_err(|error| format!("Bandcamp did not answer {url}: {error}").into())
 }
 
 #[must_use]
@@ -872,18 +871,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let user = directory.path().join("bandcamp_user");
         let cookies = directory.path().join("bandcamp_cookies.txt");
-        assert!(Login::save_to(&user, &cookies, "bad name", "identity=x").is_err());
+        assert!(Login::save_to(&user, &cookies, Some("bad name"), "identity=x").is_err());
         Login::save_to(
             &user,
             &cookies,
-            "@listener",
+            Some("@listener"),
             "identity=secret; js_logged_in=1",
         )
         .unwrap();
         let login = Login::load_from(&user, &cookies).unwrap();
         assert_eq!(login.user, "listener");
         assert_eq!(login.header(), "identity=secret; js_logged_in=1");
-        Login::save_to(&user, &cookies, "listener", "").unwrap();
+        Login::save_to(&user, &cookies, Some("listener"), "").unwrap();
         assert!(Login::load_from(&user, &cookies).is_some());
         #[cfg(unix)]
         {
