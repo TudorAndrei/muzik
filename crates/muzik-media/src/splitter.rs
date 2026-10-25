@@ -521,7 +521,7 @@ fn extract_metadata(source: &Path) -> Metadata {
                 .to_string_lossy()
                 .into_owned()
         });
-        let explicit_artist = field(&info, "artist").filter(|artist| artist != "null");
+        let explicit_artist = field(&info, "artist");
         let (parsed_artist, parsed_album, parsed_year) = parse_title(&title);
         let artist = explicit_artist
             .clone()
@@ -903,6 +903,22 @@ mod tests {
             strip_featured("Song (feat. A & B)"),
             ("Song".into(), vec!["A".into(), "B".into()])
         );
+    }
+
+    #[test]
+    fn a_null_info_artist_falls_back_to_the_video_title() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("Video.opus");
+        fs::write(&source, []).unwrap();
+        fs::write(
+            Sidecar::Info.path(&source),
+            r#"{"title":"Band - Record (1999)","artist":null,"uploader":"Channel"}"#,
+        )
+        .unwrap();
+        let metadata = extract_metadata(&source);
+        assert_eq!(metadata.artist, "Band");
+        assert_eq!(metadata.album, "Record");
+        assert_eq!(metadata.year, "1999");
     }
 
     #[test]
