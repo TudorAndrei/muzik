@@ -4,6 +4,7 @@ use gpui_kit::component::alert::Alert;
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tag::Tag;
+use muzik_spotify::PlaylistRef;
 
 impl Muzik {
     pub(crate) fn services_section(main: WeakEntity<Self>, cx: &App) -> AnyElement {
@@ -74,16 +75,12 @@ impl Muzik {
             .iter()
             .map(|playlist| playlist.playlist_id.as_str())
             .collect();
-        let connected = self.spotify.get("connected").and_then(Value::as_bool) == Some(true);
-        let has_client_id = self
-            .spotify
-            .get("client_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| !id.trim().is_empty());
+        let connected = self.spotify.connected;
+        let has_client_id = !self.spotify.client_id.trim().is_empty();
         let mut page = page_frame()
             .child(style::page_title("Spotify"))
             .child(self.spotify_application(cx));
-        if let Some(error) = self.spotify.get("error").and_then(Value::as_str) {
+        if let Some(error) = self.spotify.error.as_deref() {
             page = page.child(Alert::error("spotify-error", error.to_string()));
         }
         if self.reading(Read::SpotifyStatus) {
@@ -102,13 +99,12 @@ impl Muzik {
         if !connected {
             return page_scroll(page);
         }
-        let playlists: Vec<&Value> = self
+        let playlists: Vec<&PlaylistRef> = self
             .spotify
-            .get("playlists")
-            .and_then(Value::as_array)
-            .into_iter()
+            .playlists
+            .iter()
             .flatten()
-            .filter(|playlist| playlist["uri"] != "spotify:liked")
+            .filter(|playlist| playlist.uri != "spotify:liked")
             .collect();
         if self.reading(Read::SpotifyPlaylists) {
             return page_scroll(page.child(empty_state(
@@ -131,12 +127,7 @@ impl Muzik {
     }
 
     fn spotify_application(&self, cx: &Context<Self>) -> GroupBox {
-        let redirect = self
-            .spotify
-            .get("redirect_uri")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let redirect = self.spotify.redirect_uri.clone();
         let mut redirect_row = div()
             .flex()
             .items_center()
@@ -220,8 +211,8 @@ impl Muzik {
                     .item(
                         "Account",
                         self.spotify
-                            .get("account_name")
-                            .and_then(Value::as_str)
+                            .account_name
+                            .as_deref()
                             .unwrap_or("Spotify account")
                             .to_string(),
                         1,
@@ -321,32 +312,25 @@ fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
 }
 
 fn spotify_playlists_table(
-    playlists: &[&Value],
+    playlists: &[&PlaylistRef],
     saved_ids: &HashSet<&str>,
     cx: &Context<Muzik>,
 ) -> Table {
     let mut body = TableBody::new();
     for (index, playlist) in playlists.iter().enumerate() {
-        let uri = playlist["uri"].as_str().unwrap_or("").to_string();
+        let uri = playlist.uri.clone();
         let saved = saved_ids.contains(uri.as_str());
         body = body.child(
             TableRow::new()
                 .child(
-                    TableCell::new().child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .child(playlist["name"].as_str().unwrap_or("Playlist").to_string()),
-                    ),
+                    TableCell::new().child(div().min_w_0().truncate().child(playlist.name.clone())),
                 )
-                .child(TableCell::new().child(style::meta(
-                    playlist["owner"].as_str().unwrap_or("Spotify").to_string(),
-                    cx,
-                )))
-                .child(TableCell::new().text_right().child(style::mono(
-                    playlist["total"].as_u64().unwrap_or(0).to_string(),
-                    cx,
-                )))
+                .child(TableCell::new().child(style::meta(playlist.owner.clone(), cx)))
+                .child(
+                    TableCell::new()
+                        .text_right()
+                        .child(style::mono(playlist.total.unwrap_or(0).to_string(), cx)),
+                )
                 .child(
                     TableCell::new().text_right().child(
                         Button::new(("spotify-add", index))

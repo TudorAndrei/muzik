@@ -500,9 +500,7 @@ impl Muzik {
     fn forget_spotify(&mut self) {
         self.reads.remove(&Read::SpotifyStatus);
         self.reads.remove(&Read::SpotifyPlaylists);
-        if let Some(spotify) = self.spotify.as_object_mut() {
-            spotify.remove("playlists");
-        }
+        self.spotify.playlists = None;
     }
 
     pub(crate) fn spotify_status(&mut self, cx: &Context<Self>) {
@@ -513,14 +511,12 @@ impl Muzik {
             Backend::spotify_status,
             |view, status, window, cx| {
                 view.spotify = status;
-                if view.spotify_client_id.read(cx).value().is_empty()
-                    && let Some(client_id) = view.spotify.get("client_id").and_then(Value::as_str)
-                {
-                    let client_id = client_id.to_string();
+                if view.spotify_client_id.read(cx).value().is_empty() {
+                    let client_id = view.spotify.client_id.clone();
                     view.spotify_client_id
                         .update(cx, |state, cx| state.set_value(client_id, window, cx));
                 }
-                if view.spotify.get("connected").and_then(Value::as_bool) == Some(true) {
+                if view.spotify.connected {
                     view.spotify_playlists(cx);
                 }
                 view.status = "Spotify ready".into();
@@ -534,10 +530,8 @@ impl Muzik {
             cx,
             Backend::spotify_playlists,
             |view, playlists, _, _| {
-                if let Some(spotify) = view.spotify.as_object_mut().filter(|spotify| {
-                    spotify.get("connected").and_then(Value::as_bool) == Some(true)
-                }) {
-                    spotify.insert("playlists".into(), playlists);
+                if view.spotify.connected {
+                    view.spotify.playlists = Some(playlists);
                 }
                 view.status = "Spotify ready".into();
             },

@@ -145,7 +145,7 @@ struct Muzik {
     library_table: Entity<TableState<library::LibraryTable>>,
     library_search: Entity<InputState>,
     services: Value,
-    spotify: Value,
+    spotify: backend::SpotifyStatus,
     defaults: Option<GuiDefaults>,
     config_status: Rc<RefCell<String>>,
 }
@@ -225,7 +225,7 @@ impl Muzik {
             library_table,
             library_search,
             services: Value::Null,
-            spotify: Value::Null,
+            spotify: backend::SpotifyStatus::default(),
             defaults: None,
             config_status: Rc::new(RefCell::new(String::new())),
         };
