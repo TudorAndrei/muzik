@@ -242,12 +242,11 @@ pub fn safe_match(candidate: &Candidate, wanted: &Wanted<'_>) -> bool {
     let Some(expected) = wanted.duration else {
         return true;
     };
-    let durations = files
+    files
         .iter()
         .map(|file| file.duration_seconds.map(f64::from))
-        .collect::<Option<Vec<_>>>();
-    durations
-        .is_some_and(|values| (values.iter().sum::<f64>() - expected).abs() <= DURATION_TOLERANCE)
+        .sum::<Option<f64>>()
+        .is_some_and(|total| (total - expected).abs() <= DURATION_TOLERANCE)
 }
 
 fn version_tokens(value: &str) -> HashSet<String> {

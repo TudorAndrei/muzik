@@ -371,10 +371,8 @@ fn accept_album(
     let actual_duration = files
         .iter()
         .map(|file| backend.duration(file).ok().flatten())
-        .collect::<Option<Vec<_>>>();
-    if !actual_duration.is_some_and(|values| {
-        (values.iter().sum::<f64>() - track.duration).abs() <= DURATION_TOLERANCE
-    }) {
+        .sum::<Option<f64>>();
+    if !actual_duration.is_some_and(|total| (total - track.duration).abs() <= DURATION_TOLERANCE) {
         on_event(message(
             "Quality check: album duration does not match the source.".into(),
             true,
