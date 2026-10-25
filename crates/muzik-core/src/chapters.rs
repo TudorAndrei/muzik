@@ -6,17 +6,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-static CHAPTER_LINE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^(\d+:\d{2}(?::\d{2})?)\s+(.+)$").ok());
-static CUE_TRACK: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"(?i)^\s*TRACK\s+(\d+)\s+\S+").ok());
-static CUE_TITLE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r#"(?i)^\s*TITLE\s+"?(.*?)"?\s*$"#).ok());
-static CUE_INDEX: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"(?i)^\s*INDEX\s+01\s+(\d{2}):(\d{2}):(\d{2})").ok());
-static TRACK_PREFIX: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^\s*\d{1,3}\s*[.):\-]\s+").ok());
-static YTDLP_RANGE_SUFFIX: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"\.\)\s*$").ok());
+static CHAPTER_LINE: LazyLock<Regex> = LazyLock::new(|| fixed(r"^(\d+:\d{2}(?::\d{2})?)\s+(.+)$"));
+static CUE_TRACK: LazyLock<Regex> = LazyLock::new(|| fixed(r"(?i)^\s*TRACK\s+(\d+)\s+\S+"));
+static CUE_TITLE: LazyLock<Regex> = LazyLock::new(|| fixed(r#"(?i)^\s*TITLE\s+"?(.*?)"?\s*$"#));
+static CUE_INDEX: LazyLock<Regex> =
+    LazyLock::new(|| fixed(r"(?i)^\s*INDEX\s+01\s+(\d{2}):(\d{2}):(\d{2})"));
+static TRACK_PREFIX: LazyLock<Regex> = LazyLock::new(|| fixed(r"^\s*\d{1,3}\s*[.):\-]\s+"));
+static YTDLP_RANGE_SUFFIX: LazyLock<Regex> = LazyLock::new(|| fixed(r"\.\)\s*$"));
+
+#[expect(
+    clippy::expect_used,
+    reason = "the patterns are fixed literals covered by tests"
+)]
+fn fixed(pattern: &str) -> Regex {
+    Regex::new(pattern).expect("fixed chapter pattern")
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Chapter {
@@ -42,7 +46,7 @@ pub fn parse_chapters(text: &str) -> Vec<Chapter> {
     ordered(
         text.lines()
             .filter_map(|line| {
-                let captures = CHAPTER_LINE.as_ref()?.captures(line.trim())?;
+                let captures = CHAPTER_LINE.captures(line.trim())?;
                 let start = timestamp_seconds(captures.get(1)?.as_str())?;
                 Some(Chapter {
                     index: 0,
@@ -79,30 +83,33 @@ fn ordered(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
 
 /// Read a track list from a video description or comment.
 pub fn parse_tracklist(text: &str) -> Vec<Chapter> {
-    static START: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?[\s\-–—•|:.)\]]*(.+?)\s*$").ok()
+    static START: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?[\s\-–—•|:.)\]]*(.+?)\s*$",
+        )
     });
-    static END: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*$").ok()
+    static END: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[-–—•|(\[]*\s*[\[(]?(\d{1,2}:\d{2}(?::\d{2})?)[\])]?\s*$",
+        )
     });
-    static RANGE: LazyLock<Option<Regex>> = LazyLock::new(|| {
-        Regex::new(r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]\s*$").ok()
+    static RANGE: LazyLock<Regex> = LazyLock::new(|| {
+        fixed(
+            r"^\s*(?:\d{1,3}[.)-]\s*)?(.+?)\s*[\[(]\s*(\d{1,2}:\d{2}(?::\d{2})?)\s*[-–—]\s*\d{1,2}:\d{2}(?::\d{2})?\s*[\])]\s*$",
+        )
     });
     let mut entries = Vec::new();
     for line in text.lines() {
         let pair = RANGE
-            .as_ref()
-            .and_then(|regex| regex.captures(line))
+            .captures(line)
             .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
             .or_else(|| {
                 START
-                    .as_ref()
-                    .and_then(|regex| regex.captures(line))
+                    .captures(line)
                     .and_then(|capture| Some((capture.get(1)?.as_str(), capture.get(2)?.as_str())))
             })
             .or_else(|| {
-                END.as_ref()
-                    .and_then(|regex| regex.captures(line))
+                END.captures(line)
                     .and_then(|capture| Some((capture.get(2)?.as_str(), capture.get(1)?.as_str())))
             });
         if let Some((time, title)) = pair {
@@ -196,10 +203,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
     let mut entries: Vec<Chapter> = Vec::new();
     let mut current: Option<(u32, String, Option<i64>)> = None;
     for line in text.lines() {
-        if let Some(captures) = CUE_TRACK
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        if let Some(captures) = CUE_TRACK.captures(line) {
             if let Some((index, title, Some(start))) = current.take() {
                 entries.push(Chapter {
                     index,
@@ -217,10 +221,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
         let Some((_, title, start)) = current.as_mut() else {
             continue;
         };
-        if let Some(captures) = CUE_TITLE
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        if let Some(captures) = CUE_TITLE.captures(line) {
             let parsed = captures
                 .get(1)
                 .map_or("", |capture| capture.as_str())
@@ -228,10 +229,7 @@ pub fn parse_cue(text: &str) -> Vec<Chapter> {
             if !parsed.is_empty() {
                 parsed.clone_into(title);
             }
-        } else if let Some(captures) = CUE_INDEX
-            .as_ref()
-            .and_then(|pattern| pattern.captures(line))
-        {
+        } else if let Some(captures) = CUE_INDEX.captures(line) {
             let parts: Option<Vec<i64>> = (1..=3)
                 .map(|position| captures.get(position)?.as_str().parse::<i64>().ok())
                 .collect();
@@ -362,18 +360,11 @@ fn truncate_to_i64(number: f64) -> Option<i64> {
 
 fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
     for chapter in &mut chapters {
-        let original = chapter.title.clone();
-        let without_prefix = TRACK_PREFIX.as_ref().map_or_else(
-            || original.clone().into(),
-            |pattern| pattern.replace(&original, ""),
-        );
-        let cleaned = YTDLP_RANGE_SUFFIX.as_ref().map_or_else(
-            || without_prefix.clone(),
-            |pattern| pattern.replace(without_prefix.trim(), ""),
-        );
+        let without_prefix = TRACK_PREFIX.replace(&chapter.title, "");
+        let cleaned = YTDLP_RANGE_SUFFIX.replace(without_prefix.trim(), "");
         let cleaned = cleaned.trim();
-        if !cleaned.is_empty() {
-            cleaned.clone_into(&mut chapter.title);
+        if !cleaned.is_empty() && cleaned != chapter.title {
+            chapter.title = cleaned.to_owned();
         }
     }
     chapters
