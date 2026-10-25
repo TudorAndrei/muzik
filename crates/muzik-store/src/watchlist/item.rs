@@ -1,5 +1,5 @@
 use super::{ItemAction, SourceKind, Stage, StageStatus};
-use crate::Result;
+use crate::{Error, Result};
 use chrono::{Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -189,6 +189,23 @@ impl ItemId {
         fields.video_id.clone_from(&self.video_id);
         *params = serde_json::to_value(fields)?;
         Ok(())
+    }
+}
+
+impl std::str::FromStr for ItemId {
+    type Err = Error;
+
+    fn from_str(text: &str) -> Result<Self> {
+        let mut parts = text.rsplitn(3, ':');
+        let (Some(video_id), Some(position), Some(playlist_id)) =
+            (parts.next(), parts.next(), parts.next())
+        else {
+            return Err(format!("invalid item id: {text}").into());
+        };
+        let position = position
+            .parse()
+            .map_err(|_| Error::from(format!("invalid item id: {text}")))?;
+        Ok(Self::new(playlist_id, position, Some(video_id)))
     }
 }
 
@@ -672,6 +689,19 @@ mod tests {
         assert_eq!(super::ItemId::from_params(&params).unwrap(), bare);
         assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
         assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
+    }
+
+    #[test]
+    fn an_item_id_parses_back_from_its_text() {
+        for id in [
+            super::ItemId::new("PL1", 3, Some("abcdefghijk")),
+            super::ItemId::new("spotify:playlist:abc", 12, Some("track")),
+            super::ItemId::new("bandcamp:collection", 1, None),
+        ] {
+            assert_eq!(id.to_string().parse::<super::ItemId>().unwrap(), id);
+        }
+        assert!("PL1:x:video".parse::<super::ItemId>().is_err());
+        assert!("video".parse::<super::ItemId>().is_err());
     }
 
     #[test]
