@@ -31,6 +31,38 @@ pub enum Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+#[derive(Debug, thiserror::Error)]
+pub enum JobFailure {
+    #[error("job cancelled")]
+    Cancelled,
+    #[error(transparent)]
+    Failed(#[from] Error),
+}
+
+impl From<JobError> for JobFailure {
+    fn from(error: JobError) -> Self {
+        match error {
+            JobError::Cancelled => Self::Cancelled,
+            error => Self::Failed(Error::Message(error.to_string())),
+        }
+    }
+}
+
+impl From<muzik_workflow::Error> for JobFailure {
+    fn from(error: muzik_workflow::Error) -> Self {
+        match error {
+            muzik_workflow::Error::Cancelled => Self::Cancelled,
+            error => Self::Failed(Error::Workflow(error)),
+        }
+    }
+}
+
+impl From<serde_json::Error> for JobFailure {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Failed(error.into())
+    }
+}
+
 impl From<String> for Error {
     fn from(message: String) -> Self {
         Self::Message(message)

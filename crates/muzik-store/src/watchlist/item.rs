@@ -65,7 +65,7 @@ pub struct WatchItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
     #[serde(default)]
-    pub last_action: Option<String>,
+    pub last_action: Option<LastAction>,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
@@ -74,6 +74,40 @@ pub struct WatchItem {
     pub stages: Stages,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum LastAction {
+    Action(ItemAction),
+    Refresh,
+    Other(String),
+}
+
+impl From<ItemAction> for LastAction {
+    fn from(action: ItemAction) -> Self {
+        Self::Action(action)
+    }
+}
+
+impl From<String> for LastAction {
+    fn from(text: String) -> Self {
+        match text.parse() {
+            Ok(action) => Self::Action(action),
+            Err(_) if text == "refresh" => Self::Refresh,
+            Err(_) => Self::Other(text),
+        }
+    }
+}
+
+impl From<LastAction> for String {
+    fn from(action: LastAction) -> Self {
+        match action {
+            LastAction::Action(action) => action.to_string(),
+            LastAction::Refresh => "refresh".to_owned(),
+            LastAction::Other(text) => text,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,25 +162,51 @@ impl ItemId {
     /// # Errors
     /// Returns an error if `playlist_id` is missing or blank, or `position` is not a positive integer.
     pub fn from_params(params: &Value) -> Result<Self> {
-        let playlist_id = params["playlist_id"]
-            .as_str()
-            .filter(|id| !id.trim().is_empty())
-            .ok_or("playlist_id must be a non-empty string.")?;
-        let position = params["position"]
-            .as_u64()
-            .filter(|position| *position > 0)
-            .ok_or("position must be a positive integer.")?;
+        let params = ItemParams::read(params)?;
+        if params.playlist_id.trim().is_empty() {
+            return Err("playlist_id must be a non-empty string.".into());
+        }
+        if params.position == 0 {
+            return Err("position must be a positive integer.".into());
+        }
         Ok(Self::new(
-            playlist_id,
-            position,
-            params["video_id"].as_str(),
+            &params.playlist_id,
+            params.position,
+            params.video_id.as_deref(),
         ))
     }
 
-    pub fn write(&self, params: &mut Value) {
-        params["playlist_id"] = Value::from(self.playlist_id.as_str());
-        params["position"] = Value::from(self.position);
-        params["video_id"] = Value::from(self.video_id.as_deref().unwrap_or(""));
+    /// # Errors
+    /// Returns an error if `params` is not an object or holds item fields of the wrong type.
+    pub fn write(&self, params: &mut Value) -> Result<()> {
+        let mut fields = if params.is_null() {
+            ItemParams::default()
+        } else {
+            ItemParams::read(params)?
+        };
+        self.playlist_id.clone_into(&mut fields.playlist_id);
+        fields.position = self.position;
+        fields.video_id.clone_from(&self.video_id);
+        *params = serde_json::to_value(fields)?;
+        Ok(())
+    }
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct ItemParams {
+    #[serde(default)]
+    playlist_id: String,
+    #[serde(default)]
+    position: u64,
+    #[serde(default)]
+    video_id: Option<String>,
+    #[serde(flatten)]
+    rest: Map<String, Value>,
+}
+
+impl ItemParams {
+    fn read(params: &Value) -> Result<Self> {
+        Self::deserialize(params).map_err(|error| format!("invalid item params: {error}").into())
     }
 }
 
@@ -176,9 +236,10 @@ impl Watchlist {
         watchlist.normalized()
     }
 
-    #[must_use]
-    pub fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+    /// # Errors
+    /// Returns an error if the watchlist cannot be serialized.
+    pub fn to_value(&self) -> Result<Value> {
+        Ok(serde_json::to_value(self)?)
     }
 
     pub(super) fn normalized(mut self) -> Result<Self> {
@@ -285,10 +346,10 @@ impl Playlist {
     }
 
     pub fn merge_items(&mut self, discovered: Vec<WatchItem>) {
-        let mut old = HashMap::<(String, usize), WatchItem>::new();
-        let mut counts = HashMap::<String, usize>::new();
+        let mut old = HashMap::<(Option<String>, usize), WatchItem>::new();
+        let mut counts = HashMap::<Option<String>, usize>::new();
         for item in self.items.drain(..) {
-            let key = item.key().unwrap_or("").to_owned();
+            let key = item.key().map(str::to_owned);
             let occurrence = counts.entry(key.clone()).or_default();
             old.insert((key, *occurrence), item);
             *occurrence = occurrence.saturating_add(1);
@@ -297,7 +358,7 @@ impl Playlist {
         self.items = discovered
             .into_iter()
             .map(|mut item| {
-                let key = item.key().unwrap_or("").to_owned();
+                let key = item.key().map(str::to_owned);
                 let occurrence = counts.entry(key.clone()).or_default();
                 if let Some(previous) = old.remove(&(key, *occurrence)) {
                     item.stages = previous.stages;
@@ -408,7 +469,7 @@ impl WatchItem {
     }
 
     pub fn start(&mut self, action: ItemAction) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         *self.stage_mut(action.stage()) = StageRecord {
             status: StageStatus::Running,
@@ -418,7 +479,7 @@ impl WatchItem {
     }
 
     pub fn finish(&mut self, stage: Stage, action: ItemAction) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         if self.status(stage) == StageStatus::Running {
             *self.stage_mut(stage) = StageRecord {
@@ -430,7 +491,7 @@ impl WatchItem {
     }
 
     pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         let record = self.stage_mut(stage);
         record.status = StageStatus::Waiting;
@@ -439,7 +500,7 @@ impl WatchItem {
     }
 
     pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = Some(message.to_owned());
         *self.stage_mut(stage) = StageRecord {
             status: StageStatus::Failed,
@@ -536,7 +597,7 @@ fn bracketed_id(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioIndex, WatchItem, Watchlist};
+    use super::{AudioIndex, LastAction, WatchItem, Watchlist};
     use crate::watchlist::{ItemAction, SourceKind, Stage, StageStatus};
     use serde_json::json;
     use std::fs;
@@ -553,7 +614,7 @@ mod tests {
                 "stages":{"download":{"status":"waiting","updated_at":null,"path":"/a.flac",
                     "error":null,"question":{"kind":"import_match"}}}}]}]});
         let watchlist = Watchlist::from_value(stored).unwrap();
-        let value = watchlist.to_value();
+        let value = watchlist.to_value().unwrap();
         assert_eq!(value["version"], 3);
         assert_eq!(value["playlists"][0]["custom"], "kept");
         assert_eq!(value["playlists"][0]["processed_video_ids"], json!(["a"]));
@@ -569,20 +630,46 @@ mod tests {
     }
 
     #[test]
+    fn a_last_action_keeps_its_stored_text() {
+        let stored = json!(["retry", "refresh", "an_old_action"]);
+        let actions: Vec<LastAction> = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            actions,
+            [
+                LastAction::Action(ItemAction::Retry),
+                LastAction::Refresh,
+                LastAction::Other("an_old_action".into()),
+            ]
+        );
+        assert_eq!(serde_json::to_value(actions).unwrap(), stored);
+    }
+
+    #[test]
     fn an_item_id_reads_and_writes_job_params() {
         let id = super::ItemId::from_params(
             &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"run"}),
         )
         .unwrap();
         assert_eq!(id.to_string(), "PL1:3:abcdefghijk");
-        let mut params = json!({"output":"/music"});
-        id.write(&mut params);
+        let mut params = json!({"output":"/music","position":9});
+        id.write(&mut params).unwrap();
+        assert_eq!(
+            params,
+            json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","output":"/music"})
+        );
         assert_eq!(super::ItemId::from_params(&params).unwrap(), id);
         let bare =
             super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))
                 .unwrap();
         assert_eq!(bare.to_string(), "PL1:2:");
         assert_eq!(bare.video_id, None);
+        let mut params = serde_json::Value::Null;
+        bare.write(&mut params).unwrap();
+        assert_eq!(
+            params,
+            json!({"playlist_id":"PL1","position":2,"video_id":null})
+        );
+        assert_eq!(super::ItemId::from_params(&params).unwrap(), bare);
         assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
         assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
     }

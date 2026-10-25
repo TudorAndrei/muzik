@@ -4,7 +4,7 @@ use crate::gates::{self, Gate};
 use crate::settings::Settings;
 use crate::workflow_result::WorkflowResult;
 use muzik_core::{
-    ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, KEEP_CURRENT_TAGS, Step, Task,
+    ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, MatchAnswer, Step, Task,
     chapters::Chapter,
 };
 use muzik_import::apply::{DuplicateDecision, MatchDecision};
@@ -213,16 +213,16 @@ struct Questions<'a, 'b> {
 impl Ask for Questions<'_, '_> {
     fn choose_match(&mut self, album: &AlbumPlan) -> Result<MatchDecision, String> {
         let answer = (self.decide)(DecisionKind::ImportMatch, json!({"task":self.task}))?;
-        match answer.as_str() {
-            Some(KEEP_CURRENT_TAGS) => Ok(MatchDecision::AsIs),
-            Some(id) => album
+        match serde_json::from_value(answer) {
+            Ok(MatchAnswer::KeepCurrentTags) => Ok(MatchDecision::AsIs),
+            Ok(MatchAnswer::Candidate(id)) => album
                 .candidates
                 .iter()
                 .position(|candidate| candidate_id(candidate) == id)
                 .map(MatchDecision::Candidate)
                 .ok_or_else(|| "Select a valid match ID.".into()),
-            None if answer.is_null() => Ok(MatchDecision::Skip),
-            None => Err("Select a valid match ID.".into()),
+            Ok(MatchAnswer::Skip) => Ok(MatchDecision::Skip),
+            Err(_) => Err("Select a valid match ID.".into()),
         }
     }
 
@@ -415,7 +415,7 @@ mod tests {
                 &mut |_| {},
                 &mut |kind, _| {
                     asked.push(kind);
-                    Ok(json!(muzik_core::KEEP_CURRENT_TAGS))
+                    Ok(json!(muzik_core::MatchAnswer::KeepCurrentTags))
                 },
             )
             .unwrap();

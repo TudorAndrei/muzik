@@ -1,34 +1,25 @@
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
+use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::jobs::PendingItem;
-use muzik_store::watchlist::{ItemAction, ItemId, SourceKind};
+use muzik_store::watchlist::{ItemAction, ItemId, Repository};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Value, json};
-use std::fmt;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EnqueueError {
+    #[error("{0}")]
     Invalid(String),
+    #[error("{0}")]
     Busy(String),
+    #[error("{0}")]
     Store(String),
 }
-
-impl fmt::Display for EnqueueError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Invalid(message) | Self::Busy(message) | Self::Store(message) => {
-                formatter.write_str(message)
-            }
-        }
-    }
-}
-
-impl std::error::Error for EnqueueError {}
 
 impl From<String> for EnqueueError {
     fn from(message: String) -> Self {
@@ -148,9 +139,9 @@ impl Jobs {
     /// # Errors
     /// Returns an error when the item is invalid, already has an open job, or cannot be added to the queue.
     pub fn item(&self, params: &Value) -> Result<i64, EnqueueError> {
-        let key = validate_item(params)
-            .map_err(|error| EnqueueError::Invalid(error.to_string()))?
-            .to_string();
+        let (id, _) =
+            item_request(params).map_err(|error| EnqueueError::Invalid(error.to_string()))?;
+        let key = id.to_string();
         let title = params["title"]
             .as_str()
             .or_else(|| params["video_id"].as_str())
@@ -175,7 +166,7 @@ impl Jobs {
         let mut queued = 0_usize;
         for item in pending {
             let mut params = params.clone();
-            item.id.write(&mut params);
+            item.id.write(&mut params)?;
             if let Some(fields) = params.as_object_mut() {
                 fields.insert("title".into(), json!(item.title));
                 fields.insert("action".into(), json!(ItemAction::Run));
@@ -207,6 +198,13 @@ impl Jobs {
     }
 
     pub(crate) fn release_import_questions(&self) -> crate::Result<usize> {
+        let keeping: HashSet<String> = Repository::open(&self.paths)
+            .load()?
+            .playlists
+            .into_iter()
+            .filter(|playlist| playlist.kind.keeps_current_tags())
+            .map(|playlist| playlist.playlist_id)
+            .collect();
         let store = self.store();
         let mut released = 0_usize;
         for job in store.list(Status::Waiting)? {
@@ -214,7 +212,7 @@ impl Jobs {
                 .params
                 .get("playlist_id")
                 .and_then(Value::as_str)
-                .is_some_and(|id| SourceKind::of_playlist_id(id).keeps_current_tags());
+                .is_some_and(|id| keeping.contains(id));
             let kind = job
                 .question
                 .as_ref()
@@ -225,7 +223,10 @@ impl Jobs {
                     kind,
                     Some(DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)
                 )
-                && store.answer(job.id, &json!({"kind":kind,"value":KEEP_CURRENT_TAGS}))?
+                && store.answer(
+                    job.id,
+                    &json!({"kind":kind,"value":MatchAnswer::KeepCurrentTags}),
+                )?
             {
                 released = released.saturating_add(1);
             }
@@ -287,17 +288,17 @@ pub fn parse_job_id(text: &str) -> Option<i64> {
     text.strip_prefix("queue-").unwrap_or(text).parse().ok()
 }
 
-fn validate_item(params: &Value) -> crate::Result<ItemId> {
+pub fn item_request(params: &Value) -> crate::Result<(ItemId, ItemAction)> {
     let id = ItemId::from_params(params)?;
     let action = params
         .get("action")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or("action must be a non-empty string.")?;
-    action
+    let action = action
         .parse::<ItemAction>()
         .map_err(|_| format!("'{action}' is not a valid ItemAction"))?;
-    Ok(id)
+    Ok((id, action))
 }
 
 fn unique() -> u128 {
@@ -311,8 +312,8 @@ mod tests {
     use super::{EnqueueError, Jobs, parse_job_id};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
-    use muzik_store::watchlist::ItemId;
     use muzik_store::watchlist::jobs::PendingItem;
+    use muzik_store::watchlist::{ItemId, Playlist, Repository, SourceKind};
     use serde_json::json;
     use std::path::Path;
 
@@ -429,7 +430,19 @@ mod tests {
 
     #[test]
     fn waiting_spotify_import_questions_go_back_to_the_queue() {
-        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        Repository::open(&paths)
+            .update(|document| {
+                document.playlists = vec![
+                    Playlist::new("spotify:liked", "u", SourceKind::Spotify, None),
+                    Playlist::new("PL1", "u", SourceKind::Youtube, None),
+                    Playlist::new("spotify:album:a", "u", SourceKind::Spotify, None),
+                ];
+                Ok(())
+            })
+            .unwrap();
+        let jobs = Jobs::in_memory(&paths).unwrap();
         let park = |playlist: &str, kind: &str| {
             jobs.store().park(
                 &muzik_store::jobs::NewJob {

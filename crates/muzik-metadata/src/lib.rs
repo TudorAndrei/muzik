@@ -178,14 +178,15 @@ impl ReleaseSearch {
         if self.release.trim().is_empty() {
             return Err(Error::EmptyReleaseTitle);
         }
-        let mut terms = Vec::new();
-        add_term(&mut terms, "release", &self.release);
-        if self.various_artists {
-            add_term(&mut terms, "arid", VARIOUS_ARTISTS_ID);
-        } else if let Some(artist) = &self.artist {
-            add_term(&mut terms, "artist", artist);
-        }
-        for (field, value) in [
+        let artist = if self.various_artists {
+            ("arid", Some(VARIOUS_ARTISTS_ID))
+        } else {
+            ("artist", self.artist.as_deref())
+        };
+        let tracks = self.tracks.map(|tracks| tracks.to_string());
+        let terms: Vec<String> = [
+            ("release", Some(self.release.as_str())),
+            artist,
             ("barcode", self.barcode.as_deref()),
             ("catno", self.catalog_number.as_deref()),
             ("country", self.country.as_deref()),
@@ -193,22 +194,19 @@ impl ReleaseSearch {
             ("format", self.media.as_deref()),
             ("date", self.year.as_deref()),
             ("alias", self.alias.as_deref()),
-        ] {
-            if let Some(value) = value {
-                add_term(&mut terms, field, value);
-            }
-        }
-        if let Some(tracks) = self.tracks {
-            add_term(&mut terms, "tracks", &tracks.to_string());
-        }
+            ("tracks", tracks.as_deref()),
+        ]
+        .into_iter()
+        .filter_map(|(field, value)| term(field, value?))
+        .collect();
         Ok(terms.join(" "))
     }
 }
 
-fn add_term(terms: &mut Vec<String>, field: &str, value: &str) {
+fn term(field: &str, value: &str) -> Option<String> {
     let value = value.trim().to_lowercase();
     if value.is_empty() {
-        return;
+        return None;
     }
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -217,7 +215,7 @@ fn add_term(terms: &mut Vec<String>, field: &str, value: &str) {
         }
         escaped.push(character);
     }
-    terms.push(format!("{field}:({escaped})"));
+    Some(format!("{field}:({escaped})"))
 }
 
 fn limiter() -> &'static DefaultDirectRateLimiter {

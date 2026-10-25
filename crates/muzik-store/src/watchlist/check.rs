@@ -1,7 +1,7 @@
 //! Local checks own revision retries and suppress results after a newer edit or load.
 
 use super::WatchlistView;
-use super::{CheckedWrite, ReconcileOptions, Repository, import_cache, reconcile, view};
+use super::{CheckedWrite, ReconcileOptions, Repository, import_cache, view};
 use crate::Result;
 use muzik_core::QualityPolicy;
 use parking_lot::Mutex;
@@ -107,7 +107,7 @@ impl LocalCheck {
                 return Ok(None);
             }
             let (mut checked, revision) = self.repository.load_revision()?;
-            reconcile(&mut checked, options)?;
+            checked.reconcile(options)?;
             let written = {
                 let _gate = self.gate.lock();
                 if busy() || !self.current() {
