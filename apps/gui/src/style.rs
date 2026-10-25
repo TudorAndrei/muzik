@@ -6,7 +6,7 @@ use gpui_kit::{
     AnyElement, App, AssetSource, Div, ElementId, Hsla, Image, ImageFormat, Result, SharedString,
     div, px, rems,
 };
-use muzik_store::watchlist::{Stage, StageStatus};
+use muzik_store::watchlist::{SourceKind, Stage, StageStatus};
 
 const THEME: &str = include_str!("../themes/muzik.json");
 const LOGO: &[u8] = include_bytes!("../../../assets/muzik-logo-64.png");
@@ -33,18 +33,14 @@ impl AssetSource for AppAssets {
     }
 }
 
-pub fn source_icon(id: &str) -> gpui_kit::assets::IconName {
+pub fn source_icon(kind: SourceKind, id: &str) -> gpui_kit::assets::IconName {
     use gpui_kit::assets::IconName;
-    if id.starts_with("bandcamp:") {
-        IconName::ShoppingBag
-    } else if id == "spotify:liked" {
-        IconName::Heart
-    } else if id.starts_with("spotify:album:") {
-        IconName::Disc3
-    } else if id.starts_with("spotify:") {
-        IconName::ListMusic
-    } else {
-        IconName::SquarePlay
+    match kind {
+        SourceKind::Bandcamp => IconName::ShoppingBag,
+        SourceKind::Youtube => IconName::SquarePlay,
+        SourceKind::Spotify if id == "spotify:liked" => IconName::Heart,
+        SourceKind::Spotify if id.starts_with("spotify:album:") => IconName::Disc3,
+        SourceKind::Spotify => IconName::ListMusic,
     }
 }
 
@@ -227,19 +223,19 @@ pub fn stage_track(
 mod tests {
     use super::{AppAssets, Tone, source_icon, stage_headline, stage_states};
     use gpui_kit::AssetSource;
-    use muzik_store::watchlist::{Stage, StageStatus};
+    use muzik_store::watchlist::{SourceKind, Stage, StageStatus};
     use serde_json::json;
 
     #[test]
     fn every_source_icon_and_the_default_icons_load() {
-        for id in [
-            "PL123",
-            "spotify:liked",
-            "spotify:album:abc",
-            "spotify:playlist:abc",
-            "bandcamp:collection",
+        for (kind, id) in [
+            (SourceKind::Youtube, "PL123"),
+            (SourceKind::Spotify, "spotify:liked"),
+            (SourceKind::Spotify, "spotify:album:abc"),
+            (SourceKind::Spotify, "spotify:playlist:abc"),
+            (SourceKind::Bandcamp, "bandcamp:collection"),
         ] {
-            let path = source_icon(id).path();
+            let path = source_icon(kind, id).path();
             assert!(
                 AppAssets.load(&path).unwrap().is_some(),
                 "{path} is missing"

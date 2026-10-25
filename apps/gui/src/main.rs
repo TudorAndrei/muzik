@@ -11,8 +11,8 @@ mod watch_table;
 mod watchlist_view;
 
 use activity::{
-    Activity, ActivitySection, Ending, Finished, ReplyTarget, Run, RunKind, job_label, short_text,
-    u64_to_f64,
+    Activity, ActivitySection, Decision, Ending, Finished, ReplyTarget, Run, RunKind, job_label,
+    short_text, u64_to_f64,
 };
 use async_channel::Receiver;
 use backend::{Backend, ItemRequest};
@@ -97,14 +97,8 @@ const fn f64_to_u64(value: f64) -> u64 {
 const REPLACE_WARNING: &str =
     "This replaces the files from this stage. Later stages can become stale.";
 
-fn filter_summary(filter: usize) -> Option<Summary> {
-    filter
-        .checked_sub(1)
-        .and_then(|index| Summary::ALL.get(index).copied())
-}
-
-fn filter_label(filter: usize) -> &'static str {
-    filter_summary(filter).map_or("All", Into::into)
+fn filter_label(filter: Option<Summary>) -> &'static str {
+    filter.map_or("All", Into::into)
 }
 
 const fn action_label(action: ItemAction) -> &'static str {
@@ -143,7 +137,7 @@ struct Muzik {
     reload_watchlist: bool,
     watchlist: WatchlistView,
     selected_playlist: usize,
-    filter: usize,
+    filter: Option<Summary>,
     watch_table: Entity<TableState<watch_table::WatchTable>>,
     sheet_item: Option<String>,
     thumbnail_attempted: HashSet<String>,
@@ -151,7 +145,7 @@ struct Muzik {
     library_table: Entity<TableState<library::LibraryTable>>,
     library_search: Entity<InputState>,
     services: Value,
-    spotify: Value,
+    spotify: backend::SpotifyStatus,
     defaults: Option<GuiDefaults>,
     config_status: Rc<RefCell<String>>,
 }
@@ -223,7 +217,7 @@ impl Muzik {
             reload_watchlist: false,
             watchlist: WatchlistView::default(),
             selected_playlist: 0,
-            filter: 0,
+            filter: None,
             watch_table,
             sheet_item: None,
             thumbnail_attempted: HashSet::new(),
@@ -231,7 +225,7 @@ impl Muzik {
             library_table,
             library_search,
             services: Value::Null,
-            spotify: Value::Null,
+            spotify: backend::SpotifyStatus::default(),
             defaults: None,
             config_status: Rc::new(RefCell::new(String::new())),
         };
@@ -285,18 +279,12 @@ impl Muzik {
     }
 
     fn run_workflow(&mut self, cx: &mut Context<Self>) {
-        let params = self.launcher_params(cx);
-        if params
-            .get("raw")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .is_empty()
-        {
+        if self.raw.read(cx).value().trim().is_empty() {
             self.status = "Enter a URL or local path".into();
             cx.notify();
             return;
         }
+        let params = self.launcher_params(cx);
         self.start_workflow(params, cx);
     }
 
@@ -427,9 +415,12 @@ impl Muzik {
     }
 
     fn app_event(&mut self, event: AppEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let previous = self.activity.decision().cloned();
+        let previous = self
+            .activity
+            .decision()
+            .map(|decision| decision.target().clone());
         let finished = self.activity.apply(&event);
-        if previous.as_ref() != self.activity.decision() {
+        if previous.as_ref() != self.activity.decision().map(Decision::target) {
             self.prepare_decision(window, cx);
         }
         if let Some(finished) = finished {
@@ -578,14 +569,14 @@ impl Muzik {
         cx.notify();
     }
 
-    fn merge_thumbnail_results(&mut self, data: &Value) {
+    fn merge_thumbnail_results(&mut self, updates: &[thumbnails::ThumbnailUpdate]) {
         let visible: HashSet<String> = self.visible_thumbnail_ids().into_iter().collect();
-        merge_thumbnail_paths(&mut self.watchlist, &visible, data);
+        merge_thumbnail_paths(&mut self.watchlist, &visible, updates);
     }
 
     fn prepare_decision(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.chapter_rows.clear();
-        let Some(data) = self.activity.decision() else {
+        let Some(data) = self.activity.decision().map(|decision| &decision.question) else {
             return;
         };
         if choices::kind(data) == Some(DecisionKind::ChapterEdit)
@@ -973,8 +964,9 @@ impl Muzik {
             .into_any_element()
     }
 
-    fn decision_review(&self, decision: &Value, cx: &Context<Self>) -> Stateful<Div> {
-        let kind = choices::kind(decision);
+    fn decision_review(&self, decision: &Decision, cx: &Context<Self>) -> Stateful<Div> {
+        let question = &decision.question;
+        let kind = choices::kind(question);
         let mut review = div()
             .id("decision")
             .v_flex()
@@ -990,20 +982,20 @@ impl Muzik {
                     .gap_1()
                     .child(style::overline("DECISION NEEDED", cx))
                     .child(div().text_sm().font_semibold().child(choices::title(kind)))
-                    .when_some(decision["title"].as_str(), |this, title| {
+                    .when_some(decision.title.as_deref(), |this, title| {
                         this.child(style::meta(short_text(title, 80), cx))
                     }),
             );
-        if let Some(note) = choices::note(decision) {
+        if let Some(note) = choices::note(question) {
             review = review.child(style::meta(note, cx));
         }
         if let Some(note) =
-            choices::agent_note(decision.pointer("/payload/agent").unwrap_or(&Value::Null))
+            choices::agent_note(question.pointer("/payload/agent").unwrap_or(&Value::Null))
         {
             review = review.child(div().text_xs().text_color(cx.theme().warning).child(note));
         }
-        review = review.child(decision_buttons(decision, cx));
-        let details = choices::details(decision);
+        review = review.child(decision_buttons(question, cx));
+        let details = choices::details(question);
         if !details.is_empty() {
             review = review.child(decision_details(&details, cx));
         }
@@ -1023,7 +1015,7 @@ impl Muzik {
                             ),
                     );
         }
-        if !decision["queue_job"].is_null() {
+        if decision.queue_job().is_some() {
             review = review.child(
                 div().flex().child(
                     Button::new("decision-later")
@@ -1069,21 +1061,17 @@ impl Muzik {
     }
 
     fn waiting_inbox(&self, cx: &Context<Self>) -> Div {
-        let open = self
-            .activity
-            .decision()
-            .map_or(Value::Null, |decision| decision["queue_job"].clone());
+        let open = self.activity.decision().and_then(Decision::queue_job);
         let mut inbox = div().v_flex().gap_1p5().child(style::overline(
             format!("NEEDS YOU ({})", self.activity.waiting().len()),
             cx,
         ));
         for (index, waiting) in self.activity.waiting().iter().enumerate() {
-            let waiting = &waiting.data;
-            let kind = choices::kind(waiting);
-            let highlighted = waiting["queue_job"] == open;
-            let full_title = waiting["title"].as_str().unwrap_or("Item");
+            let kind = choices::kind(&waiting.question);
+            let id = waiting.queue_job();
+            let highlighted = id == open;
+            let full_title = waiting.title.as_deref().unwrap_or("Item");
             let title = short_text(full_title, 60);
-            let id = waiting["queue_job"].as_i64();
             let key = id.map_or_else(
                 || format!("waiting-ix-{index}"),
                 |id| format!("waiting-{id}"),
@@ -1328,23 +1316,23 @@ fn describe(value: &Value) -> String {
     }
 }
 
-fn merge_thumbnail_paths(watchlist: &mut WatchlistView, visible: &HashSet<String>, data: &Value) {
-    let Some(results) = data["thumbnails"].as_array() else {
-        return;
-    };
+fn merge_thumbnail_paths(
+    watchlist: &mut WatchlistView,
+    visible: &HashSet<String>,
+    updates: &[thumbnails::ThumbnailUpdate],
+) {
     let playlists = &mut watchlist.playlists;
-    for result in results {
-        let (Some(video_id), Some(path)) = (result["video_id"].as_str(), result["path"].as_str())
-        else {
+    for update in updates {
+        let Ok(path) = &update.result else {
             continue;
         };
-        if !visible.contains(video_id) {
+        if !visible.contains(&update.video_id) {
             continue;
         }
         for playlist in playlists.iter_mut() {
             for item in &mut playlist.items {
-                if item.item.video_id.as_deref() == Some(video_id) {
-                    item.thumbnail_path = Some(path.to_owned());
+                if item.item.video_id.as_deref() == Some(update.video_id.as_str()) {
+                    item.thumbnail_path = Some(path.to_string_lossy().into_owned());
                 }
             }
         }
@@ -1691,12 +1679,17 @@ mod tests {
             {"position":2,"title":"Other","summary":"Pending","actions":{},"video_id":"other", "thumbnail_path":null}
         ]}]})).unwrap();
         let visible = HashSet::from(["visible".to_string()]);
-        let event = json!({"thumbnails":[
-            {"video_id":"visible", "path":"/cache/visible.jpg"},
-            {"video_id":"other", "path":"/cache/other.jpg"},
-            {"video_id":"visible", "path":null}
-        ]});
-        merge_thumbnail_paths(&mut watchlist, &visible, &event);
+        let update =
+            |video_id: &str, result: Result<&str, &str>| super::thumbnails::ThumbnailUpdate {
+                video_id: video_id.into(),
+                result: result.map(Into::into).map_err(Into::into),
+            };
+        let updates = [
+            update("visible", Ok("/cache/visible.jpg")),
+            update("other", Ok("/cache/other.jpg")),
+            update("visible", Err("The item has no thumbnail URL.")),
+        ];
+        merge_thumbnail_paths(&mut watchlist, &visible, &updates);
         assert_eq!(
             watchlist.playlists[0].items[0].thumbnail_path.as_deref(),
             Some("/cache/visible.jpg")

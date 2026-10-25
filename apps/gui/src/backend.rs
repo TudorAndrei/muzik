@@ -27,6 +27,20 @@ pub struct ItemRequest {
     pub action: ItemAction,
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SpotifyStatus {
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub redirect_uri: String,
+    #[serde(default)]
+    pub connected: bool,
+    pub account_name: Option<String>,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub playlists: Option<Vec<spotify::PlaylistRef>>,
+}
+
 pub struct SoulseekForm {
     pub username: String,
     pub password: String,
@@ -201,7 +215,7 @@ impl Backend {
             .remove_source(required("playlist_id", playlist_id)?)?)
     }
 
-    pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Value> {
+    pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Vec<thumbnails::ThumbnailUpdate>> {
         let fresh = {
             let mut pending = self.thumbnails.lock();
             ids.into_iter()
@@ -221,12 +235,8 @@ impl Backend {
         Some(data)
     }
 
-    pub fn library(&self, config: &Path) -> anyhow::Result<LibraryInfo> {
-        let config = if config.as_os_str().is_empty() {
-            self.paths().beets.clone()
-        } else {
-            config.to_path_buf()
-        };
+    pub fn library(&self, config: Option<&Path>) -> anyhow::Result<LibraryInfo> {
+        let config = config.map_or_else(|| self.paths().beets.clone(), Path::to_path_buf);
         let (_, paths) = beets::load_paths(Some(&config), json!({}))?;
         library::read(&paths.library, &paths.directory)
     }
@@ -266,7 +276,7 @@ impl Backend {
 
     pub fn save_bandcamp(&self, user: &str, cookies: &str) -> anyhow::Result<Value> {
         let _write = self.writes.lock();
-        bandcamp::Login::save(self.paths(), user, cookies)?;
+        bandcamp::Login::save(self.paths(), Some(user), cookies)?;
         muzik_runner::watchlist::ensure_sources(self.paths())?;
         Ok(bandcamp::status(self.paths()))
     }
@@ -277,17 +287,18 @@ impl Backend {
         Ok(bandcamp::status(self.paths()))
     }
 
-    pub fn spotify_status(&self) -> anyhow::Result<Value> {
-        Ok(spotify::status(
+    pub fn spotify_status(&self) -> anyhow::Result<SpotifyStatus> {
+        Ok(serde_json::from_value(spotify::status(
+            &self.paths().config_file(),
+            &self.paths().spotify_token(),
+        )?)?)
+    }
+
+    pub fn spotify_playlists(&self) -> anyhow::Result<Vec<spotify::PlaylistRef>> {
+        Ok(spotify::list_playlists(
             &self.paths().config_file(),
             &self.paths().spotify_token(),
         )?)
-    }
-
-    pub fn spotify_playlists(&self) -> anyhow::Result<Value> {
-        let playlists =
-            spotify::list_playlists(&self.paths().config_file(), &self.paths().spotify_token())?;
-        Ok(serde_json::to_value(playlists)?)
     }
 
     pub fn set_spotify_client_id(&self, client_id: &str) -> anyhow::Result<String> {
@@ -593,5 +604,22 @@ mod tests {
         assert!(backend.rename_source("PL123", "  New name  ").unwrap());
         assert!(backend.rename_source("PL123", "").is_err());
         assert!(backend.remove_source("PL123").unwrap());
+    }
+
+    #[test]
+    fn spotify_status_reads_the_saved_client_id_and_redirect() {
+        let (_state, backend, _) = started(false).unwrap();
+        let config = backend.paths().config_file();
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            "spotify:\n  client_id: saved\n  redirect_port: '9123'\n",
+        )
+        .unwrap();
+        let status = backend.spotify_status().unwrap();
+        assert_eq!(status.client_id, "saved");
+        assert_eq!(status.redirect_uri, "http://127.0.0.1:9123/callback");
+        assert!(!status.connected);
+        assert!(status.account_name.is_none() && status.error.is_none());
     }
 }

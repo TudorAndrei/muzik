@@ -130,13 +130,12 @@ fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
 fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
     let value: Value = serde_json::from_str(text)
         .map_err(|error| format!("The cookie JSON is not valid: {error}"))?;
-    let list = match &value {
-        Value::Array(list) => list.clone(),
-        Value::Object(map) => map
-            .get("cookies")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
+    let list = match value {
+        Value::Array(list) => list,
+        Value::Object(mut map) => match map.remove("cookies") {
+            Some(Value::Array(list)) => list,
+            _ => Vec::new(),
+        },
         _ => Vec::new(),
     };
     Ok(list
@@ -227,7 +226,7 @@ impl Login {
 
     /// # Errors
     /// Returns an error when the cookies or user name are not valid, or when the files cannot be written.
-    pub fn save(paths: &Paths, user: &str, cookie_text: &str) -> Result<Self> {
+    pub fn save(paths: &Paths, user: Option<&str>, cookie_text: &str) -> Result<Self> {
         Self::save_to(
             &paths.bandcamp_user(),
             &paths.bandcamp_cookies(),
@@ -239,7 +238,7 @@ impl Login {
     fn save_to(
         user_file: &Path,
         cookie_file: &Path,
-        user: &str,
+        user: Option<&str>,
         cookie_text: &str,
     ) -> Result<Self> {
         let cookies = if cookie_text.trim().is_empty() {
@@ -249,15 +248,12 @@ impl Login {
         } else {
             parse_cookies(cookie_text)?
         };
-        let user = user.trim().trim_start_matches('@');
-        let user = if user.is_empty() {
-            Self {
-                user: String::new(),
-                cookies: cookies.clone(),
-            }
-            .account_user()?
-        } else {
-            user.to_owned()
+        let user = match user
+            .map(|user| user.trim().trim_start_matches('@'))
+            .filter(|user| !user.is_empty())
+        {
+            Some(user) => user.to_owned(),
+            None => Self::account_user(&cookies)?,
         };
         if !user
             .bytes()
@@ -273,9 +269,8 @@ impl Login {
         Ok(Self { user, cookies })
     }
 
-    fn account_user(&self) -> Result<String> {
-        let summary: Value = self
-            .get("https://bandcamp.com/api/fan/2/collection_summary")?
+    fn account_user(cookies: &[Cookie]) -> Result<String> {
+        let summary: Value = request("https://bandcamp.com/api/fan/2/collection_summary", cookies)?
             .body_mut()
             .read_json()
             .map_err(|error| {
@@ -304,27 +299,11 @@ impl Login {
     }
 
     fn header(&self) -> String {
-        self.cookies
-            .iter()
-            .map(|cookie| format!("{}={}", cookie.name, cookie.value))
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>> {
-        ureq::get(url)
-            .header("User-Agent", USER_AGENT)
-            .header("Cookie", self.header())
-            .config()
-            .timeout_global(Some(Duration::from_secs(60)))
-            .build()
-            .call()
-            .map_err(|error| format!("Bandcamp did not answer {url}: {error}").into())
+        cookie_header(&self.cookies)
     }
 
     fn page_blob(&self, url: &str) -> Result<Value> {
-        let html = self
-            .get(url)?
+        let html = request(url, &self.cookies)?
             .body_mut()
             .with_config()
             .limit(PAGE_LIMIT)
@@ -332,6 +311,25 @@ impl Login {
             .map_err(|error| format!("Bandcamp sent a page that is not valid: {error}"))?;
         page_blob(&html).ok_or_else(|| format!("Bandcamp sent no page data for {url}.").into())
     }
+}
+
+fn cookie_header(cookies: &[Cookie]) -> String {
+    cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name, cookie.value))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn request(url: &str, cookies: &[Cookie]) -> Result<ureq::http::Response<ureq::Body>> {
+    ureq::get(url)
+        .header("User-Agent", USER_AGENT)
+        .header("Cookie", cookie_header(cookies))
+        .config()
+        .timeout_global(Some(Duration::from_secs(60)))
+        .build()
+        .call()
+        .map_err(|error| format!("Bandcamp did not answer {url}: {error}").into())
 }
 
 #[must_use]
@@ -683,9 +681,23 @@ fn saved_bytes(partial: &Path) -> u64 {
 }
 
 fn content_range(header: &str) -> Option<(u64, Option<u64>)> {
-    let (range, total) = header.strip_prefix("bytes ")?.split_once('/')?;
-    let start = range.split_once('-')?.0.trim().parse().ok()?;
-    Some((start, total.trim().parse().ok()))
+    let number = |text: &str| {
+        (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| text.parse::<u64>().ok())
+            .flatten()
+    };
+    let (unit, range) = header.trim().split_once(' ')?;
+    if !unit.eq_ignore_ascii_case("bytes") {
+        return None;
+    }
+    let (range, total) = range.split_once('/')?;
+    let (first, last) = range.split_once('-')?;
+    let (first, last) = (number(first)?, number(last)?);
+    let total = match total {
+        "*" => None,
+        total => Some(number(total)?),
+    };
+    (first <= last && total.is_none_or(|total| last < total)).then_some((first, total))
 }
 
 fn wait(duration: Duration, cancelled: &AtomicBool) {
@@ -859,18 +871,18 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let user = directory.path().join("bandcamp_user");
         let cookies = directory.path().join("bandcamp_cookies.txt");
-        assert!(Login::save_to(&user, &cookies, "bad name", "identity=x").is_err());
+        assert!(Login::save_to(&user, &cookies, Some("bad name"), "identity=x").is_err());
         Login::save_to(
             &user,
             &cookies,
-            "@listener",
+            Some("@listener"),
             "identity=secret; js_logged_in=1",
         )
         .unwrap();
         let login = Login::load_from(&user, &cookies).unwrap();
         assert_eq!(login.user, "listener");
         assert_eq!(login.header(), "identity=secret; js_logged_in=1");
-        Login::save_to(&user, &cookies, "listener", "").unwrap();
+        Login::save_to(&user, &cookies, Some("listener"), "").unwrap();
         assert!(Login::load_from(&user, &cookies).is_some());
         #[cfg(unix)]
         {
@@ -1012,6 +1024,96 @@ mod tests {
         );
         assert_eq!(disposition_name(r#"attachment; filename="../x.zip""#), None);
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
+    }
+
+    fn assert_one_safe_component(header: &str) {
+        if let Some(name) = disposition_name(header) {
+            let components: Vec<_> = Path::new(&name).components().collect();
+            assert_eq!(
+                components,
+                [std::path::Component::Normal(name.as_ref())],
+                "{header:?}"
+            );
+            assert!(!name.starts_with('.'), "{header:?}");
+        }
+    }
+
+    #[test]
+    fn any_download_name_is_one_file_name_inside_the_destination() {
+        bolero::check!().with_type::<String>().for_each(|text| {
+            assert_one_safe_component(text);
+            assert_one_safe_component(&format!("attachment; filename=\"{text}\""));
+            let encoded =
+                percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC);
+            let header = format!("attachment; filename*=UTF-8''{encoded}");
+            assert_one_safe_component(&header);
+            if let Some(name) = disposition_name(&header) {
+                assert_eq!(name, text.trim());
+            }
+        });
+    }
+
+    #[test]
+    fn resumed_ranges_follow_the_content_range_grammar() {
+        assert_eq!(content_range("bytes 100-199/200"), Some((100, Some(200))));
+        assert_eq!(content_range("bytes 0-0/*"), Some((0, None)));
+        for malformed in [
+            "bytes 100-/200",
+            "bytes -199/200",
+            "bytes 100-199",
+            "bytes 200-100/300",
+            "bytes 100-200/200",
+            "bytes +1-2/3",
+            "bytes  1-2/3",
+            "bytes 1 -2/3",
+            "bytes 1-2/abc",
+            "bytes */200",
+            "items 1-2/3",
+            "bytes 1-18446744073709551616/*",
+        ] {
+            assert_eq!(content_range(malformed), None, "{malformed}");
+        }
+    }
+
+    #[test]
+    fn any_accepted_content_range_is_well_formed() {
+        bolero::check!().with_type::<String>().for_each(|header| {
+            let Some((start, total)) = content_range(header) else {
+                return;
+            };
+            let rest = header.trim();
+            assert!(rest.get(..6).unwrap().eq_ignore_ascii_case("bytes "));
+            let (range, length) = rest.get(6..).unwrap().split_once('/').unwrap();
+            let (first, last) = range.split_once('-').unwrap();
+            for part in [first, last] {
+                assert!(!part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+            }
+            assert_eq!(first.parse::<u64>().unwrap(), start);
+            let last = last.parse::<u64>().unwrap();
+            assert!(start <= last);
+            match total {
+                Some(total) => {
+                    assert_eq!(length.parse::<u64>().unwrap(), total);
+                    assert!(length.bytes().all(|byte| byte.is_ascii_digit()));
+                    assert!(last < total);
+                }
+                None => assert_eq!(length, "*"),
+            }
+        });
+    }
+
+    #[test]
+    fn any_numeric_content_range_is_accepted_only_inside_the_length() {
+        bolero::check!()
+            .with_type::<(u64, u64, Option<u64>)>()
+            .for_each(|&(first, last, total)| {
+                let length = total.map_or_else(|| "*".to_owned(), |total| total.to_string());
+                let valid = first <= last && total.is_none_or(|total| last < total);
+                assert_eq!(
+                    content_range(&format!("bytes {first}-{last}/{length}")),
+                    valid.then_some((first, total))
+                );
+            });
     }
 
     #[test]

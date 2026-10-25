@@ -2,41 +2,48 @@
 
 use muzik_core::thumbnails as cache;
 use muzik_store::watchlist::Repository;
-use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub fn cache_requested(ids: &[String], repository: &Repository, cache_dir: &Path) -> Value {
-    let updates = match repository.load() {
+#[derive(Debug, PartialEq, Eq)]
+pub struct ThumbnailUpdate {
+    pub video_id: String,
+    pub result: Result<PathBuf, String>,
+}
+
+pub fn cache_requested(
+    ids: &[String],
+    repository: &Repository,
+    cache_dir: &Path,
+) -> Vec<ThumbnailUpdate> {
+    match repository.load() {
         Ok(watchlist) => {
             let urls: BTreeMap<&str, Option<&str>> = watchlist
                 .items()
                 .filter_map(|item| Some((item.video_id.as_deref()?, item.thumbnail_url.as_deref())))
                 .collect();
             ids.iter()
-                .map(|id| {
-                    let result = urls.get(id.as_str()).map_or_else(
+                .map(|id| ThumbnailUpdate {
+                    video_id: id.clone(),
+                    result: urls.get(id.as_str()).map_or_else(
                         || Err("The item is no longer in the watchlist.".to_owned()),
-                        |url| cache_item(id, *url, cache_dir).map(Some),
-                    );
-                    update(id, result)
+                        |url| cache_item(id, *url, cache_dir),
+                    ),
                 })
-                .collect::<Vec<_>>()
+                .collect()
         }
         Err(error) => ids
             .iter()
-            .map(|id| update(id, Err(error.to_string())))
+            .map(|id| ThumbnailUpdate {
+                video_id: id.clone(),
+                result: Err(error.to_string()),
+            })
             .collect(),
-    };
-    json!({"thumbnails": updates})
+    }
 }
 
-fn cache_item(
-    id: &str,
-    source_url: Option<&str>,
-    cache_dir: &Path,
-) -> Result<std::path::PathBuf, String> {
+fn cache_item(id: &str, source_url: Option<&str>, cache_dir: &Path) -> Result<PathBuf, String> {
     if !cache::valid_id(id) {
         return Err("Invalid thumbnail ID.".into());
     }
@@ -47,18 +54,7 @@ fn cache_item(
     fetch_and_save(id, url, cache_dir)
 }
 
-fn update(id: &str, result: Result<Option<std::path::PathBuf>, String>) -> Value {
-    match result {
-        Ok(path) => json!({"video_id": id, "path": path, "error": null}),
-        Err(error) => json!({"video_id": id, "path": null, "error": error}),
-    }
-}
-
-fn fetch_and_save(
-    id: &str,
-    source_url: &str,
-    cache_dir: &Path,
-) -> Result<std::path::PathBuf, String> {
+fn fetch_and_save(id: &str, source_url: &str, cache_dir: &Path) -> Result<PathBuf, String> {
     let mut url = url::Url::parse(source_url).map_err(|error| error.to_string())?;
     if !matches!(url.scheme(), "http" | "https") {
         return Err("Thumbnail URL must use HTTP or HTTPS.".into());
@@ -88,7 +84,7 @@ fn fetch_and_save(
 
 #[cfg(test)]
 mod tests {
-    use super::{Repository, cache_requested};
+    use super::{Repository, ThumbnailUpdate, cache_requested};
     use serde_json::json;
     use std::fs;
 
@@ -112,12 +108,12 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-        let result = cache_requested(&["abcdefghijk".into()], &watchlist, &cache);
-        assert_eq!(result["thumbnails"].as_array().map(Vec::len), Some(1));
         assert_eq!(
-            result["thumbnails"][0]["path"],
-            json!(cache.join("yt_thumbnail_abcdefghijk.jpg"))
+            cache_requested(&["abcdefghijk".into()], &watchlist, &cache),
+            [ThumbnailUpdate {
+                video_id: "abcdefghijk".into(),
+                result: Ok(cache.join("yt_thumbnail_abcdefghijk.jpg")),
+            }]
         );
-        assert!(result["thumbnails"][0]["error"].is_null());
     }
 }

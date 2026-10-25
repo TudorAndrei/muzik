@@ -45,74 +45,175 @@ struct SoulseekFields {
     has_password: bool,
 }
 
-fn choices(defaults: &GuiDefaults) -> [(&'static str, &'static [&'static str], String); 6] {
-    [
-        (
-            "Audio source",
-            AudioSource::CHOICES,
-            defaults.audio_source.to_string(),
-        ),
-        (
-            "Metadata",
-            MetadataSource::CHOICES,
-            defaults.metadata_source.to_string(),
-        ),
-        (
-            "Prefer",
-            muzik_core::PreferredAudio::CHOICES,
-            defaults.prefer.to_string(),
-        ),
-        (
-            "Fallback",
-            AudioFallback::CHOICES,
-            defaults.fallback.to_string(),
-        ),
-        (
-            "Quality policy",
-            QualityPolicy::CHOICES,
-            defaults.quality_policy.to_string(),
-        ),
-        (
-            "Album already in library",
-            DuplicatePolicy::CHOICES,
-            defaults.duplicates.to_string(),
-        ),
-    ]
+#[derive(Clone, Copy)]
+enum ChoiceField {
+    AudioSource,
+    Metadata,
+    Prefer,
+    Fallback,
+    QualityPolicy,
+    Duplicates,
 }
 
-fn set_choice(defaults: &mut GuiDefaults, index: usize, value: &str) {
-    let _ = match index {
-        0 => value
-            .parse()
-            .ok()
-            .map(|value| defaults.audio_source = value),
-        1 => value
-            .parse()
-            .ok()
-            .map(|value| defaults.metadata_source = value),
-        2 => value.parse().ok().map(|value| defaults.prefer = value),
-        3 => value.parse().ok().map(|value| defaults.fallback = value),
-        4 => value
-            .parse()
-            .ok()
-            .map(|value| defaults.quality_policy = value),
-        5 => value.parse().ok().map(|value| defaults.duplicates = value),
-        _ => None,
-    };
+impl ChoiceField {
+    const ALL: [Self; 6] = [
+        Self::AudioSource,
+        Self::Metadata,
+        Self::Prefer,
+        Self::Fallback,
+        Self::QualityPolicy,
+        Self::Duplicates,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::AudioSource => "Audio source",
+            Self::Metadata => "Metadata",
+            Self::Prefer => "Prefer",
+            Self::Fallback => "Fallback",
+            Self::QualityPolicy => "Quality policy",
+            Self::Duplicates => "Album already in library",
+        }
+    }
+
+    const fn values(self) -> &'static [&'static str] {
+        match self {
+            Self::AudioSource => AudioSource::CHOICES,
+            Self::Metadata => MetadataSource::CHOICES,
+            Self::Prefer => muzik_core::PreferredAudio::CHOICES,
+            Self::Fallback => AudioFallback::CHOICES,
+            Self::QualityPolicy => QualityPolicy::CHOICES,
+            Self::Duplicates => DuplicatePolicy::CHOICES,
+        }
+    }
+
+    fn current(self, defaults: &GuiDefaults) -> String {
+        match self {
+            Self::AudioSource => defaults.audio_source.to_string(),
+            Self::Metadata => defaults.metadata_source.to_string(),
+            Self::Prefer => defaults.prefer.to_string(),
+            Self::Fallback => defaults.fallback.to_string(),
+            Self::QualityPolicy => defaults.quality_policy.to_string(),
+            Self::Duplicates => defaults.duplicates.to_string(),
+        }
+    }
+
+    fn set(self, defaults: &mut GuiDefaults, value: &str) {
+        let _ = match self {
+            Self::AudioSource => value
+                .parse()
+                .map(|value| defaults.audio_source = value)
+                .ok(),
+            Self::Metadata => value
+                .parse()
+                .map(|value| defaults.metadata_source = value)
+                .ok(),
+            Self::Prefer => value.parse().map(|value| defaults.prefer = value).ok(),
+            Self::Fallback => value.parse().map(|value| defaults.fallback = value).ok(),
+            Self::QualityPolicy => value
+                .parse()
+                .map(|value| defaults.quality_policy = value)
+                .ok(),
+            Self::Duplicates => value.parse().map(|value| defaults.duplicates = value).ok(),
+        };
+    }
 }
 
-const fn flags(defaults: &mut GuiDefaults) -> [(&'static str, &mut bool); 9] {
-    [
-        ("Review chapters", &mut defaults.review),
-        ("No split", &mut defaults.no_split),
-        ("No organize", &mut defaults.no_organize),
-        ("Import", &mut defaults.import),
-        ("Tag only", &mut defaults.tag_only),
-        ("Dry run", &mut defaults.dry_run),
-        ("Keep source", &mut defaults.keep_source),
-        ("Force", &mut defaults.force),
-        ("Interactive", &mut defaults.interactive),
-    ]
+#[derive(Clone, Copy)]
+enum NumberField {
+    Jobs,
+    MinBitrate,
+}
+
+impl NumberField {
+    const ALL: [Self; 2] = [Self::Jobs, Self::MinBitrate];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Jobs => "Jobs",
+            Self::MinBitrate => "Min bitrate",
+        }
+    }
+
+    const fn step(self) -> f64 {
+        match self {
+            Self::Jobs => 1.,
+            Self::MinBitrate => 32.,
+        }
+    }
+
+    fn current(self, defaults: &GuiDefaults) -> f64 {
+        match self {
+            Self::Jobs => u64_to_f64(u64::try_from(defaults.jobs).unwrap_or(u64::MAX)),
+            Self::MinBitrate => f64::from(defaults.min_bitrate),
+        }
+    }
+
+    fn set(self, defaults: &mut GuiDefaults, value: f64) {
+        match self {
+            Self::Jobs => {
+                defaults.jobs = usize::try_from(f64_to_u64(value)).unwrap_or(usize::MAX);
+            }
+            Self::MinBitrate => {
+                defaults.min_bitrate = u32::try_from(f64_to_u64(value)).unwrap_or(u32::MAX);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Flag {
+    Review,
+    NoSplit,
+    NoOrganize,
+    Import,
+    TagOnly,
+    DryRun,
+    KeepSource,
+    Force,
+    Interactive,
+}
+
+impl Flag {
+    const ALL: [Self; 9] = [
+        Self::Review,
+        Self::NoSplit,
+        Self::NoOrganize,
+        Self::Import,
+        Self::TagOnly,
+        Self::DryRun,
+        Self::KeepSource,
+        Self::Force,
+        Self::Interactive,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Review => "Review chapters",
+            Self::NoSplit => "No split",
+            Self::NoOrganize => "No organize",
+            Self::Import => "Import",
+            Self::TagOnly => "Tag only",
+            Self::DryRun => "Dry run",
+            Self::KeepSource => "Keep source",
+            Self::Force => "Force",
+            Self::Interactive => "Interactive",
+        }
+    }
+
+    const fn field(self, defaults: &mut GuiDefaults) -> &mut bool {
+        match self {
+            Self::Review => &mut defaults.review,
+            Self::NoSplit => &mut defaults.no_split,
+            Self::NoOrganize => &mut defaults.no_organize,
+            Self::Import => &mut defaults.import,
+            Self::TagOnly => &mut defaults.tag_only,
+            Self::DryRun => &mut defaults.dry_run,
+            Self::KeepSource => &mut defaults.keep_source,
+            Self::Force => &mut defaults.force,
+            Self::Interactive => &mut defaults.interactive,
+        }
+    }
 }
 
 fn edit(view: &WeakEntity<ConfigView>, cx: &mut App, change: impl FnOnce(&mut GuiDefaults)) {
@@ -377,88 +478,65 @@ impl ConfigView {
     }
 
     fn quality_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
-        SettingGroup::new().title("Sources and quality").items(
-            choices(&self.defaults).into_iter().enumerate().map(
-                |(index, (label, values, current))| {
-                    let view = view.clone();
-                    SettingItem::new(
-                        label,
-                        SettingField::dropdown(
-                            values
-                                .iter()
-                                .map(|value| {
-                                    (SharedString::from(*value), SharedString::from(*value))
-                                })
-                                .collect(),
-                            move |_| current.clone().into(),
-                            move |value, cx| {
-                                edit(&view, cx, |defaults| set_choice(defaults, index, &value));
-                            },
-                        ),
-                    )
-                },
-            ),
-        )
+        SettingGroup::new()
+            .title("Sources and quality")
+            .items(ChoiceField::ALL.into_iter().map(|field| {
+                let view = view.clone();
+                let current = field.current(&self.defaults);
+                SettingItem::new(
+                    field.label(),
+                    SettingField::dropdown(
+                        field
+                            .values()
+                            .iter()
+                            .map(|value| (SharedString::from(*value), SharedString::from(*value)))
+                            .collect(),
+                        move |_| current.clone().into(),
+                        move |value, cx| {
+                            edit(&view, cx, |defaults| field.set(defaults, &value));
+                        },
+                    ),
+                )
+            }))
     }
 
     fn number_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
-        [
-            (
-                "Jobs",
-                u64_to_f64(u64::try_from(self.defaults.jobs).unwrap_or(u64::MAX)),
-                1.,
-            ),
-            ("Min bitrate", f64::from(self.defaults.min_bitrate), 32.),
-        ]
-        .into_iter()
-        .enumerate()
-        .map(|(index, (label, current, step))| {
-            let view = view.clone();
-            SettingItem::new(
-                label,
-                SettingField::number_input(
-                    NumberFieldOptions {
-                        min: 0.,
-                        step,
-                        ..NumberFieldOptions::default()
-                    },
-                    move |_| current,
-                    move |value, cx| {
-                        edit(&view, cx, |defaults| match index {
-                            0 => {
-                                defaults.jobs =
-                                    usize::try_from(f64_to_u64(value)).unwrap_or(usize::MAX);
-                            }
-                            _ => {
-                                defaults.min_bitrate =
-                                    u32::try_from(f64_to_u64(value)).unwrap_or(u32::MAX);
-                            }
-                        });
-                    },
-                ),
-            )
-        })
-        .collect()
+        NumberField::ALL
+            .into_iter()
+            .map(|field| {
+                let view = view.clone();
+                let current = field.current(&self.defaults);
+                SettingItem::new(
+                    field.label(),
+                    SettingField::number_input(
+                        NumberFieldOptions {
+                            min: 0.,
+                            step: field.step(),
+                            ..NumberFieldOptions::default()
+                        },
+                        move |_| current,
+                        move |value, cx| {
+                            edit(&view, cx, |defaults| field.set(defaults, value));
+                        },
+                    ),
+                )
+            })
+            .collect()
     }
 
     fn switch_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
         let mut current = self.defaults.clone();
-        flags(&mut current)
+        Flag::ALL
             .into_iter()
-            .enumerate()
-            .map(|(index, (label, enabled))| {
-                let enabled = *enabled;
+            .map(|flag| {
+                let enabled = *flag.field(&mut current);
                 let view = view.clone();
                 SettingItem::new(
-                    label,
+                    flag.label(),
                     SettingField::switch(
                         move |_| enabled,
                         move |checked, cx| {
-                            edit(&view, cx, |defaults| {
-                                if let Some((_, flag)) = flags(defaults).into_iter().nth(index) {
-                                    *flag = checked;
-                                }
-                            });
+                            edit(&view, cx, |defaults| *flag.field(defaults) = checked);
                         },
                     ),
                 )
@@ -615,5 +693,21 @@ impl Render for ConfigView {
                             .on_click(cx.listener(|view, _, _, cx| view.save(cx))),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ChoiceField, GuiDefaults};
+
+    #[test]
+    fn every_dropdown_value_becomes_the_current_choice() {
+        let mut defaults = GuiDefaults::default();
+        for field in ChoiceField::ALL {
+            for value in field.values() {
+                field.set(&mut defaults, value);
+                assert_eq!(field.current(&defaults), *value, "{}", field.label());
+            }
+        }
     }
 }

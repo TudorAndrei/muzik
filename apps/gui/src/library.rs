@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Track {
     pub disc: i64,
-    pub number: i64,
+    pub number: Option<i64>,
     pub title: String,
     pub artist: String,
     pub length: f64,
@@ -27,7 +27,7 @@ pub struct Track {
 pub struct AlbumRow {
     pub artist: String,
     pub title: String,
-    pub year: i64,
+    pub year: Option<i64>,
     pub genre: String,
     pub label: String,
     pub added: f64,
@@ -55,7 +55,7 @@ impl AlbumRow {
         [&self.artist, &self.title, &self.genre, &self.label]
             .iter()
             .any(|text| text.to_lowercase().contains(needle))
-            || (self.year > 0 && self.year.to_string() == needle)
+            || self.year.is_some_and(|year| year.to_string() == needle)
     }
 }
 
@@ -85,6 +85,10 @@ fn integer(value: Option<&SqlValue>) -> i64 {
     }
 }
 
+fn positive(value: Option<&SqlValue>) -> Option<i64> {
+    Some(integer(value)).filter(|number| *number > 0)
+}
+
 fn real(value: Option<&SqlValue>) -> f64 {
     match value {
         Some(SqlValue::Real(number)) => *number,
@@ -97,7 +101,7 @@ fn real(value: Option<&SqlValue>) -> f64 {
 fn track(item: &Item) -> Track {
     Track {
         disc: integer(item.field("disc")),
-        number: integer(item.field("track")),
+        number: positive(item.field("track")),
         title: text(item.field("title")),
         artist: text(item.field("artist")),
         length: real(item.field("length")),
@@ -110,7 +114,7 @@ fn album_row(album: &Album, tracks: Vec<Track>) -> AlbumRow {
     AlbumRow {
         artist: text(album.field("albumartist")),
         title: text(album.field("album")),
-        year: integer(album.field("year")),
+        year: positive(album.field("year")),
         genre: text(album.field("genre")),
         label: text(album.field("label")),
         added: real(album.field("added")),
@@ -215,22 +219,87 @@ fn date(added: f64) -> String {
         .unwrap_or_default()
 }
 
-const COLUMNS: [(&str, &str, f32); 7] = [
-    ("artist", "Artist", 220.),
-    ("album", "Album", 280.),
-    ("year", "Year", 64.),
-    ("tracks", "Tracks", 64.),
-    ("length", "Length", 80.),
-    ("format", "Format", 96.),
-    ("added", "Added", 104.),
-];
-const NUMERIC: [usize; 3] = [2, 3, 4];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LibraryColumn {
+    Artist,
+    Album,
+    Year,
+    Tracks,
+    Length,
+    Format,
+    Added,
+}
+
+impl LibraryColumn {
+    const ALL: [Self; 7] = [
+        Self::Artist,
+        Self::Album,
+        Self::Year,
+        Self::Tracks,
+        Self::Length,
+        Self::Format,
+        Self::Added,
+    ];
+
+    fn at(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Artist => "artist",
+            Self::Album => "album",
+            Self::Year => "year",
+            Self::Tracks => "tracks",
+            Self::Length => "length",
+            Self::Format => "format",
+            Self::Added => "added",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Artist => "Artist",
+            Self::Album => "Album",
+            Self::Year => "Year",
+            Self::Tracks => "Tracks",
+            Self::Length => "Length",
+            Self::Format => "Format",
+            Self::Added => "Added",
+        }
+    }
+
+    const fn width(self) -> f32 {
+        match self {
+            Self::Artist => 220.,
+            Self::Album => 280.,
+            Self::Year | Self::Tracks => 64.,
+            Self::Length => 80.,
+            Self::Format => 96.,
+            Self::Added => 104.,
+        }
+    }
+
+    const fn numeric(self) -> bool {
+        match self {
+            Self::Year | Self::Tracks | Self::Length => true,
+            Self::Artist | Self::Album | Self::Format | Self::Added => false,
+        }
+    }
+
+    const fn muted(self) -> bool {
+        match self {
+            Self::Artist | Self::Album => false,
+            Self::Year | Self::Tracks | Self::Length | Self::Format | Self::Added => true,
+        }
+    }
+}
 
 pub struct LibraryTable {
     albums: Vec<Arc<AlbumRow>>,
     rows: Vec<Arc<AlbumRow>>,
     filter: String,
-    sort: Option<(usize, ColumnSort)>,
+    sort: Option<(LibraryColumn, ColumnSort)>,
     loading: bool,
 }
 
@@ -281,23 +350,23 @@ impl LibraryTable {
             return;
         };
         match column {
-            0 => self.rows.sort_by_cached_key(|album| {
+            LibraryColumn::Artist => self.rows.sort_by_cached_key(|album| {
                 (
                     album.artist.to_lowercase(),
                     album.year,
                     album.title.to_lowercase(),
                 )
             }),
-            1 => self
+            LibraryColumn::Album => self
                 .rows
                 .sort_by_cached_key(|album| album.title.to_lowercase()),
-            2 => self.rows.sort_by_key(|album| album.year),
-            3 => self.rows.sort_by_key(|album| album.tracks.len()),
-            4 => self
+            LibraryColumn::Year => self.rows.sort_by_key(|album| album.year),
+            LibraryColumn::Tracks => self.rows.sort_by_key(|album| album.tracks.len()),
+            LibraryColumn::Length => self
                 .rows
                 .sort_by(|left, right| left.length().total_cmp(&right.length())),
-            5 => self.rows.sort_by_cached_key(|album| album.format()),
-            _ => self
+            LibraryColumn::Format => self.rows.sort_by_cached_key(|album| album.format()),
+            LibraryColumn::Added => self
                 .rows
                 .sort_by(|left, right| left.added.total_cmp(&right.added)),
         }
@@ -306,26 +375,25 @@ impl LibraryTable {
         }
     }
 
-    fn text(&self, row_ix: usize, col_ix: usize) -> String {
-        let Some(album) = self.rows.get(row_ix) else {
+    fn text(&self, row_ix: usize, column: Option<LibraryColumn>) -> String {
+        let (Some(album), Some(column)) = (self.rows.get(row_ix), column) else {
             return String::new();
         };
-        match col_ix {
-            0 => album.artist.clone(),
-            1 => album.title.clone(),
-            2 if album.year > 0 => album.year.to_string(),
-            3 => album.tracks.len().to_string(),
-            4 => duration(album.length()),
-            5 => album.format(),
-            6 => date(album.added),
-            _ => String::new(),
+        match column {
+            LibraryColumn::Artist => album.artist.clone(),
+            LibraryColumn::Album => album.title.clone(),
+            LibraryColumn::Year => album.year.map(|year| year.to_string()).unwrap_or_default(),
+            LibraryColumn::Tracks => album.tracks.len().to_string(),
+            LibraryColumn::Length => duration(album.length()),
+            LibraryColumn::Format => album.format(),
+            LibraryColumn::Added => date(album.added),
         }
     }
 }
 
 impl TableDelegate for LibraryTable {
     fn columns_count(&self, _: &App) -> usize {
-        COLUMNS.len()
+        LibraryColumn::ALL.len()
     }
 
     fn rows_count(&self, _: &App) -> usize {
@@ -337,14 +405,16 @@ impl TableDelegate for LibraryTable {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        let Some(&(key, name, width)) = COLUMNS.get(col_ix) else {
+        let Some(column) = LibraryColumn::at(col_ix) else {
             return Column::new("", "");
         };
-        let column = Column::new(key, name).width(px(width)).sortable();
-        if NUMERIC.contains(&col_ix) {
-            column.text_right()
+        let header = Column::new(column.key(), column.name())
+            .width(px(column.width()))
+            .sortable();
+        if column.numeric() {
+            header.text_right()
         } else {
-            column
+            header
         }
     }
 
@@ -355,7 +425,7 @@ impl TableDelegate for LibraryTable {
         _: &mut Window,
         cx: &mut gpui_kit::Context<gpui_kit::component::table::TableState<Self>>,
     ) {
-        self.sort = Some((col_ix, sort));
+        self.sort = LibraryColumn::at(col_ix).map(|column| (column, sort));
         self.apply();
         cx.notify();
     }
@@ -367,8 +437,9 @@ impl TableDelegate for LibraryTable {
         _: &mut Window,
         cx: &mut gpui_kit::Context<gpui_kit::component::table::TableState<Self>>,
     ) -> impl IntoElement {
-        let cell = div().min_w_0().truncate().child(self.text(row_ix, col_ix));
-        if col_ix >= 2 {
+        let column = LibraryColumn::at(col_ix);
+        let cell = div().min_w_0().truncate().child(self.text(row_ix, column));
+        if column.is_none_or(LibraryColumn::muted) {
             cell.text_color(cx.theme().muted_foreground)
         } else {
             cell
@@ -376,7 +447,7 @@ impl TableDelegate for LibraryTable {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        self.text(row_ix, col_ix)
+        self.text(row_ix, LibraryColumn::at(col_ix))
     }
 }
 
@@ -535,7 +606,7 @@ fn album_sheet(sheet: Sheet, album: &AlbumRow, cx: &App) -> Sheet {
         .label_width(px(90.))
         .item("Artist", album.artist.clone(), 1);
     for (label, value) in [
-        ("Year", (album.year > 0).then(|| album.year.to_string())),
+        ("Year", album.year.map(|year| year.to_string())),
         ("Genre", Some(album.genre.clone())),
         ("Label", Some(album.label.clone())),
         ("Format", Some(album.format())),
@@ -551,9 +622,9 @@ fn album_sheet(sheet: Sheet, album: &AlbumRow, cx: &App) -> Sheet {
     let mut body = TableBody::new();
     for track in &album.tracks {
         let number = match (discs, track.number) {
-            (_, 0) => String::new(),
-            (true, number) => format!("{}-{number}", track.disc),
-            (false, number) => number.to_string(),
+            (_, None) => String::new(),
+            (true, Some(number)) => format!("{}-{number}", track.disc),
+            (false, Some(number)) => number.to_string(),
         };
         let mut title = div()
             .v_flex()
@@ -597,7 +668,9 @@ fn album_sheet(sheet: Sheet, album: &AlbumRow, cx: &App) -> Sheet {
 
 #[cfg(test)]
 mod tests {
-    use super::{AlbumRow, ColumnSort, LibraryTable, Track, duration, playtime, read};
+    use super::{
+        AlbumRow, ColumnSort, LibraryColumn, LibraryTable, Track, duration, playtime, read,
+    };
     use muzik_library::{Fields, Library, SqlValue};
     use std::sync::Arc;
 
@@ -605,7 +678,7 @@ mod tests {
         AlbumRow {
             artist: artist.into(),
             title: title.into(),
-            year,
+            year: Some(year),
             added,
             ..AlbumRow::default()
         }
@@ -678,6 +751,8 @@ mod tests {
         assert_eq!(duration(row.length()), "3:05");
         assert_eq!(row.format(), "FLAC");
         assert_eq!(row.path, "/Music/Phoniks");
+        assert_eq!(row.year, Some(2015));
+        assert_eq!(row.tracks[0].number, Some(1));
         assert_eq!(
             info.formats,
             [("FLAC".to_string(), 2), ("MP3".to_string(), 1)]
@@ -720,7 +795,7 @@ mod tests {
         table.set_filter("2011");
         assert_eq!(titles(&table), ["Road to Knowhere"]);
         table.set_filter("");
-        table.sort = Some((0, ColumnSort::Ascending));
+        table.sort = Some((LibraryColumn::Artist, ColumnSort::Ascending));
         table.apply();
         assert_eq!(
             titles(&table),
