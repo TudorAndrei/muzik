@@ -259,15 +259,20 @@ fn split_tracks(
                         if cancelled.load(Ordering::SeqCst) {
                             return Err(SplitError::Cancelled);
                         }
-                        if split_track(track_context, chapter)? {
-                            let count = completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
-                            let _ = sender.send(SplitProgress {
-                                completed: count,
-                                total: chapters.len(),
-                                chapter_index: chapter.index,
-                            });
-                        } else {
-                            failures.lock().push(chapter.title.clone());
+                        match split_track(track_context, chapter) {
+                            Ok(()) => {
+                                let count =
+                                    completed.fetch_add(1, Ordering::SeqCst).saturating_add(1);
+                                let _ = sender.send(SplitProgress {
+                                    completed: count,
+                                    total: chapters.len(),
+                                    chapter_index: chapter.index,
+                                });
+                            }
+                            Err(TrackError::Failed(reason)) => {
+                                failures.lock().push(format!("{}: {reason}", chapter.title));
+                            }
+                            Err(TrackError::Stop(error)) => return Err(error),
                         }
                         Ok(())
                     })
@@ -285,7 +290,7 @@ fn split_tracks(
     split?;
     let failed = failures.into_inner();
     if !failed.is_empty() {
-        return Err(SplitError::TracksFailed(failed.len(), failed.join(", ")));
+        return Err(SplitError::TracksFailed(failed.len(), failed.join("; ")));
     }
     Ok(())
 }
@@ -402,7 +407,18 @@ fn expected_track_name(source: &Path, chapter: &Chapter, compilation: bool) -> S
     track_file_name(source, chapter.index, &title)
 }
 
-fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<bool, SplitError> {
+enum TrackError {
+    Failed(String),
+    Stop(SplitError),
+}
+
+impl<E: Into<SplitError>> From<E> for TrackError {
+    fn from(error: E) -> Self {
+        Self::Stop(error.into())
+    }
+}
+
+fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<(), TrackError> {
     let SplitTrackContext {
         source,
         output,
@@ -449,9 +465,9 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
     };
     match ffmpeg.cut(&cut, cancelled) {
         Ok(()) => {}
-        Err(ffmpeg::Error::Failed(_)) => return Ok(false),
-        Err(ffmpeg::Error::Cancelled) => return Err(SplitError::Cancelled),
-        Err(error) => return Err(SplitError::Ffmpeg(error)),
+        Err(ffmpeg::Error::Failed(reason)) => return Err(TrackError::Failed(reason)),
+        Err(ffmpeg::Error::Cancelled) => return Err(SplitError::Cancelled.into()),
+        Err(error) => return Err(SplitError::Ffmpeg(error).into()),
     }
     if let Some(source_id) = &metadata.source_id {
         let sidecar = destination.with_extension("muzik.json");
@@ -463,7 +479,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<boo
         let text = serde_json::to_string_pretty(&payload).map_err(io::Error::other)?;
         fs::write(sidecar, format!("{text}\n"))?;
     }
-    Ok(true)
+    Ok(())
 }
 
 fn extract_metadata(source: &Path) -> Metadata {
@@ -803,6 +819,42 @@ mod tests {
         };
         assert_eq!(split(&options).unwrap(), output);
         assert!(!source.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_track_reports_the_ffmpeg_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("album.opus");
+        fs::write(&source, b"audio").unwrap();
+        let binary = temp.path().join("ffmpeg");
+        fs::write(
+            &binary,
+            "#!/bin/sh\necho 'Invalid data found' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = split_audio_with_binary(
+            &source,
+            &[Chapter {
+                index: 1,
+                start: 0,
+                end: None,
+                title: "Song".into(),
+            }],
+            &temp.path().join("output"),
+            &SplitOptions::default(),
+            &AtomicBool::new(false),
+            &mut |_| {},
+            &Ffmpeg::at(&binary),
+        );
+        assert!(
+            matches!(&result, Err(SplitError::TracksFailed(1, reasons)) if reasons == "Song: Invalid data found"),
+            "{result:?}"
+        );
+        assert!(source.exists());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::process::{self, Stopped, background_command};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
@@ -80,11 +80,12 @@ impl Ffmpeg {
 
     /// Stop ffmpeg and remove the partial file when `cancelled` becomes true.
     pub(crate) fn cut(&self, cut: &Cut<'_>, cancelled: &AtomicBool) -> Result<(), Error> {
+        let mut errors = tempfile::tempfile().map_err(Error::Run)?;
         let mut command = background_command(&self.executable);
         command
             .arg("-i")
             .arg(cut.source)
-            .args(["-nostdin", "-y", "-ss"])
+            .args(["-nostdin", "-v", "error", "-y", "-ss"])
             .arg(timestamp(cut.start));
         if let Some(end) = cut.end {
             command.arg("-to").arg(timestamp(end));
@@ -97,7 +98,7 @@ impl Ffmpeg {
             .arg(cut.destination)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(errors.try_clone().map_err(Error::Run)?);
         let mut child = process::spawn(command).map_err(Error::Run)?;
         let status = match process::wait(&mut child, None, cancelled) {
             Ok(status) => status,
@@ -108,10 +109,19 @@ impl Ffmpeg {
             }
         };
         if status.success() {
-            Ok(())
-        } else {
-            Err(Error::Failed(status.to_string()))
+            return Ok(());
         }
+        let mut text = String::new();
+        errors
+            .rewind()
+            .and_then(|()| errors.read_to_string(&mut text))
+            .map_err(Error::Run)?;
+        let text = text.trim();
+        Err(Error::Failed(if text.is_empty() {
+            status.to_string()
+        } else {
+            text.to_owned()
+        }))
     }
 
     /// # Errors
