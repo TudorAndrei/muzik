@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use muzik_core::chapters::Sidecar;
 use serde_json::Value;
 use strum_macros::Display;
 
@@ -109,11 +110,11 @@ fn kind(path: &Path) -> Option<FileKind> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     if muzik_core::audio::is_audio(path) {
         Some(FileKind::Audio)
-    } else if name.ends_with(".chapters.txt") {
+    } else if name.ends_with(Sidecar::Chapters.suffix()) {
         Some(FileKind::Chapters)
-    } else if name.ends_with(".info.json") {
+    } else if name.ends_with(Sidecar::Info.suffix()) {
         Some(FileKind::InfoJson)
-    } else if name.ends_with(".muzik.json") {
+    } else if name.ends_with(Sidecar::Muzik.suffix()) {
         Some(FileKind::Muzik)
     } else {
         None

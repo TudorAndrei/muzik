@@ -111,7 +111,7 @@ pub fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
         text,
         edit::Builder::new()
             .prefix("muzik-chapters-")
-            .suffix(".chapters.txt"),
+            .suffix(chapters::Sidecar::Chapters.suffix()),
     )
     .context("Cannot open editor")?;
     Ok(chapters::parse_chapters(&text))

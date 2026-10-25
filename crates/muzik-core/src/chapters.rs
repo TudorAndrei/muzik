@@ -265,12 +265,12 @@ pub fn find_chapters(audio: &Path) -> Result<Vec<Chapter>, Error> {
 /// # Errors
 /// Returns an error if a sidecar cannot be read or parsed.
 pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<Chapter>, Error> {
-    let txt = sidecar_path(audio, ".chapters.txt");
+    let txt = Sidecar::Chapters.path(audio);
     if txt.metadata().is_ok_and(|metadata| metadata.len() > 0) {
         return Ok(normalize(parse_chapters(&read_text(&txt)?)));
     }
 
-    let info = sidecar_path(audio, ".info.json");
+    let info = Sidecar::Info.path(audio);
     if include_info && info.exists() {
         let chapters = parse_info_json(&read_text(&info)?)?;
         if !chapters.is_empty() {
@@ -278,7 +278,7 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
         }
     }
 
-    let cue = sidecar_path(audio, ".cue");
+    let cue = Sidecar::Cue.path(audio);
     let cue = if cue.exists() {
         Some(cue)
     } else {
@@ -302,6 +302,43 @@ pub fn find_chapters_with_info(audio: &Path, include_info: bool) -> Result<Vec<C
         }
     }
     Ok(Vec::new())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Sidecar {
+    Chapters,
+    Info,
+    Metadata,
+    Muzik,
+    Cue,
+    Jpg,
+    Jpeg,
+    Png,
+    Webp,
+}
+
+impl Sidecar {
+    pub const THUMBNAILS: [Self; 4] = [Self::Jpg, Self::Jpeg, Self::Png, Self::Webp];
+
+    #[must_use]
+    pub const fn suffix(self) -> &'static str {
+        match self {
+            Self::Chapters => ".chapters.txt",
+            Self::Info => ".info.json",
+            Self::Metadata => ".metadata.txt",
+            Self::Muzik => ".muzik.json",
+            Self::Cue => ".cue",
+            Self::Jpg => ".jpg",
+            Self::Jpeg => ".jpeg",
+            Self::Png => ".png",
+            Self::Webp => ".webp",
+        }
+    }
+
+    #[must_use]
+    pub fn path(self, audio: &Path) -> PathBuf {
+        sidecar_path(audio, self.suffix())
+    }
 }
 
 #[must_use]
@@ -589,7 +626,7 @@ mod tests {
             "Cued"
         );
         fs::write(
-            sidecar_path(&audio, ".info.json"),
+            Sidecar::Info.path(&audio),
             r#"{"chapters":[{"start_time":0,"title":"02) JSON"}]}"#,
         )
         .expect("info file");
@@ -597,12 +634,12 @@ mod tests {
             find_chapters(&audio).expect("JSON chapters")[0].title,
             "JSON"
         );
-        fs::write(sidecar_path(&audio, ".chapters.txt"), "00:00 03 - Text\n").expect("text file");
+        fs::write(Sidecar::Chapters.path(&audio), "00:00 03 - Text\n").expect("text file");
         assert_eq!(
             find_chapters(&audio).expect("text chapters")[0].title,
             "Text"
         );
-        fs::write(sidecar_path(&audio, ".chapters.txt"), "invalid\n").expect("text file");
+        fs::write(Sidecar::Chapters.path(&audio), "invalid\n").expect("text file");
         assert!(find_chapters(&audio).expect("invalid text").is_empty());
     }
 
@@ -611,7 +648,7 @@ mod tests {
         let temp = tempfile::tempdir().expect("temporary directory");
         let audio = temp.path().join("Audio.flac");
         fs::write(&audio, []).expect("audio file");
-        fs::write(sidecar_path(&audio, ".chapters.txt"), []).expect("empty text file");
+        fs::write(Sidecar::Chapters.path(&audio), []).expect("empty text file");
         fs::write(
             temp.path().join("One.cue"),
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",
@@ -624,7 +661,7 @@ mod tests {
         .expect("second cue");
         assert!(find_chapters(&audio).expect("ambiguous cues").is_empty());
         fs::write(
-            sidecar_path(&audio, ".cue"),
+            Sidecar::Cue.path(&audio),
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",
         )
         .expect("matching cue");

@@ -1,7 +1,7 @@
 //! Split a chaptered audio file into tagged tracks with ffmpeg.
 
 use crate::ffmpeg::{self, Cut, Ffmpeg};
-use muzik_core::chapters::{Chapter, sidecar_path};
+use muzik_core::chapters::{Chapter, Sidecar};
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use regex::Regex;
@@ -13,8 +13,6 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use unicode_normalization::UnicodeNormalization;
-
-const THUMB_EXTS: &[&str] = &[".jpg", ".jpeg", ".png", ".webp"];
 
 #[derive(Clone, Debug, Default)]
 pub struct SplitOptions {
@@ -178,7 +176,7 @@ fn split_audio_with_binary(
 }
 
 fn split_cache_file(source: &Path, options: &SplitOptions) -> Result<Option<PathBuf>, SplitError> {
-    let chapter_sidecar = sidecar_path(source, ".chapters.txt");
+    let chapter_sidecar = Sidecar::Chapters.path(source);
     if !chapter_sidecar.exists() {
         return Ok(None);
     }
@@ -307,16 +305,11 @@ fn finish(
     }
     if !keep_source {
         fs::remove_file(source)?;
-        for extension in [
-            ".chapters.txt",
-            ".info.json",
-            ".metadata.txt",
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".webp",
-        ] {
-            let sidecar = sidecar_path(source, extension);
+        for kind in [Sidecar::Chapters, Sidecar::Info, Sidecar::Metadata]
+            .into_iter()
+            .chain(Sidecar::THUMBNAILS)
+        {
+            let sidecar = kind.path(source);
             if sidecar.exists() {
                 fs::remove_file(sidecar)?;
             }
@@ -503,7 +496,7 @@ fn extract_metadata(source: &Path) -> Metadata {
             };
         }
     }
-    if let Some(info) = read_json(&sidecar_path(source, ".info.json")) {
+    if let Some(info) = read_json(&Sidecar::Info.path(source)) {
         let title = field(&info, "title").unwrap_or_else(|| {
             source
                 .file_stem()
@@ -684,10 +677,10 @@ fn file_hash(path: &Path) -> io::Result<String> {
 }
 
 fn place_cover(source: &Path, output: &Path) {
-    for extension in THUMB_EXTS {
-        let thumbnail = sidecar_path(source, extension);
+    for kind in Sidecar::THUMBNAILS {
+        let thumbnail = kind.path(source);
         if thumbnail.exists() {
-            let _ = fs::copy(thumbnail, output.join(format!("cover{extension}")));
+            let _ = fs::copy(thumbnail, output.join(format!("cover{}", kind.suffix())));
             break;
         }
     }
@@ -706,7 +699,7 @@ mod tests {
 
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("album.mp3");
-        let sidecar = sidecar_path(&source, ".chapters.txt");
+        let sidecar = Sidecar::Chapters.path(&source);
         fs::write(&source, b"source audio").unwrap();
         fs::write(&sidecar, b"0:00 Song\n").unwrap();
         let marker = temp.path().join("started");
@@ -759,11 +752,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("album.opus");
         fs::write(&source, b"downloaded again").unwrap();
-        fs::write(
-            sidecar_path(&source, ".chapters.txt"),
-            "0:00 One\n1:00 Two\n",
-        )
-        .unwrap();
+        fs::write(Sidecar::Chapters.path(&source), "0:00 One\n1:00 Two\n").unwrap();
         let binary = temp.path().join("ffmpeg");
         fs::write(&binary, "#!/bin/sh\nexit 1\n").unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -874,7 +863,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            sidecar_path(&source, ".info.json"),
+            Sidecar::Info.path(&source),
             r#"{"artist":"Other","album":"Other"}"#,
         )
         .unwrap();
@@ -908,12 +897,8 @@ mod tests {
             r#"{"source_id":"vid1","resolved":{"artist":"Main","album":"Record","year":2005}}"#,
         )
         .unwrap();
-        fs::write(
-            sidecar_path(&source, ".chapters.txt"),
-            "00:00 One\n00:01 Two\n",
-        )
-        .unwrap();
-        fs::write(sidecar_path(&source, ".jpg"), b"cover").unwrap();
+        fs::write(Sidecar::Chapters.path(&source), "00:00 One\n00:01 Two\n").unwrap();
+        fs::write(Sidecar::Jpg.path(&source), b"cover").unwrap();
         let chapters = vec![
             Chapter {
                 index: 1,
@@ -971,8 +956,8 @@ mod tests {
             output
         );
         assert!(!source.exists());
-        assert!(!sidecar_path(&source, ".chapters.txt").exists());
-        assert!(!sidecar_path(&source, ".jpg").exists());
+        assert!(!Sidecar::Chapters.path(&source).exists());
+        assert!(!Sidecar::Jpg.path(&source).exists());
         assert!(output.join("01-one.mp3").exists());
     }
 }

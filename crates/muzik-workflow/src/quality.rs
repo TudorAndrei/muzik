@@ -1,7 +1,7 @@
 //! Safe quality replacement for a freshly acquired `YouTube` audio file.
 
 use muzik_core::audio::AudioFormat;
-use muzik_core::chapters::sidecar_path;
+use muzik_core::chapters::Sidecar;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent, PreferredAudio, QualityPolicy, Severity, app_config};
 use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
@@ -444,10 +444,10 @@ fn candidate_payload(candidate: &Candidate) -> Value {
 }
 
 fn copy_chapter_sidecars(original: &Path, replacement: &Path) -> std::io::Result<()> {
-    for extension in [".chapters.txt", ".info.json"] {
-        let source = sidecar_path(original, extension);
+    for kind in [Sidecar::Chapters, Sidecar::Info] {
+        let source = kind.path(original);
         if source.is_file() {
-            std::fs::copy(&source, sidecar_path(replacement, extension))?;
+            std::fs::copy(&source, kind.path(replacement))?;
         }
     }
     Ok(())
@@ -487,8 +487,8 @@ impl Backend for SoulseekBackend {
     fn track(&mut self, path: &Path) -> Result<Option<Track>> {
         let mut artist = String::new();
         let mut title = String::new();
-        for extension in [".muzik.json", ".info.json"] {
-            let sidecar = sidecar_path(path, extension);
+        for kind in [Sidecar::Muzik, Sidecar::Info] {
+            let sidecar = kind.path(path);
             if let Ok(bytes) = std::fs::read(sidecar)
                 && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
             {
@@ -715,15 +715,14 @@ mod tests {
     fn ask_requires_acceptance_and_auto_copies_chapters() {
         let mut backend = FakeBackend::new();
         let original = backend.original();
-        std::fs::write(sidecar_path(&original, ".chapters.txt"), "00:00 Intro").unwrap();
+        std::fs::write(Sidecar::Chapters.path(&original), "00:00 Intro").unwrap();
         let refused = run(&mut backend, original.clone(), QualityPolicy::Ask, false);
         assert_eq!(refused.audio_files, vec![original.clone()]);
         let accepted = run(&mut backend, original.clone(), QualityPolicy::Auto, true);
         assert_ne!(accepted.audio_files, vec![original.clone()]);
         assert!(original.is_file());
         assert_eq!(
-            std::fs::read_to_string(sidecar_path(&accepted.audio_files[0], ".chapters.txt"))
-                .unwrap(),
+            std::fs::read_to_string(Sidecar::Chapters.path(&accepted.audio_files[0])).unwrap(),
             "00:00 Intro"
         );
     }

@@ -46,7 +46,7 @@ pub(crate) fn discover(
 }
 
 fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
-    let path = chapters::sidecar_path(source, ".info.json");
+    let path = chapters::Sidecar::Info.path(source);
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(Vec::new());
     };
@@ -80,7 +80,7 @@ fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
 
 fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
     let tags = muzik_tags::read(source, &[]).unwrap_or_default();
-    let info = fs::read_to_string(chapters::sidecar_path(source, ".info.json"))
+    let info = fs::read_to_string(chapters::Sidecar::Info.path(source))
         .ok()
         .and_then(|text| serde_json::from_str::<Value>(&text).ok());
     let release_id = tags.fields.get("mb_albumid").map(String::as_str);
@@ -215,7 +215,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("album.opus");
         fs::write(
-            chapters::sidecar_path(&source, ".info.json"),
+            chapters::Sidecar::Info.path(&source),
             r#"{"description":"0:00 First\n3:04 Second"}"#,
         )
         .unwrap();
@@ -261,7 +261,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("album.opus");
         fs::write(
-            chapters::sidecar_path(&source, ".info.json"),
+            chapters::Sidecar::Info.path(&source),
             r#"{
             "description":"Album upload",
             "comments":[
