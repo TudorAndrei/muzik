@@ -105,7 +105,7 @@ impl Muzik {
                 if playlist.last_error.is_some() {
                     item.icon(IconName::TriangleAlert)
                 } else {
-                    item.icon(style::source_icon(&playlist.playlist_id))
+                    item.icon(style::source_icon(playlist.kind, &playlist.playlist_id))
                 }
             })
             .collect();
