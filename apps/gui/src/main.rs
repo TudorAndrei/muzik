@@ -97,14 +97,8 @@ const fn f64_to_u64(value: f64) -> u64 {
 const REPLACE_WARNING: &str =
     "This replaces the files from this stage. Later stages can become stale.";
 
-fn filter_summary(filter: usize) -> Option<Summary> {
-    filter
-        .checked_sub(1)
-        .and_then(|index| Summary::ALL.get(index).copied())
-}
-
-fn filter_label(filter: usize) -> &'static str {
-    filter_summary(filter).map_or("All", Into::into)
+fn filter_label(filter: Option<Summary>) -> &'static str {
+    filter.map_or("All", Into::into)
 }
 
 const fn action_label(action: ItemAction) -> &'static str {
@@ -143,7 +137,7 @@ struct Muzik {
     reload_watchlist: bool,
     watchlist: WatchlistView,
     selected_playlist: usize,
-    filter: usize,
+    filter: Option<Summary>,
     watch_table: Entity<TableState<watch_table::WatchTable>>,
     sheet_item: Option<String>,
     thumbnail_attempted: HashSet<String>,
@@ -223,7 +217,7 @@ impl Muzik {
             reload_watchlist: false,
             watchlist: WatchlistView::default(),
             selected_playlist: 0,
-            filter: 0,
+            filter: None,
             watch_table,
             sheet_item: None,
             thumbnail_attempted: HashSet::new(),

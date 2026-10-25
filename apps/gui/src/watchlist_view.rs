@@ -214,10 +214,14 @@ impl Muzik {
         TabBar::new("filters")
             .pill()
             .small()
-            .selected_index(self.filter)
-            .children((0..=Summary::ALL.len()).map(|filter| Tab::new().label(filter_label(filter))))
+            .selected_index(filter_tab(self.filter))
+            .children(
+                std::iter::once(None)
+                    .chain(Summary::ALL.iter().copied().map(Some))
+                    .map(|filter| Tab::new().label(filter_label(filter))),
+            )
             .on_click(cx.listener(|view, index: &usize, _, cx| {
-                view.filter = *index;
+                view.filter = tab_filter(*index);
                 view.watch_table.update(cx, TableState::clear_selection);
                 view.sync_watch_table(cx);
                 cx.notify();
@@ -618,8 +622,20 @@ fn item_video_id(item: &ItemView) -> String {
     item.item.video_id.clone().unwrap_or_default()
 }
 
-pub fn matches_filter(item: &ItemView, filter: usize) -> bool {
-    filter_summary(filter).map_or_else(
+fn filter_tab(filter: Option<Summary>) -> usize {
+    filter
+        .and_then(|wanted| Summary::ALL.iter().position(|summary| *summary == wanted))
+        .map_or(0, |index| index.saturating_add(1))
+}
+
+fn tab_filter(index: usize) -> Option<Summary> {
+    index
+        .checked_sub(1)
+        .and_then(|index| Summary::ALL.get(index).copied())
+}
+
+pub fn matches_filter(item: &ItemView, filter: Option<Summary>) -> bool {
+    filter.map_or_else(
         || item.summary != Summary::Unavailable,
         |wanted| item.summary == wanted,
     )

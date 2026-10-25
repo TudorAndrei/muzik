@@ -236,7 +236,11 @@ impl TableDelegate for WatchTable {
     }
 }
 
-pub fn rows(playlist: &PlaylistView, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
+pub fn rows(
+    playlist: &PlaylistView,
+    filter: Option<Summary>,
+    queued: &HashSet<String>,
+) -> Vec<WatchRow> {
     playlist
         .items
         .iter()
@@ -273,25 +277,19 @@ mod tests {
             HashSet::from([
                 muzik_store::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
             ]);
-        let tab = |wanted: Summary| {
-            1 + Summary::ALL
-                .iter()
-                .position(|summary| *summary == wanted)
-                .unwrap_or(0)
-        };
-        let list = rows(&playlist, tab(Summary::Failed), &queued);
+        let list = rows(&playlist, Some(Summary::Failed), &queued);
         assert_eq!(
             list.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [1, 3]
         );
         assert!(!list[0].queued);
         assert!(list[1].queued);
-        let all = rows(&playlist, 0, &queued);
+        let all = rows(&playlist, None, &queued);
         assert_eq!(
             all.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [1, 2, 3]
         );
-        let gone = rows(&playlist, tab(Summary::Unavailable), &queued);
+        let gone = rows(&playlist, Some(Summary::Unavailable), &queued);
         assert_eq!(
             gone.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [4]
@@ -306,7 +304,7 @@ mod tests {
             {"position": 2, "title": "Alpha", "video_id": "b", "actions":{}, "summary": "Failed"},
             {"position": 3, "title": "gamma", "video_id": "c", "actions":{}, "summary": "Failed"}
         ]})).unwrap();
-        table.set_rows(rows(&playlist, 0, &HashSet::new()));
+        table.set_rows(rows(&playlist, None, &HashSet::new()));
         table.sort = Some((1, ColumnSort::Ascending));
         table.apply_sort();
         assert_eq!(
