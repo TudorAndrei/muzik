@@ -1028,6 +1028,33 @@ mod tests {
         assert_eq!(disposition_name(r#"attachment; filename="..""#), None);
     }
 
+    fn assert_one_safe_component(header: &str) {
+        if let Some(name) = disposition_name(header) {
+            let components: Vec<_> = Path::new(&name).components().collect();
+            assert_eq!(
+                components,
+                [std::path::Component::Normal(name.as_ref())],
+                "{header:?}"
+            );
+            assert!(!name.starts_with('.'), "{header:?}");
+        }
+    }
+
+    #[test]
+    fn any_download_name_is_one_file_name_inside_the_destination() {
+        bolero::check!().with_type::<String>().for_each(|text| {
+            assert_one_safe_component(text);
+            assert_one_safe_component(&format!("attachment; filename=\"{text}\""));
+            let encoded =
+                percent_encoding::utf8_percent_encode(text, percent_encoding::NON_ALPHANUMERIC);
+            let header = format!("attachment; filename*=UTF-8''{encoded}");
+            assert_one_safe_component(&header);
+            if let Some(name) = disposition_name(&header) {
+                assert_eq!(name, text.trim());
+            }
+        });
+    }
+
     #[test]
     fn resumed_ranges_follow_the_content_range_grammar() {
         assert_eq!(content_range("bytes 100-199/200"), Some((100, Some(200))));
