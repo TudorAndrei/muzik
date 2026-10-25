@@ -144,13 +144,6 @@ impl App {
     /// # Errors
     /// Returns an error when the job queue cannot record the cancel request.
     pub fn cancel(&self, job: &str) -> crate::Result<bool> {
-        if self
-            .runner
-            .as_ref()
-            .is_some_and(|runner| runner.cancel(job))
-        {
-            return Ok(true);
-        }
         let Some(number) = job
             .starts_with("queue-")
             .then(|| parse_job_id(job))
@@ -158,6 +151,13 @@ impl App {
         else {
             return Ok(false);
         };
+        if self
+            .runner
+            .as_ref()
+            .is_some_and(|runner| runner.cancel(number))
+        {
+            return Ok(true);
+        }
         Ok(match self.jobs.cancel(number)? {
             CancelRequest::Removed => {
                 self.changed();

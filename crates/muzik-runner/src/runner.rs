@@ -22,7 +22,7 @@ const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
 
 pub type Sink = Arc<dyn Fn(AppEvent) + Send + Sync>;
 pub type Ask = Arc<dyn Fn(Prompt<'_>) -> Result<Value, String> + Send + Sync>;
-pub type Running = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
+pub type Running = Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>;
 
 pub struct Prompt<'a> {
     pub job_id: &'a str,
@@ -74,7 +74,7 @@ impl Shared {
         (self.sink)(AppEvent::JobsUpdated(self.jobs.snapshot()));
     }
 
-    fn running(&self) -> MutexGuard<'_, HashMap<String, Arc<AtomicBool>>> {
+    fn running(&self) -> MutexGuard<'_, HashMap<i64, Arc<AtomicBool>>> {
         self.running.lock()
     }
 }
@@ -134,8 +134,8 @@ impl Runner {
     }
 
     #[must_use]
-    pub fn cancel(&self, job_id: &str) -> bool {
-        self.shared.running().get(job_id).is_some_and(|cancel| {
+    pub fn cancel(&self, id: i64) -> bool {
+        self.shared.running().get(&id).is_some_and(|cancel| {
             cancel.store(true, Ordering::SeqCst);
             true
         })
@@ -197,7 +197,7 @@ fn watch(shared: &Arc<Shared>) {
         {
             let running = shared.running();
             for id in requests {
-                if let Some(cancel) = running.get(&job_id(id)) {
+                if let Some(cancel) = running.get(&id) {
                     cancel.store(true, Ordering::SeqCst);
                 }
             }
@@ -214,7 +214,7 @@ fn watch(shared: &Arc<Shared>) {
 fn run_job(shared: &Arc<Shared>, job: &Job) {
     let id = job_id(job.id);
     let cancel = Arc::new(AtomicBool::new(false));
-    shared.running().insert(id.clone(), Arc::clone(&cancel));
+    shared.running().insert(job.id, Arc::clone(&cancel));
     shared.generation.fetch_add(1, Ordering::SeqCst);
     gates::set_label(&job.title);
     (shared.sink)(AppEvent::JobStarted {
@@ -237,7 +237,7 @@ fn run_job(shared: &Arc<Shared>, job: &Job) {
             Err((false, message)) => store.fail(job.id, message),
         };
     }
-    shared.running().remove(&id);
+    shared.running().remove(&job.id);
     shared.generation.fetch_add(1, Ordering::SeqCst);
     (shared.sink)(match result {
         Ok(result) => AppEvent::JobCompleted { job_id: id, result },
