@@ -140,12 +140,29 @@ pub const FIELDS: &[Field] = &[
     },
 ];
 
+/// The multi-value artist fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ListField {
+    Artists,
+    AlbumArtists,
+}
+
+impl ListField {
+    pub const ALL: [Self; 2] = [Self::Artists, Self::AlbumArtists];
+
+    const fn key(self) -> ItemKey {
+        match self {
+            Self::Artists => ItemKey::TrackArtists,
+            Self::AlbumArtists => ItemKey::AlbumArtists,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TagData {
     /// Field names follow mediafile (for example, `mb_albumid`).
     pub fields: BTreeMap<String, String>,
-    /// Multi-value artist fields.
-    pub lists: BTreeMap<String, Vec<String>>,
+    pub lists: BTreeMap<ListField, Vec<String>>,
     /// User text fields use TXXX, MP4 freeform atoms, or Vorbis comments.
     pub custom: BTreeMap<String, String>,
 }
@@ -187,13 +204,10 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
         {
             data.fields.insert("label".into(), value.into());
         }
-        for (name, key) in [
-            ("artists", ItemKey::TrackArtists),
-            ("albumartists", ItemKey::AlbumArtists),
-        ] {
-            let values: Vec<String> = tag.get_strings(key).map(str::to_owned).collect();
+        for field in ListField::ALL {
+            let values: Vec<String> = tag.get_strings(field.key()).map(str::to_owned).collect();
             if !values.is_empty() {
-                data.lists.insert(name.into(), values);
+                data.lists.insert(field, values);
             }
         }
         let disambig_key = album_disambig_key(file.file_type());
@@ -245,12 +259,8 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
             .ok_or_else(|| TagsError::UnknownField(name.clone()))?;
         tag.insert_text(field.key, value.clone());
     }
-    for (name, values) in &data.lists {
-        let key = match name.as_str() {
-            "artists" => ItemKey::TrackArtists,
-            "albumartists" => ItemKey::AlbumArtists,
-            _ => return Err(TagsError::UnknownField(name.clone())),
-        };
+    for (field, values) in &data.lists {
+        let key = field.key();
         tag.remove_key(key);
         for value in values {
             tag.push(TagItem::new(key, ItemValue::Text(value.clone())));
