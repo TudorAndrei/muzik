@@ -136,10 +136,10 @@ pub fn sync(
     let mut loaded_ids = Vec::new();
     for id in &ids {
         check_cancelled(cancelled)?;
-        let Some(playlist) = draft.playlist(id).cloned() else {
+        let Some(playlist) = draft.playlist(id) else {
             continue;
         };
-        match operations.load(&playlist) {
+        match operations.load(playlist) {
             Err(JobError::Cancelled) => return Err(JobError::Cancelled),
             Err(error) => {
                 let message = error.to_string();
