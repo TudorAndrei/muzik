@@ -226,22 +226,24 @@ impl Client {
     }
 
     fn get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
-        let url = if path.starts_with("https://") {
-            let parsed =
-                Url::parse(path).map_err(|error| format!("invalid Spotify URL: {error}"))?;
-            if parsed.host_str() != Some("api.spotify.com") {
-                return Err("Spotify returned a page outside its API".into());
-            }
-            path.to_owned()
-        } else {
-            format!("{API}/{path}")
-        };
+        self.fetch(&format!("{API}/{path}"))
+    }
+
+    fn next_page<T: DeserializeOwned>(&mut self, url: &str) -> Result<T> {
+        let parsed = Url::parse(url).map_err(|error| format!("invalid Spotify URL: {error}"))?;
+        if parsed.scheme() != "https" || parsed.host_str() != Some("api.spotify.com") {
+            return Err("Spotify returned a page outside its API".into());
+        }
+        self.fetch(url)
+    }
+
+    fn fetch<T: DeserializeOwned>(&mut self, url: &str) -> Result<T> {
         if self.token.is_expired() {
             self.refresh()?;
         }
         let mut refreshed = false;
         for attempt in 0..3 {
-            let mut response = ureq::get(&url)
+            let mut response = ureq::get(url)
                 .header(
                     "Authorization",
                     format!("Bearer {}", self.token.access_token),
@@ -294,7 +296,7 @@ impl Client {
             if !seen.insert(next.clone()) {
                 return Err("Spotify returned a repeated page".into());
             }
-            page = self.get(&next)?;
+            page = self.next_page(&next)?;
         }
     }
 
@@ -372,8 +374,10 @@ mod tests {
             token_path: "token.json".into(),
             token: rspotify_model::Token::default(),
         };
-        let page = client.get::<serde_json::Value>("https://example.test/steal");
-        assert!(page.is_err_and(|error| error.to_string().contains("outside its API")));
+        for url in ["https://example.test/steal", "http://api.spotify.com/v1/me"] {
+            let page = client.next_page::<serde_json::Value>(url);
+            assert!(page.is_err_and(|error| error.to_string().contains("outside its API")));
+        }
     }
 
     #[test]
