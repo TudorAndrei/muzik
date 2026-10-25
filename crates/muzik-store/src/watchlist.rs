@@ -460,15 +460,30 @@ fn read_document(connection: &Connection) -> Result<Watchlist> {
     .normalized()
 }
 
+#[derive(Serialize)]
+struct PlaylistHeader<'a> {
+    playlist_id: &'a str,
+    url: &'a str,
+    kind: SourceKind,
+    title: Option<&'a str>,
+    processed_video_ids: &'a [String],
+    last_checked_at: Option<&'a str>,
+    last_error: Option<&'a str>,
+    #[serde(flatten)]
+    extra: &'a serde_json::Map<String, Value>,
+}
+
 fn header(playlist: &Playlist) -> Result<String> {
-    let mut value = serde_json::to_value(Playlist {
-        items: Vec::new(),
-        ..playlist.clone()
-    })?;
-    if let Some(fields) = value.as_object_mut() {
-        fields.remove("items");
-    }
-    Ok(value.to_string())
+    Ok(serde_json::to_string(&PlaylistHeader {
+        playlist_id: &playlist.playlist_id,
+        url: &playlist.url,
+        kind: playlist.kind,
+        title: playlist.title.as_deref(),
+        processed_video_ids: &playlist.processed_video_ids,
+        last_checked_at: playlist.last_checked_at.as_deref(),
+        last_error: playlist.last_error.as_deref(),
+        extra: &playlist.extra,
+    })?)
 }
 
 fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist) -> Result<()> {
@@ -568,4 +583,24 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
         ),
     };
     Ok(Playlist::new(&id, &url, SourceKind::Spotify, title))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Playlist, SourceKind, WatchItem, header};
+    use serde_json::json;
+
+    #[test]
+    fn a_playlist_header_keeps_the_stored_field_order_without_items() {
+        let mut playlist = Playlist::new("PL1", "u", SourceKind::Youtube, Some("Mix"));
+        playlist.processed_video_ids = vec!["a".into()];
+        playlist.extra.insert("custom".into(), json!("kept"));
+        playlist
+            .items
+            .push(WatchItem::new(1, "Song", SourceKind::Youtube));
+        assert_eq!(
+            header(&playlist).unwrap(),
+            r#"{"playlist_id":"PL1","url":"u","kind":"youtube","title":"Mix","processed_video_ids":["a"],"last_checked_at":null,"last_error":null,"custom":"kept"}"#
+        );
+    }
 }
