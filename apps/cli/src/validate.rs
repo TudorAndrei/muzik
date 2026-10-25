@@ -12,8 +12,7 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
     if !args.path.exists() {
         bail!("not found: {}", args.path.display());
     }
-    let mut files = Vec::new();
-    collect(&args.path, args.recursive, &mut files)?;
+    let mut files = collect(&args.path, args.recursive)?;
     files.retain(|path| kind(path).is_some());
     files.sort();
     if files.is_empty() {
@@ -71,9 +70,10 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn collect(path: &Path, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
     if !path.exists() {
-        return Ok(());
+        return Ok(files);
     }
     let walker = walkdir::WalkDir::new(path)
         .follow_links(true)
@@ -93,7 +93,7 @@ fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::R
             files.push(entry.into_path());
         }
     }
-    Ok(())
+    Ok(files)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
@@ -222,9 +222,7 @@ fn chapter_line(line: &str) -> bool {
 }
 
 fn count_audio(root: &Path) -> anyhow::Result<usize> {
-    let mut files = Vec::new();
-    collect(root, true, &mut files)?;
-    Ok(files
+    Ok(collect(root, true)?
         .into_iter()
         .filter(|path| kind(path) == Some(FileKind::Audio))
         .count())
