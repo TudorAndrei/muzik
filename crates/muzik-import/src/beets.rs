@@ -396,16 +396,9 @@ pub fn write_library_tags(
         if let Some(parent) = path.parent()
             && let Some(cover) = muzik_tags::find_cover(parent)
         {
-            let mime = if cover
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
+            let mime = muzik_tags::cover_mime_type(&cover);
             let bytes = fs::read(&cover).map_err(|error| error.to_string())?;
-            muzik_tags::embed_cover(&path, &bytes, mime)
+            muzik_tags::embed_cover(&path, &bytes, &mime)
                 .map_err(|error| format!("cannot embed cover in {}: {error}", path.display()))?;
         }
     }

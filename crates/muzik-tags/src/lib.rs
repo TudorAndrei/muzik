@@ -2,7 +2,8 @@
 
 pub mod cover;
 pub mod probe;
-pub use cover::{embed_cover, find_cover, front_cover, has_front_cover};
+pub use cover::{cover_mime_type, embed_cover, find_cover, front_cover, has_front_cover};
+pub use lofty::picture::MimeType;
 pub use probe::{AudioProperties, probe};
 
 use std::collections::BTreeMap;

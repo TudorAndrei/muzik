@@ -351,17 +351,10 @@ fn place_album(
         created.push(destination.clone());
         if options.embed_art {
             let bytes = fs::read(source)?;
-            let mime = if source
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
+            let mime = muzik_tags::cover_mime_type(source);
             for item in &prepared.items {
                 check_cancelled(cancelled)?;
-                muzik_tags::embed_cover(&item.destination, &bytes, mime)?;
+                muzik_tags::embed_cover(&item.destination, &bytes, &mime)?;
             }
         }
     }
