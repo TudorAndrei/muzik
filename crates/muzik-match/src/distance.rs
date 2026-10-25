@@ -517,10 +517,10 @@ pub fn album_distance(
         return Err(Error::NoItems);
     }
     let mut dist = Distance::default();
-    add_release_distance(&mut dist, items, album, config)?;
-    add_year_distance(&mut dist, items, album, config)?;
-    add_details_distance(&mut dist, items, album, config)?;
-    add_track_distances(&mut dist, items, album, pairs, config)?;
+    dist.add_release(items, album, config)?;
+    dist.add_year(items, album, config)?;
+    dist.add_details(items, album, config)?;
+    dist.add_tracks(items, album, pairs, config)?;
     let data_source = plurality(items, |item| item.data_source.clone());
     if let Some(penalty) =
         config.source_penalty(data_source.as_deref(), album.data_source.as_deref())
@@ -531,152 +531,155 @@ pub fn album_distance(
     Ok(dist)
 }
 
-fn add_release_distance(
-    dist: &mut Distance,
-    items: &[MatchItem],
-    album: &MatchAlbum,
-    config: &MatchConfig,
-) -> Result<(), Error> {
-    let artist = plurality(items, |item| item.artist.clone());
-    let album_artist = plurality(items, |item| item.album_artist.clone());
-    let artist =
-        if !album_artist.is_empty() && items.iter().all(|item| item.album_artist == album_artist) {
+impl Distance {
+    fn add_release(
+        &mut self,
+        items: &[MatchItem],
+        album: &MatchAlbum,
+        config: &MatchConfig,
+    ) -> Result<(), Error> {
+        let artist = plurality(items, |item| item.artist.clone());
+        let album_artist = plurality(items, |item| item.album_artist.clone());
+        let artist = if !album_artist.is_empty()
+            && items.iter().all(|item| item.album_artist == album_artist)
+        {
             album_artist
         } else {
             artist
         };
-    if !album.various_artists {
-        dist.add_string(DistanceKey::Artist, Some(&artist), Some(&album.artist))?;
-    }
-    dist.add_string(
-        DistanceKey::Album,
-        Some(&plurality(items, |item| item.album.clone())),
-        Some(&album.title),
-    )?;
-    let media = plurality(items, |item| item.media.clone());
-    if let Some(album_media) = album.media.as_deref().filter(|value| !value.is_empty()) {
-        if !config.preferred_media.is_empty() {
-            dist.add(
-                DistanceKey::Media,
-                preferred_match(album_media, &config.preferred_media, true)?,
-            )?;
-        } else if !media.is_empty() {
-            dist.add_equality(DistanceKey::Media, album_media == media)?;
+        if !album.various_artists {
+            self.add_string(DistanceKey::Artist, Some(&artist), Some(&album.artist))?;
         }
-    }
-    let disc_total = plurality(items, |item| item.disc_total);
-    if let Some(mediums) = album.mediums.filter(|mediums| *mediums != 0)
-        && disc_total != 0
-    {
-        dist.add_number(DistanceKey::Mediums, disc_total, mediums)?;
-    }
-    Ok(())
-}
-
-fn add_year_distance(
-    dist: &mut Distance,
-    items: &[MatchItem],
-    album: &MatchAlbum,
-    config: &MatchConfig,
-) -> Result<(), Error> {
-    let year = plurality(items, |item| item.year);
-    if let Some(album_year) = album.year.filter(|year| *year != 0) {
-        if config.prefer_original_year {
-            let original = album
-                .original_year
-                .filter(|year| *year != 0)
-                .unwrap_or(1889);
-            dist.add_ratio(
-                DistanceKey::Year,
-                (f64::from(album_year) - f64::from(original)).abs(),
-                (f64::from(config.current_year) - f64::from(original)).abs(),
-            )?;
-        } else if year != 0 {
-            if year == album_year || album.original_year == Some(year) {
-                dist.add(DistanceKey::Year, 0.0)?;
-            } else if let Some(original) = album.original_year.filter(|year| *year != 0) {
-                dist.add_ratio(
-                    DistanceKey::Year,
-                    (f64::from(year) - f64::from(album_year)).abs(),
-                    (f64::from(config.current_year) - f64::from(original)).abs(),
+        self.add_string(
+            DistanceKey::Album,
+            Some(&plurality(items, |item| item.album.clone())),
+            Some(&album.title),
+        )?;
+        let media = plurality(items, |item| item.media.clone());
+        if let Some(album_media) = album.media.as_deref().filter(|value| !value.is_empty()) {
+            if !config.preferred_media.is_empty() {
+                self.add(
+                    DistanceKey::Media,
+                    preferred_match(album_media, &config.preferred_media, true)?,
                 )?;
-            } else {
-                dist.add(DistanceKey::Year, 1.0)?;
+            } else if !media.is_empty() {
+                self.add_equality(DistanceKey::Media, album_media == media)?;
             }
         }
+        let disc_total = plurality(items, |item| item.disc_total);
+        if let Some(mediums) = album.mediums.filter(|mediums| *mediums != 0)
+            && disc_total != 0
+        {
+            self.add_number(DistanceKey::Mediums, disc_total, mediums)?;
+        }
+        Ok(())
     }
-    Ok(())
-}
 
-fn add_details_distance(
-    dist: &mut Distance,
-    items: &[MatchItem],
-    album: &MatchAlbum,
-    config: &MatchConfig,
-) -> Result<(), Error> {
-    let country = plurality(items, |item| item.country.clone());
-    if let Some(album_country) = album.country.as_deref().filter(|value| !value.is_empty()) {
-        if !config.preferred_countries.is_empty() {
-            dist.add(
-                DistanceKey::Country,
-                preferred_match(album_country, &config.preferred_countries, false)?,
+    fn add_year(
+        &mut self,
+        items: &[MatchItem],
+        album: &MatchAlbum,
+        config: &MatchConfig,
+    ) -> Result<(), Error> {
+        let year = plurality(items, |item| item.year);
+        if let Some(album_year) = album.year.filter(|year| *year != 0) {
+            if config.prefer_original_year {
+                let original = album
+                    .original_year
+                    .filter(|year| *year != 0)
+                    .unwrap_or(1889);
+                self.add_ratio(
+                    DistanceKey::Year,
+                    (f64::from(album_year) - f64::from(original)).abs(),
+                    (f64::from(config.current_year) - f64::from(original)).abs(),
+                )?;
+            } else if year != 0 {
+                if year == album_year || album.original_year == Some(year) {
+                    self.add(DistanceKey::Year, 0.0)?;
+                } else if let Some(original) = album.original_year.filter(|year| *year != 0) {
+                    self.add_ratio(
+                        DistanceKey::Year,
+                        (f64::from(year) - f64::from(album_year)).abs(),
+                        (f64::from(config.current_year) - f64::from(original)).abs(),
+                    )?;
+                } else {
+                    self.add(DistanceKey::Year, 1.0)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_details(
+        &mut self,
+        items: &[MatchItem],
+        album: &MatchAlbum,
+        config: &MatchConfig,
+    ) -> Result<(), Error> {
+        let country = plurality(items, |item| item.country.clone());
+        if let Some(album_country) = album.country.as_deref().filter(|value| !value.is_empty()) {
+            if !config.preferred_countries.is_empty() {
+                self.add(
+                    DistanceKey::Country,
+                    preferred_match(album_country, &config.preferred_countries, false)?,
+                )?;
+            } else if !country.is_empty() {
+                self.add_string(DistanceKey::Country, Some(&country), Some(album_country))?;
+            }
+        }
+        for (key, local, candidate) in [
+            (
+                DistanceKey::Label,
+                plurality(items, |item| item.label.clone()),
+                album.label.as_deref(),
+            ),
+            (
+                DistanceKey::CatalogNumber,
+                plurality(items, |item| item.catalog_number.clone()),
+                album.catalog_number.as_deref(),
+            ),
+            (
+                DistanceKey::Disambiguation,
+                plurality(items, |item| item.album_disambiguation.clone()),
+                album.disambiguation.as_deref(),
+            ),
+        ] {
+            if !local.is_empty() && candidate.is_some_and(|value| !value.is_empty()) {
+                self.add_string(key, Some(&local), candidate)?;
+            }
+        }
+        let album_id = plurality(items, |item| item.album_id.clone());
+        if !album_id.is_empty() {
+            self.add_equality(
+                DistanceKey::AlbumId,
+                Some(album_id.as_str()) == album.album_id.as_deref(),
             )?;
-        } else if !country.is_empty() {
-            dist.add_string(DistanceKey::Country, Some(&country), Some(album_country))?;
         }
+        Ok(())
     }
-    for (key, local, candidate) in [
-        (
-            DistanceKey::Label,
-            plurality(items, |item| item.label.clone()),
-            album.label.as_deref(),
-        ),
-        (
-            DistanceKey::CatalogNumber,
-            plurality(items, |item| item.catalog_number.clone()),
-            album.catalog_number.as_deref(),
-        ),
-        (
-            DistanceKey::Disambiguation,
-            plurality(items, |item| item.album_disambiguation.clone()),
-            album.disambiguation.as_deref(),
-        ),
-    ] {
-        if !local.is_empty() && candidate.is_some_and(|value| !value.is_empty()) {
-            dist.add_string(key, Some(&local), candidate)?;
-        }
-    }
-    let album_id = plurality(items, |item| item.album_id.clone());
-    if !album_id.is_empty() {
-        dist.add_equality(
-            DistanceKey::AlbumId,
-            Some(album_id.as_str()) == album.album_id.as_deref(),
-        )?;
-    }
-    Ok(())
-}
 
-fn add_track_distances(
-    dist: &mut Distance,
-    items: &[MatchItem],
-    album: &MatchAlbum,
-    pairs: &[(usize, usize)],
-    config: &MatchConfig,
-) -> Result<(), Error> {
-    for &(item_index, track_index) in pairs {
-        let (Some(item), Some(track)) = (items.get(item_index), album.tracks.get(track_index))
-        else {
-            return Err(Error::InvalidPair);
-        };
-        let track_dist = track_distance(item, track, album.various_artists, config)?;
-        dist.add(DistanceKey::Tracks, track_dist.score(config)?)?;
-        dist.tracks.push(track_dist);
+    fn add_tracks(
+        &mut self,
+        items: &[MatchItem],
+        album: &MatchAlbum,
+        pairs: &[(usize, usize)],
+        config: &MatchConfig,
+    ) -> Result<(), Error> {
+        for &(item_index, track_index) in pairs {
+            let (Some(item), Some(track)) = (items.get(item_index), album.tracks.get(track_index))
+            else {
+                return Err(Error::InvalidPair);
+            };
+            let track_dist = track_distance(item, track, album.various_artists, config)?;
+            self.add(DistanceKey::Tracks, track_dist.score(config)?)?;
+            self.tracks.push(track_dist);
+        }
+        for _ in pairs.len()..album.tracks.len() {
+            self.add(DistanceKey::MissingTracks, 1.0)?;
+        }
+        for _ in pairs.len()..items.len() {
+            self.add(DistanceKey::UnmatchedTracks, 1.0)?;
+        }
+        Ok(())
     }
-    for _ in pairs.len()..album.tracks.len() {
-        dist.add(DistanceKey::MissingTracks, 1.0)?;
-    }
-    for _ in pairs.len()..items.len() {
-        dist.add(DistanceKey::UnmatchedTracks, 1.0)?;
-    }
-    Ok(())
 }
