@@ -671,7 +671,9 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation() {
     )
     .unwrap();
     let mut saved = repository.load().unwrap();
-    muzik_store::watchlist::reconcile(&mut saved, options(directory.path()).reconcile).unwrap();
+    saved
+        .reconcile(options(directory.path()).reconcile)
+        .unwrap();
     assert!(saved.playlists[0].processed_video_ids.is_empty());
     for (index, position) in [(0, 1), (1, 2)] {
         let item = &saved.playlists[0].items[index];

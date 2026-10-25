@@ -1,7 +1,7 @@
 use muzik_core::QualityPolicy;
 use muzik_store::watchlist::{
     CheckedWrite, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
-    Watchlist, bandcamp_source, import_cache, reconcile, view,
+    Watchlist, bandcamp_source, import_cache, view,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -12,7 +12,7 @@ fn reconciled(
     options: ReconcileOptions<'_>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut document = Watchlist::from_value(document)?;
-    reconcile(&mut document, options)?;
+    document.reconcile(options)?;
     Ok(document.to_value()?)
 }
 
@@ -26,7 +26,7 @@ fn imported(
         return Err("the cache import did not run".into());
     }
     let mut document = repository.load()?;
-    reconcile(&mut document, options)?;
+    document.reconcile(options)?;
     Ok(document.to_value()?)
 }
 
@@ -328,12 +328,12 @@ fn a_second_reconcile_changes_no_rows() {
     let options = options(&output, directory.path(), directory.path());
     for _ in 0..2 {
         let mut document = repository.load().unwrap();
-        reconcile(&mut document, options).unwrap();
+        document.reconcile(options).unwrap();
         repository.save(&document).unwrap();
     }
     let revision = repository.revision().unwrap();
     let mut document = repository.load().unwrap();
-    reconcile(&mut document, options).unwrap();
+    document.reconcile(options).unwrap();
     repository.save(&document).unwrap();
     assert_eq!(repository.revision().unwrap(), revision);
     let saved = repository.load().unwrap().to_value().unwrap();

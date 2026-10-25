@@ -25,7 +25,7 @@ pub use item::{
     AudioIndex, ItemId, LastAction, Playlist, StageRecord, Stages, WatchItem, Watchlist, now,
 };
 pub use legacy::import_cache;
-pub use reconcile::{ReconcileOptions, reconcile};
+pub use reconcile::ReconcileOptions;
 pub use view::{Availability, ItemView, PlaylistView, PrimaryAction, Summary, WatchlistView, view};
 
 #[derive(

@@ -89,7 +89,7 @@ pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> R
         if done.is_some() {
             return Ok(false);
         }
-        apply(document, options);
+        document.apply_legacy_cache(options);
         connection.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)",
             [IMPORTED, &now()],
@@ -98,34 +98,36 @@ pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> R
     })
 }
 
-fn apply(document: &mut Watchlist, options: ReconcileOptions<'_>) {
-    for playlist in &mut document.playlists {
-        let videos = read_state(
-            options.cache,
-            &state_id(&playlist.playlist_id, playlist.kind.single_file()),
-        );
-        let mut processed = playlist.processed_video_ids.clone();
-        for item in &mut playlist.items {
-            if item.statuses().any(|status| status == StageStatus::Stale) {
-                continue;
-            }
-            let waiting: Vec<_> = Stage::ALL
-                .iter()
-                .filter(|stage| item.status(**stage) == StageStatus::Waiting)
-                .map(|stage| (*stage, item.stage(*stage).clone()))
-                .collect();
-            apply_item(item, &videos, &mut processed, options);
-            for (stage, record) in waiting {
-                *item.stage_mut(stage) = record;
-                for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
-                    .into_iter()
-                    .flatten()
-                {
-                    processed.retain(|processed| processed != key);
+impl Watchlist {
+    fn apply_legacy_cache(&mut self, options: ReconcileOptions<'_>) {
+        for playlist in &mut self.playlists {
+            let videos = read_state(
+                options.cache,
+                &state_id(&playlist.playlist_id, playlist.kind.single_file()),
+            );
+            let mut processed = playlist.processed_video_ids.clone();
+            for item in &mut playlist.items {
+                if item.statuses().any(|status| status == StageStatus::Stale) {
+                    continue;
+                }
+                let waiting: Vec<_> = Stage::ALL
+                    .iter()
+                    .filter(|stage| item.status(**stage) == StageStatus::Waiting)
+                    .map(|stage| (*stage, item.stage(*stage).clone()))
+                    .collect();
+                apply_item(item, &videos, &mut processed, options);
+                for (stage, record) in waiting {
+                    *item.stage_mut(stage) = record;
+                    for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        processed.retain(|processed| processed != key);
+                    }
                 }
             }
+            playlist.processed_video_ids = processed;
         }
-        playlist.processed_video_ids = processed;
     }
 }
 

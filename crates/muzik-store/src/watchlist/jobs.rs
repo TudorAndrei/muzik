@@ -3,7 +3,7 @@
 use super::source::availability;
 use super::{
     AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, StageStatus,
-    WatchItem, Watchlist, now, reconcile, view,
+    WatchItem, Watchlist, now, view,
 };
 use crate::Result;
 use muzik_core::{JobEvent, Severity, Task};
@@ -168,7 +168,7 @@ pub fn sync(
                         saved.last_checked_at = Some(now());
                         saved.last_error = None;
                     }
-                    reconcile_keeping_running(document, options.reconcile)
+                    document.reconcile_keeping_running(options.reconcile)
                 })?;
                 on_event(JobEvent::WatchlistSaved);
                 loaded_ids.push(id.clone());
@@ -416,36 +416,35 @@ fn write<T>(
     Ok(result)
 }
 
-fn reconcile_keeping_running(
-    document: &mut Watchlist,
-    options: ReconcileOptions<'_>,
-) -> Result<()> {
-    let mut running = Vec::new();
-    for (playlist_index, playlist) in document.playlists.iter().enumerate() {
-        for (item_index, item) in playlist.items.iter().enumerate() {
-            for stage in Stage::ALL {
-                if item.status(*stage) == StageStatus::Running {
-                    running.push((
-                        playlist_index,
-                        item_index,
-                        *stage,
-                        item.stage(*stage).clone(),
-                    ));
+impl Watchlist {
+    fn reconcile_keeping_running(&mut self, options: ReconcileOptions<'_>) -> Result<()> {
+        let mut running = Vec::new();
+        for (playlist_index, playlist) in self.playlists.iter().enumerate() {
+            for (item_index, item) in playlist.items.iter().enumerate() {
+                for stage in Stage::ALL {
+                    if item.status(*stage) == StageStatus::Running {
+                        running.push((
+                            playlist_index,
+                            item_index,
+                            *stage,
+                            item.stage(*stage).clone(),
+                        ));
+                    }
                 }
             }
         }
-    }
-    reconcile(document, options)?;
-    for (playlist_index, item_index, stage, record) in running {
-        if let Some(item) = document
-            .playlists
-            .get_mut(playlist_index)
-            .and_then(|playlist| playlist.items.get_mut(item_index))
-        {
-            *item.stage_mut(stage) = record;
+        self.reconcile(options)?;
+        for (playlist_index, item_index, stage, record) in running {
+            if let Some(item) = self
+                .playlists
+                .get_mut(playlist_index)
+                .and_then(|playlist| playlist.items.get_mut(item_index))
+            {
+                *item.stage_mut(stage) = record;
+            }
         }
+        Ok(())
     }
-    Ok(())
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
