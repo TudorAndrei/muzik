@@ -729,6 +729,17 @@ PATH_CASES = [
         "default",
         album_track("Long Artist", "é" * 200, "ö" * 200, 6, 2003),
     ),
+    (
+        "colons without a drive letter",
+        "default",
+        album_track("Ab:c", "1:2", "Mix: Two", 7, 2004),
+    ),
+]
+
+FIELD_TEMPLATES = [
+    ("drive letters in fields", "$albumartist|$album|$title"),
+    ("colons without a drive letter", "$albumartist|$album|$title"),
+    ("first", "%aunique{year,label}"),
 ]
 
 TEMPLATE_CASE = "first"
@@ -800,14 +811,15 @@ def paths_fixture():
             rules = [(re.compile(pattern), value) for pattern, value in replacements]
         case["destination"] = legalize_path(subpath, rules, extension)[0]
         sanitization.append(case)
-    item = next(item for name, _, item, _ in stored if name == TEMPLATE_CASE)
+    items = {name: item for name, _, item, _ in stored}
     templates = [
         {
-            "case": TEMPLATE_CASE,
+            "case": case,
             "template": template,
-            "rendered": item.evaluate_template(template, for_path=True),
+            "rendered": items[case].evaluate_template(template, for_path=True),
         }
-        for template in TEMPLATES
+        for case, template in [(TEMPLATE_CASE, template) for template in TEMPLATES]
+        + FIELD_TEMPLATES
     ]
     return {
         "beets_version": BEETS_VERSION,

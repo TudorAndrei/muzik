@@ -195,6 +195,21 @@
         "label": ""
       },
       "destination": "Long Artist/\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9/06 \u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6\u00f6.flac"
+    },
+    {
+      "name": "colons without a drive letter",
+      "path_format": "default",
+      "album_id": 12,
+      "fields": {
+        "albumartist": "Ab:c",
+        "artist": "Ab:c",
+        "album": "1:2",
+        "title": "Mix: Two",
+        "track": "07",
+        "year": "2004",
+        "label": ""
+      },
+      "destination": "Ab_c/1_2/07 Mix_ Two.flac"
     }
   ],
   "sanitization": [
@@ -321,6 +336,21 @@
       "case": "first",
       "template": "%aunique{album,year}",
       "rendered": " [1994]"
+    },
+    {
+      "case": "drive letters in fields",
+      "template": "$albumartist|$album|$title",
+      "rendered": "C_Drive|d__Side A_B|E_F_G"
+    },
+    {
+      "case": "colons without a drive letter",
+      "template": "$albumartist|$album|$title",
+      "rendered": "Ab:c|1:2|Mix: Two"
+    },
+    {
+      "case": "first",
+      "template": "%aunique{year,label}",
+      "rendered": ""
     }
   ]
 }
