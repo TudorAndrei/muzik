@@ -229,9 +229,12 @@ impl Muzik {
             cx,
             |backend| Ok(backend.jobs()),
             |view, jobs, window, cx| {
-                let previous = view.activity.decision().cloned();
+                let previous = view
+                    .activity
+                    .decision()
+                    .map(|decision| decision.target().clone());
                 view.activity.apply_jobs(&jobs);
-                if previous.as_ref() != view.activity.decision() {
+                if previous.as_ref() != view.activity.decision().map(Decision::target) {
                     view.prepare_decision(window, cx);
                 }
                 view.sync_watch_table(cx);

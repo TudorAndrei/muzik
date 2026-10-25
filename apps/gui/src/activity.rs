@@ -12,7 +12,7 @@ pub enum ReplyTarget {
     Queue(i64),
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct Decision {
     target: ReplyTarget,
     job_id: String,
@@ -37,6 +37,10 @@ impl Decision {
             ReplyTarget::Queue(id) => Some(id),
             ReplyTarget::Live(_) => None,
         }
+    }
+
+    pub const fn target(&self) -> &ReplyTarget {
+        &self.target
     }
 }
 pub struct Finished {
@@ -361,7 +365,7 @@ impl Activity {
         }) {
             self.decision = self.requests.first().cloned();
         }
-        let open = snapshot["open"].as_array().cloned().unwrap_or_default();
+        let open: &[Value] = snapshot["open"].as_array().map_or(&[], Vec::as_slice);
         self.queued_items = open
             .iter()
             .filter_map(|job| job["item"].as_str().map(str::to_owned))
@@ -372,7 +376,7 @@ impl Activity {
             .collect();
         self.runs
             .retain(|run| !run.queued || listed.contains(run.id.as_str()));
-        for job in &open {
+        for job in open {
             let Some(id) = job["job_id"]
                 .as_str()
                 .filter(|id| !id.is_empty() && !self.finished_runs.contains(*id))

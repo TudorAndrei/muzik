@@ -415,9 +415,12 @@ impl Muzik {
     }
 
     fn app_event(&mut self, event: AppEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let previous = self.activity.decision().cloned();
+        let previous = self
+            .activity
+            .decision()
+            .map(|decision| decision.target().clone());
         let finished = self.activity.apply(&event);
-        if previous.as_ref() != self.activity.decision() {
+        if previous.as_ref() != self.activity.decision().map(Decision::target) {
             self.prepare_decision(window, cx);
         }
         if let Some(finished) = finished {
