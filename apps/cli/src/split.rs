@@ -9,7 +9,7 @@ use muzik_media::splitter::{self, SplitOptions};
 
 use crate::Split;
 
-pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
+pub fn run(args: &Split) -> anyhow::Result<Option<PathBuf>> {
     if !args.path.is_file() {
         bail!("File not found: {}", args.path.display());
     }
@@ -21,7 +21,7 @@ pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
     if args.review {
         let Some(reviewed) = review_chapters(chapters)? else {
             println!("Split cancelled.");
-            return Ok(PathBuf::new());
+            return Ok(None);
         };
         chapters = reviewed;
     }
@@ -44,7 +44,7 @@ pub fn run(args: &Split) -> anyhow::Result<PathBuf> {
     let output =
         splitter::split_audio(&args.path, &chapters, &output, &options).map_err(split_error)?;
     println!("Split complete: {}", output.display());
-    Ok(output)
+    Ok(Some(output))
 }
 
 pub fn split_error(error: splitter::SplitError) -> anyhow::Error {
