@@ -1496,22 +1496,7 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
-    let mut paths: Vec<PathBuf> = current
-        .map(|value| std::env::split_paths(&value).collect())
-        .unwrap_or_default();
-    let extra = [
-        Some(PathBuf::from("/opt/homebrew/bin")),
-        Some(PathBuf::from("/usr/local/bin")),
-        home.map(|home| home.join(".local/share/mise/shims")),
-    ];
-    for directory in extra.into_iter().flatten() {
-        if !paths.contains(&directory) {
-            paths.push(directory);
-        }
-    }
-    paths
-}
+use muzik_core::paths::tool_path;
 
 fn check_backend() -> anyhow::Result<()> {
     Backend::start()?;

@@ -1,7 +1,7 @@
 use crate::{Error, WorkflowInput, classify_input, find_audio_inputs};
 use muzik_media::process::{self, Stopped, background_command};
 use serde_json::Value;
-use std::ffi::OsString;
+use std::ffi::OsStr;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -243,7 +243,7 @@ impl YtDlp {
         let mut stderr = tempfile::tempfile()?;
         let mut command = background_command(&self.executable);
         command
-            .args(environment_args(std::env::var_os("PATH")))
+            .args(environment_args(muzik_core::paths::tool_search_path()))
             .args(args)
             .stdin(Stdio::null())
             .stdout(stdout.try_clone()?)
@@ -281,7 +281,7 @@ pub fn is_video_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn environment_args(path: Option<OsString>) -> Vec<String> {
+fn environment_args(path: Option<&OsStr>) -> Vec<String> {
     let mut args = Vec::new();
     let variable = |name| {
         std::env::var(name)
@@ -295,7 +295,7 @@ fn environment_args(path: Option<OsString>) -> Vec<String> {
     }
     if let Some(path) = path
         && let Some(runtime) = ["node", "bun"].into_iter().find(|runtime| {
-            std::env::split_paths(&path).any(|directory| directory.join(runtime).is_file())
+            std::env::split_paths(path).any(|directory| directory.join(runtime).is_file())
         })
     {
         args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
@@ -436,7 +436,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("node"), b"").unwrap();
         fs::write(dir.path().join("bun"), b"").unwrap();
-        let args = environment_args(Some(dir.path().as_os_str().to_owned()));
+        let args = environment_args(Some(dir.path().as_os_str()));
         let at = args
             .iter()
             .position(|arg| arg == "--js-runtimes")

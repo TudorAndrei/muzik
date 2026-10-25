@@ -2,6 +2,7 @@ use etcetera::app_strategy::{AppStrategy, AppStrategyArgs, choose_native_strateg
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Paths {
@@ -148,6 +149,44 @@ pub fn cache_dir() -> PathBuf {
 
 fn home() -> PathBuf {
     etcetera::home_dir().unwrap_or_default()
+}
+
+/// Return `current` with the Homebrew and mise tool folders added once at the end.
+#[must_use]
+pub fn tool_path(current: Option<std::ffi::OsString>, home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = current
+        .map(|value| std::env::split_paths(&value).collect())
+        .unwrap_or_default();
+    let extra = [
+        Some(PathBuf::from("/opt/homebrew/bin")),
+        Some(PathBuf::from("/usr/local/bin")),
+        home.map(|home| home.join(".local/share/mise/shims")),
+    ];
+    for directory in extra.into_iter().flatten() {
+        if !paths.contains(&directory) {
+            paths.push(directory);
+        }
+    }
+    paths
+}
+
+/// Return the `PATH` for external tools. On macOS it also contains the Homebrew and mise
+/// folders, because an app started from Finder does not get the shell `PATH`.
+#[must_use]
+pub fn tool_search_path() -> Option<&'static std::ffi::OsStr> {
+    static PATH: LazyLock<Option<std::ffi::OsString>> = LazyLock::new(|| {
+        let current = std::env::var_os("PATH");
+        if cfg!(target_os = "macos") {
+            std::env::join_paths(tool_path(
+                current,
+                std::env::var_os("HOME").map(PathBuf::from),
+            ))
+            .ok()
+        } else {
+            current
+        }
+    });
+    PATH.as_deref()
 }
 
 /// Move the folders of muzik 2.x on macOS to the folders named by the app bundle ID.
