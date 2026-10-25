@@ -22,6 +22,87 @@ impl Read {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Call {
+    Hello,
+    JobsList,
+    ConfigSave,
+    SoulseekSave,
+    SoulseekGet,
+    BandcampGet,
+    BandcampSave,
+    BandcampLogout,
+    WatchlistAdd,
+    WatchlistRename,
+    WatchlistRemove,
+    WorkflowStart,
+    WatchlistRefresh,
+    WatchlistAction,
+    JobCancel,
+    DecisionReply,
+    JobsAnswer,
+    ThumbnailsCache,
+    SpotifySetClientId,
+    SpotifyLogout,
+    SpotifyLogin,
+    Read(Read),
+}
+
+impl Call {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Hello => "hello",
+            Self::JobsList => "jobs.list",
+            Self::ConfigSave => "config.save",
+            Self::SoulseekSave => "soulseek.save",
+            Self::SoulseekGet => "soulseek.get",
+            Self::BandcampGet => "bandcamp.get",
+            Self::BandcampSave => "bandcamp.save",
+            Self::BandcampLogout => "bandcamp.logout",
+            Self::WatchlistAdd => "watchlist.add",
+            Self::WatchlistRename => "watchlist.rename",
+            Self::WatchlistRemove => "watchlist.remove",
+            Self::WorkflowStart => "workflow.start",
+            Self::WatchlistRefresh => "watchlist.refresh",
+            Self::WatchlistAction => "watchlist.action",
+            Self::JobCancel => "job.cancel",
+            Self::DecisionReply => "decision.reply",
+            Self::JobsAnswer => "jobs.answer",
+            Self::ThumbnailsCache => "thumbnails.cache",
+            Self::SpotifySetClientId => "spotify.set_client_id",
+            Self::SpotifyLogout => "spotify.logout",
+            Self::SpotifyLogin => "spotify.login",
+            Self::Read(read) => read.name(),
+        }
+    }
+
+    const fn reports_in_settings(self) -> bool {
+        match self {
+            Self::ConfigSave | Self::SoulseekSave | Self::BandcampSave | Self::BandcampLogout => {
+                true
+            }
+            Self::Hello
+            | Self::JobsList
+            | Self::SoulseekGet
+            | Self::BandcampGet
+            | Self::WatchlistAdd
+            | Self::WatchlistRename
+            | Self::WatchlistRemove
+            | Self::WorkflowStart
+            | Self::WatchlistRefresh
+            | Self::WatchlistAction
+            | Self::JobCancel
+            | Self::DecisionReply
+            | Self::JobsAnswer
+            | Self::ThumbnailsCache
+            | Self::SpotifySetClientId
+            | Self::SpotifyLogout
+            | Self::SpotifyLogin
+            | Self::Read(_) => false,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub enum Command {
     Cancel(String),
@@ -41,7 +122,7 @@ pub struct PendingAction {
 impl Muzik {
     fn spawn_call<R: Send + 'static>(
         &mut self,
-        name: &'static str,
+        call: Call,
         cx: &Context<Self>,
         work: impl FnOnce(&Backend) -> R + Send + 'static,
         finish: impl FnOnce(&mut Self, R, &mut Window, &mut Context<Self>) + 'static,
@@ -50,7 +131,7 @@ impl Muzik {
             self.status = "Backend is not available".into();
             return;
         };
-        self.status = format!("{name} requested");
+        self.status = format!("{} requested", call.name());
         let handle = self.window;
         let work = cx.background_spawn(async move { work(&backend) });
         cx.spawn(async move |view, cx| {
@@ -67,18 +148,18 @@ impl Muzik {
 
     fn call<T: Send + 'static>(
         &mut self,
-        name: &'static str,
+        call: Call,
         cx: &Context<Self>,
         work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         self.spawn_call(
-            name,
+            call,
             cx,
             work,
             move |view, result, window, cx| match result {
                 Ok(value) => done(view, value, window, cx),
-                Err(error) => view.failed(name, error.to_string()),
+                Err(error) => view.failed(call, error.to_string()),
             },
         );
     }
@@ -97,40 +178,42 @@ impl Muzik {
         self.read_serial = self.read_serial.wrapping_add(1);
         let serial = self.read_serial;
         self.reads.insert(read, serial);
-        self.spawn_call(read.name(), cx, work, move |view, result, window, cx| {
-            if view.reads.get(&read) != Some(&serial) {
-                return;
-            }
-            view.reads.remove(&read);
-            match result {
-                Ok(value) => done(view, value, window, cx),
-                Err(error) => view.failed(read.name(), error.to_string()),
-            }
-        });
+        self.spawn_call(
+            Call::Read(read),
+            cx,
+            work,
+            move |view, result, window, cx| {
+                if view.reads.get(&read) != Some(&serial) {
+                    return;
+                }
+                view.reads.remove(&read);
+                match result {
+                    Ok(value) => done(view, value, window, cx),
+                    Err(error) => view.failed(Call::Read(read), error.to_string()),
+                }
+            },
+        );
     }
 
     pub(crate) fn reading(&self, read: Read) -> bool {
         self.reads.contains_key(&read)
     }
 
-    fn failed(&mut self, name: &str, message: String) {
+    fn failed(&mut self, call: Call, message: String) {
         self.status = message;
         self.error = Some(self.status.clone());
-        if matches!(
-            name,
-            "config.save" | "soulseek.save" | "bandcamp.save" | "bandcamp.logout"
-        ) {
+        if call.reports_in_settings() {
             self.config_status.borrow_mut().clone_from(&self.status);
         }
     }
 
-    fn completed(&mut self, name: &str) {
-        self.status = format!("{name} complete");
+    fn completed(&mut self, call: Call) {
+        self.status = format!("{} complete", call.name());
     }
 
     pub(crate) fn hello(&mut self, cx: &Context<Self>) {
         self.call(
-            "hello",
+            Call::Hello,
             cx,
             |backend| Ok(backend.defaults()),
             |view, defaults, _, cx| {
@@ -142,7 +225,7 @@ impl Muzik {
 
     pub(crate) fn load_jobs(&mut self, cx: &Context<Self>) {
         self.call(
-            "jobs.list",
+            Call::JobsList,
             cx,
             |backend| Ok(backend.jobs()),
             |view, jobs, window, cx| {
@@ -165,7 +248,7 @@ impl Muzik {
     ) {
         self.error = None;
         self.spawn_call(
-            "config.save",
+            Call::ConfigSave,
             cx,
             move |backend| {
                 let saved = backend.save_defaults(&defaults);
@@ -180,7 +263,7 @@ impl Muzik {
                         view.config_status.borrow_mut().clone_from(&view.status);
                         view.apply_defaults(defaults, cx);
                     }
-                    Err(error) => view.failed("config.save", error.to_string()),
+                    Err(error) => view.failed(Call::ConfigSave, error.to_string()),
                 }
                 match account {
                     Some(Ok(account)) => {
@@ -189,7 +272,7 @@ impl Muzik {
                             "Config and Soulseek account saved".into();
                         view.check_services(cx);
                     }
-                    Some(Err(error)) => view.failed("soulseek.save", error.to_string()),
+                    Some(Err(error)) => view.failed(Call::SoulseekSave, error.to_string()),
                     None => {}
                 }
             },
@@ -211,13 +294,13 @@ impl Muzik {
 
     pub(crate) fn load_accounts(&mut self, cx: &Context<Self>) {
         self.call(
-            "soulseek.get",
+            Call::SoulseekGet,
             cx,
             Backend::soulseek_account,
             |view, account, window, cx| view.show_soulseek(&account, window, cx),
         );
         self.call(
-            "bandcamp.get",
+            Call::BandcampGet,
             cx,
             |backend| Ok(backend.bandcamp()),
             |view, settings, window, cx| view.show_bandcamp(&settings, window, cx),
@@ -227,7 +310,7 @@ impl Muzik {
     pub(crate) fn save_bandcamp(&mut self, user: String, cookies: String, cx: &mut Context<Self>) {
         self.error = None;
         self.call(
-            "bandcamp.save",
+            Call::BandcampSave,
             cx,
             move |backend| backend.save_bandcamp(&user, &cookies),
             |view, settings, window, cx| {
@@ -242,7 +325,7 @@ impl Muzik {
     pub(crate) fn logout_bandcamp(&mut self, cx: &mut Context<Self>) {
         self.error = None;
         self.call(
-            "bandcamp.logout",
+            Call::BandcampLogout,
             cx,
             Backend::logout_bandcamp,
             |view, settings, window, cx| {
@@ -304,7 +387,7 @@ impl Muzik {
 
     pub(crate) fn add_source(&mut self, url: String, cx: &Context<Self>) {
         self.call(
-            "watchlist.add",
+            Call::WatchlistAdd,
             cx,
             move |backend| backend.add_source(&url).map(drop),
             |view, (), window, cx| {
@@ -317,7 +400,7 @@ impl Muzik {
 
     pub(crate) fn rename_source(&mut self, playlist_id: String, title: String, cx: &Context<Self>) {
         self.call(
-            "watchlist.rename",
+            Call::WatchlistRename,
             cx,
             move |backend| backend.rename_source(&playlist_id, &title),
             |view, _, _, cx| view.load_watchlist(cx),
@@ -326,7 +409,7 @@ impl Muzik {
 
     fn remove_source(&mut self, playlist_id: String, cx: &Context<Self>) {
         self.call(
-            "watchlist.remove",
+            Call::WatchlistRemove,
             cx,
             move |backend| backend.remove_source(&playlist_id),
             |view, _, _, cx| view.load_watchlist(cx),
@@ -335,26 +418,26 @@ impl Muzik {
 
     fn queued(
         &mut self,
-        name: &'static str,
+        call: Call,
         cx: &mut Context<Self>,
         work: impl FnOnce(&Backend) -> anyhow::Result<String> + Send + 'static,
     ) {
         self.error = None;
-        self.call(name, cx, work, |view, _, _, _| {
+        self.call(call, cx, work, |view, _, _, _| {
             view.status = "Added to the queue".into();
         });
         cx.notify();
     }
 
     pub(crate) fn start_workflow(&mut self, params: Value, cx: &mut Context<Self>) {
-        self.queued("workflow.start", cx, move |backend| {
+        self.queued(Call::WorkflowStart, cx, move |backend| {
             backend.start_workflow(&params)
         });
     }
 
     pub(crate) fn refresh(&mut self, source: Option<(String, String)>, cx: &mut Context<Self>) {
         let source = source.filter(|(id, _)| !id.is_empty());
-        self.queued("watchlist.refresh", cx, move |backend| {
+        self.queued(Call::WatchlistRefresh, cx, move |backend| {
             backend.refresh(
                 source
                     .as_ref()
@@ -364,36 +447,36 @@ impl Muzik {
     }
 
     pub(crate) fn run_item(&mut self, item: ItemRequest, cx: &mut Context<Self>) {
-        self.queued("watchlist.action", cx, move |backend| {
+        self.queued(Call::WatchlistAction, cx, move |backend| {
             backend.run_item(&item)
         });
     }
 
     pub(crate) fn cancel_job(&mut self, job_id: String, cx: &Context<Self>) {
         self.call(
-            "job.cancel",
+            Call::JobCancel,
             cx,
             move |backend| backend.cancel(&job_id),
-            |view, (), _, _| view.completed("job.cancel"),
+            |view, (), _, _| view.completed(Call::JobCancel),
         );
     }
 
     pub(crate) fn send_reply(&mut self, decision_id: String, value: Value, cx: &Context<Self>) {
         self.call(
-            "decision.reply",
+            Call::DecisionReply,
             cx,
             move |backend| backend.reply(&decision_id, value),
-            |view, (), _, _| view.completed("decision.reply"),
+            |view, (), _, _| view.completed(Call::DecisionReply),
         );
     }
 
     pub(crate) fn send_answer(&mut self, id: Option<i64>, value: Value, cx: &Context<Self>) {
         let Some(id) = id else {
-            self.failed("jobs.answer", "id and value are required.".into());
+            self.failed(Call::JobsAnswer, "id and value are required.".into());
             return;
         };
         self.call(
-            "jobs.answer",
+            Call::JobsAnswer,
             cx,
             move |backend| backend.answer(id, &value),
             |view, _, _, _| view.status = "Answer saved; the item is queued".into(),
@@ -402,14 +485,14 @@ impl Muzik {
 
     pub(crate) fn cache_thumbnails(&mut self, video_ids: Vec<String>, cx: &Context<Self>) {
         self.call(
-            "thumbnails.cache",
+            Call::ThumbnailsCache,
             cx,
             move |backend| Ok(backend.cache_thumbnails(video_ids)),
             |view, data, _, _| {
                 if let Some(data) = data {
                     view.merge_thumbnail_results(&data);
                 }
-                view.completed("thumbnails.cache");
+                view.completed(Call::ThumbnailsCache);
             },
         );
     }
@@ -464,7 +547,7 @@ impl Muzik {
     pub(crate) fn set_spotify_client_id(&mut self, client_id: String, cx: &Context<Self>) {
         self.forget_spotify();
         self.call(
-            "spotify.set_client_id",
+            Call::SpotifySetClientId,
             cx,
             move |backend| backend.set_spotify_client_id(&client_id),
             |view, _, _, cx| {
@@ -477,7 +560,7 @@ impl Muzik {
     pub(crate) fn spotify_logout(&mut self, cx: &Context<Self>) {
         self.forget_spotify();
         self.call(
-            "spotify.logout",
+            Call::SpotifyLogout,
             cx,
             Backend::spotify_logout,
             |view, _, _, cx| {
@@ -498,13 +581,13 @@ impl Muzik {
             Ok(login) => {
                 self.activity.start_login(login.job_id());
                 self.spawn_call(
-                    "spotify.login",
+                    Call::SpotifyLogin,
                     cx,
                     move |_| login.run(),
                     |view, event, window, cx| view.app_events(vec![event], window, cx),
                 );
             }
-            Err(error) => self.failed("spotify.login", error.to_string()),
+            Err(error) => self.failed(Call::SpotifyLogin, error.to_string()),
         }
         cx.notify();
     }
