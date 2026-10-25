@@ -75,8 +75,12 @@ fn prepare(mut connection: Connection) -> Result<Connection> {
     Ok(connection)
 }
 
+fn migrations() -> Migrations<'static> {
+    Migrations::new(MIGRATIONS.iter().copied().map(M::up).collect())
+}
+
 fn migrate(connection: &mut Connection) -> Result<()> {
-    let migrations = Migrations::new(MIGRATIONS.iter().copied().map(M::up).collect());
+    let migrations = migrations();
     connection.set_transaction_behavior(TransactionBehavior::Immediate);
     let migrated = migrations
         .to_latest(connection)
@@ -111,30 +115,83 @@ mod tests {
     }
 
     #[test]
-    fn a_version_one_database_keeps_its_rows_after_the_jobs_migration() {
+    fn the_migrations_are_valid() {
+        migrations().validate().unwrap();
+    }
+
+    const SEEDS: &[&str] = &[
+        "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
+         INSERT INTO watchlist_items (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
+         UPDATE watchlist_revision SET revision = 3;",
+        "INSERT INTO jobs (queue, kind, item_key, status, created_at, updated_at)
+         VALUES ('item', 'item', 'PL1:1:x', 'queued', 1, 1);",
+        "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1');",
+    ];
+
+    const TABLES: &[&str] = &["watchlist_playlists", "jobs", "meta", "sync_files"];
+
+    fn count(connection: &Connection, query: &str) -> i64 {
+        connection.query_row(query, [], |row| row.get(0)).unwrap()
+    }
+
+    fn upgrade_from(version: usize) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         {
-            let connection = Connection::open(&path).unwrap();
-            connection.execute_batch(MIGRATIONS[0]).unwrap();
-            connection
-                .execute(
-                    "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}')",
-                    [],
-                )
-                .unwrap();
-            connection.pragma_update(None, "user_version", 1).unwrap();
+            let mut connection = Connection::open(&path).unwrap();
+            migrations().to_version(&mut connection, version).unwrap();
+            for seed in &SEEDS[..version] {
+                connection.execute_batch(seed).unwrap();
+            }
         }
         let connection = open(&path).unwrap();
-        let playlists: i64 = connection
-            .query_row("SELECT COUNT(*) FROM watchlist_playlists", [], |row| {
-                row.get(0)
+        let version_after: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(usize::try_from(version_after).unwrap(), MIGRATIONS.len());
+        let tables = TABLES
+            .iter()
+            .map(|table| {
+                count(
+                    &connection,
+                    &format!("SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = '{table}'"),
+                )
             })
+            .collect::<Vec<_>>();
+        assert_eq!(tables, vec![1; TABLES.len()]);
+        let seeded = |at: usize| i64::from(version > at);
+        assert_eq!(
+            [
+                count(&connection, "SELECT COUNT(*) FROM watchlist_playlists"),
+                count(&connection, "SELECT COUNT(*) FROM watchlist_items"),
+                count(&connection, "SELECT revision FROM watchlist_revision"),
+                count(&connection, "SELECT COUNT(*) FROM jobs"),
+                count(&connection, "SELECT COUNT(*) FROM meta"),
+                count(&connection, "SELECT COUNT(*) FROM sync_files"),
+            ],
+            [1, 1, 3, seeded(1), seeded(2), 0]
+        );
+        connection
+            .execute(
+                "INSERT INTO sync_files (destination, encoding) VALUES ('/device/a.mp3', '{}')",
+                [],
+            )
             .unwrap();
-        let jobs: i64 = connection
-            .query_row("SELECT COUNT(*) FROM jobs", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!((playlists, jobs), (1, 0));
+    }
+
+    #[test]
+    fn a_version_one_database_upgrades_with_its_rows() {
+        upgrade_from(1);
+    }
+
+    #[test]
+    fn a_version_two_database_upgrades_with_its_rows() {
+        upgrade_from(2);
+    }
+
+    #[test]
+    fn a_version_three_database_upgrades_with_its_rows() {
+        upgrade_from(3);
     }
 
     #[test]
