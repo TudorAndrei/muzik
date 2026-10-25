@@ -1410,15 +1410,6 @@ fn short_detail(detail: &str) -> String {
 }
 
 fn main() -> std::process::ExitCode {
-    if cfg!(target_os = "macos") {
-        let path = tool_path(
-            std::env::var_os("PATH"),
-            std::env::var_os("HOME").map(PathBuf::from),
-        );
-        if let Ok(path) = std::env::join_paths(path) {
-            unsafe { std::env::set_var("PATH", path) };
-        }
-    }
     match std::env::args().nth(1).as_deref() {
         Some("--version") => {
             println!("muzik-gpui {}", env!("CARGO_PKG_VERSION"));
@@ -1484,8 +1475,6 @@ fn main() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
-use muzik_core::paths::tool_path;
-
 fn check_backend() -> anyhow::Result<()> {
     Backend::start()?;
     println!("Rust backend ready");
@@ -1494,7 +1483,7 @@ fn check_backend() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Muzik, merge_thumbnail_paths, tool_path};
+    use super::{Muzik, merge_thumbnail_paths};
     use gpui_kit::component::WindowExt as _;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, Focusable as _, TestAppContext, WindowOptions};
@@ -1680,24 +1669,5 @@ mod tests {
             Some("/cache/visible.jpg")
         );
         assert!(watchlist.playlists[0].items[1].thumbnail_path.is_none());
-    }
-
-    #[test]
-    fn app_path_adds_homebrew_and_mise_tools_once() {
-        let path = tool_path(
-            Some("/usr/bin:/opt/homebrew/bin".into()),
-            Some(std::path::PathBuf::from("/Users/listener")),
-        );
-        assert_eq!(
-            path,
-            [
-                "/usr/bin",
-                "/opt/homebrew/bin",
-                "/usr/local/bin",
-                "/Users/listener/.local/share/mise/shims"
-            ]
-            .map(std::path::PathBuf::from)
-            .to_vec()
-        );
     }
 }

@@ -29,6 +29,10 @@ pub fn background_command(program: impl AsRef<OsStr>) -> Command {
 
 #[cfg(not(unix))]
 pub fn background_command(program: impl AsRef<OsStr>) -> Command {
+    tool_command(program)
+}
+
+pub fn tool_command(program: impl AsRef<OsStr>) -> Command {
     with_tool_path(Command::new(program))
 }
 

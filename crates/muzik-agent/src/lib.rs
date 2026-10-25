@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -293,7 +293,7 @@ fn run_codex(prompt: &str, model: &str) -> Result<Answer> {
     std::fs::write(&schema, SCHEMA)?;
     let log_path = directory.path().join("codex.log");
     let log = std::fs::File::create(&log_path)?;
-    let mut command = Command::new("codex");
+    let mut command = process::tool_command("codex");
     command
         .args([
             "exec",

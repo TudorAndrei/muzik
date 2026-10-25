@@ -267,9 +267,28 @@ fn move_dir(old: &Path, new: &Path) -> io::Result<Move> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Move, expand_home, home, move_dir, profile_from};
+    use super::{Move, expand_home, home, move_dir, profile_from, tool_path};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn tool_path_adds_homebrew_and_mise_tools_once() {
+        let path = tool_path(
+            Some("/usr/bin:/opt/homebrew/bin".into()),
+            Some(PathBuf::from("/Users/listener")),
+        );
+        assert_eq!(
+            path,
+            [
+                "/usr/bin",
+                "/opt/homebrew/bin",
+                "/usr/local/bin",
+                "/Users/listener/.local/share/mise/shims"
+            ]
+            .map(PathBuf::from)
+            .to_vec()
+        );
+    }
 
     #[test]
     fn profile_root_is_absolute_and_ignores_an_empty_value() {
