@@ -1,6 +1,8 @@
 //! A one-time import of the cache files that the Python version wrote.
 
-use super::{ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist, now};
+use super::{
+    LastAction, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist, now,
+};
 use crate::Result;
 use muzik_core::audio::is_audio;
 use rusqlite::OptionalExtension;
@@ -258,7 +260,7 @@ fn contains_audio(path: &Path) -> bool {
 
 fn mark_organize_failed(item: &mut WatchItem, entry: &Value, target: &Path) {
     let message = "The music library did not import this item. Select Retry.";
-    item.last_action = Some("refresh".into());
+    item.last_action = Some(LastAction::Refresh);
     item.last_error = Some(message.into());
     item.complete(
         Stage::Download,

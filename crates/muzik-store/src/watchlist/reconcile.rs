@@ -1,5 +1,5 @@
 use super::library_lookup::MusicLibrary;
-use super::{AudioIndex, Stage, StageStatus, WatchItem, Watchlist};
+use super::{AudioIndex, LastAction, Stage, StageStatus, WatchItem, Watchlist};
 use crate::Result;
 use muzik_core::QualityPolicy;
 use std::path::Path;
@@ -115,7 +115,7 @@ fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) {
     {
         return;
     }
-    item.last_action = Some("refresh".into());
+    item.last_action = Some(LastAction::Refresh);
     item.last_error = None;
     for (stage, status) in wanted {
         item.set(stage, status);

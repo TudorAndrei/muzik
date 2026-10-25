@@ -65,7 +65,7 @@ pub struct WatchItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unavailable: Option<bool>,
     #[serde(default)]
-    pub last_action: Option<String>,
+    pub last_action: Option<LastAction>,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
@@ -74,6 +74,40 @@ pub struct WatchItem {
     pub stages: Stages,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum LastAction {
+    Action(ItemAction),
+    Refresh,
+    Other(String),
+}
+
+impl From<ItemAction> for LastAction {
+    fn from(action: ItemAction) -> Self {
+        Self::Action(action)
+    }
+}
+
+impl From<String> for LastAction {
+    fn from(text: String) -> Self {
+        match text.parse() {
+            Ok(action) => Self::Action(action),
+            Err(_) if text == "refresh" => Self::Refresh,
+            Err(_) => Self::Other(text),
+        }
+    }
+}
+
+impl From<LastAction> for String {
+    fn from(action: LastAction) -> Self {
+        match action {
+            LastAction::Action(action) => action.to_string(),
+            LastAction::Refresh => "refresh".to_owned(),
+            LastAction::Other(text) => text,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,7 +442,7 @@ impl WatchItem {
     }
 
     pub fn start(&mut self, action: ItemAction) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         *self.stage_mut(action.stage()) = StageRecord {
             status: StageStatus::Running,
@@ -418,7 +452,7 @@ impl WatchItem {
     }
 
     pub fn finish(&mut self, stage: Stage, action: ItemAction) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         if self.status(stage) == StageStatus::Running {
             *self.stage_mut(stage) = StageRecord {
@@ -430,7 +464,7 @@ impl WatchItem {
     }
 
     pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = None;
         let record = self.stage_mut(stage);
         record.status = StageStatus::Waiting;
@@ -439,7 +473,7 @@ impl WatchItem {
     }
 
     pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) {
-        self.last_action = Some(action.to_string());
+        self.last_action = Some(action.into());
         self.last_error = Some(message.to_owned());
         *self.stage_mut(stage) = StageRecord {
             status: StageStatus::Failed,
@@ -536,7 +570,7 @@ fn bracketed_id(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioIndex, WatchItem, Watchlist};
+    use super::{AudioIndex, LastAction, WatchItem, Watchlist};
     use crate::watchlist::{ItemAction, SourceKind, Stage, StageStatus};
     use serde_json::json;
     use std::fs;
@@ -566,6 +600,21 @@ mod tests {
         assert_eq!(item["stages"]["quality"]["status"], "not_started");
         assert!(item.get("unavailable").is_none());
         assert_eq!(Watchlist::from_value(value).unwrap(), watchlist);
+    }
+
+    #[test]
+    fn a_last_action_keeps_its_stored_text() {
+        let stored = json!(["retry", "refresh", "an_old_action"]);
+        let actions: Vec<LastAction> = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            actions,
+            [
+                LastAction::Action(ItemAction::Retry),
+                LastAction::Refresh,
+                LastAction::Other("an_old_action".into()),
+            ]
+        );
+        assert_eq!(serde_json::to_value(actions).unwrap(), stored);
     }
 
     #[test]

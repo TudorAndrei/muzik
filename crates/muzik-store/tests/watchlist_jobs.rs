@@ -101,7 +101,7 @@ fn id(video_id: &str) -> ItemId {
 fn refresh_keeps_prior_state_and_processes_each_video_once() {
     let directory = tempfile::tempdir().unwrap();
     let mut saved = card(1, "video_a");
-    saved.last_action = Some("retry".into());
+    saved.last_action = Some(ItemAction::Retry.into());
     let repository = repository_with(directory.path(), vec![saved]).unwrap();
     let mut fake = Fake {
         processed: Vec::new(),
