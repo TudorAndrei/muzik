@@ -1,23 +1,12 @@
 //! The rules that differ between `YouTube`, Spotify, and Bandcamp items.
 
-use super::{BANDCAMP_PLAYLIST_ID, ItemAction, SourceKind, Stage, WatchItem};
+use super::{ItemAction, SourceKind, Stage, WatchItem};
 use muzik_core::chapters;
 use std::path::Path;
 
 pub type Availability = (bool, Option<&'static str>);
 
 impl SourceKind {
-    #[must_use]
-    pub fn of_playlist_id(id: &str) -> Self {
-        if id.starts_with("spotify:") {
-            Self::Spotify
-        } else if id == BANDCAMP_PLAYLIST_ID {
-            Self::Bandcamp
-        } else {
-            Self::Youtube
-        }
-    }
-
     #[must_use]
     pub fn single_file(self) -> bool {
         !self.is_youtube()
@@ -161,16 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn the_playlist_id_names_the_source_kind() {
-        assert_eq!(
-            SourceKind::of_playlist_id("spotify:liked"),
-            SourceKind::Spotify
-        );
-        assert_eq!(
-            SourceKind::of_playlist_id("bandcamp:collection"),
-            SourceKind::Bandcamp
-        );
-        assert_eq!(SourceKind::of_playlist_id("PL123"), SourceKind::Youtube);
+    fn only_spotify_keeps_current_tags() {
         assert!(SourceKind::Spotify.keeps_current_tags());
         assert!(!SourceKind::Bandcamp.keeps_current_tags());
     }

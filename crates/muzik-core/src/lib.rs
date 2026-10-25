@@ -20,7 +20,7 @@ pub use config_choices::{
     AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, PreferredAudio,
     QualityPolicy, SyncPreset,
 };
-pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
+pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, MatchAnswer};
 pub use error::{Error, Result};
-pub use job_event::{JobEvent, Severity, Step, Task};
+pub use job_event::{CandidateSource, JobEvent, Severity, Step, Task};
 pub use types::{RecordingId, ReleaseCandidate, ReleaseId, TrackCandidate};

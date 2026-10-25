@@ -105,7 +105,7 @@ impl Muzik {
                 if playlist.last_error.is_some() {
                     item.icon(IconName::TriangleAlert)
                 } else {
-                    item.icon(style::source_icon(&playlist.playlist_id))
+                    item.icon(style::source_icon(playlist.kind, &playlist.playlist_id))
                 }
             })
             .collect();
@@ -214,10 +214,14 @@ impl Muzik {
         TabBar::new("filters")
             .pill()
             .small()
-            .selected_index(self.filter)
-            .children((0..=Summary::ALL.len()).map(|filter| Tab::new().label(filter_label(filter))))
+            .selected_index(filter_tab(self.filter))
+            .children(
+                std::iter::once(None)
+                    .chain(Summary::ALL.iter().copied().map(Some))
+                    .map(|filter| Tab::new().label(filter_label(filter))),
+            )
             .on_click(cx.listener(|view, index: &usize, _, cx| {
-                view.filter = *index;
+                view.filter = tab_filter(*index);
                 view.watch_table.update(cx, TableState::clear_selection);
                 view.sync_watch_table(cx);
                 cx.notify();
@@ -362,7 +366,7 @@ impl Muzik {
     fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
         self.activity
             .queued_items()
-            .contains(&ItemId::new(playlist_id, position, Some(video_id)).to_string())
+            .contains(&ItemId::new(playlist_id, position, Some(video_id)))
     }
 
     pub(crate) fn item_request(&self, id: ItemId, action: ItemAction) -> ItemRequest {
@@ -470,8 +474,8 @@ fn item_sheet(
         .activity
         .waiting()
         .iter()
-        .find(|job| job.data.get("item").and_then(Value::as_str) == Some(item_id.as_str()))
-        .and_then(|job| job.data.get("queue_job").and_then(Value::as_i64));
+        .find(|job| job.item.as_deref() == Some(item_id.as_str()))
+        .and_then(Decision::queue_job);
     let waiting_stage = style::stage_states(&item.item)
         .into_iter()
         .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
@@ -618,8 +622,20 @@ fn item_video_id(item: &ItemView) -> String {
     item.item.video_id.clone().unwrap_or_default()
 }
 
-pub fn matches_filter(item: &ItemView, filter: usize) -> bool {
-    filter_summary(filter).map_or_else(
+fn filter_tab(filter: Option<Summary>) -> usize {
+    filter
+        .and_then(|wanted| Summary::ALL.iter().position(|summary| *summary == wanted))
+        .map_or(0, |index| index.saturating_add(1))
+}
+
+fn tab_filter(index: usize) -> Option<Summary> {
+    index
+        .checked_sub(1)
+        .and_then(|index| Summary::ALL.get(index).copied())
+}
+
+pub fn matches_filter(item: &ItemView, filter: Option<Summary>) -> bool {
+    filter.map_or_else(
         || item.summary != Summary::Unavailable,
         |wanted| item.summary == wanted,
     )

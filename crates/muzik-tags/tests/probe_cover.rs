@@ -1,7 +1,8 @@
+extern crate bolero as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use muzik_tags::{embed_cover, find_cover, has_front_cover, probe, read};
+use muzik_tags::{MimeType, embed_cover, find_cover, has_front_cover, probe, read};
 
 const SUFFIXES: &[&str] = &["mp3", "flac", "m4a", "opus", "ogg"];
 
@@ -48,7 +49,11 @@ fn embeds_front_cover_and_preserves_tags() {
     for suffix in SUFFIXES {
         let dest = root.join(format!("cover.{suffix}"));
         fs::copy(fixtures().join(format!("mediafile.{suffix}")), &dest).unwrap();
-        embed_cover(&dest, &image, "image/png").unwrap();
+        assert!(
+            embed_cover(&dest, &image, &MimeType::Jpeg).is_err(),
+            "{suffix}"
+        );
+        embed_cover(&dest, &image, &MimeType::Png).unwrap();
         assert!(has_front_cover(&dest).unwrap(), "{suffix}");
         let tags = read(&dest, &["MUZIK_MOOD"]).unwrap();
         assert_eq!(

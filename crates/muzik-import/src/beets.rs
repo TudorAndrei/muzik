@@ -19,6 +19,14 @@ use crate::{Error, Result};
 
 const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Placement {
+    #[default]
+    Move,
+    Copy,
+    Link,
+}
+
 #[derive(Clone, Debug, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -27,8 +35,7 @@ const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 pub struct ImportRequest {
     pub source: PathBuf,
     pub config_path: Option<PathBuf>,
-    pub copy: bool,
-    pub link: bool,
+    pub placement: Placement,
     pub nowrite: bool,
     pub dry_run: bool,
     pub force: bool,
@@ -55,7 +62,7 @@ pub struct ImportOutcome {
     pub planned_albums: usize,
     pub apply: ApplyResult,
     pub pruned_items: usize,
-    pub prune_error: Option<String>,
+    pub prune_error: Option<muzik_library::Error>,
 }
 
 #[derive(Debug)]
@@ -121,16 +128,13 @@ pub fn plan_import_with_cancel(
     if request.source.as_os_str().is_empty() {
         return Err("audio path is missing".into());
     }
-    if request.link && !request.nowrite {
+    if request.placement == Placement::Link && !request.nowrite {
         return Err("--link requires --nowrite".into());
     }
-    if request.link && request.copy {
-        return Err("--link and --copy cannot be used together".into());
-    }
     let overrides = json!({"import": {
-        "copy": request.copy,
-        "link": request.link,
-        "move": !request.copy && !request.link,
+        "copy": request.placement == Placement::Copy,
+        "link": request.placement == Placement::Link,
+        "move": request.placement == Placement::Move,
         "write": !request.nowrite,
         "pretend": request.dry_run,
         "incremental": !request.force
@@ -151,9 +155,8 @@ pub fn plan_import_with_cancel(
         Library::open_read_only(&paths.library)
     } else {
         Library::empty()
-    }
-    .map_err(|error| error.to_string())?;
-    let match_config = MatchConfig::from_beets(&config).map_err(|error| error.to_string())?;
+    }?;
+    let match_config = MatchConfig::from_beets(&config)?;
     let provider = MetadataClient::new(USER_AGENT);
     let planner = ImportPlanner {
         provider: &provider,
@@ -218,8 +221,7 @@ pub fn apply_import_with_cancel(
         }
     } else {
         Library::open_or_create(&preview.paths.library)
-    }
-    .map_err(|error| error.to_string())?;
+    }?;
     let result =
         apply::apply_with_cancel(&mut library, &preview.plan, decisions, &options, cancelled)?;
     let mut outcome = ImportOutcome {
@@ -229,14 +231,13 @@ pub fn apply_import_with_cancel(
         prune_error: None,
     };
     if !cancelled()
-        && !preview.request.copy
-        && !preview.request.link
+        && preview.request.placement == Placement::Move
         && !preview.request.dry_run
         && !preview.request.no_prune
     {
         match library.prune_missing_items(&preview.paths.directory, 0.1) {
             Ok(count) => outcome.pruned_items = count,
-            Err(error) => outcome.prune_error = Some(error.to_string()),
+            Err(error) => outcome.prune_error = Some(error),
         }
     }
     Ok(outcome)
@@ -283,20 +284,13 @@ pub fn sync_library(
         .into());
     }
     if dry_run {
-        let library = Library::open_read_only(&paths.library).map_err(|error| error.to_string())?;
+        let library = Library::open_read_only(&paths.library)?;
         return Ok(SyncOutcome::Preview {
-            albums: library
-                .query_albums(query)
-                .map_err(|error| error.to_string())?
-                .len(),
-            items: library
-                .query_items(query)
-                .map_err(|error| error.to_string())?
-                .len(),
+            albums: library.query_albums(query)?.len(),
+            items: library.query_items(query)?.len(),
         });
     }
-    let mut library =
-        Library::open_read_write(&paths.library).map_err(|error| error.to_string())?;
+    let mut library = Library::open_read_write(&paths.library)?;
     let provider = MetadataClient::new(USER_AGENT);
     let result = sync::sync(&mut library, &provider, query, !nowrite)?;
     Ok(SyncOutcome::Updated(result))
@@ -306,7 +300,7 @@ fn legacy_history(statefile: &Path) -> Result<Vec<Vec<PathBuf>>> {
     if IncrementalHistory::path_for_statefile(statefile).exists() || !statefile.exists() {
         return Ok(Vec::new());
     }
-    let bytes = fs::read(statefile).map_err(|error| error.to_string())?;
+    let bytes = fs::read(statefile)?;
     let state = serde_pickle::value_from_slice(&bytes, serde_pickle::DeOptions::new())
         .map_err(|error| format!("invalid beets import state: {error}"))?;
     let Value::Dict(fields) = state else {
@@ -369,12 +363,10 @@ pub fn write_library_tags(
         )
         .into());
     }
-    let library = Library::open_read_only(&paths.library).map_err(|error| error.to_string())?;
-    let requested = directory
-        .canonicalize()
-        .map_err(|error| error.to_string())?;
+    let library = Library::open_read_only(&paths.library)?;
+    let requested = directory.canonicalize()?;
     let mut count = 0;
-    for item in library.items().map_err(|error| error.to_string())? {
+    for item in library.items()? {
         let Some(path) = item.field("path").and_then(path_from_sql) else {
             continue;
         };
@@ -396,16 +388,9 @@ pub fn write_library_tags(
         if let Some(parent) = path.parent()
             && let Some(cover) = muzik_tags::find_cover(parent)
         {
-            let mime = if cover
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
-            let bytes = fs::read(&cover).map_err(|error| error.to_string())?;
-            muzik_tags::embed_cover(&path, &bytes, mime)
+            let mime = muzik_tags::cover_mime_type(&cover);
+            let bytes = fs::read(&cover)?;
+            muzik_tags::embed_cover(&path, &bytes, &mime)
                 .map_err(|error| format!("cannot embed cover in {}: {error}", path.display()))?;
         }
     }

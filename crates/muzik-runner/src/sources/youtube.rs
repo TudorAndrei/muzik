@@ -5,7 +5,8 @@ use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::workflow_result::WorkflowResult;
 use crate::{local_workflow, remote_workflow};
-use muzik_core::{ChapterAnswer, DecisionKind, chapters};
+use muzik_core::chapters::{self, Sidecar};
+use muzik_core::{ChapterAnswer, DecisionKind};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
 use muzik_workflow::quality::{QualityUpgradeResult, check_youtube_quality};
@@ -244,7 +245,7 @@ fn refresh_chapters_with(
     let metadata = fetch(false)?;
     let info = serde_json::to_string_pretty(&metadata)
         .map_err(|error| JobError::Operation(error.to_string()))?;
-    atomic_write(&chapters::sidecar_path(audio, ".info.json"), &(info + "\n"))?;
+    atomic_write(&Sidecar::Info.path(audio), &(info + "\n"))?;
     check_cancelled(cancelled)?;
     let mut found = chapters::parse_info_json(&metadata.to_string())
         .map_err(|error| JobError::Operation(error.to_string()))?;
@@ -301,7 +302,7 @@ fn refresh_chapters_with(
         .collect::<Vec<_>>()
         .join("\n")
         + "\n";
-    let path = chapters::sidecar_path(audio, ".chapters.txt");
+    let path = Sidecar::Chapters.path(audio);
     atomic_write(&path, &text)?;
     Ok(path)
 }

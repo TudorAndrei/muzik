@@ -1,13 +1,13 @@
 use crate::Result;
 use muzik_core::app_config;
 use muzik_core::paths::Paths;
+use muzik_media::process::tool_command;
 use muzik_soulseek::session::{
     self, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, Session, SessionSettings,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::path::Path;
-use std::process::Command;
 
 pub struct SoulseekAccount<'a> {
     pub username: Option<&'a str>,
@@ -128,7 +128,7 @@ fn check_binary(
     args: &[&str],
     optional: bool,
 ) -> ServiceStatus {
-    match Command::new(executable).args(args).output() {
+    match tool_command(executable).args(args).output() {
         Ok(output) => {
             let text = if output.stdout.is_empty() {
                 &output.stderr

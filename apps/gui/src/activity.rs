@@ -2,6 +2,7 @@
 use muzik_core::{JobEvent, Task as JobTask};
 use muzik_runner::{AppEvent, choices};
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
+use muzik_store::watchlist::ItemId;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use strum_macros::{Display, EnumString};
@@ -16,7 +17,9 @@ pub enum ReplyTarget {
 pub struct Decision {
     target: ReplyTarget,
     job_id: String,
-    pub data: Value,
+    pub title: Option<String>,
+    pub item: Option<String>,
+    pub question: Value,
 }
 impl Decision {
     fn saved(job: &Value) -> Option<Self> {
@@ -24,8 +27,21 @@ impl Decision {
         Some(Self {
             target: ReplyTarget::Queue(id),
             job_id: muzik_runner::job_id(id),
-            data: json!({"queue_job":id,"item":job["item"],"title":job["title"],"kind":job["kind"],"payload":job["payload"]}),
+            title: job["title"].as_str().map(str::to_owned),
+            item: job["item"].as_str().map(str::to_owned),
+            question: json!({"kind":job["kind"],"payload":job["payload"]}),
         })
+    }
+
+    pub const fn queue_job(&self) -> Option<i64> {
+        match self.target {
+            ReplyTarget::Queue(id) => Some(id),
+            ReplyTarget::Live(_) => None,
+        }
+    }
+
+    pub const fn target(&self) -> &ReplyTarget {
+        &self.target
     }
 }
 pub struct Finished {
@@ -38,7 +54,7 @@ pub struct Finished {
 pub struct Activity {
     runs: Vec<Run>,
     finished_runs: HashSet<String>,
-    queued_items: HashSet<String>,
+    queued_items: HashSet<ItemId>,
     sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Decision>,
@@ -166,7 +182,7 @@ impl Activity {
     pub fn runs(&self) -> &[Run] {
         &self.runs
     }
-    pub const fn queued_items(&self) -> &HashSet<String> {
+    pub const fn queued_items(&self) -> &HashSet<ItemId> {
         &self.queued_items
     }
     pub fn sections(&self) -> &[ActivitySection] {
@@ -178,8 +194,8 @@ impl Activity {
     pub fn waiting(&self) -> &[Decision] {
         &self.waiting
     }
-    pub fn decision(&self) -> Option<&Value> {
-        self.decision.as_ref().map(|choice| &choice.data)
+    pub const fn decision(&self) -> Option<&Decision> {
+        self.decision.as_ref()
     }
 
     pub fn start_login(&mut self, id: &str) {
@@ -251,7 +267,13 @@ impl Activity {
             } => {
                 let target = ReplyTarget::Live(decision_id.clone());
                 if !self.requests.iter().any(|choice| choice.target == target) {
-                    self.requests.push(Decision { target, job_id: job_id.clone(), data: json!({"job_id":job_id,"decision_id":decision_id,"kind":kind,"payload":payload}) });
+                    self.requests.push(Decision {
+                        target,
+                        job_id: job_id.clone(),
+                        title: None,
+                        item: None,
+                        question: json!({"kind":kind,"payload":payload}),
+                    });
                 }
                 self.set_status(job_id, "Decision needed");
                 if self.decision.is_none() {
@@ -344,10 +366,10 @@ impl Activity {
         }) {
             self.decision = self.requests.first().cloned();
         }
-        let open = snapshot["open"].as_array().cloned().unwrap_or_default();
+        let open: &[Value] = snapshot["open"].as_array().map_or(&[], Vec::as_slice);
         self.queued_items = open
             .iter()
-            .filter_map(|job| job["item"].as_str().map(str::to_owned))
+            .filter_map(|job| job["item"].as_str()?.parse().ok())
             .collect();
         let listed: HashSet<&str> = open
             .iter()
@@ -355,11 +377,13 @@ impl Activity {
             .collect();
         self.runs
             .retain(|run| !run.queued || listed.contains(run.id.as_str()));
-        for job in &open {
-            let id = job["job_id"].as_str().unwrap_or("");
-            if id.is_empty() || self.finished_runs.contains(id) {
+        for job in open {
+            let Some(id) = job["job_id"]
+                .as_str()
+                .filter(|id| !id.is_empty() && !self.finished_runs.contains(*id))
+            else {
                 continue;
-            }
+            };
             let queued = job["status"]
                 .as_str()
                 .and_then(|status| status.parse::<JobStatus>().ok())
@@ -573,7 +597,11 @@ mod tests {
         let mut activity = Activity::default();
         let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":"PL1:1:video"}], "waiting":[]});
         activity.apply_jobs(&snapshot);
-        assert!(activity.queued_items().contains("PL1:1:video"));
+        assert!(
+            activity
+                .queued_items()
+                .contains(&ItemId::new("PL1", 1, Some("video")))
+        );
         activity.apply(&job_event(JobEvent::ProgressStarted {
             task: JobTask::LocalSplit,
             description: "Split tracks".into(),
@@ -632,13 +660,23 @@ mod tests {
         activity.apply(&request("queue-2", "second"));
         activity.apply_jobs(&json!({"waiting":[{"id":3,"item":"PL1:3:video", "kind":"chapter_edit", "payload":{"chapters":[]}}]}));
         activity.open_waiting(3);
-        assert_eq!(activity.decision().unwrap()["queue_job"], 3);
+        assert_eq!(activity.decision().unwrap().queue_job(), Some(3));
+        assert_eq!(
+            activity.decision().unwrap().item.as_deref(),
+            Some("PL1:3:video")
+        );
         activity.defer();
-        assert_eq!(activity.decision().unwrap()["decision_id"], "first");
+        assert_eq!(
+            activity.decision().unwrap().target,
+            ReplyTarget::Live("first".into())
+        );
         activity.apply(&AppEvent::JobCancelled {
             job_id: "queue-1".into(),
         });
-        assert_eq!(activity.decision().unwrap()["decision_id"], "second");
+        assert_eq!(
+            activity.decision().unwrap().target,
+            ReplyTarget::Live("second".into())
+        );
         activity.open_waiting(3);
         assert_eq!(activity.reply(), Some(ReplyTarget::Queue(3)));
         assert!(activity.waiting().is_empty());
@@ -673,7 +711,7 @@ mod tests {
         activity.apply(&job_event(JobEvent::StepStarted(muzik_core::Step::Import)));
         assert_eq!(activity.runs()[0].status, "import");
         activity.apply(&job_event(JobEvent::CandidatesFound {
-            source: "soulseek".into(),
+            source: muzik_core::CandidateSource::Soulseek,
             candidates: (0..6).map(|index| json!({"title":format!("Album {index}"),"quality":{"format":"FLAC"},"user":"listener"})).collect(),
         }));
         let section = &activity.sections()[0];

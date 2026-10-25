@@ -28,7 +28,7 @@ pub struct AudioProperties {
 /// Returns an error when the format is not supported or the file cannot be read.
 pub fn probe(path: impl AsRef<Path>) -> Result<AudioProperties, TagsError> {
     let path = path.as_ref();
-    let audio = lofty::read_from_path(path)?;
+    let audio = crate::open(path)?;
     let properties = audio.properties();
     let duration = properties.duration().as_secs_f64();
     let file_type = audio.file_type();

@@ -27,11 +27,11 @@ pub fn login(
     if let Some(port) = port_override {
         settings.redirect_port = port;
     }
-    if settings.client_id.is_empty() {
+    let Some(client_id) = settings.client_id.take() else {
         return Err(
             "No Spotify client ID is configured. Run 'muzik spotify set-client-id <id>'.".into(),
         );
-    }
+    };
     let listener = TcpListener::bind(("127.0.0.1", settings.redirect_port)).map_err(|error| {
         format!(
             "Unable to listen on 127.0.0.1:{} for the Spotify redirect: {error}",
@@ -41,7 +41,7 @@ pub fn login(
     listener.set_nonblocking(true)?;
     let verifier = random_url_token(64)?;
     let state = random_url_token(16)?;
-    let url = authorize_url(&settings, &verifier, &state)?;
+    let url = authorize_url(&settings, &client_id, &verifier, &state)?;
     open::that(url.as_str())
         .map_err(|error| format!("Unable to open Spotify login in the browser: {error}"))?;
     let code = wait_for_code(&listener, &state, cancel, Duration::from_secs(300))?;
@@ -52,7 +52,7 @@ pub fn login(
         ("grant_type", "authorization_code"),
         ("code", &code),
         ("redirect_uri", &settings.redirect_uri()),
-        ("client_id", &settings.client_id),
+        ("client_id", &client_id),
         ("code_verifier", &verifier),
     ])?;
     if cancel.load(Ordering::Relaxed) {
@@ -60,7 +60,7 @@ pub fn login(
     }
     save_token(token_path, &token)?;
     account_name(&mut Client {
-        client_id: settings.client_id,
+        client_id: Some(client_id),
         token_path: token_path.to_path_buf(),
         token,
     })
@@ -73,11 +73,11 @@ fn random_url_token(length: usize) -> Result<String> {
     Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
-fn authorize_url(settings: &Settings, verifier: &str, state: &str) -> Result<Url> {
+fn authorize_url(settings: &Settings, client_id: &str, verifier: &str, state: &str) -> Result<Url> {
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let mut url = Url::parse(AUTHORIZE_URL).map_err(|error| error.to_string())?;
     url.query_pairs_mut()
-        .append_pair("client_id", &settings.client_id)
+        .append_pair("client_id", client_id)
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &settings.redirect_uri())
         .append_pair("code_challenge_method", "S256")
@@ -173,11 +173,12 @@ mod tests {
     #[test]
     fn authorize_url_has_the_expected_pkce_fields() {
         let settings = Settings {
-            client_id: "my-client".into(),
+            client_id: None,
             redirect_port: 8888,
         };
         let url = authorize_url(
             &settings,
+            "my-client",
             "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
             "state",
         )

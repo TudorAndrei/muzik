@@ -1,7 +1,7 @@
 use muzik_core::QualityPolicy;
 use muzik_store::watchlist::{
     CheckedWrite, ReconcileOptions, Repository, SourceKind, Stage, StageStatus, WatchItem,
-    Watchlist, bandcamp_source, import_cache, reconcile, view,
+    Watchlist, bandcamp_source, import_cache, view,
 };
 use serde_json::{Value, json};
 use std::fs;
@@ -12,8 +12,8 @@ fn reconciled(
     options: ReconcileOptions<'_>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let mut document = Watchlist::from_value(document)?;
-    reconcile(&mut document, options)?;
-    Ok(document.to_value())
+    document.reconcile(options)?;
+    Ok(document.to_value()?)
 }
 
 fn imported(
@@ -26,8 +26,8 @@ fn imported(
         return Err("the cache import did not run".into());
     }
     let mut document = repository.load()?;
-    reconcile(&mut document, options)?;
-    Ok(document.to_value())
+    document.reconcile(options)?;
+    Ok(document.to_value()?)
 }
 
 const fn options<'a>(output: &'a Path, splits: &'a Path, cache: &'a Path) -> ReconcileOptions<'a> {
@@ -107,7 +107,7 @@ fn imports_old_watchlist_file_and_preserves_saved_item_state() {
     let repository = Repository::new(directory.path().join("muzik.db")).with_legacy(path.clone());
 
     let loaded = repository.load().unwrap();
-    let value = loaded.to_value();
+    let value = loaded.to_value().unwrap();
     let item = &value["playlists"][0]["items"][0];
     assert_eq!(value["version"], 3);
     assert_eq!(item["stages"]["quality"]["status"], "not_started");
@@ -139,7 +139,7 @@ fn the_bandcamp_collection_is_added_once() {
     let revision = repository.revision().unwrap();
     assert!(!repository.ensure(&source).unwrap());
     assert_eq!(repository.revision().unwrap(), revision);
-    let saved = repository.load().unwrap().to_value();
+    let saved = repository.load().unwrap().to_value().unwrap();
     assert_eq!(saved["playlists"].as_array().map(Vec::len), Some(1));
     assert_eq!(saved["playlists"][0]["kind"], "bandcamp");
     assert_eq!(
@@ -163,7 +163,7 @@ fn edits_saved_sources_without_losing_item_state() {
             .is_err()
     );
 
-    let mut saved = repository.load().unwrap().to_value();
+    let mut saved = repository.load().unwrap().to_value().unwrap();
     saved["playlists"][0]["items"] = json!([{
         "position": 1,
         "title": "Song",
@@ -173,7 +173,7 @@ fn edits_saved_sources_without_losing_item_state() {
         .save(&Watchlist::from_value(saved).unwrap())
         .unwrap();
     assert!(repository.rename("PL_ONE", " Jazz albums ").unwrap());
-    let saved = repository.load().unwrap().to_value();
+    let saved = repository.load().unwrap().to_value().unwrap();
     assert_eq!(saved["playlists"][0]["title"], "Jazz albums");
     assert_eq!(
         saved["playlists"][0]["items"][0]["stages"]["download"]["path"],
@@ -293,7 +293,7 @@ fn the_cache_import_marks_a_remaining_import_failed_once() {
     assert_eq!(playlist["items"][0]["last_action"], "refresh");
     fs::remove_file(audio).unwrap();
     assert!(!import_cache(&repository, options(&output, &splits, &cache)).unwrap());
-    let saved = repository.load().unwrap().to_value();
+    let saved = repository.load().unwrap().to_value().unwrap();
     assert_eq!(
         saved["playlists"][0]["items"][0]["stages"]["organize"]["status"],
         "failed"
@@ -328,15 +328,15 @@ fn a_second_reconcile_changes_no_rows() {
     let options = options(&output, directory.path(), directory.path());
     for _ in 0..2 {
         let mut document = repository.load().unwrap();
-        reconcile(&mut document, options).unwrap();
+        document.reconcile(options).unwrap();
         repository.save(&document).unwrap();
     }
     let revision = repository.revision().unwrap();
     let mut document = repository.load().unwrap();
-    reconcile(&mut document, options).unwrap();
+    document.reconcile(options).unwrap();
     repository.save(&document).unwrap();
     assert_eq!(repository.revision().unwrap(), revision);
-    let saved = repository.load().unwrap().to_value();
+    let saved = repository.load().unwrap().to_value().unwrap();
     assert_eq!(
         saved["playlists"][0]["items"][1]["stages"]["download"]["status"],
         "complete"

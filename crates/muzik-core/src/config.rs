@@ -151,11 +151,12 @@ fn parse_layer(yaml: &str, layer: &'static str) -> Result<Value, Error> {
 }
 
 fn merge(base: &mut Value, overlay: Value) {
-    if let (Some(base), Value::Object(overlay)) = (base.as_object_mut(), &overlay) {
-        for (key, value) in overlay {
-            merge(base.entry(key).or_insert(Value::Null), value.clone());
+    match (base, overlay) {
+        (Value::Object(base), Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                merge(base.entry(key).or_insert(Value::Null), value);
+            }
         }
-    } else {
-        *base = overlay;
+        (base, overlay) => *base = overlay,
     }
 }

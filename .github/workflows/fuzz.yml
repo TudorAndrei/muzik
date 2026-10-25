@@ -19,19 +19,61 @@ concurrency:
 
 jobs:
   fuzz:
-    name: Fuzz ${{ matrix.package }}
+    name: Fuzz ${{ matrix.id }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - package: muzik-soulseek
+          - id: soulseek-peer-names
+            package: muzik-soulseek
             harness: fetch::tests::local_files_stay_directly_inside_the_root_for_any_peer_names
             corpus: crates/muzik-soulseek/src/__fuzz__
-          - package: muzik-bandcamp
+          - id: bandcamp-archive
+            package: muzik-bandcamp
             harness: tests::any_archive_writes_only_inside_the_destination
             corpus: crates/muzik-bandcamp/src/__fuzz__
+          - id: bandcamp-download-name
+            package: muzik-bandcamp
+            harness: tests::any_download_name_is_one_file_name_inside_the_destination
+            corpus: crates/muzik-bandcamp/src/__fuzz__
+          - id: bandcamp-content-range
+            package: muzik-bandcamp
+            harness: tests::any_accepted_content_range_is_well_formed
+            corpus: crates/muzik-bandcamp/src/__fuzz__
+          - id: bandcamp-numeric-content-range
+            package: muzik-bandcamp
+            harness: tests::any_numeric_content_range_is_accepted_only_inside_the_length
+            corpus: crates/muzik-bandcamp/src/__fuzz__
+          - id: media-split-folder
+            package: muzik-media
+            harness: splitter::tests::any_title_gives_one_normal_file_name
+            corpus: crates/muzik-media/src/__fuzz__
+          - id: core-chapter-text
+            package: muzik-core
+            harness: chapters::tests::any_chapter_text_gives_ordered_chapters
+            corpus: crates/muzik-core/src/__fuzz__
+          - id: core-tracklist
+            package: muzik-core
+            harness: chapters::tests::any_tracklist_gives_ordered_chapters
+            corpus: crates/muzik-core/src/__fuzz__
+          - id: core-cue-sheet
+            package: muzik-core
+            harness: chapters::tests::any_cue_sheet_gives_ordered_chapters
+            corpus: crates/muzik-core/src/__fuzz__
+          - id: core-info-json
+            package: muzik-core
+            harness: chapters::tests::any_info_json_gives_ordered_chapters
+            corpus: crates/muzik-core/src/__fuzz__
+          - id: import-path-components
+            package: muzik-import
+            harness: paths::tests::rendered_paths_keep_the_template_components_for_any_field_values
+            corpus: crates/muzik-import/src/__fuzz__
+          - id: tags-read
+            package: muzik-tags
+            harness: tests::reading_any_bytes_does_not_panic
+            corpus: crates/muzik-tags/src/__fuzz__
     steps:
       - uses: actions/checkout@v7
         with:
@@ -42,8 +84,8 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ${{ matrix.corpus }}
-          key: fuzz-corpus-${{ matrix.package }}-${{ github.run_id }}
-          restore-keys: fuzz-corpus-${{ matrix.package }}-
+          key: fuzz-corpus-${{ matrix.id }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.id }}-
       - name: Fuzz the harness
         env:
           PACKAGE: ${{ matrix.package }}
@@ -53,6 +95,6 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: failure()
         with:
-          name: fuzz-crashes-${{ matrix.package }}
+          name: fuzz-crashes-${{ matrix.id }}
           path: ${{ matrix.corpus }}/*/crashes
           if-no-files-found: ignore

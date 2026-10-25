@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use muzik_core::chapters::Sidecar;
 use serde_json::Value;
 use strum_macros::Display;
 
@@ -11,8 +12,7 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
     if !args.path.exists() {
         bail!("not found: {}", args.path.display());
     }
-    let mut files = Vec::new();
-    collect(&args.path, args.recursive, &mut files)?;
+    let mut files = collect(&args.path, args.recursive)?;
     files.retain(|path| kind(path).is_some());
     files.sort();
     if files.is_empty() {
@@ -70,9 +70,10 @@ pub fn run(args: &Validate) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
+fn collect(path: &Path, recursive: bool) -> std::io::Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
     if !path.exists() {
-        return Ok(());
+        return Ok(files);
     }
     let walker = walkdir::WalkDir::new(path)
         .follow_links(true)
@@ -92,7 +93,7 @@ fn collect(path: &Path, recursive: bool, files: &mut Vec<PathBuf>) -> std::io::R
             files.push(entry.into_path());
         }
     }
-    Ok(())
+    Ok(files)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
@@ -109,11 +110,11 @@ fn kind(path: &Path) -> Option<FileKind> {
     let name = path.file_name()?.to_str()?.to_ascii_lowercase();
     if muzik_core::audio::is_audio(path) {
         Some(FileKind::Audio)
-    } else if name.ends_with(".chapters.txt") {
+    } else if name.ends_with(Sidecar::Chapters.suffix()) {
         Some(FileKind::Chapters)
-    } else if name.ends_with(".info.json") {
+    } else if name.ends_with(Sidecar::Info.suffix()) {
         Some(FileKind::InfoJson)
-    } else if name.ends_with(".muzik.json") {
+    } else if name.ends_with(Sidecar::Muzik.suffix()) {
         Some(FileKind::Muzik)
     } else {
         None
@@ -221,9 +222,7 @@ fn chapter_line(line: &str) -> bool {
 }
 
 fn count_audio(root: &Path) -> anyhow::Result<usize> {
-    let mut files = Vec::new();
-    collect(root, true, &mut files)?;
-    Ok(files
+    Ok(collect(root, true)?
         .into_iter()
         .filter(|path| kind(path) == Some(FileKind::Audio))
         .count())

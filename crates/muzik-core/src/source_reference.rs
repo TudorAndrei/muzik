@@ -57,6 +57,25 @@ impl SpotifyReference {
     }
 }
 
+impl std::fmt::Display for SpotifyReference {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Liked => formatter.write_str("spotify:liked"),
+            Self::Playlist(id) => write!(formatter, "spotify:playlist:{id}"),
+            Self::Album(id) => write!(formatter, "spotify:album:{id}"),
+        }
+    }
+}
+
+impl serde::Serialize for SpotifyReference {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 /// # Errors
 /// Returns an error unless the URL belongs to `YouTube` and contains a playlist ID.
 pub fn youtube_playlist(input: &str) -> Result<String> {
@@ -88,4 +107,27 @@ pub fn youtube_playlist(input: &str) -> Result<String> {
         return Err(invalid());
     }
     Ok(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SpotifyReference;
+
+    #[test]
+    fn a_spotify_reference_parses_back_from_its_text() {
+        for reference in [
+            SpotifyReference::Liked,
+            SpotifyReference::Playlist("abc123".into()),
+            SpotifyReference::Album("xyz789".into()),
+        ] {
+            assert_eq!(
+                SpotifyReference::parse(&reference.to_string()).unwrap(),
+                reference
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(SpotifyReference::Playlist("abc123".into())).unwrap(),
+            "spotify:playlist:abc123"
+        );
+    }
 }

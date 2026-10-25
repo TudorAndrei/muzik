@@ -80,16 +80,16 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
         error => error.into(),
     })?;
     if report.failed > 0 {
-        bail!("{} of {} files failed", report.failed, report.written);
+        bail!("{} of {} files failed", report.failed, report.total);
     }
     if report.unrecorded > 0 {
         bail!(
             "{} of {} files were written, but muzik could not save their encoding; the next sync converts them again",
             report.unrecorded,
-            report.written
+            report.total
         );
     }
-    println!("Sync complete: {} files written", report.written);
+    println!("Sync complete: {} files written", report.total);
     Ok(())
 }
 

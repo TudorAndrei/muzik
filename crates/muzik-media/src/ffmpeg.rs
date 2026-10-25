@@ -2,7 +2,7 @@
 
 use crate::process::{self, Stopped, background_command};
 use std::fs;
-use std::io;
+use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::AtomicBool;
@@ -40,7 +40,33 @@ pub struct Cut<'a> {
     /// `None` keeps all audio after `start`.
     pub end: Option<i64>,
     /// Replaces all source tags.
-    pub tags: &'a [(&'a str, String)],
+    pub tags: &'a TrackTags,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrackTags {
+    pub title: String,
+    pub artist: String,
+    pub album_artist: String,
+    pub album: String,
+    pub date: String,
+    pub track: u32,
+    pub track_total: usize,
+    pub compilation: bool,
+}
+
+impl TrackTags {
+    fn metadata_args(&self) -> [String; 7] {
+        [
+            format!("title={}", self.title),
+            format!("artist={}", self.artist),
+            format!("albumartist={}", self.album_artist),
+            format!("album={}", self.album),
+            format!("date={}", self.date),
+            format!("track={}/{}", self.track, self.track_total),
+            format!("compilation={}", u8::from(self.compilation)),
+        ]
+    }
 }
 
 /// Re-encode the first audio stream and keep the source tags.
@@ -80,26 +106,27 @@ impl Ffmpeg {
 
     /// Stop ffmpeg and remove the partial file when `cancelled` becomes true.
     pub(crate) fn cut(&self, cut: &Cut<'_>, cancelled: &AtomicBool) -> Result<(), Error> {
+        let mut errors = tempfile::tempfile().map_err(Error::Run)?;
         let mut command = background_command(&self.executable);
         command
             .arg("-i")
             .arg(cut.source)
-            .args(["-nostdin", "-y", "-ss"])
+            .args(["-nostdin", "-v", "error", "-y", "-ss"])
             .arg(timestamp(cut.start));
         if let Some(end) = cut.end {
             command.arg("-to").arg(timestamp(end));
         }
         command.args(["-vn", "-c:a", "copy", "-map_metadata", "-1"]);
-        for (key, value) in cut.tags {
-            command.arg("-metadata").arg(format!("{key}={value}"));
+        for tag in cut.tags.metadata_args() {
+            command.arg("-metadata").arg(tag);
         }
         command
             .arg(cut.destination)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(errors.try_clone().map_err(Error::Run)?);
         let mut child = process::spawn(command).map_err(Error::Run)?;
-        let status = match process::wait(&mut child, None, cancelled) {
+        let status = match process::wait(&mut *child, None, cancelled) {
             Ok(status) => status,
             Err(Stopped::Io(error)) => return Err(Error::Run(error)),
             Err(Stopped::Cancelled | Stopped::TimedOut) => {
@@ -108,10 +135,19 @@ impl Ffmpeg {
             }
         };
         if status.success() {
-            Ok(())
-        } else {
-            Err(Error::Failed(status.to_string()))
+            return Ok(());
         }
+        let mut text = String::new();
+        errors
+            .rewind()
+            .and_then(|()| errors.read_to_string(&mut text))
+            .map_err(Error::Run)?;
+        let text = text.trim();
+        Err(Error::Failed(if text.is_empty() {
+            status.to_string()
+        } else {
+            text.to_owned()
+        }))
     }
 
     /// # Errors

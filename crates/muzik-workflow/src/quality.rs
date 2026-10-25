@@ -1,7 +1,7 @@
 //! Safe quality replacement for a freshly acquired `YouTube` audio file.
 
 use muzik_core::audio::AudioFormat;
-use muzik_core::chapters::sidecar_path;
+use muzik_core::chapters::Sidecar;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent, PreferredAudio, QualityPolicy, Severity, app_config};
 use muzik_media::quality::{self, MeasuredQuality, QualityDecision};
@@ -149,7 +149,7 @@ fn check_with_backend(
         return Ok(keep);
     };
     on_event(JobEvent::CandidatesFound {
-        source: "soulseek".into(),
+        source: muzik_core::CandidateSource::Soulseek,
         candidates: vec![candidate_payload(&candidate)],
     });
     if quality_decision == QualityDecision::Ask {
@@ -371,10 +371,8 @@ fn accept_album(
     let actual_duration = files
         .iter()
         .map(|file| backend.duration(file).ok().flatten())
-        .collect::<Option<Vec<_>>>();
-    if !actual_duration.is_some_and(|values| {
-        (values.iter().sum::<f64>() - track.duration).abs() <= DURATION_TOLERANCE
-    }) {
+        .sum::<Option<f64>>();
+    if !actual_duration.is_some_and(|total| (total - track.duration).abs() <= DURATION_TOLERANCE) {
         on_event(message(
             "Quality check: album duration does not match the source.".into(),
             true,
@@ -444,10 +442,10 @@ fn candidate_payload(candidate: &Candidate) -> Value {
 }
 
 fn copy_chapter_sidecars(original: &Path, replacement: &Path) -> std::io::Result<()> {
-    for extension in [".chapters.txt", ".info.json"] {
-        let source = sidecar_path(original, extension);
+    for kind in [Sidecar::Chapters, Sidecar::Info] {
+        let source = kind.path(original);
         if source.is_file() {
-            std::fs::copy(&source, sidecar_path(replacement, extension))?;
+            std::fs::copy(&source, kind.path(replacement))?;
         }
     }
     Ok(())
@@ -485,10 +483,17 @@ impl Backend for SoulseekBackend {
     }
 
     fn track(&mut self, path: &Path) -> Result<Option<Track>> {
-        let mut artist = String::new();
-        let mut title = String::new();
-        for extension in [".muzik.json", ".info.json"] {
-            let sidecar = sidecar_path(path, extension);
+        let mut artist: Option<String> = None;
+        let mut title: Option<String> = None;
+        let text = |source: &Value, key: &str| {
+            source
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        for kind in [Sidecar::Muzik, Sidecar::Info] {
+            let sidecar = kind.path(path);
             if let Ok(bytes) = std::fs::read(sidecar)
                 && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
             {
@@ -498,32 +503,28 @@ impl Backend for SoulseekBackend {
                     Some(&value),
                 ];
                 for source in sources.into_iter().flatten() {
-                    if artist.is_empty() {
-                        source
-                            .get("artist")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .clone_into(&mut artist);
-                    }
-                    if title.is_empty() {
-                        source
-                            .get("title")
-                            .and_then(Value::as_str)
-                            .or_else(|| source.get("track").and_then(Value::as_str))
-                            .unwrap_or("")
-                            .clone_into(&mut title);
-                    }
+                    artist = artist.or_else(|| text(source, "artist"));
+                    title = title
+                        .or_else(|| text(source, "title"))
+                        .or_else(|| text(source, "track"));
                 }
             }
         }
-        if let Ok(tags) = muzik_tags::read(path, &[]) {
-            if artist.is_empty() {
-                artist = tags.fields.get("artist").cloned().unwrap_or_default();
-            }
-            if title.is_empty() {
-                title = tags.fields.get("title").cloned().unwrap_or_default();
-            }
+        if (artist.is_none() || title.is_none())
+            && let Ok(tags) = muzik_tags::read(path, &[])
+        {
+            let tag = |key: &str| {
+                tags.fields
+                    .get(key)
+                    .filter(|text| !text.is_empty())
+                    .cloned()
+            };
+            artist = artist.or_else(|| tag("artist"));
+            title = title.or_else(|| tag("title"));
         }
+        let (Some(artist), Some(title)) = (artist, title) else {
+            return Ok(None);
+        };
         let duration = muzik_tags::probe(path)?.duration_seconds;
         Ok(duration.map(|duration| Track {
             artist,
@@ -715,15 +716,14 @@ mod tests {
     fn ask_requires_acceptance_and_auto_copies_chapters() {
         let mut backend = FakeBackend::new();
         let original = backend.original();
-        std::fs::write(sidecar_path(&original, ".chapters.txt"), "00:00 Intro").unwrap();
+        std::fs::write(Sidecar::Chapters.path(&original), "00:00 Intro").unwrap();
         let refused = run(&mut backend, original.clone(), QualityPolicy::Ask, false);
         assert_eq!(refused.audio_files, vec![original.clone()]);
         let accepted = run(&mut backend, original.clone(), QualityPolicy::Auto, true);
         assert_ne!(accepted.audio_files, vec![original.clone()]);
         assert!(original.is_file());
         assert_eq!(
-            std::fs::read_to_string(sidecar_path(&accepted.audio_files[0], ".chapters.txt"))
-                .unwrap(),
+            std::fs::read_to_string(Sidecar::Chapters.path(&accepted.audio_files[0])).unwrap(),
             "00:00 Intro"
         );
     }

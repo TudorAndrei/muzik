@@ -24,12 +24,23 @@ pub fn background_command(program: impl AsRef<OsStr>) -> Command {
         .arg("-n")
         .arg(BACKGROUND_NICENESS.to_string())
         .arg(program);
-    command
+    with_tool_path(command)
 }
 
 #[cfg(not(unix))]
 pub fn background_command(program: impl AsRef<OsStr>) -> Command {
-    Command::new(program)
+    tool_command(program)
+}
+
+pub fn tool_command(program: impl AsRef<OsStr>) -> Command {
+    with_tool_path(Command::new(program))
+}
+
+fn with_tool_path(mut command: Command) -> Command {
+    if let Some(path) = muzik_core::paths::tool_search_path() {
+        command.env("PATH", path);
+    }
+    command
 }
 
 /// # Errors
@@ -46,7 +57,7 @@ pub fn spawn(command: Command) -> io::Result<Box<dyn ChildWrapper>> {
 /// # Errors
 /// Returns an error when `cancelled` becomes true, the timeout passes, or the status cannot be read.
 pub fn wait(
-    child: &mut Box<dyn ChildWrapper>,
+    child: &mut dyn ChildWrapper,
     timeout: Option<Duration>,
     cancelled: &AtomicBool,
 ) -> Result<ExitStatus, Stopped> {
@@ -104,7 +115,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         let stopped = wait(
-            &mut child,
+            &mut *child,
             Some(Duration::from_millis(100)),
             &AtomicBool::new(false),
         );
@@ -120,7 +131,7 @@ mod tests {
 
         let mut child = spawn(Command::new("true")).unwrap();
         assert!(
-            wait(&mut child, None, &AtomicBool::new(false))
+            wait(&mut *child, None, &AtomicBool::new(false))
                 .unwrap()
                 .success()
         );
@@ -128,7 +139,7 @@ mod tests {
         sleep.arg("30");
         let mut child = spawn(sleep).unwrap();
         assert!(matches!(
-            wait(&mut child, None, &AtomicBool::new(true)),
+            wait(&mut *child, None, &AtomicBool::new(true)),
             Err(Stopped::Cancelled)
         ));
     }

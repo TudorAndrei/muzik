@@ -66,7 +66,8 @@ pub fn run(args: &Archive) -> anyhow::Result<()> {
                 force: false,
             };
             match split::run(&request) {
-                Ok(_) => processed = processed.saturating_add(1),
+                Ok(Some(_)) => processed = processed.saturating_add(1),
+                Ok(None) => skipped = skipped.saturating_add(1),
                 Err(error) => {
                     eprintln!(
                         "Split failed for {}: {}",

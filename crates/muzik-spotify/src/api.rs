@@ -1,13 +1,14 @@
 //! Spotify playlist references shared by the CLI and desktop app.
 
 use super::{Client, Result};
+use muzik_core::source_reference::SpotifyReference;
 use rspotify_model::{Id, SimplifiedPlaylist};
 use serde::Serialize;
 use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PlaylistRef {
-    pub uri: String,
+    pub uri: SpotifyReference,
     pub name: String,
     pub owner: String,
     pub total: Option<u64>,
@@ -19,7 +20,7 @@ pub struct PlaylistRef {
 pub fn list_playlists(config_path: &Path, token_path: &Path) -> Result<Vec<PlaylistRef>> {
     let mut spotify = Client::connect(config_path, token_path)?;
     let mut playlists = vec![PlaylistRef {
-        uri: "spotify:liked".into(),
+        uri: SpotifyReference::Liked,
         name: "Liked Songs".into(),
         owner: "you".into(),
         total: None,
@@ -34,7 +35,7 @@ impl From<SimplifiedPlaylist> for PlaylistRef {
     fn from(playlist: SimplifiedPlaylist) -> Self {
         let id = playlist.id.id().to_owned();
         Self {
-            uri: format!("spotify:playlist:{id}"),
+            uri: SpotifyReference::Playlist(id.clone()),
             name: Some(playlist.name)
                 .filter(|name| !name.is_empty())
                 .unwrap_or(id),
@@ -70,7 +71,7 @@ mod tests {
         }))
         .unwrap();
         let reference = PlaylistRef::from(playlist);
-        assert_eq!(reference.uri, "spotify:playlist:one");
+        assert_eq!(reference.uri.to_string(), "spotify:playlist:one");
         assert_eq!(reference.name, "one");
         assert_eq!(reference.owner, "owner");
         assert_eq!(reference.total, Some(3));

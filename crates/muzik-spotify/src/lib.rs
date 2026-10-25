@@ -62,7 +62,7 @@ impl From<Error> for String {
 
 #[derive(Clone, Debug)]
 pub struct Settings {
-    pub client_id: String,
+    pub client_id: Option<String>,
     pub redirect_port: u16,
 }
 
@@ -119,7 +119,8 @@ pub fn settings(path: &Path) -> Result<Settings> {
         return Err("Spotify redirect port must be from 1 to 65535".into());
     }
     Ok(Settings {
-        client_id: value("MUZIK_SPOTIFY_CLIENT_ID", "client_id", ""),
+        client_id: Some(value("MUZIK_SPOTIFY_CLIENT_ID", "client_id", ""))
+            .filter(|client_id| !client_id.is_empty()),
         redirect_port: port,
     })
 }
@@ -208,7 +209,7 @@ struct Client {
         clippy::struct_field_names,
         reason = "client_id is the Spotify OAuth term"
     )]
-    client_id: String,
+    client_id: Option<String>,
     token_path: PathBuf,
     token: Token,
 }
@@ -225,22 +226,24 @@ impl Client {
     }
 
     fn get<T: DeserializeOwned>(&mut self, path: &str) -> Result<T> {
-        let url = if path.starts_with("https://") {
-            let parsed =
-                Url::parse(path).map_err(|error| format!("invalid Spotify URL: {error}"))?;
-            if parsed.host_str() != Some("api.spotify.com") {
-                return Err("Spotify returned a page outside its API".into());
-            }
-            path.to_owned()
-        } else {
-            format!("{API}/{path}")
-        };
+        self.fetch(&format!("{API}/{path}"))
+    }
+
+    fn next_page<T: DeserializeOwned>(&mut self, url: &str) -> Result<T> {
+        let parsed = Url::parse(url).map_err(|error| format!("invalid Spotify URL: {error}"))?;
+        if parsed.scheme() != "https" || parsed.host_str() != Some("api.spotify.com") {
+            return Err("Spotify returned a page outside its API".into());
+        }
+        self.fetch(url)
+    }
+
+    fn fetch<T: DeserializeOwned>(&mut self, url: &str) -> Result<T> {
         if self.token.is_expired() {
             self.refresh()?;
         }
         let mut refreshed = false;
         for attempt in 0..3 {
-            let mut response = ureq::get(&url)
+            let mut response = ureq::get(url)
                 .header(
                     "Authorization",
                     format!("Bearer {}", self.token.access_token),
@@ -293,14 +296,15 @@ impl Client {
             if !seen.insert(next.clone()) {
                 return Err("Spotify returned a repeated page".into());
             }
-            page = self.get(&next)?;
+            page = self.next_page(&next)?;
         }
     }
 
     fn refresh(&mut self) -> Result<()> {
-        if self.client_id.is_empty() {
-            return Err("No Spotify client ID is configured".into());
-        }
+        let client_id = self
+            .client_id
+            .as_deref()
+            .ok_or("No Spotify client ID is configured")?;
         let refresh = self
             .token
             .refresh_token
@@ -309,7 +313,7 @@ impl Client {
         let mut token = request_token(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", &refresh),
-            ("client_id", &self.client_id),
+            ("client_id", client_id),
         ])?;
         token.refresh_token.get_or_insert(refresh);
         save_token(&self.token_path, &token)?;
@@ -323,8 +327,12 @@ impl Client {
 pub fn status(config_path: &Path, token_path: &Path) -> Result<Value> {
     let settings = settings(config_path)?;
     let mut result = serde_json::Map::new();
-    result.insert("client_id".into(), json!(settings.client_id));
-    result.insert("redirect_uri".into(), json!(settings.redirect_uri()));
+    let redirect_uri = settings.redirect_uri();
+    result.insert(
+        "client_id".into(),
+        json!(settings.client_id.unwrap_or_default()),
+    );
+    result.insert("redirect_uri".into(), json!(redirect_uri));
     result.insert("connected".into(), json!(false));
     if load_token(token_path).is_some() {
         match Client::connect(config_path, token_path)
@@ -362,12 +370,14 @@ mod tests {
     #[test]
     fn a_page_outside_the_spotify_api_never_gets_the_token() {
         let mut client = Client {
-            client_id: "client".into(),
+            client_id: Some("client".into()),
             token_path: "token.json".into(),
             token: rspotify_model::Token::default(),
         };
-        let page = client.get::<serde_json::Value>("https://example.test/steal");
-        assert!(page.is_err_and(|error| error.to_string().contains("outside its API")));
+        for url in ["https://example.test/steal", "http://api.spotify.com/v1/me"] {
+            let page = client.next_page::<serde_json::Value>(url);
+            assert!(page.is_err_and(|error| error.to_string().contains("outside its API")));
+        }
     }
 
     #[test]

@@ -50,6 +50,8 @@ pub struct ApplyOptions {
     pub aunique_keys: Vec<String>,
     pub aunique_disambiguators: Vec<String>,
     pub aunique_bracket: String,
+    pub path_sep_replace: String,
+    pub drive_sep_replace: String,
 }
 
 impl ApplyOptions {
@@ -106,6 +108,11 @@ impl ApplyOptions {
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default(),
+                config
+                    .get(&["max_filename_length"])
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|length| usize::try_from(length).ok())
+                    .unwrap_or(0),
             )?,
             aunique_keys: text(&["aunique", "keys"], "albumartist album")
                 .split_whitespace()
@@ -116,6 +123,8 @@ impl ApplyOptions {
                 .map(str::to_owned)
                 .collect(),
             aunique_bracket: text(&["aunique", "bracket"], "[]"),
+            path_sep_replace: text(&["path_sep_replace"], "_"),
+            drive_sep_replace: text(&["drive_sep_replace"], "_"),
         })
     }
 }
@@ -201,26 +210,30 @@ pub fn apply_with_cancel(
         check_cancelled(cancelled)?;
         let skip_duplicate =
             !album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
-        let candidate_index = match decision.choice {
-            MatchDecision::Candidate(index) if !skip_duplicate => Some(Some(index)),
-            MatchDecision::AsIs if !skip_duplicate => Some(None),
-            MatchDecision::Candidate(_) | MatchDecision::AsIs | MatchDecision::Skip => None,
-        };
-        let Some(candidate_index) = candidate_index else {
+        if skip_duplicate || decision.choice == MatchDecision::Skip {
             result.skipped_albums = result.skipped_albums.saturating_add(1);
             if !options.dry_run && !plan.incremental_skip_later {
                 record_history(plan, album, &mut result);
             }
             continue;
-        };
+        }
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
+        let candidate = match decision.choice {
+            MatchDecision::Candidate(index) => Some(
+                album
+                    .candidates
+                    .get(index)
+                    .ok_or(ApplyError::CandidateIndex { index })?,
+            ),
+            MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
         let reserved_before = reserved.clone();
         let prepared = match prepare(
             library,
             album,
-            candidate_index,
+            candidate,
             decision.duplicate,
             options,
             &mut reserved,
@@ -347,17 +360,10 @@ fn place_album(
         created.push(destination.clone());
         if options.embed_art {
             let bytes = fs::read(source)?;
-            let mime = if source
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-            {
-                "image/png"
-            } else {
-                "image/jpeg"
-            };
+            let mime = muzik_tags::cover_mime_type(source);
             for item in &prepared.items {
                 check_cancelled(cancelled)?;
-                muzik_tags::embed_cover(&item.destination, &bytes, mime)?;
+                muzik_tags::embed_cover(&item.destination, &bytes, &mime)?;
             }
         }
     }
@@ -419,19 +425,11 @@ fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult
 fn prepare(
     library: &Library,
     album: &AlbumPlan,
-    candidate_index: Option<usize>,
+    candidate: Option<&PlannedCandidate>,
     duplicate: Option<DuplicateDecision>,
     options: &ApplyOptions,
     reserved: &mut BTreeSet<PathBuf>,
 ) -> Result<PreparedAlbum, ApplyError> {
-    let candidate = candidate_index
-        .map(|index| {
-            album
-                .candidates
-                .get(index)
-                .ok_or(ApplyError::CandidateIndex { index })
-        })
-        .transpose()?;
     let compilation = is_compilation(album, candidate);
     let replace_ids = if duplicate == Some(DuplicateDecision::Replace) {
         selected_replacements(library, album, candidate)?
@@ -467,10 +465,12 @@ fn prepare(
         let context = TemplateContext {
             fields: path_fields,
             album_id: (album.kind == ImportMode::Album).then_some(next_id),
-            albums: known.clone(),
-            aunique_keys: options.aunique_keys.clone(),
-            aunique_disambiguators: options.aunique_disambiguators.clone(),
-            aunique_bracket: options.aunique_bracket.clone(),
+            albums: &known,
+            aunique_keys: &options.aunique_keys,
+            aunique_disambiguators: &options.aunique_disambiguators,
+            aunique_bracket: &options.aunique_bracket,
+            path_sep_replace: &options.path_sep_replace,
+            drive_sep_replace: &options.drive_sep_replace,
         };
         let destination = item_destination(options, kind, &context, &item.source)?;
         claim_destination(
@@ -565,9 +565,10 @@ fn item_tags(
     if let Some(candidate) = candidate {
         apply_candidate_tags(&mut tags, candidate, index, compilation);
     }
-    let title = tags.fields.get("title").cloned().unwrap_or_default();
-    let artist = tags.fields.get("artist").cloned().unwrap_or_default();
-    let (title, artist) = ftclean::clean(&title, &artist);
+    let (title, artist) = {
+        let field = |name| tags.fields.get(name).map_or("", String::as_str);
+        ftclean::clean(field("title"), field("artist"))
+    };
     tags.fields.insert("title".into(), title);
     tags.fields.insert("artist".into(), artist);
     tags
@@ -622,7 +623,7 @@ const fn path_kind(mode: ImportMode, compilation: bool) -> PathKind {
 fn item_destination(
     options: &ApplyOptions,
     kind: PathKind,
-    context: &TemplateContext,
+    context: &TemplateContext<'_>,
     source: &Path,
 ) -> Result<PathBuf, ApplyError> {
     let extension = source

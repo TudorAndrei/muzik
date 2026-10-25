@@ -101,7 +101,7 @@ fn id(video_id: &str) -> ItemId {
 fn refresh_keeps_prior_state_and_processes_each_video_once() {
     let directory = tempfile::tempdir().unwrap();
     let mut saved = card(1, "video_a");
-    saved.last_action = Some("retry".into());
+    saved.last_action = Some(ItemAction::Retry.into());
     let repository = repository_with(directory.path(), vec![saved]).unwrap();
     let mut fake = Fake {
         processed: Vec::new(),
@@ -671,7 +671,9 @@ fn repeat_action_preserves_stale_stages_across_cached_reconciliation() {
     )
     .unwrap();
     let mut saved = repository.load().unwrap();
-    muzik_store::watchlist::reconcile(&mut saved, options(directory.path()).reconcile).unwrap();
+    saved
+        .reconcile(options(directory.path()).reconcile)
+        .unwrap();
     assert!(saved.playlists[0].processed_video_ids.is_empty());
     for (index, position) in [(0, 1), (1, 2)] {
         let item = &saved.playlists[0].items[index];

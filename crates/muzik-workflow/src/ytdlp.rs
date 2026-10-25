@@ -1,7 +1,7 @@
 use crate::{Error, WorkflowInput, classify_input, find_audio_inputs};
 use muzik_media::process::{self, Stopped, background_command};
 use serde_json::Value;
-use std::ffi::OsString;
+use std::ffi::OsStr;
 use std::io::{Read, Seek};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -107,8 +107,7 @@ impl YtDlp {
         if request.force {
             args.push("--force-overwrites".to_owned());
         }
-        args.push(target);
-        let printed = self.print(args, "after_move:filepath", DOWNLOAD, cancelled)?;
+        let printed = self.print(args, &target, "after_move:filepath", DOWNLOAD, cancelled)?;
         let files = printed
             .lines()
             .map(str::trim)
@@ -137,7 +136,8 @@ impl YtDlp {
     /// video IDs.
     pub fn playlist_ids(&self, url: &str, cancelled: &AtomicBool) -> Result<Vec<String>, Error> {
         let printed = self.print(
-            vec!["--flat-playlist".to_owned(), url.to_owned()],
+            vec!["--flat-playlist".to_owned()],
+            url,
             "id",
             LOOKUP,
             cancelled,
@@ -186,7 +186,8 @@ impl YtDlp {
         cancelled: &AtomicBool,
     ) -> Result<String, Error> {
         let value = self.print(
-            vec!["--skip-download".to_owned(), target.to_owned()],
+            vec!["--skip-download".to_owned()],
+            target,
             field,
             SHORT_LOOKUP,
             cancelled,
@@ -213,20 +214,18 @@ impl YtDlp {
     fn print(
         &self,
         mut args: Vec<String>,
+        target: &str,
         template: &str,
         timeout: Duration,
         cancelled: &AtomicBool,
     ) -> Result<String, Error> {
         let printed = tempfile::NamedTempFile::new()?;
-        let target = args
-            .pop()
-            .ok_or_else(|| Error::Operation("yt-dlp target is missing".into()))?;
         args.extend([
             "--quiet".to_owned(),
             "--print-to-file".to_owned(),
             template.to_owned(),
             printed.path().to_string_lossy().into_owned(),
-            target,
+            target.to_owned(),
         ]);
         self.run(&args, timeout, cancelled)?;
         Ok(std::fs::read_to_string(printed.path())?)
@@ -243,14 +242,14 @@ impl YtDlp {
         let mut stderr = tempfile::tempfile()?;
         let mut command = background_command(&self.executable);
         command
-            .args(environment_args(std::env::var_os("PATH")))
+            .args(environment_args(muzik_core::paths::tool_search_path()))
             .args(args)
             .stdin(Stdio::null())
             .stdout(stdout.try_clone()?)
             .stderr(stderr.try_clone()?);
         let mut child = process::spawn(command)
             .map_err(|error| Error::Operation(format!("cannot start yt-dlp: {error}")))?;
-        let status = match process::wait(&mut child, Some(timeout), cancelled) {
+        let status = match process::wait(&mut *child, Some(timeout), cancelled) {
             Ok(status) => status,
             Err(Stopped::Cancelled) => return Err(Error::Cancelled),
             Err(Stopped::TimedOut) => return Err(Error::Operation("yt-dlp timed out".into())),
@@ -281,7 +280,7 @@ pub fn is_video_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn environment_args(path: Option<OsString>) -> Vec<String> {
+fn environment_args(path: Option<&OsStr>) -> Vec<String> {
     let mut args = Vec::new();
     let variable = |name| {
         std::env::var(name)
@@ -295,7 +294,7 @@ fn environment_args(path: Option<OsString>) -> Vec<String> {
     }
     if let Some(path) = path
         && let Some(runtime) = ["node", "bun"].into_iter().find(|runtime| {
-            std::env::split_paths(&path).any(|directory| directory.join(runtime).is_file())
+            std::env::split_paths(path).any(|directory| directory.join(runtime).is_file())
         })
     {
         args.extend(["--js-runtimes".to_owned(), runtime.to_owned()]);
@@ -436,7 +435,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("node"), b"").unwrap();
         fs::write(dir.path().join("bun"), b"").unwrap();
-        let args = environment_args(Some(dir.path().as_os_str().to_owned()));
+        let args = environment_args(Some(dir.path().as_os_str()));
         let at = args
             .iter()
             .position(|arg| arg == "--js-runtimes")

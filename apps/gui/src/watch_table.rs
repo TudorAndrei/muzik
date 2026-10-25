@@ -45,19 +45,73 @@ impl WatchRow {
     }
 }
 
-const COLUMNS: [(&str, &str, f32); 6] = [
-    ("position", "#", 56.),
-    ("title", "Title", 340.),
-    ("stages", "Stages", 110.),
-    ("status", "Status", 110.),
-    ("action", "", 90.),
-    ("error", "Error", 420.),
-];
-const SORTABLE: [usize; 3] = [0, 1, 3];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WatchColumn {
+    Position,
+    Title,
+    Stages,
+    Status,
+    Action,
+    Error,
+}
+
+impl WatchColumn {
+    const ALL: [Self; 6] = [
+        Self::Position,
+        Self::Title,
+        Self::Stages,
+        Self::Status,
+        Self::Action,
+        Self::Error,
+    ];
+
+    fn at(index: usize) -> Option<Self> {
+        Self::ALL.get(index).copied()
+    }
+
+    const fn key(self) -> &'static str {
+        match self {
+            Self::Position => "position",
+            Self::Title => "title",
+            Self::Stages => "stages",
+            Self::Status => "status",
+            Self::Action => "action",
+            Self::Error => "error",
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Position => "#",
+            Self::Title => "Title",
+            Self::Stages => "Stages",
+            Self::Status => "Status",
+            Self::Action => "",
+            Self::Error => "Error",
+        }
+    }
+
+    const fn width(self) -> f32 {
+        match self {
+            Self::Position => 56.,
+            Self::Title => 340.,
+            Self::Stages | Self::Status => 110.,
+            Self::Action => 90.,
+            Self::Error => 420.,
+        }
+    }
+
+    const fn sortable(self) -> bool {
+        match self {
+            Self::Position | Self::Title | Self::Status => true,
+            Self::Stages | Self::Action | Self::Error => false,
+        }
+    }
+}
 
 pub struct WatchTable {
     rows: Vec<WatchRow>,
-    sort: Option<(usize, ColumnSort)>,
+    sort: Option<(WatchColumn, ColumnSort)>,
     view: WeakEntity<Muzik>,
 }
 
@@ -80,17 +134,24 @@ impl WatchTable {
     }
 
     fn apply_sort(&mut self) {
-        let (column, order) = self.sort.unwrap_or((0, ColumnSort::Default));
+        let (column, order) = self
+            .sort
+            .unwrap_or((WatchColumn::Position, ColumnSort::Default));
         match column {
-            1 => self
+            WatchColumn::Title => self
                 .rows
                 .sort_by_cached_key(|row| row.title().to_lowercase()),
-            3 => self.rows.sort_by(|left, right| {
+            WatchColumn::Status => self.rows.sort_by(|left, right| {
                 left.summary()
                     .cmp(right.summary())
                     .then(left.key.position.cmp(&right.key.position))
             }),
-            _ => self.rows.sort_by_key(|row| row.key.position),
+            WatchColumn::Position
+            | WatchColumn::Stages
+            | WatchColumn::Action
+            | WatchColumn::Error => {
+                self.rows.sort_by_key(|row| row.key.position);
+            }
         }
         if order == ColumnSort::Descending {
             self.rows.reverse();
@@ -111,7 +172,7 @@ pub fn open_item(view: &WeakEntity<Muzik>, key: ItemId, window: &mut Window, cx:
 
 impl TableDelegate for WatchTable {
     fn columns_count(&self, _: &App) -> usize {
-        COLUMNS.len()
+        WatchColumn::ALL.len()
     }
 
     fn rows_count(&self, _: &App) -> usize {
@@ -119,14 +180,14 @@ impl TableDelegate for WatchTable {
     }
 
     fn column(&self, col_ix: usize, _: &App) -> Column {
-        let Some(&(key, name, width)) = COLUMNS.get(col_ix) else {
+        let Some(column) = WatchColumn::at(col_ix) else {
             return Column::new("", "");
         };
-        let column = Column::new(key, name).width(px(width));
-        if SORTABLE.contains(&col_ix) {
-            column.sortable()
+        let header = Column::new(column.key(), column.name()).width(px(column.width()));
+        if column.sortable() {
+            header.sortable()
         } else {
-            column
+            header
         }
     }
 
@@ -137,7 +198,7 @@ impl TableDelegate for WatchTable {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) {
-        self.sort = Some((col_ix, sort));
+        self.sort = WatchColumn::at(col_ix).map(|column| (column, sort));
         self.apply_sort();
         cx.notify();
     }
@@ -149,22 +210,22 @@ impl TableDelegate for WatchTable {
         _: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(row) = self.rows.get(row_ix) else {
+        let (Some(row), Some(column)) = (self.rows.get(row_ix), WatchColumn::at(col_ix)) else {
             return div().into_any_element();
         };
-        match col_ix {
-            0 => div().child(row.key.position.to_string()).into_any_element(),
-            1 => div()
+        match column {
+            WatchColumn::Position => div().child(row.key.position.to_string()).into_any_element(),
+            WatchColumn::Title => div()
                 .min_w_0()
                 .truncate()
                 .child(row.title().to_string())
                 .into_any_element(),
-            2 => style::stage_track(
+            WatchColumn::Stages => style::stage_track(
                 SharedString::from(format!("watch-stages-{}", row.key)),
                 &row.item.item,
                 cx,
             ),
-            3 => {
+            WatchColumn::Status => {
                 let tag = if row.queued {
                     Tag::info().outline().child("In the queue")
                 } else {
@@ -172,13 +233,13 @@ impl TableDelegate for WatchTable {
                 };
                 div().flex().child(tag.small()).into_any_element()
             }
-            5 => div()
+            WatchColumn::Error => div()
                 .min_w_0()
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(row.error().to_string())
                 .into_any_element(),
-            _ => match row.primary() {
+            WatchColumn::Action => match row.primary() {
                 Some((action, label, enabled)) => {
                     let key = row.key.clone();
                     let view = self.view.clone();
@@ -223,27 +284,31 @@ impl TableDelegate for WatchTable {
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        let Some(row) = self.rows.get(row_ix) else {
+        let (Some(row), Some(column)) = (self.rows.get(row_ix), WatchColumn::at(col_ix)) else {
             return String::new();
         };
-        match col_ix {
-            0 => row.key.position.to_string(),
-            1 => row.title().to_string(),
-            3 => row.summary().to_string(),
-            5 => row.error().to_string(),
-            _ => String::new(),
+        match column {
+            WatchColumn::Position => row.key.position.to_string(),
+            WatchColumn::Title => row.title().to_string(),
+            WatchColumn::Status => row.summary().to_string(),
+            WatchColumn::Error => row.error().to_string(),
+            WatchColumn::Stages | WatchColumn::Action => String::new(),
         }
     }
 }
 
-pub fn rows(playlist: &PlaylistView, filter: usize, queued: &HashSet<String>) -> Vec<WatchRow> {
+pub fn rows(
+    playlist: &PlaylistView,
+    filter: Option<Summary>,
+    queued: &HashSet<ItemId>,
+) -> Vec<WatchRow> {
     playlist
         .items
         .iter()
         .filter(|item| watchlist_view::matches_filter(item, filter))
         .map(|item| {
             let key = ItemId::of(&playlist.playlist_id, &item.item);
-            let queued = queued.contains(&key.to_string());
+            let queued = queued.contains(&key);
             WatchRow {
                 key,
                 item: item.clone(),
@@ -255,7 +320,7 @@ pub fn rows(playlist: &PlaylistView, filter: usize, queued: &HashSet<String>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{ColumnSort, WatchTable, rows};
+    use super::{ColumnSort, WatchColumn, WatchTable, rows};
     use gpui_kit::WeakEntity;
     use muzik_store::watchlist::Summary;
     use serde_json::json;
@@ -269,29 +334,24 @@ mod tests {
             {"position": 3, "title": "Three", "video_id": "ccccccccccc", "actions":{}, "summary": "Failed"},
             {"position": 4, "title": "Gone", "video_id": "ddddddddddd", "actions":{}, "summary": "Unavailable"}
         ]})).unwrap();
-        let queued =
-            HashSet::from([
-                muzik_store::watchlist::ItemId::new("PL1", 3, Some("ccccccccccc")).to_string(),
-            ]);
-        let tab = |wanted: Summary| {
-            1 + Summary::ALL
-                .iter()
-                .position(|summary| *summary == wanted)
-                .unwrap_or(0)
-        };
-        let list = rows(&playlist, tab(Summary::Failed), &queued);
+        let queued = HashSet::from([muzik_store::watchlist::ItemId::new(
+            "PL1",
+            3,
+            Some("ccccccccccc"),
+        )]);
+        let list = rows(&playlist, Some(Summary::Failed), &queued);
         assert_eq!(
             list.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [1, 3]
         );
         assert!(!list[0].queued);
         assert!(list[1].queued);
-        let all = rows(&playlist, 0, &queued);
+        let all = rows(&playlist, None, &queued);
         assert_eq!(
             all.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [1, 2, 3]
         );
-        let gone = rows(&playlist, tab(Summary::Unavailable), &queued);
+        let gone = rows(&playlist, Some(Summary::Unavailable), &queued);
         assert_eq!(
             gone.iter().map(|row| row.key.position).collect::<Vec<_>>(),
             [4]
@@ -306,8 +366,8 @@ mod tests {
             {"position": 2, "title": "Alpha", "video_id": "b", "actions":{}, "summary": "Failed"},
             {"position": 3, "title": "gamma", "video_id": "c", "actions":{}, "summary": "Failed"}
         ]})).unwrap();
-        table.set_rows(rows(&playlist, 0, &HashSet::new()));
-        table.sort = Some((1, ColumnSort::Ascending));
+        table.set_rows(rows(&playlist, None, &HashSet::new()));
+        table.sort = Some((WatchColumn::Title, ColumnSort::Ascending));
         table.apply_sort();
         assert_eq!(
             table
@@ -317,7 +377,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Alpha", "beta", "gamma"]
         );
-        table.sort = Some((3, ColumnSort::Descending));
+        table.sort = Some((WatchColumn::Status, ColumnSort::Descending));
         table.apply_sort();
         assert_eq!(
             table
@@ -327,7 +387,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 3, 2]
         );
-        table.sort = Some((0, ColumnSort::Default));
+        table.sort = Some((WatchColumn::Position, ColumnSort::Default));
         table.apply_sort();
         assert_eq!(
             table
