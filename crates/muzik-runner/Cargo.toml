@@ -31,3 +31,4 @@ thiserror = "2"
 
 [dev-dependencies]
 keyring-core = "1.0"
+shuttle = "0.9"

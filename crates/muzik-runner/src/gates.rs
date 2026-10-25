@@ -344,44 +344,186 @@ pub fn snapshot() -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{Gate, enter, set_label, snapshot, suspended};
-    use serde_json::json;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::mpsc;
-    use std::thread;
-    use std::time::Duration;
+    use super::{Gate, Gates, Monitor, State};
+    use crate::Error;
+    use serde_json::{Value, json};
+    use shuttle::sync::{Condvar, Mutex, MutexGuard};
+    use shuttle::thread::{self, ThreadId};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    fn listed(lane: Gate, part: &str, label: &str) -> bool {
-        snapshot()[lane.as_ref()][part]
+    struct Simulated {
+        state: Mutex<State<ThreadId>>,
+        changed: Condvar,
+        polls: bool,
+    }
+
+    impl Monitor for Simulated {
+        type Thread = ThreadId;
+        type Guard<'a> = MutexGuard<'a, State<ThreadId>>;
+
+        fn current() -> ThreadId {
+            thread::current().id()
+        }
+
+        fn lock(&self) -> Self::Guard<'_> {
+            self.state.lock().unwrap()
+        }
+
+        fn wait<'a>(&'a self, guard: Self::Guard<'a>) -> Self::Guard<'a> {
+            if self.polls {
+                drop(guard);
+                thread::yield_now();
+                self.lock()
+            } else {
+                self.changed.wait(guard).unwrap()
+            }
+        }
+
+        fn notify_all(&self) {
+            self.changed.notify_all();
+        }
+    }
+
+    fn gates(polls: bool) -> Arc<Gates<Simulated>> {
+        Arc::new(Gates::new(Simulated {
+            state: Mutex::new(State::new()),
+            changed: Condvar::new(),
+            polls,
+        }))
+    }
+
+    fn names(snapshot: &Value, gate: Gate, part: &str) -> Vec<String> {
+        snapshot[gate.as_ref()][part]
             .as_array()
-            .is_some_and(|names| names.contains(&json!(label)))
+            .into_iter()
+            .flatten()
+            .filter_map(|name| name.as_str().map(str::to_owned))
+            .collect()
+    }
+
+    #[derive(Default)]
+    struct History {
+        last: Option<Value>,
+        queued: Vec<String>,
+        admitted: Vec<String>,
+    }
+
+    fn record(history: &parking_lot::Mutex<History>, gate: Gate, snapshot: &Value) {
+        let mut history = history.lock();
+        let active = names(snapshot, gate, "active");
+        assert!(active.len() <= gate.limit(), "{active:?} exceed the limit");
+        let before = history.last.take().unwrap_or(Value::Null);
+        for name in names(snapshot, gate, "waiting") {
+            if !names(&before, gate, "waiting").contains(&name) {
+                history.queued.push(name);
+            }
+        }
+        for name in active {
+            if !names(&before, gate, "active").contains(&name) {
+                history.admitted.push(name);
+            }
+        }
+        history.last = Some(snapshot.clone());
     }
 
     #[test]
-    fn a_gate_admits_its_limit_and_the_next_waits() {
-        let never = AtomicBool::new(false);
-        set_label("gate holder");
-        let first = enter(Gate::Import, &never).unwrap();
-        let again = enter(Gate::Import, &never).unwrap();
-        let (sender, receiver) = mpsc::channel();
-        let waiter = thread::spawn(move || {
-            set_label("gate waiter");
-            let never = AtomicBool::new(false);
-            let permit = enter(Gate::Import, &never);
-            let _ = sender.send(());
-            permit.map(drop)
-        });
-        assert!(receiver.recv_timeout(Duration::from_millis(300)).is_err());
-        assert!(listed(Gate::Import, "waiting", "gate waiter"));
-        let during = suspended(|| receiver.recv_timeout(Duration::from_secs(5)));
-        assert!(during.is_ok());
-        waiter.join().unwrap().unwrap();
-        assert!(listed(Gate::Import, "active", "gate holder"));
-        drop(again);
-        drop(first);
-        assert!(!listed(Gate::Import, "active", "gate holder"));
-        let cancelled = AtomicBool::new(true);
-        let blocked = thread::spawn(move || enter(Gate::Import, &cancelled).map(drop));
-        assert!(blocked.join().unwrap().is_err());
+    fn waiters_are_admitted_in_ticket_order_within_the_limit_and_all_wake() {
+        shuttle::check_pct(
+            || {
+                let gate = Gate::Download;
+                let gates = gates(false);
+                let history = Arc::new(parking_lot::Mutex::new(History::default()));
+                let recorder = Arc::clone(&history);
+                gates.listen(move |snapshot| record(&recorder, gate, &snapshot));
+                let workers: Vec<_> = (0..4)
+                    .map(|worker| {
+                        let gates = Arc::clone(&gates);
+                        thread::spawn(move || {
+                            gates.set_label(&format!("worker {worker}"));
+                            let permit = gates.enter(gate, &AtomicBool::new(false)).unwrap();
+                            thread::yield_now();
+                            drop(permit);
+                        })
+                    })
+                    .collect();
+                for worker in workers {
+                    worker.join().unwrap();
+                }
+                let history = history.lock();
+                assert_eq!(history.admitted.len(), 4);
+                assert_eq!(history.admitted, history.queued);
+                assert_eq!(
+                    gates.snapshot()[gate.as_ref()],
+                    json!({"limit":2,"active":[],"waiting":[]})
+                );
+            },
+            1000,
+            3,
+        );
+    }
+
+    #[test]
+    fn a_cancelled_waiter_leaves_the_queue() {
+        shuttle::check_pct(
+            || {
+                let gates = gates(true);
+                gates.set_label("holder");
+                let held = gates.enter(Gate::Import, &AtomicBool::new(false)).unwrap();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let waiter = {
+                    let gates = Arc::clone(&gates);
+                    let cancel = Arc::clone(&cancel);
+                    thread::spawn(move || {
+                        gates.set_label("waiter");
+                        gates.enter(Gate::Import, &cancel).map(drop)
+                    })
+                };
+                thread::yield_now();
+                cancel.store(true, Ordering::SeqCst);
+                assert!(matches!(
+                    waiter.join().unwrap(),
+                    Err(Error::GateCancelled(Gate::Import))
+                ));
+                let snapshot = gates.snapshot();
+                assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
+                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                drop(held);
+                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+            },
+            1000,
+            3,
+        );
+    }
+
+    #[test]
+    fn a_suspended_holder_lets_a_waiter_run_and_then_gets_its_slot_back() {
+        shuttle::check_pct(
+            || {
+                let never = AtomicBool::new(false);
+                let gates = gates(false);
+                gates.set_label("holder");
+                let held = gates.enter(Gate::Import, &never).unwrap();
+                let again = gates.enter(Gate::Import, &never).unwrap();
+                assert_eq!(again.held, None);
+                let waiter = {
+                    let gates = Arc::clone(&gates);
+                    thread::spawn(move || {
+                        gates.set_label("waiter");
+                        gates.enter(Gate::Import, &AtomicBool::new(false)).map(drop)
+                    })
+                };
+                let finished = gates.suspended(|| waiter.join().unwrap());
+                assert!(finished.is_ok());
+                let snapshot = gates.snapshot();
+                assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
+                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                drop(again);
+                drop(held);
+                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+            },
+            1000,
+            3,
+        );
     }
 }
