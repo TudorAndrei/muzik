@@ -55,7 +55,7 @@ pub struct ImportOutcome {
     pub planned_albums: usize,
     pub apply: ApplyResult,
     pub pruned_items: usize,
-    pub prune_error: Option<String>,
+    pub prune_error: Option<muzik_library::Error>,
 }
 
 #[derive(Debug)]
@@ -234,7 +234,7 @@ pub fn apply_import_with_cancel(
     {
         match library.prune_missing_items(&preview.paths.directory, 0.1) {
             Ok(count) => outcome.pruned_items = count,
-            Err(error) => outcome.prune_error = Some(error.to_string()),
+            Err(error) => outcome.prune_error = Some(error),
         }
     }
     Ok(outcome)
