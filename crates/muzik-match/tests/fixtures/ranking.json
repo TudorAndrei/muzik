@@ -362,6 +362,423 @@
         ],
         "recommendation": "medium"
       }
+    },
+    {
+      "name": "required fields drop candidates",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "year": 2000,
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "dated"
+        },
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "undated"
+        }
+      ],
+      "config": {
+        "required": [
+          "album",
+          "artist",
+          "year"
+        ]
+      },
+      "expected": {
+        "ids": [
+          "dated"
+        ],
+        "scores": [
+          0.0
+        ],
+        "recommendation": "strong"
+      }
+    },
+    {
+      "name": "ignored penalty drops a candidate",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record",
+          "mb_albumid": "local-id"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "other-id"
+        },
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "local-id"
+        }
+      ],
+      "config": {
+        "ignored": [
+          "album_id"
+        ]
+      },
+      "expected": {
+        "ids": [
+          "local-id"
+        ],
+        "scores": [
+          0.0
+        ],
+        "recommendation": "strong"
+      }
+    },
+    {
+      "name": "ignored zero penalty keeps a candidate",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "exact"
+        }
+      ],
+      "config": {
+        "ignored": [
+          "artist"
+        ]
+      },
+      "expected": {
+        "ids": [
+          "exact"
+        ],
+        "scores": [
+          0.0
+        ],
+        "recommendation": "strong"
+      }
+    },
+    {
+      "name": "max rec ignores zero penalties",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "exact"
+        }
+      ],
+      "config": {
+        "max_rec": {
+          "artist": "low"
+        }
+      },
+      "expected": {
+        "ids": [
+          "exact"
+        ],
+        "scores": [
+          0.0
+        ],
+        "recommendation": "strong"
+      }
+    },
+    {
+      "name": "max rec limits a track penalty",
+      "items": [
+        {
+          "title": "Song 0",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 1",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 2",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 3",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 4",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 5",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 6",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 7",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Song 8",
+          "artist": "Band",
+          "album": "Record"
+        },
+        {
+          "title": "Intro",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "Song 0",
+              "index": 1
+            },
+            {
+              "title": "Song 1",
+              "index": 2
+            },
+            {
+              "title": "Song 2",
+              "index": 3
+            },
+            {
+              "title": "Song 3",
+              "index": 4
+            },
+            {
+              "title": "Song 4",
+              "index": 5
+            },
+            {
+              "title": "Song 5",
+              "index": 6
+            },
+            {
+              "title": "Song 6",
+              "index": 7
+            },
+            {
+              "title": "Song 7",
+              "index": 8
+            },
+            {
+              "title": "Song 8",
+              "index": 9
+            },
+            {
+              "title": "Completely Different",
+              "index": 10
+            }
+          ],
+          "album_id": "one-title-differs"
+        }
+      ],
+      "config": {
+        "max_rec": {
+          "track_title": "low"
+        }
+      },
+      "expected": {
+        "ids": [
+          "one-title-differs"
+        ],
+        "scores": [
+          0.06882591093117409
+        ],
+        "recommendation": "low"
+      }
+    },
+    {
+      "name": "strong threshold is exclusive",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Record",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "exact"
+        }
+      ],
+      "config": {
+        "strong_rec_thresh": 0.0
+      },
+      "expected": {
+        "ids": [
+          "exact"
+        ],
+        "scores": [
+          0.0
+        ],
+        "recommendation": "medium"
+      }
+    },
+    {
+      "name": "large gap gives a low recommendation",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Other",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "near"
+        },
+        {
+          "album": "Other",
+          "artist": "Someone",
+          "tracks": [
+            {
+              "title": "Two",
+              "index": 1
+            }
+          ],
+          "album_id": "far"
+        }
+      ],
+      "expected": {
+        "ids": [
+          "near",
+          "far"
+        ],
+        "scores": [
+          0.3125,
+          0.8839285714285714
+        ],
+        "recommendation": "low"
+      }
+    },
+    {
+      "name": "small gap gives no recommendation",
+      "items": [
+        {
+          "title": "One",
+          "artist": "Band",
+          "album": "Record"
+        }
+      ],
+      "albums": [
+        {
+          "album": "Other",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "One",
+              "index": 1
+            }
+          ],
+          "album_id": "near"
+        },
+        {
+          "album": "Other",
+          "artist": "Band",
+          "tracks": [
+            {
+              "title": "Ona",
+              "index": 1
+            }
+          ],
+          "album_id": "close"
+        }
+      ],
+      "expected": {
+        "ids": [
+          "near",
+          "close"
+        ],
+        "scores": [
+          0.3125,
+          0.3958333333333333
+        ],
+        "recommendation": "none"
+      }
     }
   ]
 }

@@ -98,6 +98,26 @@ STRING_PAIRS = [
     ("Line\nBreak", "Line Break"),
     ("(intro)", ""),
     ("[EP] (live)", ""),
+    ("AC/DC", "AC DC"),
+    ("AC/DC", "ACDC"),
+    ("Back\\In Black", "Back In Black"),
+    ("C:Drive", "C Drive"),
+    ("Song / Other", "Song - Other"),
+    ("   ", ""),
+    ("\t", " "),
+    ("Café", "Café"),
+    ("Café del Mar", "Cafe Del Mar"),
+    ("Ünïcödé Tëxt", "Unicode Text"),
+    ("日本語のタイトル", "Ri Ben Yu notaitoru"),
+    ("한국어", "hangugeo"),
+    ("Ⅻ", "XII"),
+    ("ﬁnal", "final"),
+    ("Song (Remix) [Live] (feat. X)", "Song"),
+    ("Track 01", "Track 1"),
+    ("12345", "12354"),
+    ("a" * 300, "a" * 299 + "b"),
+    ("Long Title " * 30, "Long Title " * 29),
+    ("x" * 1000, ""),
 ]
 
 
@@ -160,7 +180,51 @@ TRACK_CASES = [
         {"title": "Song", "data_source": "MusicBrainz"},
         False,
     ),
+    (
+        "same data source",
+        {"title": "Song", "artist": "Band", "data_source": "MusicBrainz"},
+        {"title": "Song", "data_source": "MusicBrainz"},
+        False,
+    ),
+    (
+        "local item without data source",
+        {"title": "Song", "artist": "Band"},
+        {"title": "Song", "data_source": "MusicBrainz"},
+        False,
+    ),
+    (
+        "disc without track medium",
+        {"title": "Song", "artist": "Band", "disc": 1},
+        {"title": "Song"},
+        False,
+    ),
+    (
+        "track medium without disc",
+        {"title": "Song", "artist": "Band"},
+        {"title": "Song", "medium": 2},
+        False,
+    ),
+    (
+        "unicode and separators in titles",
+        {"title": "Björk/Hidden Place", "artist": "Björk"},
+        {"title": "Bjork - Hidden Place", "artist": "Bjork"},
+        True,
+    ),
 ]
+
+
+def local_items(*titles, **fields):
+    return [{"title": title, "artist": "Band", "album": "Record", **fields} for title in titles]
+
+
+def release(*titles, **fields):
+    return {
+        "album": "Record",
+        "artist": "Band",
+        **fields,
+        "tracks": [{"title": title, "index": index + 1} for index, title in enumerate(titles)],
+    }
+
 
 ALBUM_CASES = [
     (
@@ -232,6 +296,91 @@ ALBUM_CASES = [
             "mediums": 2,
             "tracks": [{"title": "One", "index": 1}],
         },
+        [[0, 0]],
+        None,
+    ),
+    (
+        "plurality tie keeps the first value",
+        [
+            {"title": "One", "artist": "Band", "album": "Record"},
+            {"title": "Two", "artist": "Other", "album": "Different"},
+        ],
+        release("One", "Two"),
+        [[0, 0], [1, 1]],
+        None,
+    ),
+    (
+        "album artist consensus",
+        [
+            {"title": "One", "artist": "Singer", "albumartist": "Band", "album": "Record"},
+            {"title": "Two", "artist": "Guest", "albumartist": "Band", "album": "Record"},
+        ],
+        release("One", "Two"),
+        [[0, 0], [1, 1]],
+        None,
+    ),
+    ("current media matches", local_items("One", media="CD"), release("One", media="CD"), [[0, 0]], None),
+    (
+        "current media differs",
+        local_items("One", media="CD"),
+        release("One", media="Vinyl"),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "preferred media as a string",
+        local_items("One"),
+        release("One", media="Vinyl"),
+        [[0, 0]],
+        {"media": "CD Vinyl"},
+    ),
+    ("same year", local_items("One", year=2000), release("One", year=2000), [[0, 0]], None),
+    (
+        "original year matches",
+        local_items("One", year=1990),
+        release("One", year=2000, original_year=1990),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "year between releases",
+        local_items("One", year=1995),
+        release("One", year=2000, original_year=1990),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "year without original",
+        local_items("One", year=1995),
+        release("One", year=2000),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "current country",
+        local_items("One", country="GB"),
+        release("One", country="DE"),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "label catalog and disambiguation",
+        local_items("One", label="Harbor", catalognum="HR-1", albumdisambig="remaster"),
+        release("One", label="Harbor Records", catalognum="HR-1", albumdisambig="deluxe"),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "label only on the candidate",
+        local_items("One"),
+        release("One", label="Harbor", catalognum="HR-1", albumdisambig="deluxe"),
+        [[0, 0]],
+        None,
+    ),
+    (
+        "unicode album names",
+        local_items("Hidden Place", album="Vespertine/Live"),
+        release("Hidden Place", album="Vespertine – Live"),
         [[0, 0]],
         None,
     ),
@@ -383,6 +532,69 @@ RANKING_CASES = [
             }
         ],
     ),
+    (
+        "required fields drop candidates",
+        local_items("One"),
+        [
+            {**release("One", year=2000), "album_id": "dated"},
+            {**release("One"), "album_id": "undated"},
+        ],
+        {"required": ["album", "artist", "year"]},
+    ),
+    (
+        "ignored penalty drops a candidate",
+        local_items("One", mb_albumid="local-id"),
+        [
+            {**release("One"), "album_id": "other-id"},
+            {**release("One"), "album_id": "local-id"},
+        ],
+        {"ignored": ["album_id"]},
+    ),
+    (
+        "ignored zero penalty keeps a candidate",
+        local_items("One"),
+        [{**release("One"), "album_id": "exact"}],
+        {"ignored": ["artist"]},
+    ),
+    (
+        "max rec ignores zero penalties",
+        local_items("One"),
+        [{**release("One"), "album_id": "exact"}],
+        {"max_rec": {"artist": "low"}},
+    ),
+    (
+        "max rec limits a track penalty",
+        local_items(*[f"Song {index}" for index in range(9)], "Intro"),
+        [
+            {
+                **release(*[f"Song {index}" for index in range(9)], "Completely Different"),
+                "album_id": "one-title-differs",
+            }
+        ],
+        {"max_rec": {"track_title": "low"}},
+    ),
+    (
+        "strong threshold is exclusive",
+        local_items("One"),
+        [{**release("One"), "album_id": "exact"}],
+        {"strong_rec_thresh": 0.0},
+    ),
+    (
+        "large gap gives a low recommendation",
+        local_items("One"),
+        [
+            {**release("One", album="Other"), "album_id": "near"},
+            {**release("Two", album="Other", artist="Someone"), "album_id": "far"},
+        ],
+    ),
+    (
+        "small gap gives no recommendation",
+        local_items("One"),
+        [
+            {**release("One", album="Other"), "album_id": "near"},
+            {**release("Ona", album="Other"), "album_id": "close"},
+        ],
+    ),
 ]
 
 
@@ -415,17 +627,21 @@ def ranking_fixture():
             }
         )
     rankings = []
-    for name, items, albums in RANKING_CASES:
+    for name, items, albums, *overrides in RANKING_CASES:
+        reset_config()
+        for key, value in (overrides[0] if overrides else {}).items():
+            config["match"][key].set(value)
         beets_items = [Item(**item) for item in items]
         candidates = {}
         for album in albums:
             match_module._add_candidate(beets_items, candidates, make_album(album))
         ranked = match_module._sort_candidates(candidates.values())
+        case = {"name": name, "items": items, "albums": albums}
+        if overrides:
+            case["config"] = overrides[0]
         rankings.append(
             {
-                "name": name,
-                "items": items,
-                "albums": albums,
+                **case,
                 "expected": {
                     "ids": [candidate.info.album_id for candidate in ranked],
                     "scores": [candidate.distance.distance for candidate in ranked],
@@ -433,6 +649,7 @@ def ranking_fixture():
                 },
             }
         )
+    reset_config()
     return {
         "beets_version": BEETS_VERSION,
         "assignments": assignments,

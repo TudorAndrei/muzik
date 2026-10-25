@@ -225,6 +225,106 @@
       "left": "[EP] (live)",
       "right": "",
       "distance": 1.0
+    },
+    {
+      "left": "AC/DC",
+      "right": "AC DC",
+      "distance": 0.0
+    },
+    {
+      "left": "AC/DC",
+      "right": "ACDC",
+      "distance": 0.0
+    },
+    {
+      "left": "Back\\In Black",
+      "right": "Back In Black",
+      "distance": 0.0
+    },
+    {
+      "left": "C:Drive",
+      "right": "C Drive",
+      "distance": 0.0
+    },
+    {
+      "left": "Song / Other",
+      "right": "Song - Other",
+      "distance": 0.0
+    },
+    {
+      "left": "   ",
+      "right": "",
+      "distance": 0.0
+    },
+    {
+      "left": "\t",
+      "right": " ",
+      "distance": 0.0
+    },
+    {
+      "left": "Café",
+      "right": "Café",
+      "distance": 0.0
+    },
+    {
+      "left": "Café del Mar",
+      "right": "Cafe Del Mar",
+      "distance": 0.0
+    },
+    {
+      "left": "Ünïcödé Tëxt",
+      "right": "Unicode Text",
+      "distance": 0.0
+    },
+    {
+      "left": "日本語のタイトル",
+      "right": "Ri Ben Yu notaitoru",
+      "distance": 0.0
+    },
+    {
+      "left": "한국어",
+      "right": "hangugeo",
+      "distance": 0.0
+    },
+    {
+      "left": "Ⅻ",
+      "right": "XII",
+      "distance": 0.0
+    },
+    {
+      "left": "ﬁnal",
+      "right": "final",
+      "distance": 0.0
+    },
+    {
+      "left": "Song (Remix) [Live] (feat. X)",
+      "right": "Song",
+      "distance": 0.21623931623931622
+    },
+    {
+      "left": "Track 01",
+      "right": "Track 1",
+      "distance": 0.14285714285714285
+    },
+    {
+      "left": "12345",
+      "right": "12354",
+      "distance": 0.4
+    },
+    {
+      "left": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "right": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+      "distance": 0.0033333333333333335
+    },
+    {
+      "left": "Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title ",
+      "right": "Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title Long Title ",
+      "distance": 0.03333333333333333
+    },
+    {
+      "left": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "right": "",
+      "distance": 1.0
     }
   ]
 }
