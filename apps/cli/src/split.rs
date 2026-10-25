@@ -80,15 +80,22 @@ fn clock(seconds: i64) -> String {
 }
 
 pub fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<Chapter>>> {
+    const CHOICES: [(&str, Review); 3] = [
+        ("Continue", Review::Continue),
+        ("Edit", Review::Edit),
+        ("Abort", Review::Abort),
+    ];
     loop {
         let choice = dialoguer::Select::new()
             .with_prompt("Continue, edit, or abort?")
-            .items(["Continue", "Edit", "Abort"])
+            .items(CHOICES.map(|(label, _)| label))
             .default(0)
-            .interact_opt()?;
+            .interact_opt()?
+            .and_then(|index| CHOICES.get(index))
+            .map_or(Review::Abort, |(_, choice)| *choice);
         match choice {
-            Some(0) => return Ok(Some(chapters)),
-            Some(1) => {
+            Review::Continue => return Ok(Some(chapters)),
+            Review::Edit => {
                 let edited = edit_chapters(&chapters)?;
                 if edited.is_empty() {
                     eprintln!("No valid chapters in the edited file. The prior list remains.");
@@ -97,9 +104,16 @@ pub fn review_chapters(mut chapters: Vec<Chapter>) -> anyhow::Result<Option<Vec<
                     show_chapters(&chapters);
                 }
             }
-            _ => return Ok(None),
+            Review::Abort => return Ok(None),
         }
     }
+}
+
+#[derive(Clone, Copy)]
+enum Review {
+    Continue,
+    Edit,
+    Abort,
 }
 
 pub fn edit_chapters(chapters: &[Chapter]) -> anyhow::Result<Vec<Chapter>> {
