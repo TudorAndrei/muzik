@@ -28,9 +28,7 @@ pub fn write<E: Serialize>(
     save(connection, destination, text.as_deref())
 }
 
-/// # Errors
-/// Returns an error if the sync records cannot be read.
-pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, String>> {
+fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, String>> {
     let mut statement = connection.prepare("SELECT destination, encoding FROM sync_files")?;
     let rows = statement.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -46,9 +44,7 @@ pub fn load(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, St
     Ok(files)
 }
 
-/// # Errors
-/// Returns an error if the sync record cannot be written or removed.
-pub fn save(connection: &Connection, destination: &Path, encoding: Option<&str>) -> Result<()> {
+fn save(connection: &Connection, destination: &Path, encoding: Option<&str>) -> Result<()> {
     let destination = destination.to_string_lossy();
     match encoding {
         None => connection.execute(

@@ -509,14 +509,7 @@ fn copy(source: &Path, destination: &Path) -> Result<()> {
 /// # Errors
 /// Returns an error if the sync records cannot be read.
 pub fn encodings(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBuf, Encoding>> {
-    Ok(sync_files::load(connection, root)?
-        .into_iter()
-        .filter_map(|(destination, text)| {
-            serde_json::from_str(&text)
-                .ok()
-                .map(|encoding| (destination, encoding))
-        })
-        .collect())
+    Ok(sync_files::read(connection, root)?)
 }
 
 /// # Errors
@@ -524,9 +517,9 @@ pub fn encodings(connection: &Connection, root: &Path) -> Result<BTreeMap<PathBu
 pub fn record(connection: &Connection, transfer: &Transfer) -> Result<()> {
     let encoding = match &transfer.action {
         Action::Copy => None,
-        Action::Convert(encoding) => Some(serde_json::to_string(encoding)?),
+        Action::Convert(encoding) => Some(encoding),
     };
-    sync_files::save(connection, &transfer.destination, encoding.as_deref())?;
+    sync_files::write(connection, &transfer.destination, encoding)?;
     Ok(())
 }
 
