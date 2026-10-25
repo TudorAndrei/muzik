@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::Hash;
 
 use chrono::{Datelike, Local};
 use muzik_core::BeetsConfig;
@@ -473,12 +474,20 @@ pub fn track_distance(
     Ok(dist)
 }
 
-fn plurality<T: Eq + Clone + Default>(items: &[MatchItem], get: impl Fn(&MatchItem) -> T) -> T {
+fn plurality<'a, T: Eq + Hash + Copy + Default>(
+    items: &'a [MatchItem],
+    get: impl Fn(&'a MatchItem) -> T,
+) -> T {
+    let mut counts = HashMap::<T, usize>::new();
+    for item in items {
+        let count = counts.entry(get(item)).or_default();
+        *count = count.saturating_add(1);
+    }
     let mut best = T::default();
     let mut best_count = 0;
     for item in items {
         let value = get(item);
-        let count = items.iter().filter(|other| get(other) == value).count();
+        let count = counts.get(&value).copied().unwrap_or_default();
         if count > best_count {
             best = value;
             best_count = count;
@@ -521,10 +530,8 @@ pub fn album_distance(
     dist.add_year(items, album, config)?;
     dist.add_details(items, album, config)?;
     dist.add_tracks(items, album, pairs, config)?;
-    let data_source = plurality(items, |item| item.data_source.clone());
-    if let Some(penalty) =
-        config.source_penalty(data_source.as_deref(), album.data_source.as_deref())
-    {
+    let data_source = plurality(items, |item| item.data_source.as_deref());
+    if let Some(penalty) = config.source_penalty(data_source, album.data_source.as_deref()) {
         dist.add(DistanceKey::DataSource, penalty)?;
     }
     tracing::debug!(score = dist.score(config)?, "scored album candidate");
@@ -538,8 +545,8 @@ impl Distance {
         album: &MatchAlbum,
         config: &MatchConfig,
     ) -> Result<(), Error> {
-        let artist = plurality(items, |item| item.artist.clone());
-        let album_artist = plurality(items, |item| item.album_artist.clone());
+        let artist = plurality(items, |item| item.artist.as_str());
+        let album_artist = plurality(items, |item| item.album_artist.as_str());
         let artist = if !album_artist.is_empty()
             && items.iter().all(|item| item.album_artist == album_artist)
         {
@@ -548,14 +555,14 @@ impl Distance {
             artist
         };
         if !album.various_artists {
-            self.add_string(DistanceKey::Artist, Some(&artist), Some(&album.artist))?;
+            self.add_string(DistanceKey::Artist, Some(artist), Some(&album.artist))?;
         }
         self.add_string(
             DistanceKey::Album,
-            Some(&plurality(items, |item| item.album.clone())),
+            Some(plurality(items, |item| item.album.as_str())),
             Some(&album.title),
         )?;
-        let media = plurality(items, |item| item.media.clone());
+        let media = plurality(items, |item| item.media.as_str());
         if let Some(album_media) = album.media.as_deref().filter(|value| !value.is_empty()) {
             if !config.preferred_media.is_empty() {
                 self.add(
@@ -616,7 +623,7 @@ impl Distance {
         album: &MatchAlbum,
         config: &MatchConfig,
     ) -> Result<(), Error> {
-        let country = plurality(items, |item| item.country.clone());
+        let country = plurality(items, |item| item.country.as_str());
         if let Some(album_country) = album.country.as_deref().filter(|value| !value.is_empty()) {
             if !config.preferred_countries.is_empty() {
                 self.add(
@@ -624,35 +631,35 @@ impl Distance {
                     preferred_match(album_country, &config.preferred_countries, false)?,
                 )?;
             } else if !country.is_empty() {
-                self.add_string(DistanceKey::Country, Some(&country), Some(album_country))?;
+                self.add_string(DistanceKey::Country, Some(country), Some(album_country))?;
             }
         }
         for (key, local, candidate) in [
             (
                 DistanceKey::Label,
-                plurality(items, |item| item.label.clone()),
+                plurality(items, |item| item.label.as_str()),
                 album.label.as_deref(),
             ),
             (
                 DistanceKey::CatalogNumber,
-                plurality(items, |item| item.catalog_number.clone()),
+                plurality(items, |item| item.catalog_number.as_str()),
                 album.catalog_number.as_deref(),
             ),
             (
                 DistanceKey::Disambiguation,
-                plurality(items, |item| item.album_disambiguation.clone()),
+                plurality(items, |item| item.album_disambiguation.as_str()),
                 album.disambiguation.as_deref(),
             ),
         ] {
             if !local.is_empty() && candidate.is_some_and(|value| !value.is_empty()) {
-                self.add_string(key, Some(&local), candidate)?;
+                self.add_string(key, Some(local), candidate)?;
             }
         }
-        let album_id = plurality(items, |item| item.album_id.clone());
+        let album_id = plurality(items, |item| item.album_id.as_str());
         if !album_id.is_empty() {
             self.add_equality(
                 DistanceKey::AlbumId,
-                Some(album_id.as_str()) == album.album_id.as_deref(),
+                Some(album_id) == album.album_id.as_deref(),
             )?;
         }
         Ok(())
