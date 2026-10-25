@@ -270,11 +270,11 @@ impl Muzik {
             .defaults
             .as_ref()
             .map(|defaults| defaults.config.clone())
-            .unwrap_or_default();
+            .filter(|config| !config.as_os_str().is_empty());
         self.read(
             Read::Library,
             cx,
-            move |backend| backend.library(&config),
+            move |backend| backend.library(config.as_deref()),
             |view, library, _, cx| {
                 view.apply_library(library, cx);
                 view.status = "Library ready".into();

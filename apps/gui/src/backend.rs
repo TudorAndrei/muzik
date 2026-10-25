@@ -221,12 +221,8 @@ impl Backend {
         Some(data)
     }
 
-    pub fn library(&self, config: &Path) -> anyhow::Result<LibraryInfo> {
-        let config = if config.as_os_str().is_empty() {
-            self.paths().beets.clone()
-        } else {
-            config.to_path_buf()
-        };
+    pub fn library(&self, config: Option<&Path>) -> anyhow::Result<LibraryInfo> {
+        let config = config.map_or_else(|| self.paths().beets.clone(), Path::to_path_buf);
         let (_, paths) = beets::load_paths(Some(&config), json!({}))?;
         library::read(&paths.library, &paths.directory)
     }
