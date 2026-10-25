@@ -1,5 +1,6 @@
 use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_media::process::{self, Stopped};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -7,7 +8,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
-use strum_macros::EnumString;
 
 pub const DEFAULT_MODEL: &str = "gpt-6-luna";
 const STRONG_DISTANCE: f64 = 0.10;
@@ -63,12 +63,27 @@ pub enum Outcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, EnumString)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 enum Action {
     Pick,
     Keep,
     Ask,
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Deserialize)]
+struct Answer {
+    #[serde(default)]
+    action: Action,
+    #[serde(default)]
+    index: Option<i64>,
+    #[serde(default)]
+    confidence: f64,
+    #[serde(default)]
+    reason: String,
 }
 
 #[must_use]
@@ -234,27 +249,23 @@ pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) 
     text
 }
 
-#[must_use]
-pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]) -> Outcome {
-    let confidence = answer["confidence"].as_f64().unwrap_or(0.0).clamp(0.0, 1.0);
-    let reason = answer["reason"].as_str().unwrap_or("").trim().to_owned();
-    let index = answer["index"]
-        .as_i64()
+fn interpret(kind: DecisionKind, answer: &Answer, options: &[(String, Value)]) -> Outcome {
+    let confidence = answer.confidence.clamp(0.0, 1.0);
+    let reason = answer.reason.trim().to_owned();
+    let index = answer
+        .index
         .and_then(|index| usize::try_from(index).ok())
         .filter(|index| *index < options.len());
     let confident = confidence >= MIN_CONFIDENCE;
-    let action = answer["action"]
-        .as_str()
-        .and_then(|action| action.parse::<Action>().ok());
     let picked = index.and_then(|index| options.get(index));
-    match (action, index, picked) {
-        (Some(Action::Pick), _, Some((label, value))) if confident => Outcome::Decided(Choice {
+    match (answer.action, index, picked) {
+        (Action::Pick, _, Some((label, value))) if confident => Outcome::Decided(Choice {
             value: value.clone(),
             label: label.clone(),
             confidence,
             reason,
         }),
-        (Some(Action::Keep), _, _) if confident && kind == DecisionKind::ImportMatch => {
+        (Action::Keep, _, _) if confident && kind == DecisionKind::ImportMatch => {
             Outcome::Decided(Choice {
                 value: json!(MatchAnswer::KeepCurrentTags),
                 label: "Keep current tags".into(),
@@ -262,12 +273,12 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
                 reason,
             })
         }
-        (Some(Action::Pick), suggestion, _) => Outcome::Unsure {
+        (Action::Pick, suggestion, _) => Outcome::Unsure {
             suggestion,
             confidence,
             reason,
         },
-        (Some(Action::Keep | Action::Ask) | None, _, _) => Outcome::Unsure {
+        (Action::Keep | Action::Ask | Action::Unknown, _, _) => Outcome::Unsure {
             suggestion: None,
             confidence,
             reason,
@@ -275,7 +286,7 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
     }
 }
 
-fn run_codex(prompt: &str, model: &str) -> Result<Value> {
+fn run_codex(prompt: &str, model: &str) -> Result<Answer> {
     let directory = tempfile::tempdir()?;
     let schema = directory.path().join("schema.json");
     let answer = directory.path().join("answer.json");
@@ -365,7 +376,11 @@ fn text_or(value: &Value, fallback: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Outcome, interpret, options, prompt, strong_match};
+    use super::{Answer, Outcome, interpret, options, prompt, strong_match};
+
+    fn answer(value: serde_json::Value) -> Answer {
+        serde_json::from_value(value).unwrap()
+    }
     use muzik_core::DecisionKind;
     use serde_json::json;
 
@@ -420,13 +435,15 @@ mod tests {
         let options = options(DecisionKind::ImportMatch, &payload);
         let picked = interpret(
             DecisionKind::ImportMatch,
-            &json!({"action": "pick", "index": 0, "confidence": 0.9, "reason": "Same release."}),
+            &answer(
+                json!({"action": "pick", "index": 0, "confidence": 0.9, "reason": "Same release."}),
+            ),
             &options,
         );
         assert!(matches!(picked, Outcome::Decided(choice) if choice.value == json!("m0")));
         let unsure = interpret(
             DecisionKind::ImportMatch,
-            &json!({"action": "pick", "index": 1, "confidence": 0.4, "reason": "Maybe."}),
+            &answer(json!({"action": "pick", "index": 1, "confidence": 0.4, "reason": "Maybe."})),
             &options,
         );
         assert_eq!(
@@ -445,7 +462,7 @@ mod tests {
         let choices = options(DecisionKind::ImportMatch, &payload);
         let invented = interpret(
             DecisionKind::ImportMatch,
-            &json!({"action": "pick", "index": 7, "confidence": 0.99, "reason": ""}),
+            &answer(json!({"action": "pick", "index": 7, "confidence": 0.99, "reason": ""})),
             &choices,
         );
         assert!(matches!(
@@ -457,16 +474,30 @@ mod tests {
         ));
         let keep = interpret(
             DecisionKind::ImportMatch,
-            &json!({"action": "keep", "index": -1, "confidence": 0.8, "reason": "No match."}),
+            &answer(
+                json!({"action": "keep", "index": -1, "confidence": 0.8, "reason": "No match."}),
+            ),
             &choices,
         );
         assert!(matches!(keep, Outcome::Decided(choice) if choice.value == json!("as_is")));
         let download = json!({"query": "Sunburst", "candidates": [{"title": "a.flac"}]});
         let keep_download = interpret(
             DecisionKind::SoulseekCandidate,
-            &json!({"action": "keep", "index": -1, "confidence": 0.9, "reason": ""}),
+            &answer(json!({"action": "keep", "index": -1, "confidence": 0.9, "reason": ""})),
             &options(DecisionKind::SoulseekCandidate, &download),
         );
         assert!(matches!(keep_download, Outcome::Unsure { .. }));
+        let unknown = interpret(
+            DecisionKind::ImportMatch,
+            &answer(json!({"action": "guess", "index": 0, "confidence": 0.99, "reason": ""})),
+            &choices,
+        );
+        assert!(matches!(
+            unknown,
+            Outcome::Unsure {
+                suggestion: None,
+                ..
+            }
+        ));
     }
 }
