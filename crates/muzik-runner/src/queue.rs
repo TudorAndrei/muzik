@@ -1,6 +1,6 @@
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{DecisionKind, KEEP_CURRENT_TAGS};
+use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::jobs::PendingItem;
@@ -223,7 +223,10 @@ impl Jobs {
                     kind,
                     Some(DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)
                 )
-                && store.answer(job.id, &json!({"kind":kind,"value":KEEP_CURRENT_TAGS}))?
+                && store.answer(
+                    job.id,
+                    &json!({"kind":kind,"value":MatchAnswer::KeepCurrentTags}),
+                )?
             {
                 released = released.saturating_add(1);
             }

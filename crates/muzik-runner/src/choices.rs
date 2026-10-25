@@ -1,4 +1,4 @@
-use muzik_core::{ChapterAnswer, DecisionKind, DuplicateAnswer, KEEP_CURRENT_TAGS};
+use muzik_core::{ChapterAnswer, DecisionKind, DuplicateAnswer, MatchAnswer};
 use serde_json::{Value, json};
 
 pub struct Choice {
@@ -288,12 +288,15 @@ fn import_match_choices(payload: &Value) -> Vec<Choice> {
                         .as_f64()
                         .map(|distance| percent(1.0 - distance.clamp(0.0, 1.0)))
                 }),
-                value: json!(id),
+                value: json!(MatchAnswer::Candidate(id.to_owned())),
             })
         })
         .collect();
-    choices.push(Choice::plain("Keep current tags", json!(KEEP_CURRENT_TAGS)));
-    choices.push(Choice::plain("Skip", Value::Null));
+    choices.push(Choice::plain(
+        "Keep current tags",
+        json!(MatchAnswer::KeepCurrentTags),
+    ));
+    choices.push(Choice::plain("Skip", json!(MatchAnswer::Skip)));
     choices
 }
 

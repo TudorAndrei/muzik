@@ -1,4 +1,4 @@
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_media::process::{self, Stopped};
 use serde_json::{Value, json};
 use std::fmt::Write as _;
@@ -256,7 +256,7 @@ pub fn interpret(kind: DecisionKind, answer: &Value, options: &[(String, Value)]
         }),
         (Some(Action::Keep), _, _) if confident && kind == DecisionKind::ImportMatch => {
             Outcome::Decided(Choice {
-                value: json!("as_is"),
+                value: json!(MatchAnswer::KeepCurrentTags),
                 label: "Keep current tags".into(),
                 confidence,
                 reason,
