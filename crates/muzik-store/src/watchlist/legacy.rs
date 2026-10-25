@@ -6,19 +6,75 @@ use super::{
 use crate::Result;
 use muzik_core::audio::is_audio;
 use rusqlite::OptionalExtension;
-use serde_json::{Value, json};
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use strum_macros::{AsRefStr, EnumString};
+use strum_macros::EnumString;
 
 const IMPORTED: &str = "legacy_cache_imported";
 
-#[derive(Clone, Copy, PartialEq, Eq, AsRefStr, EnumString)]
+#[derive(Clone, Copy, PartialEq, Eq, EnumString)]
 #[strum(serialize_all = "snake_case")]
 enum CacheStatus {
     Downloaded,
     Split,
     Organized,
+}
+
+#[derive(Default, Deserialize)]
+struct LegacyState {
+    #[serde(default)]
+    videos: HashMap<String, Value>,
+}
+
+#[derive(Clone, Deserialize)]
+struct LegacyEntry {
+    #[serde(default, deserialize_with = "known_status")]
+    status: Option<CacheStatus>,
+    #[serde(default)]
+    audio_file: Option<PathBuf>,
+    #[serde(default)]
+    split_dir: Option<PathBuf>,
+    #[serde(default)]
+    files: Option<Vec<Value>>,
+}
+
+fn known_status<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<CacheStatus>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(|status| status.parse().ok()))
+}
+
+impl LegacyEntry {
+    fn first_file(&self) -> Option<PathBuf> {
+        self.files.as_ref()?.first()?.as_str().map(PathBuf::from)
+    }
+
+    fn remaining_organize_target(&self, splits: &Path) -> Option<PathBuf> {
+        if self.status != Some(CacheStatus::Organized) {
+            return None;
+        }
+        let split = self.split_dir.clone().or_else(|| {
+            self.audio_file
+                .as_ref()
+                .map(|path| splits.join(path.file_stem().unwrap_or_default()))
+                .filter(|path| path.is_dir())
+        });
+        if let Some(split) = split.filter(|path| path.is_dir()) {
+            return contains_audio(&split).then_some(split);
+        }
+        if let Some(audio) = self.audio_file.clone().filter(|path| path.is_file()) {
+            return Some(audio);
+        }
+        self.files
+            .iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(PathBuf::from)
+            .find(|path| path.is_file())
+    }
 }
 
 /// # Errors
@@ -44,11 +100,10 @@ pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> R
 
 fn apply(document: &mut Watchlist, options: ReconcileOptions<'_>) {
     for playlist in &mut document.playlists {
-        let state = read_state(
+        let videos = read_state(
             options.cache,
             &state_id(&playlist.playlist_id, playlist.kind.single_file()),
         );
-        let videos = state.get("videos").and_then(Value::as_object);
         let mut processed = playlist.processed_video_ids.clone();
         for item in &mut playlist.items {
             if item.statuses().any(|status| status == StageStatus::Stale) {
@@ -59,7 +114,7 @@ fn apply(document: &mut Watchlist, options: ReconcileOptions<'_>) {
                 .filter(|stage| item.status(**stage) == StageStatus::Waiting)
                 .map(|stage| (*stage, item.stage(*stage).clone()))
                 .collect();
-            apply_item(item, videos, &mut processed, options);
+            apply_item(item, &videos, &mut processed, options);
             for (stage, record) in waiting {
                 *item.stage_mut(stage) = record;
                 for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
@@ -76,29 +131,27 @@ fn apply(document: &mut Watchlist, options: ReconcileOptions<'_>) {
 
 fn apply_item(
     item: &mut WatchItem,
-    videos: Option<&serde_json::Map<String, Value>>,
+    videos: &HashMap<String, LegacyEntry>,
     processed: &mut Vec<String>,
     options: ReconcileOptions<'_>,
 ) {
-    let entry_of = |id: &str| {
-        videos
-            .and_then(|values| values.get(id))
-            .cloned()
-            .unwrap_or(Value::Null)
+    let Some(key) = item.key().map(str::to_owned) else {
+        return;
     };
+    let entry = videos.get(&key);
     if item.kind.single_file() {
-        let entry_id = item.entry_id.clone().unwrap_or_default();
-        let entry = entry_of(&entry_id);
-        let status = cache_status(&entry);
+        let Some(entry) = entry else {
+            return;
+        };
         if matches!(
-            status,
+            entry.status,
             Some(CacheStatus::Downloaded | CacheStatus::Organized)
         ) {
-            item.complete(Stage::Download, first_file(&entry));
-            if status == Some(CacheStatus::Organized) {
+            item.complete(Stage::Download, entry.first_file());
+            if entry.status == Some(CacheStatus::Organized) {
                 item.set(Stage::Organize, StageStatus::Complete);
-                if !entry_id.is_empty() && !processed.contains(&entry_id) {
-                    processed.push(entry_id);
+                if !processed.contains(&key) {
+                    processed.push(key);
                 }
             } else if options.no_organize {
                 item.set(Stage::Organize, StageStatus::Skipped);
@@ -106,51 +159,45 @@ fn apply_item(
         }
         return;
     }
-    let Some(video_id) = item.video_id.clone().filter(|id| !id.is_empty()) else {
-        return;
-    };
-    let mut entry = entry_of(&video_id);
     if !options.no_organize
-        && let Some(target) = remaining_organize_target(&entry, options.splits)
+        && let Some(entry) = entry
+        && let Some(target) = entry.remaining_organize_target(options.splits)
     {
-        processed.retain(|id| id != &video_id);
-        mark_organize_failed(item, &entry, &target);
+        processed.retain(|id| id != &key);
+        mark_organize_failed(item, entry.audio_file.clone(), &target);
         return;
     }
-    if processed.contains(&video_id) {
+    if processed.contains(&key) {
         return;
     }
-    if entry.is_null() {
-        entry = legacy_entry(options.cache, options.splits, &video_id);
-    }
-    let Some(status) = cache_status(&entry) else {
+    let Some(entry) = entry
+        .cloned()
+        .or_else(|| legacy_entry(options.cache, options.splits, &key))
+    else {
         return;
     };
-    let path = entry
-        .get("audio_file")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .or_else(|| first_file(&entry));
-    item.complete(Stage::Download, path);
+    let Some(status) = entry.status else {
+        return;
+    };
+    item.complete(
+        Stage::Download,
+        entry.audio_file.clone().or_else(|| entry.first_file()),
+    );
     if matches!(status, CacheStatus::Split | CacheStatus::Organized) {
         item.set(Stage::Parse, StageStatus::Complete);
-        let split = entry
-            .get("split_dir")
-            .and_then(Value::as_str)
-            .map(PathBuf::from);
         item.set(
             Stage::Split,
-            if split.is_some() {
+            if entry.split_dir.is_some() {
                 StageStatus::Complete
             } else {
                 StageStatus::Skipped
             },
         );
-        item.set_path(Stage::Split, split);
+        item.set_path(Stage::Split, entry.split_dir);
     }
     if status == CacheStatus::Organized {
         item.set(Stage::Organize, StageStatus::Complete);
-        processed.push(video_id);
+        processed.push(key);
     }
 }
 
@@ -172,77 +219,47 @@ fn state_id(playlist_id: &str, single_file: bool) -> String {
     )
 }
 
-fn cache_status(entry: &Value) -> Option<CacheStatus> {
-    entry["status"].as_str()?.parse().ok()
-}
-
-fn first_file(entry: &Value) -> Option<PathBuf> {
-    entry["files"]
-        .as_array()
-        .and_then(|files| files.first())
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-}
-
 fn safe(id: &str) -> bool {
     id.bytes()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
 }
 
-fn read_state(cache: &Path, id: &str) -> Value {
+fn read_state(cache: &Path, id: &str) -> HashMap<String, LegacyEntry> {
     if !safe(id) {
-        return Value::Null;
+        return HashMap::new();
     }
     fs::read(cache.join(format!("playlist_{id}.json")))
         .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or(Value::Null)
+        .and_then(|bytes| serde_json::from_slice::<LegacyState>(&bytes).ok())
+        .unwrap_or_default()
+        .videos
+        .into_iter()
+        .filter_map(|(id, entry)| Some((id, serde_json::from_value(entry).ok()?)))
+        .collect()
 }
 
-fn legacy_entry(cache: &Path, splits: &Path, id: &str) -> Value {
+fn legacy_entry(cache: &Path, splits: &Path, id: &str) -> Option<LegacyEntry> {
     if !safe(id) {
-        return Value::Null;
-    }
-    let Ok(value) = fs::read_to_string(cache.join(format!("yt_{id}.txt"))) else {
-        return Value::Null;
-    };
-    if value.trim().is_empty() {
-        return Value::Null;
-    }
-    let path = PathBuf::from(value.trim());
-    if path.is_file() {
-        return json!({"status": CacheStatus::Downloaded.as_ref(), "audio_file": value});
-    }
-    let split = splits.join(path.file_stem().unwrap_or_default());
-    if split.exists() {
-        return json!({"status": CacheStatus::Split.as_ref(), "audio_file": value, "split_dir": split});
-    }
-    json!({"status": CacheStatus::Organized.as_ref(), "audio_file": value})
-}
-
-fn remaining_organize_target(entry: &Value, splits: &Path) -> Option<PathBuf> {
-    if cache_status(entry) != Some(CacheStatus::Organized) {
         return None;
     }
-    let audio = entry["audio_file"].as_str().map(PathBuf::from);
-    let split = entry["split_dir"].as_str().map(PathBuf::from).or_else(|| {
-        audio
-            .as_ref()
-            .map(|path| splits.join(path.file_stem().unwrap_or_default()))
-            .filter(|path| path.is_dir())
-    });
-    if let Some(split) = split.filter(|path| path.is_dir()) {
-        return contains_audio(&split).then_some(split);
+    let value = fs::read_to_string(cache.join(format!("yt_{id}.txt"))).ok()?;
+    let path = PathBuf::from(value.trim());
+    if path.as_os_str().is_empty() {
+        return None;
     }
-    if let Some(audio) = audio.filter(|path| path.is_file()) {
-        return Some(audio);
-    }
-    entry["files"].as_array().and_then(|files| {
-        files
-            .iter()
-            .filter_map(Value::as_str)
-            .map(PathBuf::from)
-            .find(|path| path.is_file())
+    let split = splits.join(path.file_stem().unwrap_or_default());
+    let (status, split_dir) = if path.is_file() {
+        (CacheStatus::Downloaded, None)
+    } else if split.exists() {
+        (CacheStatus::Split, Some(split))
+    } else {
+        (CacheStatus::Organized, None)
+    };
+    Some(LegacyEntry {
+        status: Some(status),
+        audio_file: Some(PathBuf::from(value)),
+        split_dir,
+        files: None,
     })
 }
 
@@ -258,14 +275,11 @@ fn contains_audio(path: &Path) -> bool {
         })
 }
 
-fn mark_organize_failed(item: &mut WatchItem, entry: &Value, target: &Path) {
+fn mark_organize_failed(item: &mut WatchItem, audio: Option<PathBuf>, target: &Path) {
     let message = "The music library did not import this item. Select Retry.";
     item.last_action = Some(LastAction::Refresh);
     item.last_error = Some(message.into());
-    item.complete(
-        Stage::Download,
-        entry["audio_file"].as_str().map(PathBuf::from),
-    );
+    item.complete(Stage::Download, audio);
     item.complete(Stage::Parse, None);
     if target.is_dir() {
         item.complete(Stage::Split, Some(target.to_path_buf()));
