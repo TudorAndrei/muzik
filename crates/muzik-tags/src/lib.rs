@@ -181,6 +181,14 @@ pub enum TagsError {
     Unsupported(FileType),
     #[error("unsupported tag field: {0}")]
     UnknownField(String),
+    #[error("cannot read tags: the audio parser stopped on malformed data")]
+    Malformed,
+}
+
+pub(crate) fn open(path: &Path) -> Result<lofty::file::TaggedFile, TagsError> {
+    std::panic::catch_unwind(|| lofty::read_from_path(path))
+        .map_err(|_| TagsError::Malformed)?
+        .map_err(Into::into)
 }
 
 /// Read known mediafile fields and the named custom keys.
@@ -190,7 +198,7 @@ pub enum TagsError {
 /// Returns an error when the file cannot be read.
 pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, TagsError> {
     let path = path.as_ref();
-    let file = lofty::read_from_path(path)?;
+    let file = open(path)?;
     let tag = file.primary_tag();
     let mut data = TagData::default();
     if let Some(tag) = tag {
@@ -233,7 +241,7 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
 /// Returns an error when the format is not supported, a field is unknown, or the file cannot be read or written.
 pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     let path = path.as_ref();
-    let file = lofty::read_from_path(path)?;
+    let file = open(path)?;
     let kind = file.file_type();
     let tag_type = match kind {
         FileType::Mpeg => TagType::Id3v2,
@@ -430,25 +438,27 @@ mod tests {
 
     const OPUS: &[u8] = include_bytes!("../tests/fixtures/mediafile.opus");
 
-    const SAMPLES: [(&str, &[u8]); 4] = [
+    const SAMPLES: [(&str, &[u8]); 5] = [
         ("mp3", include_bytes!("../tests/fixtures/mediafile.mp3")),
         ("flac", include_bytes!("../tests/fixtures/mediafile.flac")),
         ("m4a", include_bytes!("../tests/fixtures/mediafile.m4a")),
         ("ogg", include_bytes!("../tests/fixtures/mediafile.ogg")),
+        ("opus", OPUS),
     ];
 
     #[test]
-    #[ignore = "lofty 0.25.4 panics with \"Channel count is valid\" in ogg/opus/properties.rs:132"]
-    fn reading_opus_with_zero_channels_does_not_panic() {
+    fn reading_opus_with_zero_channels_returns_an_error() {
         let root = std::env::temp_dir().join(format!("muzik-tags-opus-{}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         let mut bytes = OPUS.to_vec();
         bytes[37] = 0;
         let path = root.join("zero-channels.opus");
         fs::write(&path, &bytes).unwrap();
-        let result = std::panic::catch_unwind(|| crate::read(&path, &[]).is_ok());
+        let read = crate::read(&path, &[]);
+        let probed = crate::probe(&path);
         fs::remove_dir_all(root).unwrap();
-        assert!(result.is_ok());
+        assert!(matches!(read, Err(crate::TagsError::Malformed)));
+        assert!(matches!(probed, Err(crate::TagsError::Malformed)));
     }
 
     #[test]

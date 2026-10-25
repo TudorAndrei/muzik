@@ -104,7 +104,7 @@ pub fn embed_cover(
         )));
     }
     picture.set_pic_type(PictureType::CoverFront);
-    let kind = lofty::read_from_path(path)?.file_type();
+    let kind = crate::open(path)?.file_type();
     let mut reader = fs::File::open(path)?;
     let options = ParseOptions::default();
     match kind {
@@ -152,7 +152,7 @@ pub fn embed_cover(
 ///
 /// Returns an error when the file cannot be read.
 pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, MimeType)>, TagsError> {
-    let audio = lofty::read_from_path(path)?;
+    let audio = crate::open(path.as_ref())?;
     let pictures: Vec<&Picture> = audio.tags().iter().flat_map(Tag::pictures).collect();
     let picture = pictures
         .iter()
@@ -170,7 +170,7 @@ pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, MimeType)>
 ///
 /// Returns an error when the file cannot be read.
 pub fn has_front_cover(path: impl AsRef<Path>) -> Result<bool, TagsError> {
-    let audio = lofty::read_from_path(path)?;
+    let audio = crate::open(path.as_ref())?;
     let mp4 = audio.file_type() == FileType::Mp4;
     Ok(audio.tags().iter().any(|tag| {
         tag.pictures()
