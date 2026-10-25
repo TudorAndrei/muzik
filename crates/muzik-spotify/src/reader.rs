@@ -14,7 +14,7 @@ struct Track<'a> {
     name: &'a str,
     artists: &'a [SimplifiedArtist],
     id: Option<String>,
-    url: Option<&'a String>,
+    url: Option<&'a str>,
     duration_ms: i64,
     disc_number: i32,
     #[expect(
@@ -22,7 +22,7 @@ struct Track<'a> {
         reason = "mirrors the Spotify API field name"
     )]
     track_number: u32,
-    isrc: Option<&'a String>,
+    isrc: Option<&'a str>,
     is_local: bool,
 }
 
@@ -111,11 +111,11 @@ fn full_entry(track: &FullTrack, added_at: Option<DateTime<Utc>>) -> Option<Map<
         name: &track.name,
         artists: &track.artists,
         id: track.id.as_ref().map(|id| id.id().to_owned()),
-        url: track.external_urls.get("spotify"),
+        url: track.external_urls.get("spotify").map(String::as_str),
         duration_ms: track.duration.num_milliseconds(),
         disc_number: track.disc_number,
         track_number: track.track_number,
-        isrc: track.external_ids.get("isrc"),
+        isrc: track.external_ids.get("isrc").map(String::as_str),
         is_local: track.is_local,
     };
     entry(&fields, &album, added_at)
@@ -126,7 +126,7 @@ fn simple_track(track: &SimplifiedTrack) -> Track<'_> {
         name: &track.name,
         artists: &track.artists,
         id: track.id.as_ref().map(|id| id.id().to_owned()),
-        url: track.external_urls.get("spotify"),
+        url: track.external_urls.get("spotify").map(String::as_str),
         duration_ms: track.duration.num_milliseconds(),
         disc_number: track.disc_number,
         track_number: track.track_number,
@@ -159,7 +159,7 @@ fn entry(
     );
     entry.insert(
         "source_url".into(),
-        json!(track.url.cloned().or_else(|| {
+        json!(track.url.map(str::to_owned).or_else(|| {
             track
                 .id
                 .as_ref()
