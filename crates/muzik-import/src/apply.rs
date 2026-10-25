@@ -205,26 +205,30 @@ pub fn apply_with_cancel(
         check_cancelled(cancelled)?;
         let skip_duplicate =
             !album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
-        let candidate_index = match decision.choice {
-            MatchDecision::Candidate(index) if !skip_duplicate => Some(Some(index)),
-            MatchDecision::AsIs if !skip_duplicate => Some(None),
-            MatchDecision::Candidate(_) | MatchDecision::AsIs | MatchDecision::Skip => None,
-        };
-        let Some(candidate_index) = candidate_index else {
+        if skip_duplicate || decision.choice == MatchDecision::Skip {
             result.skipped_albums = result.skipped_albums.saturating_add(1);
             if !options.dry_run && !plan.incremental_skip_later {
                 record_history(plan, album, &mut result);
             }
             continue;
-        };
+        }
         if !album.duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
+        let candidate = match decision.choice {
+            MatchDecision::Candidate(index) => Some(
+                album
+                    .candidates
+                    .get(index)
+                    .ok_or(ApplyError::CandidateIndex { index })?,
+            ),
+            MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
         let reserved_before = reserved.clone();
         let prepared = match prepare(
             library,
             album,
-            candidate_index,
+            candidate,
             decision.duplicate,
             options,
             &mut reserved,
@@ -416,19 +420,11 @@ fn record_history(plan: &ImportPlan, album: &AlbumPlan, result: &mut ApplyResult
 fn prepare(
     library: &Library,
     album: &AlbumPlan,
-    candidate_index: Option<usize>,
+    candidate: Option<&PlannedCandidate>,
     duplicate: Option<DuplicateDecision>,
     options: &ApplyOptions,
     reserved: &mut BTreeSet<PathBuf>,
 ) -> Result<PreparedAlbum, ApplyError> {
-    let candidate = candidate_index
-        .map(|index| {
-            album
-                .candidates
-                .get(index)
-                .ok_or(ApplyError::CandidateIndex { index })
-        })
-        .transpose()?;
     let compilation = is_compilation(album, candidate);
     let replace_ids = if duplicate == Some(DuplicateDecision::Replace) {
         selected_replacements(library, album, candidate)?
