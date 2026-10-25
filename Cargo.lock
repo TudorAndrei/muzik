@@ -5037,6 +5037,7 @@ dependencies = [
 name = "muzik-media"
 version = "2.14.1"
 dependencies = [
+ "bolero",
  "chrono",
  "hex",
  "muzik-core",

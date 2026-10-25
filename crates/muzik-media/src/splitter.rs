@@ -658,10 +658,11 @@ fn safe_filename(title: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("-");
+    let slug = slug.trim_start_matches(['.', '-']);
     if slug.is_empty() {
         "unknown".into()
     } else {
-        slug
+        slug.to_owned()
     }
 }
 
@@ -827,6 +828,27 @@ mod tests {
             validate_chapters(&chapters, Path::new("album.opus"), false),
             Err(SplitError::InvalidChapter(_))
         ));
+    }
+
+    #[test]
+    fn dot_names_stay_inside_the_splits_folder() {
+        assert_eq!(safe_filename(".."), "unknown");
+        assert_eq!(safe_filename(". ."), "unknown");
+        assert_eq!(safe_filename(".hidden album"), "hidden-album");
+        assert_eq!(safe_filename("Vol. 1"), "vol.-1");
+    }
+
+    #[test]
+    fn any_title_gives_one_normal_file_name() {
+        bolero::check!().with_type::<String>().for_each(|title| {
+            let name = safe_filename(title);
+            let components: Vec<_> = Path::new(&name).components().collect();
+            assert!(
+                matches!(components.as_slice(), [std::path::Component::Normal(part)] if *part == name.as_str()),
+                "{title:?} -> {name:?}"
+            );
+            assert!(!name.starts_with('.'), "{title:?} -> {name:?}");
+        });
     }
 
     #[test]
