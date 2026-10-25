@@ -210,9 +210,10 @@ impl Watchlist {
         watchlist.normalized()
     }
 
-    #[must_use]
-    pub fn to_value(&self) -> Value {
-        serde_json::to_value(self).unwrap_or(Value::Null)
+    /// # Errors
+    /// Returns an error if the watchlist cannot be serialized.
+    pub fn to_value(&self) -> Result<Value> {
+        Ok(serde_json::to_value(self)?)
     }
 
     pub(super) fn normalized(mut self) -> Result<Self> {
@@ -587,7 +588,7 @@ mod tests {
                 "stages":{"download":{"status":"waiting","updated_at":null,"path":"/a.flac",
                     "error":null,"question":{"kind":"import_match"}}}}]}]});
         let watchlist = Watchlist::from_value(stored).unwrap();
-        let value = watchlist.to_value();
+        let value = watchlist.to_value().unwrap();
         assert_eq!(value["version"], 3);
         assert_eq!(value["playlists"][0]["custom"], "kept");
         assert_eq!(value["playlists"][0]["processed_video_ids"], json!(["a"]));
