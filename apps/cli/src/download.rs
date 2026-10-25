@@ -24,7 +24,13 @@ pub fn run(args: &Download) -> anyhow::Result<()> {
     };
     let files = match YtDlp::default().download(&request, &AtomicBool::new(false)) {
         Ok(files) => files,
-        Err(Error::NoAudio) => Vec::new(),
+        Err(Error::NoAudio) => {
+            println!(
+                "Download complete: {} (no new audio files)",
+                output.display()
+            );
+            return Ok(());
+        }
         Err(error) => return Err(error.into()),
     };
     println!("Download complete: {}", output.display());
