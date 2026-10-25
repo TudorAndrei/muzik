@@ -277,10 +277,10 @@ impl Shared {
         let settings = self.settings(job)?;
         let model = settings.agent_model.as_deref();
         let parked = RefCell::new(None);
-        let resume = RefCell::new(job.answer.as_ref().and_then(|answer| {
+        let mut resume = job.answer.as_ref().and_then(|answer| {
             let kind = answer["kind"].as_str()?.parse::<DecisionKind>().ok()?;
             Some((kind, answer["value"].clone()))
-        }));
+        });
         let mut workflow_event = |event: JobEvent| {
             if matches!(event, JobEvent::ItemWaiting { .. }) {
                 self.publish();
@@ -289,14 +289,7 @@ impl Shared {
         };
         let mut import_event = |event: JobEvent| self.event(job_id, Source::Native, event);
         let mut decide = |kind: DecisionKind, mut payload: Value| {
-            let answered = {
-                let mut resume = resume.borrow_mut();
-                match resume.as_ref() {
-                    Some((asked, _)) if *asked == kind => resume.take(),
-                    _ => None,
-                }
-            };
-            if let Some((_, value)) = answered {
+            if let Some((_, value)) = resume.take_if(|(asked, _)| *asked == kind) {
                 return Ok(value);
             }
             if let Some(value) = self.ask_agent(job_id, model, kind, &mut payload) {
