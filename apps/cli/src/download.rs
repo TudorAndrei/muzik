@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
+use muzik_core::chapters::Sidecar;
 use muzik_workflow::Error;
 use muzik_workflow::ytdlp::{self, YtDlp};
 
@@ -28,28 +29,22 @@ pub fn run(args: &Download) -> anyhow::Result<()> {
     };
     println!("Download complete: {}", output.display());
     for file in files {
-        let chapters = chapter_count(&file);
-        let next = if chapters > 0 { "split" } else { "organize" };
-        println!(
-            "{}: {chapters} chapters; next: muzik {next}",
-            file.display()
-        );
+        match chapter_count(&file) {
+            Some(chapters) if chapters > 0 => {
+                println!("{}: {chapters} chapters; next: muzik split", file.display());
+            }
+            Some(_) => println!("{}: 0 chapters; next: muzik organize", file.display()),
+            None => println!("{}: no chapter data; next: muzik organize", file.display()),
+        }
     }
     Ok(())
 }
 
-fn chapter_count(audio: &Path) -> usize {
-    let Some(stem) = audio.file_stem() else {
-        return 0;
-    };
-    let json_path = audio.with_file_name(format!("{}.info.json", stem.to_string_lossy()));
-    let Ok(text) = fs::read_to_string(json_path) else {
-        return 0;
-    };
-    let Ok(data) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return 0;
-    };
-    data.get("chapters")
+fn chapter_count(audio: &Path) -> Option<usize> {
+    let text = fs::read_to_string(Sidecar::Info.path(audio)).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("chapters")
         .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len)
+        .map(Vec::len)
 }
