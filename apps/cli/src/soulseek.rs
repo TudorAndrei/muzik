@@ -108,20 +108,20 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
                 ),
                 Some((candidate, score)) => {
                     let id = candidate_id(&candidate)?;
-                    save_candidate(
-                        &paths::cache_dir(),
-                        &id,
-                        &CachedCandidate {
-                            query: query.clone(),
-                            score,
-                            candidate: candidate.clone(),
-                        },
-                    )?;
                     let suggested = candidate
                         .files
                         .first()
                         .map(file_quality_label)
                         .unwrap_or_default();
+                    save_candidate(
+                        &paths::cache_dir(),
+                        &id,
+                        &CachedCandidate {
+                            query,
+                            score,
+                            candidate,
+                        },
+                    )?;
                     println!(
                         "{}\t{}\t{}\treplacement found\t{}\t{}",
                         safe_display(&track.artist),
