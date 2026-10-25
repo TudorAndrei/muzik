@@ -1,7 +1,32 @@
 use crate::Result;
 use rusqlite::Connection;
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// # Errors
+/// Returns an error if the sync records cannot be read.
+pub fn read<E: DeserializeOwned>(
+    connection: &Connection,
+    root: &Path,
+) -> Result<BTreeMap<PathBuf, E>> {
+    Ok(load(connection, root)?
+        .into_iter()
+        .filter_map(|(destination, text)| Some((destination, serde_json::from_str(&text).ok()?)))
+        .collect())
+}
+
+/// # Errors
+/// Returns an error if the encoding cannot be serialized or the sync record cannot be written or removed.
+pub fn write<E: Serialize>(
+    connection: &Connection,
+    destination: &Path,
+    encoding: Option<&E>,
+) -> Result<()> {
+    let text = encoding.map(serde_json::to_string).transpose()?;
+    save(connection, destination, text.as_deref())
+}
 
 /// # Errors
 /// Returns an error if the sync records cannot be read.
@@ -44,25 +69,56 @@ pub fn save(connection: &Connection, destination: &Path, encoding: Option<&str>)
 mod tests {
     use super::*;
     use crate::db;
+    use serde::Deserialize;
+
+    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+    struct Encoding {
+        mp3: u32,
+    }
 
     #[test]
-    fn load_returns_the_saved_text_under_the_root_only() {
+    fn read_returns_the_saved_encodings_under_the_root_only() {
         let connection = db::open_in_memory().unwrap();
-        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":1}")).unwrap();
-        save(&connection, Path::new("/device/a.mp3"), Some("{\"mp3\":2}")).unwrap();
-        save(&connection, Path::new("/other/b.mp3"), Some("{\"mp3\":3}")).unwrap();
-        let files = load(&connection, Path::new("/device")).unwrap();
+        write(
+            &connection,
+            Path::new("/device/a.mp3"),
+            Some(&Encoding { mp3: 1 }),
+        )
+        .unwrap();
+        write(
+            &connection,
+            Path::new("/device/a.mp3"),
+            Some(&Encoding { mp3: 2 }),
+        )
+        .unwrap();
+        write(
+            &connection,
+            Path::new("/other/b.mp3"),
+            Some(&Encoding { mp3: 3 }),
+        )
+        .unwrap();
+        save(&connection, Path::new("/device/c.mp3"), Some("not json")).unwrap();
+        let files = read::<Encoding>(&connection, Path::new("/device")).unwrap();
         assert_eq!(
             files.into_iter().collect::<Vec<_>>(),
-            vec![(PathBuf::from("/device/a.mp3"), "{\"mp3\":2}".to_owned())]
+            vec![(PathBuf::from("/device/a.mp3"), Encoding { mp3: 2 })]
+        );
+        assert_eq!(
+            load(&connection, Path::new("/device")).unwrap()[Path::new("/device/a.mp3")],
+            "{\"mp3\":2}"
         );
     }
 
     #[test]
-    fn saving_no_encoding_removes_the_row() {
+    fn writing_no_encoding_removes_the_row() {
         let connection = db::open_in_memory().unwrap();
-        save(&connection, Path::new("/device/a.mp3"), Some("{}")).unwrap();
-        save(&connection, Path::new("/device/a.mp3"), None).unwrap();
+        write(
+            &connection,
+            Path::new("/device/a.mp3"),
+            Some(&Encoding { mp3: 1 }),
+        )
+        .unwrap();
+        write::<Encoding>(&connection, Path::new("/device/a.mp3"), None).unwrap();
         assert!(load(&connection, Path::new("/device")).unwrap().is_empty());
     }
 }
