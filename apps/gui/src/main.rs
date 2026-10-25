@@ -566,9 +566,9 @@ impl Muzik {
         cx.notify();
     }
 
-    fn merge_thumbnail_results(&mut self, data: &Value) {
+    fn merge_thumbnail_results(&mut self, updates: &[thumbnails::ThumbnailUpdate]) {
         let visible: HashSet<String> = self.visible_thumbnail_ids().into_iter().collect();
-        merge_thumbnail_paths(&mut self.watchlist, &visible, data);
+        merge_thumbnail_paths(&mut self.watchlist, &visible, updates);
     }
 
     fn prepare_decision(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1316,23 +1316,23 @@ fn describe(value: &Value) -> String {
     }
 }
 
-fn merge_thumbnail_paths(watchlist: &mut WatchlistView, visible: &HashSet<String>, data: &Value) {
-    let Some(results) = data["thumbnails"].as_array() else {
-        return;
-    };
+fn merge_thumbnail_paths(
+    watchlist: &mut WatchlistView,
+    visible: &HashSet<String>,
+    updates: &[thumbnails::ThumbnailUpdate],
+) {
     let playlists = &mut watchlist.playlists;
-    for result in results {
-        let (Some(video_id), Some(path)) = (result["video_id"].as_str(), result["path"].as_str())
-        else {
+    for update in updates {
+        let Ok(path) = &update.result else {
             continue;
         };
-        if !visible.contains(video_id) {
+        if !visible.contains(&update.video_id) {
             continue;
         }
         for playlist in playlists.iter_mut() {
             for item in &mut playlist.items {
-                if item.item.video_id.as_deref() == Some(video_id) {
-                    item.thumbnail_path = Some(path.to_owned());
+                if item.item.video_id.as_deref() == Some(update.video_id.as_str()) {
+                    item.thumbnail_path = Some(path.to_string_lossy().into_owned());
                 }
             }
         }
@@ -1679,12 +1679,17 @@ mod tests {
             {"position":2,"title":"Other","summary":"Pending","actions":{},"video_id":"other", "thumbnail_path":null}
         ]}]})).unwrap();
         let visible = HashSet::from(["visible".to_string()]);
-        let event = json!({"thumbnails":[
-            {"video_id":"visible", "path":"/cache/visible.jpg"},
-            {"video_id":"other", "path":"/cache/other.jpg"},
-            {"video_id":"visible", "path":null}
-        ]});
-        merge_thumbnail_paths(&mut watchlist, &visible, &event);
+        let update =
+            |video_id: &str, result: Result<&str, &str>| super::thumbnails::ThumbnailUpdate {
+                video_id: video_id.into(),
+                result: result.map(Into::into).map_err(Into::into),
+            };
+        let updates = [
+            update("visible", Ok("/cache/visible.jpg")),
+            update("other", Ok("/cache/other.jpg")),
+            update("visible", Err("The item has no thumbnail URL.")),
+        ];
+        merge_thumbnail_paths(&mut watchlist, &visible, &updates);
         assert_eq!(
             watchlist.playlists[0].items[0].thumbnail_path.as_deref(),
             Some("/cache/visible.jpg")

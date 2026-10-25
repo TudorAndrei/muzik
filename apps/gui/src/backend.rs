@@ -201,7 +201,7 @@ impl Backend {
             .remove_source(required("playlist_id", playlist_id)?)?)
     }
 
-    pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Value> {
+    pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Vec<thumbnails::ThumbnailUpdate>> {
         let fresh = {
             let mut pending = self.thumbnails.lock();
             ids.into_iter()
