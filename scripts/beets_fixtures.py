@@ -565,10 +565,10 @@ RANKING_CASES = [
     ),
     (
         "max rec limits a track penalty",
-        local_items(*[f"Song {index}" for index in range(9)], "Intro"),
+        local_items(*[f"Song {index}" for index in range(9)], "Xxxx"),
         [
             {
-                **release(*[f"Song {index}" for index in range(9)], "Completely Different"),
+                **release(*[f"Song {index}" for index in range(9)], "Zzzz"),
                 "album_id": "one-title-differs",
             }
         ],

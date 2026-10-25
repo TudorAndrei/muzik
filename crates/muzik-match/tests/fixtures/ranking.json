@@ -586,7 +586,7 @@
           "album": "Record"
         },
         {
-          "title": "Intro",
+          "title": "Xxxx",
           "artist": "Band",
           "album": "Record"
         }
@@ -633,7 +633,7 @@
               "index": 9
             },
             {
-              "title": "Completely Different",
+              "title": "Zzzz",
               "index": 10
             }
           ],
@@ -650,7 +650,7 @@
           "one-title-differs"
         ],
         "scores": [
-          0.06882591093117409
+          0.07692307692307693
         ],
         "recommendation": "low"
       }
