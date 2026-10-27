@@ -281,6 +281,88 @@ fn local_album_splits_then_organizes_split_dir() {
     assert_eq!(operations.organized, vec![dir.path().join("splits/album")]);
 }
 
+struct LocalSplitter {
+    cache: PathBuf,
+}
+
+impl WorkflowOperations for LocalSplitter {
+    fn download_youtube(&mut self, _: &str, _: &Path, _: bool) -> Result<Vec<PathBuf>, String> {
+        Err("unexpected download".into())
+    }
+
+    fn acquire_soulseek(&mut self, _: &str) -> Result<Vec<PathBuf>, String> {
+        Err("unexpected search".into())
+    }
+
+    fn organize(&mut self, _: &Path, _: &WorkflowOptions) -> Result<(), String> {
+        Err("unexpected import".into())
+    }
+
+    fn split(&mut self, task: &SplitTask, options: &WorkflowOptions) -> Result<(), String> {
+        muzik_media::splitter::split_audio(
+            &task.source,
+            &task.chapters,
+            &task.output,
+            &muzik_media::splitter::SplitOptions {
+                force: options.force,
+                keep_source: true,
+                cache_dir: Some(self.cache.clone()),
+                ..Default::default()
+            },
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+    }
+}
+
+#[test]
+fn forced_split_rejects_dot_stems_and_keeps_files_outside_the_split_root() {
+    for name in ["...flac", "..flac"] {
+        let source_dir = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let audio = source_dir.path().join(name);
+        fs::write(&audio, b"audio").unwrap();
+        let sidecar = muzik_core::chapters::Sidecar::Chapters.path(&audio);
+        fs::write(&sidecar, "0:00 First\n").unwrap();
+        let splits = destination.path().join("splits");
+        fs::create_dir(&splits).unwrap();
+        let unrelated = destination.path().join("unrelated.txt");
+        fs::write(&unrelated, b"keep this file").unwrap();
+        let existing = splits.join("other-album");
+        fs::create_dir(&existing).unwrap();
+        fs::write(existing.join("track.flac"), b"keep this track").unwrap();
+        let result = run_workflow(
+            &request(audio.to_string_lossy().into_owned(), destination.path()),
+            &WorkflowOptions {
+                force: true,
+                no_organize: true,
+                metadata_source: muzik_workflow::MetadataSource::None,
+                ..Default::default()
+            },
+            &mut LocalSplitter {
+                cache: source_dir.path().join("cache"),
+            },
+            &AtomicBool::new(false),
+        );
+        assert_eq!(
+            fs::read(&unrelated).unwrap(),
+            b"keep this file",
+            "source: {name}"
+        );
+        assert_eq!(
+            fs::read(existing.join("track.flac")).unwrap(),
+            b"keep this track",
+            "source: {name}"
+        );
+        assert!(
+            matches!(result, Err(Error::Operation(ref message)) if message.contains("invalid album name")),
+            "{result:?}"
+        );
+        assert!(audio.exists());
+        assert!(sidecar.exists());
+    }
+}
+
 #[test]
 fn dry_run_plans_without_download_or_file_changes() {
     let dir = tempfile::tempdir().unwrap();
