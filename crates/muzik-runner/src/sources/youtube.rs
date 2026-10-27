@@ -167,10 +167,9 @@ pub(super) fn local_stage(
             "No chapters were found for this audio.".into(),
         ));
     }
-    let stem = audio
-        .file_stem()
-        .ok_or_else(|| JobError::Operation("Audio file has no name.".into()))?;
-    let output = adapter.prepared.settings.request.splits.join(stem);
+    let output =
+        muzik_media::splitter::source_output(&audio, &adapter.prepared.settings.request.splits)
+            .map_err(|error| JobError::Operation(error.to_string()))?;
     let task = muzik_workflow::SplitTask {
         source: audio,
         chapters: found,
@@ -414,6 +413,40 @@ mod tests {
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn split_again_rejects_a_parent_directory_album_name() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let audio = source_dir.path().join("...flac");
+        fs::write(&audio, b"audio").unwrap();
+        fs::write(
+            muzik_core::chapters::Sidecar::Chapters.path(&audio),
+            "0:00 First\n",
+        )
+        .unwrap();
+        let root = destination.path().join("splits");
+        fs::create_dir(&root).unwrap();
+        let marker = destination.path().join("unrelated.txt");
+        fs::write(&marker, b"keep this file").unwrap();
+        let settings = settings(
+            destination.path(),
+            &json!({"output":source_dir.path(),"splits":root}),
+        )
+        .unwrap();
+        let mut item = WatchItem::new(1, "Album", SourceKind::Youtube);
+        item.complete(Stage::Download, Some(audio.clone()));
+        let result = with_adapter(&settings, |adapter, cancelled| {
+            of(SourceKind::Youtube).process(adapter, &item, ItemAction::SplitAgain, cancelled)
+        });
+        assert!(
+            matches!(result, Err(muzik_store::watchlist::jobs::JobError::Operation(ref message))
+                if message.contains("invalid album name")),
+            "{result:?}"
+        );
+        assert_eq!(fs::read(marker).unwrap(), b"keep this file");
+        assert_eq!(fs::read(audio).unwrap(), b"audio");
+    }
 
     #[test]
     fn saved_output_paths_resolve_new_and_existing_audio() {

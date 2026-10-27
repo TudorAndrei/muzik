@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use unicode_normalization::UnicodeNormalization;
 
@@ -48,6 +48,10 @@ pub enum SplitError {
     OutputNotEmpty(PathBuf),
     #[error("output directory contains the source audio file")]
     OutputContainsSource,
+    #[error("audio file has an invalid album name: {0}")]
+    InvalidAlbumName(PathBuf),
+    #[error("split output must be strictly inside its parent directory: {0}")]
+    UnsafeOutput(PathBuf),
     #[error("failed to split {0} track(s): {1}")]
     TracksFailed(usize, String),
     #[error(transparent)]
@@ -131,6 +135,7 @@ fn split_audio_with_binary(
         return Err(SplitError::NoChapters);
     }
     validate_chapters(chapters, source, options.compilation)?;
+    validate_output(output)?;
     let source = source.canonicalize()?;
     // A forced split must never remove its input with the output directory.
     if output.exists() && source.starts_with(output.canonicalize()?) {
@@ -220,11 +225,56 @@ fn prepare_output(
                 }
                 return Err(SplitError::OutputNotEmpty(output.to_path_buf()));
             }
+            // Resolve the destination again immediately before forced deletion.
+            validate_output(output)?;
             fs::remove_dir_all(output)?;
         }
     }
     fs::create_dir_all(output)?;
     Ok(None)
+}
+
+/// Return a split destination inside `root`, using the source file stem as the album name.
+///
+/// # Errors
+/// Returns an error if the stem is not one normal path component, an existing output
+/// resolves outside `root` or to `root` itself, or a path cannot be read.
+pub fn source_output(source: &Path, root: &Path) -> Result<PathBuf, SplitError> {
+    let stem = source
+        .file_stem()
+        .ok_or_else(|| SplitError::InvalidAlbumName(source.to_path_buf()))?;
+    let mut components = Path::new(stem).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
+        return Err(SplitError::InvalidAlbumName(source.to_path_buf()));
+    }
+    let output = root.join(stem);
+    validate_output(&output)?;
+    Ok(output)
+}
+
+fn validate_output(output: &Path) -> Result<(), SplitError> {
+    if !matches!(output.components().next_back(), Some(Component::Normal(_))) {
+        return Err(SplitError::UnsafeOutput(output.to_path_buf()));
+    }
+    match fs::symlink_metadata(output) {
+        Ok(_) => {
+            let parent = output
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."))
+                .canonicalize()?;
+            let resolved = output.canonicalize()?;
+            if resolved == parent || !resolved.starts_with(&parent) {
+                return Err(SplitError::UnsafeOutput(output.to_path_buf()));
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 fn split_tracks(
@@ -706,6 +756,99 @@ fn place_cover(source: &Path, output: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_output_requires_an_album_name_and_keeps_valid_stems() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("new/splits");
+        for (source, album) in [
+            ("album.flac", "album"),
+            (".hidden.flac", ".hidden"),
+            ("Vol. 1.flac", "Vol. 1"),
+            ("音楽.flac", "音楽"),
+        ] {
+            assert_eq!(
+                source_output(Path::new(source), &root).unwrap(),
+                root.join(album)
+            );
+        }
+        for source in ["", ".", "..", "/"] {
+            assert!(matches!(
+                source_output(Path::new(source), &root),
+                Err(SplitError::InvalidAlbumName(_))
+            ));
+        }
+        assert!(!root.exists(), "path selection must not create directories");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn forced_split_rejects_output_links_that_escape_or_equal_the_root() {
+        use std::os::unix::fs::symlink;
+
+        let source_dir = tempfile::tempdir().unwrap();
+        let source = source_dir.path().join("album.flac");
+        fs::write(&source, b"source audio").unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        let root = destination.path().join("splits");
+        let sibling = destination.path().join("splits-other");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&sibling).unwrap();
+        let chapters = [Chapter {
+            index: 1,
+            start: 0,
+            end: None,
+            title: "Song".into(),
+        }];
+        for target in [&root, &sibling, destination.path()] {
+            let marker = target.join("unrelated.txt");
+            fs::write(&marker, b"keep this file").unwrap();
+            let output = root.join("album");
+            symlink(target, &output).unwrap();
+            let result = split_audio(
+                &source,
+                &chapters,
+                &output,
+                &SplitOptions {
+                    force: true,
+                    keep_source: true,
+                    cache_dir: Some(source_dir.path().join("cache")),
+                    ..Default::default()
+                },
+            );
+            assert!(
+                matches!(result, Err(SplitError::UnsafeOutput(_))),
+                "target: {target:?}, result: {result:?}"
+            );
+            assert_eq!(fs::read(&marker).unwrap(), b"keep this file");
+            assert!(fs::symlink_metadata(&output).unwrap().is_symlink());
+            assert_eq!(fs::read(&source).unwrap(), b"source audio");
+            fs::remove_file(&output).unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_output_resolves_a_linked_root_and_refuses_a_dangling_output() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("splits");
+        let alias = temp.path().join("alias");
+        fs::create_dir(&root).unwrap();
+        symlink(&root, &alias).unwrap();
+        let source = Path::new("album.flac");
+        assert_eq!(source_output(source, &alias).unwrap(), alias.join("album"));
+        fs::create_dir(root.join("album")).unwrap();
+        assert_eq!(source_output(source, &alias).unwrap(), alias.join("album"));
+        let missing = root.join("missing");
+        symlink(temp.path().join("absent"), &missing).unwrap();
+        assert!(matches!(
+            source_output(Path::new("missing.flac"), &alias),
+            Err(SplitError::Io(error)) if error.kind() == io::ErrorKind::NotFound
+        ));
+        assert!(fs::symlink_metadata(missing).unwrap().is_symlink());
+    }
 
     #[cfg(unix)]
     #[test]
