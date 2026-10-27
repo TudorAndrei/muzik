@@ -459,14 +459,11 @@ pub fn process_audio_plan_with_events<O: WorkflowOperations>(
     let mut split_dirs = plan.pre_split_dirs.clone();
     for album in &plan.albums {
         check_cancelled(cancelled)?;
-        let stem = album
-            .source
-            .file_stem()
-            .ok_or_else(|| Error::Operation("audio file has no name".into()))?;
         let task = SplitTask {
             source: album.source.clone(),
             chapters: album.chapters.clone(),
-            output: splits.join(stem),
+            output: muzik_media::splitter::source_output(&album.source, splits)
+                .map_err(|error| Error::Operation(error.to_string()))?,
         };
         if !options.dry_run {
             on_event(WorkflowEvent::SplitStarted(task.clone()));
