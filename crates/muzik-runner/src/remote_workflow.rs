@@ -186,7 +186,11 @@ impl WorkflowOperations for RemoteOperations<'_> {
                     None,
                 )
             },
-            || Ok(download(&query, &output, false, cancelled)?),
+            || {
+                let _permit = gates::enter(Gate::Download, cancelled)?;
+                Ok(YtDlp::default()
+                    .download_search(&Download::audio(&query, &output, false), cancelled)?)
+            },
         )?;
         self.acquired_from = Some(acquired.source);
         Ok(acquired.files)
