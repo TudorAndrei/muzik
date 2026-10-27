@@ -63,13 +63,34 @@ impl YtDlp {
         request: &Download<'_>,
         cancelled: &AtomicBool,
     ) -> Result<Vec<PathBuf>, Error> {
-        std::fs::create_dir_all(request.output)?;
-        let output = std::fs::canonicalize(request.output)?;
         let target = if matches!(classify_input(request.target), WorkflowInput::Search(_)) {
             format!("ytsearch1:{}", request.target)
         } else {
             request.target.to_owned()
         };
+        self.download_target(request, &target, cancelled)
+    }
+
+    /// Download one search result without classifying the query as a URL or local path.
+    ///
+    /// # Errors
+    /// Returns an error when yt-dlp fails, times out, or is cancelled, or no audio file results.
+    pub fn download_search(
+        &self,
+        request: &Download<'_>,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<PathBuf>, Error> {
+        self.download_target(request, &format!("ytsearch1:{}", request.target), cancelled)
+    }
+
+    fn download_target(
+        &self,
+        request: &Download<'_>,
+        target: &str,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<PathBuf>, Error> {
+        std::fs::create_dir_all(request.output)?;
+        let output = std::fs::canonicalize(request.output)?;
         let mut args = vec![
             if request.playlist {
                 "--yes-playlist"
@@ -107,7 +128,7 @@ impl YtDlp {
         if request.force {
             args.push("--force-overwrites".to_owned());
         }
-        let printed = self.print(args, &target, "after_move:filepath", DOWNLOAD, cancelled)?;
+        let printed = self.print(args, target, "after_move:filepath", DOWNLOAD, cancelled)?;
         let files = printed
             .lines()
             .map(str::trim)
@@ -125,7 +146,13 @@ impl YtDlp {
     /// Returns an error when yt-dlp fails, times out, or is cancelled, or returns invalid JSON.
     pub fn playlist(&self, url: &str, cancelled: &AtomicBool) -> Result<Value, Error> {
         self.json(
-            &["--flat-playlist", "--dump-single-json", "--quiet", url],
+            &[
+                "--flat-playlist",
+                "--dump-single-json",
+                "--quiet",
+                "--",
+                url,
+            ],
             LOOKUP,
             cancelled,
         )
@@ -172,7 +199,7 @@ impl YtDlp {
                 "youtube:max_comments=50,all,0,0;comment_sort=top",
             ]);
         }
-        args.push(url);
+        args.extend(["--", url]);
         let timeout = if comments { SHORT_LOOKUP } else { LOOKUP };
         self.json(&args, timeout, cancelled)
     }
@@ -225,6 +252,7 @@ impl YtDlp {
             "--print-to-file".to_owned(),
             template.to_owned(),
             printed.path().to_string_lossy().into_owned(),
+            "--".to_owned(),
             target.to_owned(),
         ]);
         self.run(&args, timeout, cancelled)?;
@@ -363,6 +391,129 @@ mod tests {
             "ytsearch1:artist - song",
         ] {
             assert!(passed.lines().any(|line| line == flag), "{flag} is missing");
+        }
+    }
+
+    #[test]
+    fn targets_are_operands_for_downloads_and_metadata_lookups() {
+        #[derive(Debug)]
+        enum Operation {
+            Download,
+            Playlist,
+            PlaylistIds,
+            Video,
+            Field,
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let companion = tempfile::Builder::new()
+            .prefix("--config-locations=")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let target = companion.path().file_name().unwrap().to_str().unwrap();
+        let audio = dir.path().join("song.flac");
+        fs::write(&audio, b"audio").unwrap();
+        let arguments = dir.path().join("arguments");
+        let ytdlp = script(
+            dir.path(),
+            &format!(
+                r#"printf '%s\0' "$@" > '{}'
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = '--print-to-file' ]; then
+        case "$2" in
+            id) printf '%s\n' 'dQw4w9WgXcQ' >> "$3" ;;
+            *) printf '%s\n' '{}' >> "$3" ;;
+        esac
+        break
+    fi
+    shift
+done
+printf '{{}}'
+"#,
+                arguments.display(),
+                audio.display()
+            ),
+        )
+        .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let mut unprotected = Vec::new();
+        for operation in [
+            Operation::Download,
+            Operation::Playlist,
+            Operation::PlaylistIds,
+            Operation::Video,
+            Operation::Field,
+        ] {
+            match operation {
+                Operation::Download => {
+                    assert_eq!(
+                        ytdlp
+                            .download(&Download::audio(target, dir.path(), false), &cancelled)
+                            .unwrap(),
+                        std::slice::from_ref(&audio)
+                    );
+                }
+                Operation::Playlist => {
+                    ytdlp.playlist(target, &cancelled).unwrap();
+                }
+                Operation::PlaylistIds => {
+                    ytdlp.playlist_ids(target, &cancelled).unwrap();
+                }
+                Operation::Video => {
+                    ytdlp.video(target, true, &cancelled).unwrap();
+                }
+                Operation::Field => {
+                    ytdlp.field(target, "title", &cancelled).unwrap();
+                }
+            }
+            let passed = fs::read_to_string(&arguments).unwrap();
+            let args = passed.split_terminator('\0').collect::<Vec<_>>();
+            if !args.ends_with(&["--", target]) {
+                unprotected.push(operation);
+            }
+        }
+        assert!(
+            unprotected.is_empty(),
+            "unprotected targets: {unprotected:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_search_ignores_companion_files_and_url_syntax() {
+        let dir = tempfile::tempdir().unwrap();
+        let companion = tempfile::Builder::new()
+            .prefix("--config-locations=")
+            .suffix(" - Song")
+            .tempfile_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let query = companion.path().file_name().unwrap().to_str().unwrap();
+        let audio = dir.path().join("song.flac");
+        fs::write(&audio, b"audio").unwrap();
+        let arguments = dir.path().join("arguments");
+        let ytdlp = script(
+            dir.path(),
+            &format!(
+                "printf '%s\\0' \"$@\" > '{}'\nwhile [ \"$1\" != \"--print-to-file\" ]; do shift; done\nprintf '%s\\n' '{}' >> \"$3\"",
+                arguments.display(),
+                audio.display()
+            ),
+        )
+        .unwrap();
+        for query in [
+            query,
+            "https://youtu.be/dQw4w9WgXcQ# - Song",
+            "Artist - Song",
+        ] {
+            let files = ytdlp
+                .download_search(
+                    &Download::audio(query, dir.path(), false),
+                    &AtomicBool::new(false),
+                )
+                .unwrap();
+            assert_eq!(files, std::slice::from_ref(&audio));
+            let passed = fs::read_to_string(&arguments).unwrap();
+            let args = passed.split_terminator('\0').collect::<Vec<_>>();
+            assert!(args.ends_with(&["--", &format!("ytsearch1:{query}")]));
         }
     }
 
