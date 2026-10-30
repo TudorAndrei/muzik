@@ -4,7 +4,8 @@ use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::component::{IconName, IndexPath, WindowExt as _};
 use gpui_kit::prelude::*;
 use gpui_kit::{
-    Action, App, Entity, KeyBinding, Menu, MenuItem, OsAction, WeakEntity, Window, actions, rems,
+    Action, App, Entity, KeyBinding, Menu, MenuItem, OperatingSystem, OsAction, WeakEntity, Window,
+    actions, rems,
 };
 
 actions!(
@@ -123,17 +124,19 @@ pub fn command_at(index: IndexPath) -> Option<AppCommand> {
 
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &Quit, cx| cx.quit());
+    let macos = cx.platform_info().os == OperatingSystem::Mac;
+    let primary = |macos_keys, other_keys| if macos { macos_keys } else { other_keys };
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("secondary-1", ShowWorkflow, None),
-        KeyBinding::new("secondary-2", ShowWatchlist, None),
-        KeyBinding::new("secondary-3", ShowLibrary, None),
-        KeyBinding::new("secondary-4", ShowSettings, None),
-        KeyBinding::new("secondary-,", ShowSettings, None),
-        KeyBinding::new("secondary-5", ShowSpotify, None),
-        KeyBinding::new("secondary-k", OpenCommands, None),
-        KeyBinding::new("secondary-shift-p", OpenCommands, None),
-        KeyBinding::new("secondary-r", Refresh, None),
+        KeyBinding::new(primary("cmd-1", "ctrl-1"), ShowWorkflow, None),
+        KeyBinding::new(primary("cmd-2", "ctrl-2"), ShowWatchlist, None),
+        KeyBinding::new(primary("cmd-3", "ctrl-3"), ShowLibrary, None),
+        KeyBinding::new(primary("cmd-4", "ctrl-4"), ShowSettings, None),
+        KeyBinding::new(primary("cmd-,", "ctrl-,"), ShowSettings, None),
+        KeyBinding::new(primary("cmd-5", "ctrl-5"), ShowSpotify, None),
+        KeyBinding::new(primary("cmd-k", "ctrl-k"), OpenCommands, None),
+        KeyBinding::new(primary("cmd-shift-p", "ctrl-shift-p"), OpenCommands, None),
+        KeyBinding::new(primary("cmd-r", "ctrl-r"), Refresh, None),
         KeyBinding::new("cmd-m", Minimize, None),
         KeyBinding::new("enter", OpenSelected, Some("DataTable")),
         KeyBinding::new("tab", FocusNext, Some("DataTable")),
