@@ -1,6 +1,6 @@
 # muzik
 
-![muzik](assets/muzik-logo-v2.png)
+<img src="assets/muzik-logo-v2.png" alt="muzik" width="160">
 
 Rust CLI and desktop app to download, split, and organize music from Soulseek,
 YouTube, and Bandcamp.
