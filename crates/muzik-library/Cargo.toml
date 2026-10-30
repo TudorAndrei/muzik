@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 deunicode = "1.6"
-fancy-regex = "0.19"
+fancy-regex = "0.20"
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 shlex = "2"
 thiserror = "2"

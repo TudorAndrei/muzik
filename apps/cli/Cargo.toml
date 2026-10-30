@@ -40,6 +40,6 @@ strum_macros = "0.28"
 tempfile = "3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-usage-rs = { version = "7.1", features = ["completions"] }
+usage-rs = { version = "7.1.4", features = ["completions"] }
 
 walkdir = "2.5"
