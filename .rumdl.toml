@@ -3,3 +3,6 @@
 # tables occasionally exceed it, and hard-wrapping them adds churn.
 [global]
 disable = ["MD013"]
+
+[MD033]
+allowed-elements = ["img"]
