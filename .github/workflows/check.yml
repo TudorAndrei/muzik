@@ -13,6 +13,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          code=true
+          if [ "$EVENT" = pull_request ]; then
+            code=false
+            files=$(git diff --name-only "$BASE...$HEAD")
+            while IFS= read -r path; do
+              case "$path" in
+                *.md | .rumdl.toml | LICENSE*) ;;
+                *) code=true ;;
+              esac
+            done <<< "$files"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
   commits:
     name: Commits
     runs-on: ubuntu-latest
@@ -28,6 +57,8 @@ jobs:
 
   check:
     name: Check
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     env:
       MISE_ENV: ci
@@ -54,6 +85,8 @@ jobs:
 
   gpui-macos:
     name: GPUI on macOS
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
