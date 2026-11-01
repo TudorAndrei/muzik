@@ -1,5 +1,9 @@
 //! Blocking `MusicBrainz` release search and lookup.
 
+mod coverart;
+
+pub use coverart::{CoverArtArchive, CoverArtError, FrontCoverSource};
+
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::thread;

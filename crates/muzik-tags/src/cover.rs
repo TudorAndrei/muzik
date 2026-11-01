@@ -1,7 +1,7 @@
 //! Find album art near an audio file and embed a front cover.
 
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 
 use lofty::config::{ParseOptions, WriteOptions};
@@ -18,6 +18,7 @@ use crate::TagsError;
 
 const NAMES: &[&str] = &["cover", "front", "art", "album", "folder"];
 const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
+const FOLDER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
 
 /// Find the first named image in a directory tree, in beets cover-name order.
 pub fn find_cover(directory: impl AsRef<Path>) -> Option<PathBuf> {
@@ -162,6 +163,79 @@ pub fn front_cover(path: impl AsRef<Path>) -> Result<Option<(Vec<u8>, MimeType)>
         let mime = picture.mime_type()?.clone();
         Some((picture.data().to_vec(), mime))
     }))
+}
+
+/// Return the file extension for JPEG, PNG, GIF, or WebP image data.
+#[must_use]
+pub fn image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("jpg")
+    } else if bytes.starts_with(&[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n']) {
+        Some("png")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()) {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// Find a cover image in an album folder, including `<name>.<ext>` files that [`find_cover`] does not match.
+pub fn find_folder_cover(directory: impl AsRef<Path>, name: &str) -> Option<PathBuf> {
+    let directory = directory.as_ref();
+    find_cover(directory).or_else(|| {
+        FOLDER_EXTENSIONS
+            .iter()
+            .map(|extension| directory.join(format!("{name}.{extension}")))
+            .find(|path| path.symlink_metadata().is_ok())
+    })
+}
+
+/// Return the first front cover found in the files, and skip files that cannot be read.
+pub fn first_front_cover<P: AsRef<Path>>(paths: impl IntoIterator<Item = P>) -> Option<Vec<u8>> {
+    paths.into_iter().find_map(|path| match front_cover(path) {
+        Ok(Some((bytes, _))) if !bytes.is_empty() => Some(bytes),
+        _ => None,
+    })
+}
+
+/// Write image data as `<name>.<ext>` in a folder. The file appears in one step and an existing file is never replaced.
+///
+/// # Errors
+///
+/// Returns an error when the data is not a known image, the file already exists, or the file cannot be written.
+pub fn write_cover_file(
+    directory: impl AsRef<Path>,
+    name: &str,
+    image_bytes: &[u8],
+) -> Result<PathBuf, TagsError> {
+    let directory = directory.as_ref();
+    let path = cover_file_path(directory, name, image_bytes)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(".muzik-cover-")
+        .tempfile_in(directory)?;
+    file.write_all(image_bytes)?;
+    file.as_file().sync_all()?;
+    file.persist_noclobber(&path)
+        .map_err(|error| TagsError::Io(error.error))?;
+    Ok(path)
+}
+
+/// Return the path that [`write_cover_file`] uses for the image data.
+///
+/// # Errors
+///
+/// Returns an error when the data is not a known image.
+pub fn cover_file_path(
+    directory: impl AsRef<Path>,
+    name: &str,
+    image_bytes: &[u8],
+) -> Result<PathBuf, TagsError> {
+    let extension = image_extension(image_bytes).ok_or_else(|| {
+        TagsError::Picture("cover data is not a JPEG, PNG, GIF, or WebP image".into())
+    })?;
+    Ok(directory.as_ref().join(format!("{name}.{extension}")))
 }
 
 /// Return whether a file has a front cover.

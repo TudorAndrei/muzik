@@ -5078,6 +5078,7 @@ dependencies = [
  "muzik-import",
  "muzik-library",
  "muzik-media",
+ "muzik-metadata",
  "muzik-soulseek",
  "muzik-spotify",
  "muzik-store",
@@ -5175,6 +5176,7 @@ dependencies = [
  "muzik-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
