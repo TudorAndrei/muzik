@@ -177,6 +177,13 @@ cargo test -p muzik-features --test sync
 cargo test -p muzik-features --test sync -- --name "unplugged"
 ```
 
+[`FEATURES.md`](FEATURES.md) lists each feature and scenario. It is generated
+from `features/`. After you change a `.feature` file, update it:
+
+```sh
+mise run features
+```
+
 Unit, parity, and fuzz tests stay next to the code as `#[test]` functions.
 
 To run a development build, use the `.dev/` profile. It has its own database,
