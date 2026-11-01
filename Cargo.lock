@@ -5043,6 +5043,7 @@ dependencies = [
  "muzik-import",
  "muzik-library",
  "muzik-media",
+ "muzik-metadata",
  "muzik-soulseek",
  "muzik-spotify",
  "muzik-store",

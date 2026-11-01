@@ -31,4 +31,5 @@ thiserror = "2"
 
 [dev-dependencies]
 keyring-core = "1.0"
+muzik-metadata = { path = "../muzik-metadata" }
 shuttle = "0.9"
