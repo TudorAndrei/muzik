@@ -184,6 +184,7 @@ pub(super) fn local_stage(
         on_import_event: adapter.on_import_event,
         cancelled,
         stage: &stage,
+        after_import: adapter.prepared.settings.after_import,
     };
     local
         .split_with_cancel(&task, &options, cancelled, &mut |_| {})

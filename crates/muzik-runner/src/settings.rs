@@ -1,4 +1,5 @@
 use crate::Result;
+use crate::library_tasks::AfterImport;
 use muzik_core::paths::{Paths, expand_home};
 use muzik_core::{ChoiceError, app_config};
 use muzik_store::watchlist::ReconcileOptions;
@@ -12,6 +13,7 @@ pub struct Settings {
     pub request: WorkflowRequest,
     pub options: WorkflowOptions,
     pub agent_model: Option<String>,
+    pub after_import: AfterImport,
 }
 
 impl Settings {
@@ -33,7 +35,10 @@ impl Settings {
 
     pub(crate) fn parse(paths: &Paths, values: &Value) -> Result<Self> {
         let mut options = WorkflowOptions::default();
+        let mut after_import = AfterImport::default();
         for (key, target) in [
+            ("replaygain_after_import", &mut after_import.replaygain),
+            ("covers_after_import", &mut after_import.covers),
             ("review", &mut options.review),
             ("no_organize", &mut options.no_organize),
             ("tag_only", &mut options.tag_only),
@@ -107,6 +112,7 @@ impl Settings {
             request,
             options,
             agent_model,
+            after_import,
         })
     }
 
@@ -143,6 +149,7 @@ fn path(values: &Value, key: &str) -> Result<Option<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::Settings;
+    use crate::library_tasks::AfterImport;
     use muzik_core::paths::Paths;
     use serde_json::json;
     use std::fs;
@@ -154,10 +161,17 @@ mod tests {
         fs::create_dir_all(&paths.config).unwrap();
         fs::write(
             paths.config_file(),
-            "native_gui:\n  prefer: mp3\n  audio_source: soulseek\n  auto_decide: false\n",
+            "native_gui:\n  prefer: mp3\n  audio_source: soulseek\n  auto_decide: false\n  replaygain_after_import: false\n",
         )
         .unwrap();
         let settings = Settings::resolve(&paths, &json!({"raw":" song ","prefer":"flac"})).unwrap();
+        assert_eq!(
+            settings.after_import,
+            AfterImport {
+                replaygain: false,
+                covers: true
+            }
+        );
         assert_eq!(settings.request.raw, "song");
         assert_eq!(settings.request.output, paths.downloads());
         assert_eq!(settings.request.splits, paths.splits());
@@ -199,5 +213,7 @@ mod tests {
         );
         assert!(Settings::parse(&paths, &json!({"duplicates":"merge"})).is_err());
         assert!(Settings::parse(&paths, &json!({"force":"yes"})).is_err());
+        assert!(Settings::parse(&paths, &json!({"covers_after_import":"yes"})).is_err());
+        assert_eq!(settings.after_import, AfterImport::default());
     }
 }

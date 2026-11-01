@@ -57,6 +57,7 @@ fn organize(
         on_import_event: adapter.on_import_event,
         cancelled,
         stage: &stage,
+        after_import: adapter.prepared.settings.after_import,
     };
     local
         .organize(target, options)

@@ -1,6 +1,7 @@
 //! Local audio workflow adapter with native split and Beets import.
 
 use crate::gates::{self, Gate};
+use crate::library_tasks::{self, AfterImport};
 use crate::settings::Settings;
 use crate::workflow_result::WorkflowResult;
 use muzik_core::{
@@ -36,6 +37,7 @@ pub fn run(
         on_import_event,
         cancelled,
         stage: &stage,
+        after_import: settings.after_import,
     };
     let result = run_workflow_with_events(
         &settings.request,
@@ -52,6 +54,7 @@ pub struct LocalOperations<'a> {
     pub(crate) on_import_event: &'a mut dyn FnMut(JobEvent),
     pub(crate) cancelled: &'a AtomicBool,
     pub(crate) stage: &'a Cell<Stage>,
+    pub(crate) after_import: AfterImport,
 }
 
 impl WorkflowOperations for LocalOperations<'_> {
@@ -102,7 +105,7 @@ impl WorkflowOperations for LocalOperations<'_> {
 
     fn organize(&mut self, target: &Path, options: &WorkflowOptions) -> Result<(), String> {
         self.stage.set(Stage::Organize);
-        let _permit = gates::enter(Gate::Import, self.cancelled)?;
+        let permit = gates::enter(Gate::Import, self.cancelled)?;
         if options.tag_only {
             let count =
                 beets::write_library_tags(target, options.config.as_deref(), options.dry_run)?;
@@ -147,6 +150,7 @@ impl WorkflowOperations for LocalOperations<'_> {
                 },
             )?);
         }
+        let library = preview.paths.clone();
         let outcome = beets::apply_import_with_cancel(preview, &decisions, &|| {
             self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
         })?;
@@ -156,6 +160,16 @@ impl WorkflowOperations for LocalOperations<'_> {
             ));
         }
         (self.on_import_event)(JobEvent::StepFinished(Step::Import));
+        drop(permit);
+        if !options.dry_run {
+            library_tasks::after_import(
+                self.after_import,
+                &library,
+                &outcome.apply.destinations,
+                self.cancelled,
+                &mut *self.on_import_event,
+            );
+        }
         Ok(())
     }
 

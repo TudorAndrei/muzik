@@ -23,8 +23,12 @@ pub enum Error {
     Agent(#[from] muzik_agent::Error),
     #[error(transparent)]
     Soulseek(#[from] muzik_soulseek::error::BridgeError),
+    #[error(transparent)]
+    Import(#[from] muzik_import::Error),
     #[error("{0} queue wait cancelled")]
     GateCancelled(Gate),
+    #[error("job cancelled")]
+    Cancelled,
     #[error("{0}")]
     Message(String),
 }
