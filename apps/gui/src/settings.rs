@@ -172,10 +172,14 @@ enum Flag {
     KeepSource,
     Force,
     Interactive,
+    ReplayGainAfterImport,
+    CoversAfterImport,
 }
 
 impl Flag {
-    const ALL: [Self; 9] = [
+    const AFTER_IMPORT: [Self; 2] = [Self::ReplayGainAfterImport, Self::CoversAfterImport];
+
+    const WORKFLOW: [Self; 9] = [
         Self::Review,
         Self::NoSplit,
         Self::NoOrganize,
@@ -198,6 +202,8 @@ impl Flag {
             Self::KeepSource => "Keep source",
             Self::Force => "Force",
             Self::Interactive => "Interactive",
+            Self::ReplayGainAfterImport => "Calculate ReplayGain",
+            Self::CoversAfterImport => "Add cover files",
         }
     }
 
@@ -212,6 +218,8 @@ impl Flag {
             Self::KeepSource => &mut defaults.keep_source,
             Self::Force => &mut defaults.force,
             Self::Interactive => &mut defaults.interactive,
+            Self::ReplayGainAfterImport => &mut defaults.replaygain_after_import,
+            Self::CoversAfterImport => &mut defaults.covers_after_import,
         }
     }
 }
@@ -436,9 +444,53 @@ impl ConfigView {
                 SettingGroup::new()
                     .title("Processing")
                     .items(self.number_items(&view))
-                    .items(self.switch_items(&view)),
+                    .items(self.switch_items(&view, &Flag::WORKFLOW)),
             )
             .group(self.agent_group(&view))
+    }
+
+    fn library_page(&self, cx: &Context<Self>) -> SettingPage {
+        let view = cx.entity().downgrade();
+        let main = self.main.clone();
+        SettingPage::new("Library")
+            .description("Tasks that keep the music library complete.")
+            .resettable(false)
+            .group(
+                SettingGroup::new()
+                    .title("After each import")
+                    .description("Muzik does these tasks for each album that it imports.")
+                    .items(self.switch_items(&view, &Flag::AFTER_IMPORT)),
+            )
+            .group(
+                SettingGroup::new()
+                    .title("Library maintenance")
+                    .description(
+                        "Each task runs over the full library. Activity shows its progress.",
+                    )
+                    .items(
+                        LibraryTask::ALL
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, task)| {
+                                let main = main.clone();
+                                SettingItem::new(
+                                    task.title(),
+                                    SettingField::render(move |_, _, _| {
+                                        let main = main.clone();
+                                        Button::new(("library-task", index))
+                                            .label("Start")
+                                            .on_click(move |_, _, cx| {
+                                                if let Some(main) = main.upgrade() {
+                                                    main.update(cx, |main, cx| {
+                                                        main.start_library_task(task, cx);
+                                                    });
+                                                }
+                                            })
+                                    }),
+                                )
+                            }),
+                    ),
+            )
     }
 
     fn destinations_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
@@ -524,10 +576,11 @@ impl ConfigView {
             .collect()
     }
 
-    fn switch_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
+    fn switch_items(&self, view: &WeakEntity<Self>, flags: &[Flag]) -> Vec<SettingItem> {
         let mut current = self.defaults.clone();
-        Flag::ALL
-            .into_iter()
+        flags
+            .iter()
+            .copied()
             .map(|flag| {
                 let enabled = *flag.field(&mut current);
                 let view = view.clone();
@@ -662,6 +715,7 @@ impl Render for ConfigView {
             self.workflow_page(cx),
             self.accounts_page(cx),
             self.services_page(),
+            self.library_page(cx),
         ];
         div()
             .v_flex()
@@ -698,7 +752,25 @@ impl Render for ConfigView {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChoiceField, GuiDefaults};
+    use super::{ChoiceField, Flag, GuiDefaults};
+
+    #[test]
+    fn the_after_import_switches_change_only_their_own_settings() {
+        let mut defaults = GuiDefaults::default();
+        for flag in Flag::AFTER_IMPORT {
+            *flag.field(&mut defaults) = false;
+        }
+        assert!(!defaults.replaygain_after_import);
+        assert!(!defaults.covers_after_import);
+        assert_eq!(
+            GuiDefaults {
+                replaygain_after_import: true,
+                covers_after_import: true,
+                ..defaults
+            },
+            GuiDefaults::default()
+        );
+    }
 
     #[test]
     fn every_dropdown_value_becomes_the_current_choice() {

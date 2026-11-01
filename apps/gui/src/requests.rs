@@ -38,6 +38,7 @@ pub enum Call {
     WorkflowStart,
     WatchlistRefresh,
     WatchlistAction,
+    LibraryTask,
     JobCancel,
     DecisionReply,
     JobsAnswer,
@@ -65,6 +66,7 @@ impl Call {
             Self::WorkflowStart => "workflow.start",
             Self::WatchlistRefresh => "watchlist.refresh",
             Self::WatchlistAction => "watchlist.action",
+            Self::LibraryTask => "library.task",
             Self::JobCancel => "job.cancel",
             Self::DecisionReply => "decision.reply",
             Self::JobsAnswer => "jobs.answer",
@@ -78,9 +80,11 @@ impl Call {
 
     const fn reports_in_settings(self) -> bool {
         match self {
-            Self::ConfigSave | Self::SoulseekSave | Self::BandcampSave | Self::BandcampLogout => {
-                true
-            }
+            Self::ConfigSave
+            | Self::SoulseekSave
+            | Self::BandcampSave
+            | Self::BandcampLogout
+            | Self::LibraryTask => true,
             Self::Hello
             | Self::JobsList
             | Self::SoulseekGet
@@ -436,6 +440,20 @@ impl Muzik {
         self.queued(Call::WorkflowStart, cx, move |backend| {
             backend.start_workflow(&params)
         });
+    }
+
+    pub(crate) fn start_library_task(&mut self, task: LibraryTask, cx: &mut Context<Self>) {
+        self.error = None;
+        self.call(
+            Call::LibraryTask,
+            cx,
+            move |backend| backend.start_library_task(task),
+            move |view, _, _, _| {
+                view.status = format!("{} is in the queue", task.title());
+                view.config_status.borrow_mut().clone_from(&view.status);
+            },
+        );
+        cx.notify();
     }
 
     pub(crate) fn refresh(&mut self, source: Option<(String, String)>, cx: &mut Context<Self>) {
