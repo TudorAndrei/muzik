@@ -84,6 +84,7 @@ pub mod decide;
 pub mod files;
 pub mod ftclean;
 pub mod history;
+pub mod mbid_fill;
 pub mod paths;
 pub mod plan;
 pub mod sync;

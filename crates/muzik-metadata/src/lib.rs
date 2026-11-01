@@ -4,6 +4,7 @@ mod coverart;
 
 pub use coverart::{CoverArtArchive, CoverArtError, FrontCoverSource};
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::thread;
@@ -54,6 +55,13 @@ pub struct ReleaseSearchHit {
     pub title: String,
     pub artist: String,
     pub score: Option<u8>,
+}
+
+/// First credited artist IDs of a release and of each release track, by release track ID.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseArtistIds {
+    pub album_artist: Option<String>,
+    pub tracks: BTreeMap<String, String>,
 }
 
 /// Beets match settings that affect `MusicBrainz` release mapping.
@@ -128,8 +136,21 @@ impl MetadataClient {
     /// # Errors
     /// Returns an error when the `MusicBrainz` request fails.
     pub fn lookup_release(&self, id: &str) -> Result<ReleaseCandidate, Error> {
+        Ok(release_candidate_with_options(
+            &self.fetch_release(id)?,
+            &self.options,
+        ))
+    }
+
+    /// # Errors
+    /// Returns an error when the `MusicBrainz` request fails.
+    pub fn lookup_release_artist_ids(&self, id: &str) -> Result<ReleaseArtistIds, Error> {
+        Ok(release_artist_ids(&self.fetch_release(id)?))
+    }
+
+    fn fetch_release(&self, id: &str) -> Result<Release, Error> {
         tracing::debug!(id, "look up MusicBrainz release");
-        let release = request_with_retry(|| {
+        request_with_retry(|| {
             Release::fetch()
                 .id(id)
                 .with_media()
@@ -140,8 +161,7 @@ impl MetadataClient {
                 .with_release_groups()
                 .execute_with_client(&self.client)
                 .map_err(Box::new)
-        })?;
-        Ok(release_candidate_with_options(&release, &self.options))
+        })
     }
 
     /// # Errors
@@ -274,6 +294,43 @@ fn artist_name(credits: &[ArtistCredit]) -> String {
         }
     }
     name
+}
+
+fn first_artist_id(credits: &[ArtistCredit]) -> Option<String> {
+    credits
+        .first()
+        .map(|credit| credit.artist.id.clone())
+        .filter(|id| !id.is_empty())
+}
+
+/// Read the first credited artist IDs from one decoded `MusicBrainz` release.
+#[must_use]
+pub fn release_artist_ids(release: &Release) -> ReleaseArtistIds {
+    let credits = release.artist_credit.as_deref().unwrap_or_default();
+    let tracks = release
+        .media
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|medium| medium.tracks.as_deref().unwrap_or_default())
+        .filter_map(|track| {
+            let credits = track
+                .artist_credit
+                .as_deref()
+                .or_else(|| {
+                    track
+                        .recording
+                        .as_ref()
+                        .and_then(|recording| recording.artist_credit.as_deref())
+                })
+                .unwrap_or(credits);
+            Some((track.id.clone(), first_artist_id(credits)?))
+        })
+        .collect();
+    ReleaseArtistIds {
+        album_artist: first_artist_id(credits),
+        tracks,
+    }
 }
 
 /// Convert one decoded `MusicBrainz` response to the shared matching model.
