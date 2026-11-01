@@ -11,7 +11,7 @@ use muzik_library::{Library, SqlValue};
 use muzik_match::{
     Assignment, MatchAlbum, MatchConfig, MatchItem, MatchTrack, Recommendation, rank_albums,
 };
-use muzik_metadata::{MetadataClient, ReleaseSearch, ReleaseSearchHit};
+use muzik_metadata::{MetadataClient, ReleaseArtistIds, ReleaseSearch, ReleaseSearchHit};
 use muzik_tags::TagData;
 use walkdir::WalkDir;
 
@@ -29,6 +29,15 @@ pub trait ReleaseProvider {
     /// # Errors
     /// Returns an error when the recording cannot be fetched.
     fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error>;
+    /// # Errors
+    /// Returns an error when the release cannot be fetched.
+    fn lookup_release_artist_ids(
+        &self,
+        id: &str,
+    ) -> Result<ReleaseArtistIds, muzik_metadata::Error> {
+        let _ = id;
+        Ok(ReleaseArtistIds::default())
+    }
 }
 
 impl ReleaseProvider for MetadataClient {
@@ -46,6 +55,13 @@ impl ReleaseProvider for MetadataClient {
 
     fn lookup_recording(&self, id: &str) -> Result<TrackCandidate, muzik_metadata::Error> {
         self.lookup_recording(id)
+    }
+
+    fn lookup_release_artist_ids(
+        &self,
+        id: &str,
+    ) -> Result<ReleaseArtistIds, muzik_metadata::Error> {
+        self.lookup_release_artist_ids(id)
     }
 }
 
@@ -194,28 +210,12 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             let items = plan_items(paths, cancelled)?;
             let current: Vec<_> = items.iter().map(|item| item.match_item.clone()).collect();
             let releases = if options.autotag && mode == ImportMode::Album {
-                self.find_releases(&current, &source_dir, cancelled)?
+                self.find_releases(&current, &source_dir, cancelled, false)?
             } else {
                 Vec::new()
             };
             check_cancelled(cancelled)?;
-            let candidates_for_match: Vec<_> = releases.iter().map(match_album).collect();
-            let ranked = rank_albums(&current, &candidates_for_match, self.match_config)?;
-            let candidates = ranked
-                .candidates
-                .into_iter()
-                .map(|ranked| {
-                    let index = ranked.input_index;
-                    Ok(PlannedCandidate {
-                        release: releases
-                            .get(index)
-                            .ok_or(ImportError::CandidateIndex { index })?
-                            .clone(),
-                        distance: ranked.distance.score(self.match_config)?,
-                        assignment: ranked.assignment,
-                    })
-                })
-                .collect::<Result<Vec<_>, ImportError>>()?;
+            let (candidates, recommendation) = self.rank(&current, &releases)?;
             let duplicates = if mode == ImportMode::Album {
                 find_duplicates(&items, &releases, &library_albums, &library_items)
             } else {
@@ -227,7 +227,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
                 source_dir,
                 items,
                 candidates,
-                recommendation: ranked.recommendation,
+                recommendation,
                 duplicates,
             });
         }
@@ -240,11 +240,37 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         })
     }
 
-    fn find_releases(
+    pub(crate) fn rank(
+        &self,
+        current: &[MatchItem],
+        releases: &[ReleaseCandidate],
+    ) -> Result<(Vec<PlannedCandidate>, Recommendation), ImportError> {
+        let candidates_for_match: Vec<_> = releases.iter().map(match_album).collect();
+        let ranked = rank_albums(current, &candidates_for_match, self.match_config)?;
+        let candidates = ranked
+            .candidates
+            .into_iter()
+            .map(|ranked| {
+                let index = ranked.input_index;
+                Ok(PlannedCandidate {
+                    release: releases
+                        .get(index)
+                        .ok_or(ImportError::CandidateIndex { index })?
+                        .clone(),
+                    distance: ranked.distance.score(self.match_config)?,
+                    assignment: ranked.assignment,
+                })
+            })
+            .collect::<Result<Vec<_>, ImportError>>()?;
+        Ok((candidates, ranked.recommendation))
+    }
+
+    pub(crate) fn find_releases(
         &self,
         current: &[MatchItem],
         source_dir: &Path,
         cancelled: &dyn Fn() -> bool,
+        strict: bool,
     ) -> Result<Vec<ReleaseCandidate>, ImportError> {
         let title = plurality(current, |item| item.album.as_str());
         if title.is_empty() {
@@ -271,6 +297,7 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         };
         let hits = match self.provider.search_releases(&criteria, self.search_limit) {
             Ok(hits) => hits,
+            Err(error) if strict => return Err(error.into()),
             Err(error) => {
                 tracing::warn!(path = %source_dir.display(), %error, "MusicBrainz search failed; import can continue as-is");
                 Vec::new()
@@ -372,7 +399,7 @@ fn number(value: Option<&str>) -> u32 {
         .unwrap_or(0)
 }
 
-fn match_item(tags: &TagData) -> MatchItem {
+pub(crate) fn match_item(tags: &TagData) -> MatchItem {
     let field = |name: &str| tags.fields.get(name).cloned().unwrap_or_default();
     MatchItem {
         title: field("title"),

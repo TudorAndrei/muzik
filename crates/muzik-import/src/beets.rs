@@ -17,7 +17,7 @@ use crate::plan::{AlbumPlan, ImportMode, ImportPlan, ImportPlanner, PlanOptions}
 use crate::sync::{self, SyncResult};
 use crate::{Error, Result};
 
-const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
+pub(crate) const USER_AGENT: &str = "muzik/0.1 (https://github.com/TudorAndrei/muzik)";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Placement {
