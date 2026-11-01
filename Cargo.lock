@@ -5081,6 +5081,7 @@ dependencies = [
  "muzik-soulseek",
  "muzik-spotify",
  "muzik-store",
+ "muzik-tags",
  "muzik-workflow",
  "parking_lot 0.13.0",
  "rusqlite",

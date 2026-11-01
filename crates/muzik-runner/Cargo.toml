@@ -19,6 +19,7 @@ muzik-library = { path = "../muzik-library" }
 muzik-media = { path = "../muzik-media" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-spotify = { path = "../muzik-spotify" }
+muzik-tags = { path = "../muzik-tags" }
 muzik-workflow = { path = "../muzik-workflow" }
 parking_lot = "0.13"
 rusqlite = { version = "0.40", features = ["bundled"] }
