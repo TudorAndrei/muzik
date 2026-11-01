@@ -206,6 +206,7 @@ fn report(titles: &Mutex<HashMap<String, String>>, event: &AppEvent) {
             let line = match event {
                 JobEvent::Message { message, .. } => message.clone(),
                 JobEvent::StepStarted(step) => format!("{step} started"),
+                JobEvent::ProgressStarted { description, .. } => description.clone(),
                 JobEvent::ItemWaiting { title, question } => format!(
                     "{title} waits for a choice: {}",
                     choices::title(choices::kind(question))

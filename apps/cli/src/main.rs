@@ -7,6 +7,7 @@ mod downloaded;
 mod import;
 mod init;
 mod jobs;
+mod library;
 mod organize;
 mod soulseek;
 mod split;
@@ -19,6 +20,7 @@ mod workflow;
 
 use std::path::PathBuf;
 
+use muzik_runner::library_tasks::LibraryTask;
 use usage_rs::{Args, Cli, Subcommands};
 
 /// Download, tag, and organize music.
@@ -49,6 +51,8 @@ enum Command {
     Import(Import),
     /// Show, answer, cancel, and run queued jobs.
     Jobs(Jobs),
+    /// Run maintenance tasks over the music library.
+    Library(Library),
     /// Import audio by default, or write tags from the music library.
     Organize(Organize),
     /// Manage a Spotify account.
@@ -325,6 +329,35 @@ struct JobAnswer {
     /// Answer value as JSON, instead of a choice number.
     #[usage(long)]
     value: Option<String>,
+}
+
+#[derive(Args)]
+struct Library {
+    #[usage(subcommand)]
+    command: LibraryCommand,
+}
+
+#[derive(Subcommands)]
+enum LibraryCommand {
+    #[usage(help = "Calculate ReplayGain and write the track and album gain tags.")]
+    Replaygain(LibraryTaskArgs),
+    /// Add a cover file to each album folder.
+    Covers(LibraryTaskArgs),
+    #[usage(help = "Find MusicBrainz IDs for albums that have none.")]
+    Mbids(LibraryTaskArgs),
+}
+
+#[derive(Args)]
+struct LibraryTaskArgs {
+    /// Show the planned changes without writing them.
+    #[usage(long, short = 'd')]
+    dry_run: bool,
+    /// Beets-compatible library config file.
+    #[usage(long, short = 'c')]
+    config: Option<PathBuf>,
+    /// Only add the job to the queue.
+    #[usage(long)]
+    queue_only: bool,
 }
 
 #[derive(Args)]
@@ -742,6 +775,11 @@ fn run(command: Command) -> anyhow::Result<()> {
             JobsCommand::Answer(args) => jobs::answer(&args.id, args.choice, args.value.as_deref()),
             JobsCommand::Cancel(args) => jobs::cancel(&args.id),
             JobsCommand::Run => jobs::run(),
+        },
+        Command::Library(args) => match args.command {
+            LibraryCommand::Replaygain(args) => library::run(LibraryTask::ReplayGain, &args),
+            LibraryCommand::Covers(args) => library::run(LibraryTask::Covers, &args),
+            LibraryCommand::Mbids(args) => library::run(LibraryTask::Mbids, &args),
         },
         Command::Organize(args) => organize::run(&args),
         Command::Spotify(args) => match args.command {

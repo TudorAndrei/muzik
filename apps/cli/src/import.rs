@@ -1,11 +1,17 @@
 //! CLI presentation for the shared Beets import service.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
 use anyhow::bail;
+use muzik_core::paths::Paths;
+use muzik_core::{JobEvent, Severity};
 use muzik_import::apply::{AlbumDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest, Placement, SyncOutcome};
 use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
+use muzik_runner::Settings;
+use muzik_runner::library_tasks::{self, AfterImport};
+use serde_json::json;
 
 use crate::Import;
 
@@ -73,6 +79,7 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let library = preview.paths.clone();
     let result = beets::apply_import(preview, &decisions)?;
     if result.apply.already_in_library > 0 {
         println!(
@@ -106,7 +113,41 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
     if let Some(error) = result.prune_error {
         eprintln!("Warning: skipped library prune: {error}");
     }
+    if !args.dry_run {
+        library_tasks::after_import(
+            after_import(&Paths::user(), args),
+            &library,
+            &result.apply.destinations,
+            &AtomicBool::new(false),
+            &mut print_event,
+        );
+    }
     Ok(())
+}
+
+fn after_import(paths: &Paths, args: &Import) -> AfterImport {
+    match Settings::resolve(paths, &json!({})) {
+        Ok(settings) => AfterImport {
+            replaygain: settings.after_import.replaygain && !args.nowrite,
+            covers: settings.after_import.covers,
+        },
+        Err(error) => {
+            eprintln!("Warning: skipped the tasks after the import: {error}");
+            AfterImport::default()
+        }
+    }
+}
+
+fn print_event(event: JobEvent) {
+    match event {
+        JobEvent::Message {
+            message,
+            severity: Severity::Info,
+        } => println!("{message}"),
+        JobEvent::Message { message, .. } => eprintln!("Warning: {message}"),
+        JobEvent::ProgressStarted { description, .. } => println!("{description}"),
+        _ => {}
+    }
 }
 
 fn sync(query: &str, args: &Import) -> anyhow::Result<()> {
