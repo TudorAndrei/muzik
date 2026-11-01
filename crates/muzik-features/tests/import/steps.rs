@@ -1,0 +1,10 @@
+mod catalog;
+mod duplicates;
+mod history;
+mod imports;
+mod mbid_fill;
+mod plans;
+mod settings;
+mod songs;
+mod sync;
+mod tables;
