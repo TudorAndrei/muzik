@@ -27,6 +27,7 @@ pub enum Task {
     LocalSplit,
     BandcampDownload,
     WatchlistRefresh,
+    LibraryMaintenance,
 }
 
 #[derive(Clone, Debug, PartialEq)]

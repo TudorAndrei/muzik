@@ -46,6 +46,8 @@ pub struct GuiDefaults {
     pub min_bitrate: u32,
     pub auto_decide: bool,
     pub agent_model: String,
+    pub replaygain_after_import: bool,
+    pub covers_after_import: bool,
 }
 
 impl Default for GuiDefaults {
@@ -73,6 +75,8 @@ impl Default for GuiDefaults {
             min_bitrate: 256,
             auto_decide: true,
             agent_model: "gpt-6-luna".into(),
+            replaygain_after_import: true,
+            covers_after_import: true,
         }
     }
 }
@@ -250,6 +254,22 @@ mod tests {
             assert!(save_gui_defaults(&paths, &value).is_err());
             assert!(!paths.config_file().exists());
         }
+    }
+
+    #[test]
+    fn after_import_tasks_are_on_for_an_old_config_and_keep_a_saved_choice() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        fs::create_dir_all(&paths.config).unwrap();
+        fs::write(paths.config_file(), "native_gui:\n  jobs: 2\n").unwrap();
+        let old = load_gui_defaults(&paths);
+        assert_eq!(old.jobs, 2);
+        assert!(old.replaygain_after_import);
+        assert!(old.covers_after_import);
+        let saved = save_gui_defaults(&paths, &json!({"covers_after_import": false})).unwrap();
+        assert!(saved.replaygain_after_import);
+        assert!(!saved.covers_after_import);
+        assert_eq!(load_gui_defaults(&paths), saved);
     }
 
     #[test]
