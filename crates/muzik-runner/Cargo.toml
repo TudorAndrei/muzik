@@ -17,6 +17,8 @@ muzik-import = { path = "../muzik-import" }
 muzik-store = { path = "../muzik-store" }
 muzik-library = { path = "../muzik-library" }
 muzik-media = { path = "../muzik-media" }
+muzik-metadata = { path = "../muzik-metadata" }
+muzik-tags = { path = "../muzik-tags" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-spotify = { path = "../muzik-spotify" }
 muzik-workflow = { path = "../muzik-workflow" }
