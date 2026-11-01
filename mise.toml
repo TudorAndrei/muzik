@@ -14,6 +14,7 @@ cargo-binstall = "1.25.2"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-edit" = "0.13.13"
 "cargo:cargo-auditable" = "0.7.7"
+"cargo:cargo-about" = "0.9.3"
 "cargo:cargo-bolero" = "0.13.5"
 cocogitto = "7"
 
@@ -97,6 +98,14 @@ cargo bolero test -p muzik-import --sanitizer NONE -T "${usage_seconds}s" \
   paths::tests::rendered_paths_keep_the_template_components_for_any_field_values
 cargo bolero test -p muzik-tags --sanitizer NONE -T "${usage_seconds}s" \
   tests::reading_any_bytes_does_not_panic
+"""
+
+[tasks.third-party-licenses]
+description = "Write the license texts of all bundled third-party crates to one Markdown file"
+usage = 'arg "[output]" default="target/THIRD_PARTY_LICENSES.md"'
+run = """
+mkdir -p "$(dirname "${usage_output}")"
+cargo about generate --workspace --locked --fail -o "${usage_output}" about.md.hbs
 """
 
 [tasks.check-release]
