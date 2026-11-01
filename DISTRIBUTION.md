@@ -33,6 +33,11 @@ for macOS arm64 and Linux x86_64 and publishes:
 Each archive has the license files and crate notices. Both programs are
 licensed under GPL-3.0-only.
 
+Each archive also has `THIRD_PARTY_LICENSES.md`. It holds the license text of
+each third-party crate in the build. `mise run third-party-licenses` makes it
+with `cargo about` from `about.toml` and `about.md.hbs`. Keep the `accepted` list in
+`about.toml` the same as the `allow` list and exceptions in `deny.toml`.
+
 The CLI and the desktop app are separate programs. The app adds the Homebrew
 and mise tool folders to its `PATH`, so it finds `ffmpeg` and `yt-dlp` when it
 opens from Finder.

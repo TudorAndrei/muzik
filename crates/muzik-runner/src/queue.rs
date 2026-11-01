@@ -1,3 +1,4 @@
+use crate::library_tasks::LibraryRequest;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, MatchAnswer};
@@ -157,6 +158,25 @@ impl Jobs {
             .ok_or_else(|| EnqueueError::Busy("This item already has a job in the queue.".into()))
     }
 
+    /// # Errors
+    /// Returns an error when the request or settings are invalid, or the job cannot be added to the queue.
+    pub fn library(&self, request: &LibraryRequest) -> Result<i64, EnqueueError> {
+        let params = request
+            .to_params()
+            .map_err(|error| EnqueueError::Invalid(error.to_string()))?;
+        Settings::resolve(&self.paths, &params)
+            .map_err(|error| EnqueueError::Invalid(error.to_string()))?;
+        Ok(self
+            .store()
+            .enqueue(&NewJob {
+                kind: Kind::Library,
+                item_key: &request.task.item_key(),
+                title: request.task.title(),
+                params: &params,
+            })?
+            .id())
+    }
+
     pub(crate) fn queue_pending(
         &self,
         params: &Value,
@@ -310,6 +330,7 @@ fn unique() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{EnqueueError, Jobs, parse_job_id};
+    use crate::library_tasks::{LibraryRequest, LibraryTask};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
     use muzik_store::watchlist::jobs::PendingItem;
@@ -349,6 +370,26 @@ mod tests {
         assert_eq!(jobs.snapshot()["open"], json!([]));
         assert_eq!(parse_job_id("queue-7"), Some(7));
         assert_eq!(parse_job_id("7"), Some(7));
+    }
+
+    #[test]
+    fn a_library_task_has_one_open_job_with_its_title() {
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
+        let request = LibraryRequest::new(LibraryTask::ReplayGain);
+        let first = jobs.library(&request).unwrap();
+        assert_eq!(jobs.library(&request).unwrap(), first);
+        let other = jobs
+            .library(&LibraryRequest::new(LibraryTask::Covers))
+            .unwrap();
+        assert_ne!(other, first);
+        let open = &jobs.snapshot()["open"];
+        assert_eq!(open[0]["kind"], "library");
+        assert_eq!(open[0]["title"], LibraryTask::ReplayGain.title());
+        assert_eq!(open[0]["item"], serde_json::Value::Null);
+        assert_eq!(
+            jobs.get(first).unwrap().map(|job| job.params),
+            Some(json!({"task":"replaygain","dry_run":false}))
+        );
     }
 
     #[test]

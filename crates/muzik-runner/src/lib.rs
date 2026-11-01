@@ -6,6 +6,7 @@ pub mod choices;
 mod error;
 mod events;
 pub mod gates;
+pub mod library_tasks;
 mod local_workflow;
 mod queue;
 mod remote_workflow;

@@ -7,6 +7,7 @@ use gpui_kit::{
     Action, App, Entity, KeyBinding, Menu, MenuItem, OperatingSystem, OsAction, WeakEntity, Window,
     actions, rems,
 };
+use muzik_runner::library_tasks::LibraryTask;
 
 actions!(
     muzik,
@@ -46,6 +47,7 @@ pub enum AppCommand {
     RunWorkflow,
     SearchLibrary,
     Refresh,
+    Library(LibraryTask),
 }
 
 const GO_TO: [(Page, &str, IconName, &[&str]); 5] = [
@@ -81,7 +83,7 @@ const GO_TO: [(Page, &str, IconName, &[&str]); 5] = [
     ),
 ];
 
-const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 3] = [
+const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 6] = [
     (
         AppCommand::RunWorkflow,
         "Run workflow",
@@ -99,6 +101,24 @@ const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 3] = [
         "Refresh this page",
         IconName::RefreshCw,
         &["reload"],
+    ),
+    (
+        AppCommand::Library(LibraryTask::ReplayGain),
+        LibraryTask::ReplayGain.title(),
+        IconName::Cpu,
+        &["loudness", "volume", "library"],
+    ),
+    (
+        AppCommand::Library(LibraryTask::Covers),
+        LibraryTask::Covers.title(),
+        IconName::FolderOpen,
+        &["artwork", "album art", "library"],
+    ),
+    (
+        AppCommand::Library(LibraryTask::Mbids),
+        LibraryTask::Mbids.title(),
+        IconName::Search,
+        &["musicbrainz", "match", "library"],
     ),
 ];
 

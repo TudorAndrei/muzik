@@ -1,10 +1,12 @@
 use crate::agent::Chooser;
 use crate::error::JobFailure;
 use crate::events::{AppEvent, Source};
+use crate::library_tasks::{self, LibraryRequest, TaskContext};
 use crate::queue::{Jobs, RunnerClaim, job_id};
 use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
+use muzik_import::beets;
 use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
 use muzik_store::watchlist::Stage;
 use muzik_workflow::{WorkflowInput, classify_input};
@@ -18,7 +20,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-const QUEUES: [Queue; 3] = [Queue::Sync, Queue::Workflow, Queue::Item];
+const QUEUES: [Queue; 4] = [Queue::Sync, Queue::Workflow, Queue::Item, Queue::Library];
 
 pub type Sink = Arc<dyn Fn(AppEvent) + Send + Sync>;
 pub type Ask = Arc<dyn Fn(Prompt<'_>) -> Result<Value, String> + Send + Sync>;
@@ -228,6 +230,7 @@ impl Shared {
             Kind::Refresh => self.run_refresh(job, &id, &cancel),
             Kind::Item => self.run_item(job, &id, &cancel),
             Kind::Workflow => self.run_workflow(job, &id, &cancel),
+            Kind::Library => self.run_library(job, &id, &cancel),
         };
         {
             let store = self.store();
@@ -315,19 +318,8 @@ impl Shared {
         let model = settings.agent_model.as_deref();
         let mut workflow_event = |event: JobEvent| self.event(job_id, Source::Workflow, event);
         let mut import_event = |event: JobEvent| self.event(job_id, Source::Native, event);
-        let mut decide = |kind: DecisionKind, mut payload: Value| {
-            if let Some(value) = self.ask_agent(job_id, model, kind, &mut payload) {
-                return Ok(value);
-            }
-            gates::suspended(|| {
-                (self.ask)(Prompt {
-                    job_id,
-                    title: &job.title,
-                    kind,
-                    payload,
-                    cancelled: cancel,
-                })
-            })
+        let mut decide = |kind: DecisionKind, payload: Value| {
+            self.decide_live(job, job_id, model, cancel, kind, payload)
         };
         if settings.request.raw.is_empty() {
             return Err(crate::Error::from("Enter a URL or path.").into());
@@ -353,6 +345,51 @@ impl Shared {
             )
         }?;
         Ok(serde_json::to_value(result)?)
+    }
+
+    fn run_library(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+        let request = LibraryRequest::from_params(&job.params)?;
+        let settings = self.settings(job)?;
+        let model = settings.agent_model.as_deref();
+        let (_, paths) = beets::load_paths(settings.options.config.as_deref(), json!({}))
+            .map_err(crate::Error::from)?;
+        let mut events = |event: JobEvent| self.event(job_id, Source::Native, event);
+        let mut decide = |kind: DecisionKind, payload: Value| {
+            self.decide_live(job, job_id, model, cancel, kind, payload)
+        };
+        let context = TaskContext::new(&paths, request.dry_run, cancel, &mut events, &mut decide);
+        let report = gates::enter(request.task.gate(), cancel)
+            .and_then(|_permit| library_tasks::run(request.task, &context))
+            .map_err(|error| match error {
+                crate::Error::Cancelled | crate::Error::GateCancelled(_) => JobFailure::Cancelled,
+                _ if context.is_cancelled() => JobFailure::Cancelled,
+                error => JobFailure::Failed(error),
+            })?;
+        context.message(report.summary(request.task));
+        Ok(serde_json::to_value(report)?)
+    }
+
+    fn decide_live(
+        &self,
+        job: &Job,
+        job_id: &str,
+        model: Option<&str>,
+        cancel: &AtomicBool,
+        kind: DecisionKind,
+        mut payload: Value,
+    ) -> Result<Value, String> {
+        if let Some(value) = self.ask_agent(job_id, model, kind, &mut payload) {
+            return Ok(value);
+        }
+        gates::suspended(|| {
+            (self.ask)(Prompt {
+                job_id,
+                title: &job.title,
+                kind,
+                payload,
+                cancelled: cancel,
+            })
+        })
     }
 
     fn ask_agent(
@@ -400,6 +437,7 @@ impl Shared {
 mod tests {
     use super::{Options, Runner};
     use crate::events::AppEvent;
+    use crate::library_tasks::{LibraryRequest, LibraryTask, TaskReport};
     use crate::queue::Jobs;
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{Repository, SourceKind, Stage, StageStatus, WatchItem};
@@ -521,6 +559,58 @@ mod tests {
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
         assert!(runner.is_idle());
+    }
+
+    #[test]
+    fn a_library_job_runs_its_task_and_reports_the_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.yaml");
+        std::fs::write(
+            &config,
+            format!(
+                "directory: {}\nlibrary: {}\n",
+                dir.path().join("Music").display(),
+                dir.path().join("library.db").display()
+            ),
+        )
+        .unwrap();
+        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path())).unwrap());
+        let (runner, receiver) = runner(&jobs).unwrap();
+        let id = jobs
+            .library(&LibraryRequest {
+                task: LibraryTask::Covers,
+                dry_run: true,
+                config: Some(config),
+            })
+            .unwrap();
+        runner.wake();
+        let job_id = super::job_id(id);
+        let mut kind = None;
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(20)).unwrap() {
+                AppEvent::JobStarted {
+                    job_id: started,
+                    kind: started_kind,
+                    ..
+                } if started == job_id => kind = Some(started_kind),
+                AppEvent::JobCompleted {
+                    job_id: done,
+                    result,
+                } if done == job_id => {
+                    assert_eq!(result, json!(TaskReport::default()));
+                    break;
+                }
+                AppEvent::JobFailed {
+                    job_id: failed,
+                    message,
+                } if failed == job_id => {
+                    panic!("{message}");
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(kind, Some(muzik_store::jobs::Kind::Library));
+        runner.wait_until_idle(&AtomicBool::new(false));
     }
 
     #[test]

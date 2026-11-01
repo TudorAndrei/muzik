@@ -100,6 +100,7 @@ pub enum RunKind {
     Workflow,
     Refresh,
     Item,
+    Library,
     SpotifyLogin,
     #[default]
     #[strum(disabled)]
@@ -112,6 +113,7 @@ impl From<JobKind> for RunKind {
             JobKind::Workflow => Self::Workflow,
             JobKind::Refresh => Self::Refresh,
             JobKind::Item => Self::Item,
+            JobKind::Library => Self::Library,
         }
     }
 }
@@ -129,6 +131,7 @@ impl RunKind {
             Self::Workflow => "Workflow",
             Self::Refresh => "Watchlist check",
             Self::Item => "Item",
+            Self::Library => "Library",
             Self::SpotifyLogin => "Spotify connection",
             Self::Unknown => "Job",
         }
@@ -577,6 +580,7 @@ fn candidate_summary(candidate: &Value) -> String {
 pub fn job_label(kind: RunKind, title: &str) -> String {
     match kind {
         RunKind::Refresh | RunKind::SpotifyLogin => kind.label().into(),
+        RunKind::Library => short_text(title, 60),
         _ => format!("{} “{}”", kind.label(), short_text(title, 60)),
     }
 }
@@ -641,6 +645,31 @@ mod tests {
             kind: JobKind::Item,
         });
         assert_eq!(activity.runs()[0].title, "Resumed album");
+    }
+
+    #[test]
+    fn a_library_task_run_shows_its_title_and_progress() {
+        let mut activity = Activity::default();
+        activity.apply_jobs(&json!({"open":[{"job_id":"queue-1","kind":"library","title":"Add cover files","status":"running"}],"waiting":[]}));
+        assert_eq!(activity.runs()[0].kind, RunKind::Library);
+        activity.apply(&job_event(JobEvent::ProgressStarted {
+            task: JobTask::LibraryMaintenance,
+            description: "Album folders".into(),
+            total: Some(4),
+        }));
+        activity.apply(&job_event(JobEvent::ProgressAdvanced {
+            task: JobTask::LibraryMaintenance,
+            completed: Some(1),
+            total: Some(4),
+        }));
+        assert_eq!(activity.runs()[0].progress_text(), "1 / 4");
+        let finished = activity
+            .apply(&AppEvent::JobCompleted {
+                job_id: "queue-1".into(),
+                result: Value::Null,
+            })
+            .unwrap();
+        assert_eq!(job_label(finished.kind, &finished.title), "Add cover files");
     }
 
     fn request(job: &str, decision: &str) -> AppEvent {

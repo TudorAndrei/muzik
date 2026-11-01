@@ -2,6 +2,7 @@
 
 use crate::agent::Chooser;
 use crate::events::AppEvent;
+use crate::library_tasks::{LibraryRequest, LibraryTask};
 use crate::queue::{EnqueueError, Jobs, job_id, parse_job_id};
 use crate::runner::{Options, Prompt, Runner, Sink};
 use crate::settings::Settings;
@@ -108,6 +109,12 @@ impl App {
     /// Returns an error when the job cannot be added to the queue.
     pub fn start_workflow(&self, params: &Value) -> Result<String, EnqueueError> {
         self.queued(self.jobs.workflow(params))
+    }
+
+    /// # Errors
+    /// Returns an error when the job cannot be added to the queue.
+    pub fn start_library_task(&self, task: LibraryTask) -> Result<String, EnqueueError> {
+        self.queued(self.jobs.library(&LibraryRequest::new(task)))
     }
 
     /// # Errors

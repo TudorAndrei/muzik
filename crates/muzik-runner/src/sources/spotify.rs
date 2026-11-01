@@ -121,6 +121,7 @@ fn import_file(
         on_import_event: adapter.on_import_event,
         cancelled,
         stage: &stage,
+        after_import: adapter.prepared.settings.after_import,
     };
     process_audio_plan_with_events(
         std::slice::from_ref(&file),

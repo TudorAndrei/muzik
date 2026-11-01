@@ -1,0 +1,25 @@
+# Third-party licenses
+
+Muzik includes the Rust crates below. Each crate is listed with its license text.
+
+## Overview
+
+{{#each overview}}
+- {{{name}}} (`{{{id}}}`): {{count}} crates
+{{/each}}
+
+## License texts
+{{#each licenses}}
+
+### {{{name}}}: {{{used_by.[0].crate.name}}} {{{used_by.[0].crate.version}}} (text {{@index}})
+
+Used by:
+
+{{#each used_by}}
+- {{#if crate.repository}}[{{{crate.name}}} {{{crate.version}}}]({{{crate.repository}}}){{else}}{{{crate.name}}} {{{crate.version}}}{{/if}}
+{{/each}}
+
+````text
+{{{text}}}
+````
+{{/each}}

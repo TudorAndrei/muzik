@@ -26,6 +26,7 @@ pub enum Queue {
     Sync,
     Workflow,
     Item,
+    Library,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, AsRefStr, Display, EnumString, IntoStaticStr)]
@@ -34,6 +35,7 @@ pub enum Kind {
     Refresh,
     Workflow,
     Item,
+    Library,
 }
 
 impl Kind {
@@ -43,6 +45,7 @@ impl Kind {
             Self::Refresh => Queue::Sync,
             Self::Workflow => Queue::Workflow,
             Self::Item => Queue::Item,
+            Self::Library => Queue::Library,
         }
     }
 }
@@ -578,6 +581,30 @@ mod tests {
                 .unwrap()
                 .map(|job| job.id),
             Some(older)
+        );
+    }
+
+    #[test]
+    fn a_library_job_keeps_its_kind_and_queue_through_the_database() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("muzik.db");
+        let params = json!({"task":"replaygain"});
+        let id = Store::from_connection(crate::db::open(&path).unwrap())
+            .enqueue(&job(Kind::Library, "library:replaygain", &params))
+            .unwrap()
+            .id();
+        let mut store = Store::from_connection(crate::db::open(&path).unwrap());
+        assert_eq!(
+            store
+                .enqueue(&job(Kind::Library, "library:replaygain", &params))
+                .unwrap(),
+            Admission::Retained(id)
+        );
+        assert_eq!(store.claim(Queue::Item).unwrap(), None);
+        let claimed = store.claim(Queue::Library).unwrap().unwrap();
+        assert_eq!(
+            (claimed.id, claimed.queue, claimed.kind, claimed.params),
+            (id, Queue::Library, Kind::Library, params)
         );
     }
 

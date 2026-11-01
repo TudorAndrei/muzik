@@ -40,6 +40,7 @@ pub fn run(
             on_import_event,
             cancelled,
             stage,
+            after_import: settings.after_import,
         },
         paths: settings.paths.clone(),
         prefer: settings.options.prefer,

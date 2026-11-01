@@ -48,6 +48,7 @@ use muzik_core::{
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::gates::Gate;
+use muzik_runner::library_tasks::LibraryTask;
 use muzik_store::watchlist::{
     ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
 };
@@ -261,6 +262,7 @@ impl Muzik {
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             AppCommand::Refresh => self.refresh_page(cx),
+            AppCommand::Library(task) => self.start_library_task(task, cx),
         }
     }
 
@@ -1571,6 +1573,9 @@ mod tests {
             window.within("settings-sidebar").click("0-2", cx);
             window.render_frame(cx);
             assert!(window.try_find("service-refresh").is_some());
+            window.within("settings-sidebar").click("0-3", cx);
+            window.render_frame(cx);
+            assert!(window.try_find(("library-task", 2usize)).is_some());
             window.click("save-config", cx);
             window.within("pages").click(0usize, cx);
             assert!(window.try_find("run").is_some());

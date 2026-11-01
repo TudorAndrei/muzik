@@ -8,6 +8,7 @@ use muzik_core::paths::Paths;
 use muzik_import::beets;
 use muzik_runner::agent::{Chooser, Codex};
 use muzik_runner::app::WatchlistCheck;
+use muzik_runner::library_tasks::LibraryTask;
 use muzik_runner::{App, AppEvent, AppOptions, setup};
 use muzik_spotify as spotify;
 use muzik_store::watchlist::{ItemAction, ItemId, Playlist};
@@ -149,6 +150,10 @@ impl Backend {
 
     pub fn start_workflow(&self, params: &Value) -> anyhow::Result<String> {
         Ok(self.app.start_workflow(params)?)
+    }
+
+    pub fn start_library_task(&self, task: LibraryTask) -> anyhow::Result<String> {
+        Ok(self.app.start_library_task(task)?)
     }
 
     pub fn refresh(&self, source: Option<(&str, &str)>) -> anyhow::Result<String> {
