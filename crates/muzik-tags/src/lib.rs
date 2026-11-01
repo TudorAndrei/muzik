@@ -2,7 +2,10 @@
 
 pub mod cover;
 pub mod probe;
-pub use cover::{cover_mime_type, embed_cover, find_cover, front_cover, has_front_cover};
+pub use cover::{
+    cover_file_path, cover_mime_type, embed_cover, find_cover, find_folder_cover,
+    first_front_cover, front_cover, has_front_cover, image_extension, write_cover_file,
+};
 pub use lofty::picture::MimeType;
 pub use probe::{AudioProperties, probe};
 
