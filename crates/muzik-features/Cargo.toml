@@ -1,0 +1,54 @@
+[package]
+name = "muzik-features"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license = "GPL-3.0-only"
+publish = false
+autotests = false
+description = "Cucumber feature specifications for muzik"
+
+[lints]
+workspace = true
+
+[lib]
+test = false
+doctest = false
+
+[dev-dependencies]
+anyhow = "1"
+cucumber = "0.23"
+futures = "0.3"
+muzik-core = { path = "../muzik-core" }
+muzik-import = { path = "../muzik-import" }
+muzik-library = { path = "../muzik-library" }
+muzik-match = { path = "../muzik-match" }
+muzik-media = { path = "../muzik-media" }
+muzik-metadata = { path = "../muzik-metadata" }
+muzik-store = { path = "../muzik-store" }
+muzik-sync = { path = "../muzik-sync" }
+muzik-tags = { path = "../muzik-tags" }
+muzik-workflow = { path = "../muzik-workflow" }
+rusqlite = { version = "0.40", features = ["bundled", "serde_json"] }
+serde_json = "1"
+tempfile = "3"
+
+[[test]]
+name = "import"
+harness = false
+
+[[test]]
+name = "library"
+harness = false
+
+[[test]]
+name = "sync"
+harness = false
+
+[[test]]
+name = "watchlist"
+harness = false
+
+[[test]]
+name = "workflow"
+harness = false

@@ -167,6 +167,22 @@ Tests read and write only inside the repository. Temporary files go to `.tmp/`.
 On macOS, `mise run test-scoped` runs the tests in a sandbox that blocks the real
 muzik, beets, and music folders.
 
+The [`features/`](features) folder is the list of muzik features. Each domain
+(`import`, `library`, `sync`, `watchlist`, `workflow`) has Cucumber scenarios in
+Gherkin. The step code is in `crates/muzik-features`. Run one domain, or only the
+scenarios whose name matches a pattern:
+
+```sh
+cargo test -p muzik-features --test sync
+cargo test -p muzik-features --test sync -- --name "unplugged"
+```
+
+[`FEATURES.md`](FEATURES.md) lists each feature and scenario. It is generated
+from `features/`. Each release updates it in the version commit. To update it
+before a release, run `mise run features`.
+
+Unit, parity, and fuzz tests stay next to the code as `#[test]` functions.
+
 To run a development build, use the `.dev/` profile. It has its own database,
 beets library, music folder, and Soulseek keychain entry:
 
