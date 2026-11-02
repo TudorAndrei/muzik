@@ -131,3 +131,62 @@ fn rejects_an_unknown_max_rec_limit() {
         Err(Error::InvalidConfig("match.max_rec"))
     ));
 }
+
+#[test]
+fn assignment_preserves_pairs_and_extra_order_across_word_boundaries() {
+    let beets = BeetsConfig::from_layers("", json!({})).unwrap();
+    let config = MatchConfig::from_beets(&beets).unwrap();
+    for count in [0_u32, 1, 63, 64, 65, 127, 128, 129] {
+        let items: Vec<_> = (0..count)
+            .map(|index| MatchItem {
+                title: format!("Track {index}"),
+                track: count - index,
+                ..MatchItem::default()
+            })
+            .collect();
+        let tracks: Vec<_> = (0..count)
+            .map(|index| MatchTrack {
+                title: format!("Track {index}"),
+                index: Some(count - index),
+                ..MatchTrack::default()
+            })
+            .collect();
+        let all_extras: Vec<_> = (0..items.len()).rev().collect();
+        let without_tracks = assign_items(&items, &[], &config).unwrap();
+        assert_eq!(without_tracks.extra_items, all_extras);
+        assert!(without_tracks.pairs.is_empty());
+        let without_items = assign_items(&[], &tracks, &config).unwrap();
+        assert_eq!(without_items.extra_tracks, all_extras);
+        assert!(without_items.pairs.is_empty());
+        let selected: Vec<_> = (0..items.len()).step_by(2).rev().collect();
+        let expected_extra: Vec<_> = (0..items.len())
+            .filter(|index| index % 2 != 0)
+            .rev()
+            .collect();
+        let selected_tracks: Vec<_> = selected
+            .iter()
+            .map(|&index| tracks[index].clone())
+            .collect();
+        let actual = assign_items(&items, &selected_tracks, &config).unwrap();
+        let expected_pairs: Vec<_> = selected
+            .iter()
+            .enumerate()
+            .map(|(track, &item)| (item, track))
+            .collect();
+        assert_eq!(actual.pairs, expected_pairs, "{count} items");
+        assert_eq!(actual.extra_items, expected_extra, "{count} items");
+        assert!(actual.extra_tracks.is_empty());
+
+        let selected_items: Vec<_> = selected.iter().map(|&index| items[index].clone()).collect();
+        let actual = assign_items(&selected_items, &tracks, &config).unwrap();
+        let expected_pairs: Vec<_> = selected
+            .iter()
+            .enumerate()
+            .rev()
+            .map(|(item, &track)| (item, track))
+            .collect();
+        assert_eq!(actual.pairs, expected_pairs, "{count} tracks");
+        assert_eq!(actual.extra_tracks, expected_extra, "{count} tracks");
+        assert!(actual.extra_items.is_empty());
+    }
+}

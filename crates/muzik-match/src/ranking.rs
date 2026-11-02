@@ -33,22 +33,12 @@ pub fn assign_items(
     let mut pairs: Vec<_> = rows.into_iter().zip(columns).collect();
     // beets builds its mapping by track order, even when LAP returns row order.
     pairs.sort_by_key(|pair| pair.1);
-    let used_items: HashSet<_> = pairs.iter().map(|pair| pair.0).collect();
-    let used_tracks: HashSet<_> = pairs.iter().map(|pair| pair.1).collect();
-    let mut extra_items: Vec<_> = items
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| !used_items.contains(index))
-        .collect();
+    let mut extra_items = unmatched(items, pairs.iter().map(|pair| pair.0))?;
     extra_items.sort_by(|(_, left), (_, right)| {
         (left.disc, left.track, &left.title).cmp(&(right.disc, right.track, &right.title))
     });
     let extra_items: Vec<_> = extra_items.into_iter().map(|(index, _)| index).collect();
-    let mut extra_tracks: Vec<_> = tracks
-        .iter()
-        .enumerate()
-        .filter(|(index, _)| !used_tracks.contains(index))
-        .collect();
+    let mut extra_tracks = unmatched(tracks, pairs.iter().map(|pair| pair.1))?;
     extra_tracks.sort_by(|(_, left), (_, right)| {
         (left.index, &left.title).cmp(&(right.index, &right.title))
     });
@@ -64,6 +54,33 @@ pub fn assign_items(
         extra_items,
         extra_tracks,
     })
+}
+
+// Solver indices are unique and dense within each input slice. Store only their
+// membership bits; the records stay in their original arrays.
+fn unmatched<T>(
+    values: &[T],
+    assigned: impl ExactSizeIterator<Item = usize>,
+) -> Result<Vec<(usize, &T)>, Error> {
+    if assigned.len() == values.len() {
+        return Ok(Vec::new());
+    }
+    let mut used = vec![0_u64; values.len().div_ceil(64)];
+    for index in assigned {
+        if index >= values.len() {
+            return Err(Error::InvalidPair);
+        }
+        let word = used.get_mut(index / 64).ok_or(Error::InvalidPair)?;
+        *word |= 1_u64 << (index % 64);
+    }
+    Ok(values
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| {
+            used.get(index / 64)
+                .is_some_and(|word| word & (1_u64 << (index % 64)) == 0)
+        })
+        .collect())
 }
 
 #[derive(
