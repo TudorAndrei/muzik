@@ -11,6 +11,7 @@ zizmor = "latest"
 rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], mr_boxington = true }
 mr-boxington = "1.19.0"
 cargo-binstall = "1.25.2"
+"cargo:cargo-nextest" = "0.9.150"
 "cargo:cargo-deny" = "latest"
 "cargo:cargo-edit" = "0.13.13"
 "cargo:cargo-auditable" = "0.7.7"
@@ -57,9 +58,17 @@ description = "Run format, Clippy, tests, dependency, and workflow checks"
 run = """
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+mise run --skip-tools test
 cargo deny check
 zizmor --persona=auditor .github
+"""
+
+[tasks.test]
+description = "Run Nextest, Cucumber, and documentation tests"
+run = """
+cargo nextest run --workspace --exclude muzik-features --locked
+cargo test -p muzik-features --tests --locked
+cargo test --workspace --doc --locked
 """
 
 [tasks.features]
@@ -87,8 +96,12 @@ run = '''
 description = "Run the tests in a macOS sandbox that blocks the real muzik, beets, and music folders"
 run = """
 TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HOME="$HOME" -f scripts/test-scope.sb \
-  cargo test --workspace --locked --offline -- \
+  cargo nextest run --workspace --exclude muzik-features --locked --offline -- \
   --skip background_command_runs_the_program_at_lower_priority
+TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HOME="$HOME" -f scripts/test-scope.sb \
+  cargo test -p muzik-features --tests --locked --offline
+TMPDIR="$MISE_PROJECT_ROOT/.tmp" sandbox-exec -D REPO="$MISE_PROJECT_ROOT" -D HOME="$HOME" -f scripts/test-scope.sb \
+  cargo test --workspace --doc --locked --offline
 """
 
 [tasks.fuzz]
