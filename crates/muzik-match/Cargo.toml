@@ -23,3 +23,7 @@ strum_macros = "0.28"
 thiserror = "2"
 tracing = "0.1"
 chrono = "0.4"
+
+[[bench]]
+name = "assignment"
+harness = false
