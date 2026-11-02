@@ -154,6 +154,16 @@ separate keychain entry for the Soulseek password, and no folder migration.
 
 ## Development
 
+Install the project tools with `mise install`. Run all tests with:
+
+```sh
+mise run test
+```
+
+[Nextest](https://nexte.st/) runs the unit and integration tests. The task runs
+the Cucumber tests and documentation tests in separate Cargo steps. CI uses the
+`ci` Nextest profile to run all tests after a test failure.
+
 Run the locked checks that CI runs on each push:
 
 ```sh
