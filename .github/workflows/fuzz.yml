@@ -92,7 +92,7 @@ jobs:
           HARNESS: ${{ matrix.harness }}
           SECONDS_EACH: ${{ inputs.seconds || '600' }}
         run: cargo bolero test -p "$PACKAGE" --sanitizer NONE -T "${SECONDS_EACH}s" "$HARNESS"
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: fuzz-crashes-${{ matrix.id }}
