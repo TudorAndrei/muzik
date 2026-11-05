@@ -1,33 +1,30 @@
-amends "package://github.com/jdx/hk/releases/download/v1.55.0/hk@1.55.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.55.0/hk@1.55.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.11.1/hk@2.11.1#/Builtins.pkl"
 
-local linters = new Mapping<String, Step | Group> {
+exclude = "CHANGELOG.md"
+
+steps = new Mapping<String, Step | Group> {
     // ── tier 1: gatekeepers. Never mutate, no ordering needed. ──
     ["check-merge-conflict"] = Builtins.check_merge_conflict
-    ["check-added-large-files"] = Builtins.check_added_large_files
+    ["check-added-large-files"] = (Builtins.check_added_large_files) {
+        exclude = List("assets/logo.jpeg", "assets/muzik-logo.png", "assets/muzik-logo-v2.png")
+    }
     ["detect-private-key"] = Builtins.detect_private_key
     ["gitleaks"] = new Step {
         check = "if git diff --cached --quiet; then gitleaks git --redact --no-banner --log-opts origin/main..HEAD; else gitleaks git --staged --redact --no-banner; fi"
     }
-    ["actionlint"] = Builtins.actionlint
-    ["zizmor"] = Builtins.zizmor
 
     // ── tier 2: content fixers. `typos` is repo-wide, so it takes the barrier. ──
     ["typos"] = (Builtins.typos) { exclusive = true }
     ["rumdl"] = Builtins.rumdl
+    ["jactionlint"] = Builtins.jactionlint
 
     // ── tier 3: formatters. ──
     ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
-
     ["cargo-fmt"] = new Step {
         glob = "**/*.rs"
         check = "cargo fmt --all --check"
         fix = "cargo fmt --all"
-    }
-    ["cargo-clippy"] = new Step {
-        glob = "**/*.rs"
-        depends = "cargo-fmt"
-        check = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
     }
 
     // ── tier 4: whole-repo hygiene. One barrier, both steps inside it. ──
@@ -38,27 +35,21 @@ local linters = new Mapping<String, Step | Group> {
         }
     }
 
+    // ── tier 5: validators. ──
+    ["cargo-clippy"] = new Step {
+        glob = "**/*.rs"
+        depends = "cargo-fmt"
+        check = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+    }
 }
 
 hooks {
-    ["pre-commit"] {
-        fix = true
-        stash = "git"
-        steps { ...linters }
-    }
     ["commit-msg"] {
         steps {
             ["conventional-commit"] = Builtins.check_conventional_commit
         }
     }
     ["pre-push"] {
-        steps { ...linters }
-    }
-    ["check"] {
-        steps { ...linters }
-    }
-    ["fix"] {
-        fix = true
-        steps { ...linters }
+        steps = new Mapping<String, Step | Group> { ...module.steps }
     }
 }
