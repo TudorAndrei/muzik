@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/jdx/jactionlint/main/schema/jactionlint-config.json
+profile: default
+
+rules:
+  unpinned-uses:
+    policies:
+      "*": ref-pin

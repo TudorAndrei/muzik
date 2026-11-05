@@ -9,7 +9,11 @@ local linters = new Mapping<String, Step | Group> {
     ["gitleaks"] = new Step {
         check = "if git diff --cached --quiet; then gitleaks git --redact --no-banner --log-opts origin/main..HEAD; else gitleaks git --staged --redact --no-banner; fi"
     }
-    ["actionlint"] = Builtins.actionlint
+    ["jactionlint"] = new Step {
+        glob = List(".github/workflows/*.y*ml", ".github/actions/**/action.y*ml", ".github/dependabot.y*ml", ".github/jactionlint.yaml")
+        check = "jactionlint"
+        fix = "jactionlint --fix"
+    }
     ["zizmor"] = Builtins.zizmor
 
     // ── tier 2: content fixers. `typos` is repo-wide, so it takes the barrier. ──

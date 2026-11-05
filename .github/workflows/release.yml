@@ -19,6 +19,7 @@ jobs:
   version:
     name: Version
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read # read the Check workflow runs for this commit
       contents: write # push the version commit and tag
@@ -97,6 +98,7 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -174,6 +176,7 @@ jobs:
     name: Publish
     needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write # create the GitHub release
     steps:
@@ -193,6 +196,7 @@ jobs:
     name: Homebrew
     needs: [version, publish]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: homebrew
     permissions:
       contents: write # push the cask update to main
