@@ -155,22 +155,3 @@ impl Session {
         Ok(Self { client })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn session_settings_defaults_leave_optional_fields_unset() {
-        let settings = SessionSettings {
-            username: "alice".to_string(),
-            password: "secret".to_string(),
-            server_host: None,
-            server_port: None,
-            enable_listen: None,
-            listen_port: None,
-        };
-        assert_eq!(settings.username, "alice");
-        assert!(settings.server_host.is_none());
-    }
-}

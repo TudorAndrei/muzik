@@ -2,7 +2,6 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-// Order matters: each successful reduction changes the baseline for the next.
 const SD_END_WORDS: &[&str] = &["the", "a", "an"];
 const SD_REPLACE: &[(&str, &str)] = &[("&", "and")];
 const SD_PATTERNS: &[(&str, f64)] = &[
