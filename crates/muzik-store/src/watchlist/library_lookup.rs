@@ -1,9 +1,8 @@
 use muzik_core::BeetsConfig;
-use muzik_library::{Library, SqlValue};
+use muzik_library::{Library, SqlValue, path_from_sql};
 use regex::Regex;
 use serde_json::json;
 use std::collections::HashMap;
-use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -17,21 +16,21 @@ impl MusicLibrary {
     pub(super) fn open(config: Option<&Path>) -> Option<Self> {
         let path = config?.to_path_buf();
         let values = BeetsConfig::load(&path, json!({})).ok()?;
-        let database = values.get(&["library"])?.as_str()?;
-        let directory = values.get(&["directory"])?.as_str()?;
-        let database = expand_path(database, &path);
-        let directory = expand_path(directory, &path);
+        let database = values.configured_path(&path, "library").ok()?;
+        let directory = values.configured_path(&path, "directory").ok()?;
         let library = Library::open_read_only(&database).ok()?;
         let items = library.items().ok()?;
         let albums = library.albums().ok()?;
         let mut source_paths = HashMap::new();
         let mut first_item_by_album = HashMap::new();
         for item in items {
-            let Some(item_path) = item
-                .field("path")
-                .and_then(sql_text)
-                .map(|path| resolve(&directory, path))
-            else {
+            let Some(item_path) = item.field("path").and_then(path_from_sql).map(|path| {
+                if path.is_absolute() {
+                    path
+                } else {
+                    directory.join(path)
+                }
+            }) else {
                 continue;
             };
             if let Some(source_id) = item
@@ -85,37 +84,11 @@ impl MusicLibrary {
     }
 }
 
-fn resolve(directory: &Path, raw: &str) -> PathBuf {
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        path
-    } else {
-        directory.join(path)
-    }
-}
-
 fn sql_text(value: &SqlValue) -> Option<&str> {
     match value {
         SqlValue::Text(text) => Some(text),
         SqlValue::Blob(bytes) => std::str::from_utf8(bytes).ok(),
         _ => None,
-    }
-}
-
-fn expand_path(raw: &str, config: &Path) -> PathBuf {
-    let path = raw.strip_prefix("~/").map_or_else(
-        || PathBuf::from(raw),
-        |rest| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_default()
-                .join(rest)
-        },
-    );
-    if path.is_absolute() {
-        path
-    } else {
-        config.parent().unwrap_or_else(|| Path::new("")).join(path)
     }
 }
 
@@ -140,4 +113,34 @@ fn parse_title(title: &str) -> Option<(String, String)> {
         return None;
     }
     Some((artist.to_owned(), album.to_owned()))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::MusicLibrary;
+    use muzik_library::{Fields, Library, SqlValue, path_to_sql};
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+    use std::path::PathBuf;
+
+    #[test]
+    fn source_lookup_preserves_native_path_bytes_and_resolves_relative_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let config = root.path().join("config.yaml");
+        std::fs::write(&config, "library: library.db\ndirectory: music\n").unwrap();
+        let relative = PathBuf::from(OsString::from_vec(b"Song\xff.flac".to_vec()));
+        let mut library = Library::open_or_create(&root.path().join("library.db")).unwrap();
+        library
+            .insert_item(
+                &Fields::from([("path".into(), path_to_sql(&relative))]),
+                &Fields::from([("muzik_source_id".into(), SqlValue::Text("source-id".into()))]),
+            )
+            .unwrap();
+        drop(library);
+        let index = MusicLibrary::open(Some(&config)).unwrap();
+        assert_eq!(
+            index.find("source-id", ""),
+            Some(root.path().join("music").join(relative))
+        );
+    }
 }
