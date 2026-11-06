@@ -9,35 +9,42 @@ pub enum Page {
     Spotify,
 }
 
-pub const PAGES: [(Page, &str, IconName, &[&str]); 5] = [
-    (
-        Page::Workflow,
-        "Workflow",
-        IconName::Play,
-        &["run", "download", "split"],
-    ),
-    (
-        Page::Watchlist,
-        "Watchlist",
-        IconName::Eye,
-        &["playlist", "sources"],
-    ),
-    (
-        Page::Library,
-        "Library",
-        IconName::BookOpen,
-        &["beets", "albums"],
-    ),
-    (
-        Page::Settings,
-        "Settings",
-        IconName::Settings,
-        &["config", "preferences"],
-    ),
-    (
-        Page::Spotify,
-        "Spotify",
-        IconName::Globe,
-        &["login", "import"],
-    ),
+pub struct PageInfo {
+    pub page: Page,
+    pub label: &'static str,
+    pub icon: IconName,
+    pub keywords: &'static [&'static str],
+}
+
+pub const PAGES: [PageInfo; 5] = [
+    PageInfo {
+        page: Page::Workflow,
+        label: "Workflow",
+        icon: IconName::Play,
+        keywords: &["run", "download", "split"],
+    },
+    PageInfo {
+        page: Page::Watchlist,
+        label: "Watchlist",
+        icon: IconName::Eye,
+        keywords: &["playlist", "sources"],
+    },
+    PageInfo {
+        page: Page::Library,
+        label: "Library",
+        icon: IconName::BookOpen,
+        keywords: &["beets", "albums"],
+    },
+    PageInfo {
+        page: Page::Settings,
+        label: "Settings",
+        icon: IconName::Settings,
+        keywords: &["config", "preferences"],
+    },
+    PageInfo {
+        page: Page::Spotify,
+        label: "Spotify",
+        icon: IconName::Globe,
+        keywords: &["login", "import"],
+    },
 ];

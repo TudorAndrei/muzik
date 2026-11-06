@@ -102,9 +102,7 @@ pub fn page_action(page: Page) -> Box<dyn Action> {
 
 pub fn command_at(index: IndexPath) -> Option<AppCommand> {
     match index.section {
-        0 => PAGES
-            .get(index.row)
-            .map(|(page, ..)| AppCommand::Show(*page)),
+        0 => PAGES.get(index.row).map(|info| AppCommand::Show(info.page)),
         1 => ACTIONS.get(index.row).map(|(command, ..)| *command),
         _ => None,
     }
@@ -184,15 +182,17 @@ pub fn open_palette(
                     Command::new(&palette)
                         .bordered(false)
                         .placeholder("Go to a page or run a command")
-                        .group(CommandGroup::new().label("Go to").items(PAGES.iter().map(
-                            |(page, label, icon, keywords)| {
-                                CommandItem::new()
-                                    .label(*label)
-                                    .icon(icon.clone())
-                                    .keywords(keywords.iter().copied())
-                                    .action(page_action(*page))
-                            },
-                        )))
+                        .group(
+                            CommandGroup::new()
+                                .label("Go to")
+                                .items(PAGES.iter().map(|info| {
+                                    CommandItem::new()
+                                        .label(info.label)
+                                        .icon(info.icon.clone())
+                                        .keywords(info.keywords.iter().copied())
+                                        .action(page_action(info.page))
+                                })),
+                        )
                         .group(
                             CommandGroup::new()
                                 .label("Actions")
