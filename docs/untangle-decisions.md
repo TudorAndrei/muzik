@@ -50,7 +50,7 @@ Baseline: `cargo test --workspace --locked --offline`. The build needs the share
 
 ## Results
 
-All listed fixes are complete. Three independent reviews found no further issue worth a change in the reviewed areas. The local dependency graph has 21 packages and no cycles. No package dependency was added. Import no longer needs its direct `regex` dependency.
+All listed fixes are complete. Three independent reviews found no further issue worth a change in the reviewed areas. The local dependency graph has 21 packages and no cycles. The first refactor added no package dependencies. Import no longer needs its direct `regex` dependency. The later lock-location fix uses the existing locked versions of `sha2` and `hex`.
 
 Evidence:
 
@@ -90,10 +90,22 @@ The PR review identified existing defects that the first structural review did n
 - Home expansion uses an absolute HOME or USERPROFILE, or returns an error. Empty library paths count as missing.
 - Featured performer parsing preserves version text such as `(Remix)` in the title.
 - Tag updates restore snapshots after returned errors and panic unwinding. Failed restoration retains snapshots and reports both saved and original paths.
-- Cooperative tag updates lock canonical paths in a fixed order through snapshot, update, and restoration. Persistent sidecar files keep lock identity stable between processes. Separate hard-link names and unrelated tag writers do not share this path-based coordination.
+- Cooperative tag updates lock canonical paths in a fixed order through snapshot, update, and restoration. Persistent hashed lock files in the library state directory keep lock identity stable between processes. Separate hard-link names and unrelated tag writers do not share this path-based coordination.
 - Runner claim and registration hold the same mutex used by shutdown. An interrupted wait cannot miss a claimed but unregistered job.
 - Quality documentation states the extension-only fallback. Tests cover successful probing, home expansion, malformed candidate exclusion, and database-only updates.
 
 The review's general documentation coverage target is not a runtime contract. Documentation was added where it explains behavior and recovery. Comments that only repeat code remain excluded.
 
 Verification: all 357 workspace tests and 192 feature scenarios passed. The final local HTTP test includes rejection of unknown-length partial responses. Strict workspace Clippy, formatting, spelling of changed files, documentation tests, documentation build, and dependency checks passed.
+
+## Claude review corrections
+
+The independent Claude review found five further issues. All five were verified and corrected:
+
+- Featured-credit keywords need word boundaries. Ordinary titles such as `Left Behind` and `Soft Rain` now remain unchanged.
+- Tag locks now use SHA-256 names under `muzik-locks` beside the library database. The backup owner receives the database path explicitly. Tag updates can write existing files in an album directory that is read-only, and the empty album directory can then be removed.
+- The Bandcamp runner no longer deletes an old purchase before download. A failed `Download again` keeps the old audio.
+- The first download-page lookup occurs after the cancellation check and outside the transfer retry loop. A permanent page or format error returns at once.
+- The CLI checks all purchase folder names before downloading. It rejects identical names, case collisions, and names that become identical after filename cleanup. This preserves existing folder names without allowing one purchase to replace another.
+
+The ordinary-title, permanent-lookup-error, and runner purchase-retention tests failed on the reviewed code before the fixes. A control run with album-side lock files also failed for the expected permission error; the restored state-folder implementation passed. The final suite covers conflicting purchase folders. All 362 workspace tests and 192 feature scenarios passed, as did strict Clippy, formatting, documentation and dependency checks. No live account or device UI test was run.
