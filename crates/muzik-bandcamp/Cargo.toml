@@ -21,10 +21,11 @@ strum_macros = "0.28"
 thiserror = "2"
 ureq = { version = "3.5.0", features = ["json"] }
 usage-rs = "7.1.4"
+url = "2.5.8"
 zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 walkdir = "2.5"
+tempfile = "3"
 
 [dev-dependencies]
 bolero = "0.13"
-tempfile = "3"

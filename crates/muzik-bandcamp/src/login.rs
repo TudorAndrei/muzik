@@ -54,7 +54,7 @@ fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
             ["domain", "Host raw", "host"]
                 .iter()
                 .find_map(|key| cookie[key].as_str())
-                .is_none_or(|domain| domain.contains("bandcamp.com"))
+                .is_none_or(bandcamp_domain)
         })
         .filter_map(|cookie| {
             let name = ["name", "Name raw"]
@@ -71,6 +71,31 @@ fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
         .collect())
 }
 
+fn bandcamp_domain(domain: &str) -> bool {
+    let domain = domain
+        .strip_prefix('.')
+        .unwrap_or(domain)
+        .to_ascii_lowercase();
+    domain == "bandcamp.com" || domain.ends_with(".bandcamp.com")
+}
+
+pub fn credential_url(input: &str) -> Result<url::Url> {
+    let invalid = || crate::Error::from("Bandcamp returned an untrusted URL.");
+    let url = url::Url::parse(input).map_err(|_| invalid())?;
+    let trusted_host = url.host_str().is_some_and(|host| {
+        bandcamp_domain(host) || host == "bcbits.com" || host.ends_with(".bcbits.com")
+    });
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.port_or_known_default() != Some(443)
+        || !trusted_host
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
 fn netscape_cookies(text: &str) -> Vec<Cookie> {
     text.lines()
         .map(|line| line.strip_prefix("#HttpOnly_").unwrap_or(line))
@@ -80,7 +105,7 @@ fn netscape_cookies(text: &str) -> Vec<Cookie> {
             let [domain, _, _, _, _, name, value] = fields.get(..7)? else {
                 return None;
             };
-            domain.contains("bandcamp.com").then(|| Cookie {
+            bandcamp_domain(domain).then(|| Cookie {
                 name: name.trim().to_owned(),
                 value: value.trim().to_owned(),
             })
@@ -232,10 +257,12 @@ fn cookie_header(cookies: &[Cookie]) -> String {
 }
 
 fn request(url: &str, cookies: &[Cookie]) -> Result<ureq::http::Response<ureq::Body>> {
-    ureq::get(url)
+    let url = credential_url(url)?;
+    ureq::get(url.as_str())
         .header("User-Agent", USER_AGENT)
         .header("Cookie", cookie_header(cookies))
         .config()
+        .https_only(true)
         .timeout_global(Some(Duration::from_secs(60)))
         .build()
         .call()
@@ -255,16 +282,23 @@ pub fn status(paths: &Paths) -> Value {
 
 fn write_private(path: &Path, text: &str) -> Result<()> {
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create(true).truncate(false);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options
-        .open(path)
-        .and_then(|mut file| file.write_all(text.as_bytes()))
-        .map_err(|error| format!("cannot write {}: {error}", path.display()).into())
+    let write = || -> std::io::Result<()> {
+        let mut file = options.open(path)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+        file.set_len(0)?;
+        file.write_all(text.as_bytes())
+    };
+    write().map_err(|error| format!("cannot write {}: {error}", path.display()).into())
 }
 
 fn page_blob(html: &str) -> Option<Value> {
@@ -316,6 +350,32 @@ mod tests {
     }
 
     #[test]
+    fn cookie_exports_match_bandcamp_at_domain_boundaries() {
+        for domain in [
+            "bandcamp.com",
+            ".bandcamp.com",
+            "artist.bandcamp.com",
+            ".ARTIST.BANDCAMP.COM",
+        ] {
+            let json = json!([{"domain": domain, "name": "identity", "value": "secret"}]);
+            assert!(parse_cookies(&json.to_string()).is_ok(), "{domain}");
+            let file = format!("{domain}\tTRUE\t/\tTRUE\t0\tidentity\tsecret");
+            assert!(parse_cookies(&file).is_ok(), "{domain}");
+        }
+        for domain in [
+            "evilbandcamp.com",
+            "bandcamp.com.evil.test",
+            "notbandcamp.com",
+            "",
+        ] {
+            let json = json!([{"domain": domain, "name": "identity", "value": "secret"}]);
+            assert!(parse_cookies(&json.to_string()).is_err(), "{domain}");
+            let file = format!("{domain}\tTRUE\t/\tTRUE\t0\tidentity\tsecret");
+            assert!(parse_cookies(&file).is_err(), "{domain}");
+        }
+    }
+
+    #[test]
     fn a_saved_login_loads_again_and_keeps_the_cookies_private() {
         let directory = tempfile::tempdir().unwrap();
         let user = directory.path().join("bandcamp_user");
@@ -331,6 +391,11 @@ mod tests {
         let login = Login::load_from(&user, &cookies).unwrap();
         assert_eq!(login.user, "listener");
         assert_eq!(login.header(), "identity=secret; js_logged_in=1");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&cookies, fs::Permissions::from_mode(0o644)).unwrap();
+        }
         Login::save_to(&user, &cookies, Some("listener"), "").unwrap();
         assert!(Login::load_from(&user, &cookies).is_some());
         #[cfg(unix)]
@@ -339,6 +404,42 @@ mod tests {
             assert_eq!(
                 fs::metadata(&cookies).unwrap().permissions().mode() & 0o777,
                 0o600
+            );
+        }
+    }
+
+    #[test]
+    fn credential_requests_accept_only_trusted_https_origins() {
+        for address in [
+            "https://bandcamp.com/download",
+            "https://artist.bandcamp.com/album/name",
+            "https://t4.bcbits.com/stream/file",
+            "https://bandcamp.com:443/file",
+        ] {
+            assert!(credential_url(address).is_ok(), "{address}");
+        }
+        let login = Login {
+            user: "listener".into(),
+            cookies: vec![Cookie {
+                name: "identity".into(),
+                value: "secret".into(),
+            }],
+        };
+        for address in [
+            "http://bandcamp.com/file",
+            "https://bandcamp.com:444/file",
+            "https://user:secret@bandcamp.com/file",
+            "https://evilbandcamp.com/file",
+            "https://bandcamp.com.evil.test/file",
+            "https://bcbits.com.evil.test/file",
+            "https://127.0.0.1/file",
+            "not a URL",
+        ] {
+            let error = login.page_blob(address).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Bandcamp returned an untrusted URL.",
+                "{address}"
             );
         }
     }

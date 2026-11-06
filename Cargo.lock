@@ -5138,6 +5138,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "ureq",
+ "url",
  "usage-rs",
  "walkdir",
  "zip",
