@@ -427,6 +427,7 @@ mod tests {
         let choices = options(DecisionKind::ImportMatch, &payload);
         let text = prompt(DecisionKind::ImportMatch, &payload, &choices);
         assert!(text.contains("[0] Artist — Album · distance 0.300"));
+        assert!(!text.contains("Missing ID"));
         assert!(strong_match(DecisionKind::ImportMatch, &payload).is_none());
         let picked = interpret(
             DecisionKind::ImportMatch,

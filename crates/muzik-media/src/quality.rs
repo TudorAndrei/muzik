@@ -23,7 +23,11 @@ pub enum QualityDecision {
     Replace,
 }
 
-/// Unknown or unreadable audio gives `None`.
+/// Probe the audio properties.
+///
+/// If probing fails, DSF, DFF, WMA, and TTA paths
+/// use their extension to identify the codec, including missing or unreadable files.
+/// Other files that cannot be probed give `None`.
 #[must_use]
 pub fn measure(path: &Path) -> Option<MeasuredQuality> {
     if let Ok(properties) = muzik_tags::probe(path) {
@@ -110,6 +114,7 @@ mod tests {
     use muzik_core::QualityPolicy;
     use muzik_core::audio::{AudioFormat, Codec};
     use muzik_tags::AudioProperties;
+    use std::path::Path;
 
     fn properties(format: AudioFormat, codec: Option<Codec>) -> AudioProperties {
         AudioProperties {
@@ -160,6 +165,18 @@ mod tests {
         let measured = MeasuredQuality::from(properties(AudioFormat::Aiff, None));
         assert_eq!(measured.format, Codec::Pcm("pcm_s16be".into()));
         assert!(measured.lossless);
+    }
+
+    #[test]
+    fn readable_audio_uses_probed_quality() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../muzik-tags/tests/fixtures/mediafile.flac");
+        let measured = measure(&path).unwrap();
+        assert_eq!(measured.format, Codec::Flac);
+        assert!(measured.lossless);
+        assert_eq!(measured.sample_rate, Some(48_000));
+        assert_eq!(measured.channels, Some(1));
+        assert!(measured.size.is_some_and(|size| size > 0));
     }
 
     #[test]
