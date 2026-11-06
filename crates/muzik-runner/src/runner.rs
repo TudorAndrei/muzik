@@ -186,13 +186,23 @@ impl Runner {
 impl Shared {
     fn work(&self) {
         while !self.stop.load(Ordering::SeqCst) {
-            let claimed = self.store().claim_any(&QUEUES).ok().flatten();
-            let Some(job) = claimed else {
+            let claimed = {
+                let mut running = self.running();
+                if self.stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                self.store().claim_any(&QUEUES).ok().flatten().map(|job| {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    running.insert(job.id, Arc::clone(&cancel));
+                    (job, cancel)
+                })
+            };
+            let Some((job, cancel)) = claimed else {
                 let mut idle = self.idle.lock();
                 self.wake.wait_for(&mut idle, Duration::from_secs(1));
                 continue;
             };
-            self.run_job(&job);
+            self.run_job(&job, &cancel);
         }
     }
 
@@ -217,14 +227,8 @@ impl Shared {
         }
     }
 
-    fn run_job(&self, job: &Job) {
+    fn run_job(&self, job: &Job, cancel: &AtomicBool) {
         let id = job_id(job.id);
-        let cancel = {
-            let mut running = self.running();
-            let cancel = Arc::new(AtomicBool::new(self.stop.load(Ordering::SeqCst)));
-            running.insert(job.id, Arc::clone(&cancel));
-            cancel
-        };
         self.generation.fetch_add(1, Ordering::SeqCst);
         gates::set_label(&job.title);
         (self.sink)(AppEvent::JobStarted {
@@ -234,10 +238,10 @@ impl Shared {
         });
         self.publish();
         let result = match job.kind {
-            Kind::Refresh => self.run_refresh(job, &id, &cancel),
-            Kind::Item => self.run_item(job, &id, &cancel),
-            Kind::Workflow => self.run_workflow(job, &id, &cancel),
-            Kind::Library => self.run_library(job, &id, &cancel),
+            Kind::Refresh => self.run_refresh(job, &id, cancel),
+            Kind::Item => self.run_item(job, &id, cancel),
+            Kind::Workflow => self.run_workflow(job, &id, cancel),
+            Kind::Library => self.run_library(job, &id, cancel),
         };
         {
             let store = self.store();
