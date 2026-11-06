@@ -171,6 +171,11 @@ fn transfer(
     cancelled: &AtomicBool,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<String> {
+    if cancelled.load(Ordering::SeqCst) {
+        partial.discard();
+        return Err("Bandcamp download cancelled".into());
+    }
+    let mut url = locate()?;
     let mut failures: u32 = 0;
     loop {
         if cancelled.load(Ordering::SeqCst) {
@@ -178,7 +183,7 @@ fn transfer(
             return Err("Bandcamp download cancelled".into());
         }
         let before = saved_bytes(partial.path);
-        let attempt = locate().and_then(|url| fetch(&url, cookie, partial, cancelled, on_progress));
+        let attempt = fetch(&url, cookie, partial, cancelled, on_progress);
         let error = match attempt {
             Ok(name) => return Ok(name),
             Err(error) => error,
@@ -193,6 +198,9 @@ fn transfer(
         }
         if failures > 0 {
             wait(Duration::from_secs(1 << failures), cancelled);
+        }
+        if !cancelled.load(Ordering::SeqCst) {
+            url = locate()?;
         }
     }
 }
@@ -827,6 +835,35 @@ mod tests {
                 assert_eq!(top, ["archive.zip", "out"]);
                 assert_links_stay_inside(&destination, &destination);
             });
+    }
+
+    #[test]
+    fn an_unavailable_download_page_returns_its_error_without_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("partial");
+        let cancelled = AtomicBool::new(false);
+        let mut requests = 0;
+        let result = transfer(
+            &mut || {
+                requests += 1;
+                if requests > 1 {
+                    cancelled.store(true, Ordering::SeqCst);
+                }
+                Err("purchase has no requested format".into())
+            },
+            "",
+            &PartialDownload {
+                path: &path,
+                identity: "purchase",
+            },
+            &cancelled,
+            &mut |_, _| {},
+        );
+        assert_eq!(requests, 1);
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "purchase has no requested format"
+        );
     }
 
     #[test]
