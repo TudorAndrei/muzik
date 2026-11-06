@@ -108,14 +108,12 @@ pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcom
     Ok(interpret(kind, &answer, &options))
 }
 
+#[must_use]
 pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
     if kind != DecisionKind::ImportMatch {
         return None;
     }
-    let best = payload
-        .pointer("/task/matches")
-        .and_then(Value::as_array)?
-        .iter()
+    let best = release_candidates(payload)
         .filter_map(|item| Some((item, item["distance"].as_f64()?)))
         .min_by(|left, right| left.1.total_cmp(&right.1))?;
     (best.1 <= STRONG_DISTANCE).then(|| Choice {
@@ -126,14 +124,19 @@ pub fn strong_match(kind: DecisionKind, payload: &Value) -> Option<Choice> {
     })
 }
 
+fn release_candidates(payload: &Value) -> impl Iterator<Item = &Value> {
+    payload
+        .pointer("/task/matches")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|item| item["candidate_id"].is_string())
+}
+
+#[must_use]
 pub fn options(kind: DecisionKind, payload: &Value) -> Vec<(String, Value)> {
     match kind {
-        DecisionKind::ImportMatch => payload
-            .pointer("/task/matches")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|item| item["candidate_id"].is_string())
+        DecisionKind::ImportMatch => release_candidates(payload)
             .map(|item| (release_label(item), item["candidate_id"].clone()))
             .collect(),
         DecisionKind::SoulseekCandidate => payload["candidates"]
@@ -195,7 +198,7 @@ pub fn prompt(kind: DecisionKind, payload: &Value, options: &[(String, Value)]) 
             text,
             "Candidates (distance 0.0 is a perfect match, 1.0 is a poor match):"
         );
-        for (index, item) in task["matches"].as_array().into_iter().flatten().enumerate() {
+        for (index, item) in release_candidates(payload).enumerate() {
             let _ = writeln!(
                 text,
                 "[{index}] {} · distance {:.3}",
@@ -413,6 +416,24 @@ mod tests {
         let choice = strong_match(DecisionKind::ImportMatch, &payload);
         assert_eq!(choice.map(|choice| choice.value), Some(json!("m1")));
         assert!(strong_match(DecisionKind::ImportMatch, &album()).is_none());
+    }
+
+    #[test]
+    fn release_choices_and_prompt_use_the_same_valid_candidates() {
+        let payload = json!({"task": {"matches": [
+            {"artist": "Invalid", "album": "Missing ID", "distance": 0.01},
+            {"candidate_id": "release", "artist": "Artist", "album": "Album", "distance": 0.3}
+        ]}});
+        let choices = options(DecisionKind::ImportMatch, &payload);
+        let text = prompt(DecisionKind::ImportMatch, &payload, &choices);
+        assert!(text.contains("[0] Artist — Album · distance 0.300"));
+        assert!(strong_match(DecisionKind::ImportMatch, &payload).is_none());
+        let picked = interpret(
+            DecisionKind::ImportMatch,
+            &answer(json!({"action": "pick", "index": 0, "confidence": 0.9})),
+            &choices,
+        );
+        assert!(matches!(picked, Outcome::Decided(choice) if choice.value == json!("release")));
     }
 
     #[test]
