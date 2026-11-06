@@ -77,3 +77,23 @@ Compatibility and limits:
 - Runner shutdown retains queue ownership until workers stop. It does not wait for blocking terminal input.
 - No live network account test or device UI check was run. No dependency upgrade was made.
 - Existing third-party future compatibility and dependency notices remain outside this refactor.
+
+## PR 31 review corrections
+
+The PR review identified existing defects that the first structural review did not find. The fixes cover these contracts:
+
+- Collection pages must contain an item array and a continuation flag. Continuing pages need a new, nonempty token. Repeated tokens stop with an error.
+- Bandcamp requests check HTTPS origins before sending cookies. Cookie imports match domain boundaries. Existing cookie files receive private permissions before replacement.
+- A cancelled download makes no initial page request. Resume requires the same purchase, strong ETag, and safe filename. A confirmed complete partial file can finish after HTTP 416.
+- ZIP extraction checks entry count and expanded size. Download names reject drive prefixes. Purchase scans do not follow filesystem links.
+- Downloads are extracted and checked in a temporary folder. A successful download replaces old content. A failed download preserves it. Failed replacement recovery retains the previous files and reports their location.
+- Home expansion uses an absolute HOME or USERPROFILE, or returns an error. Empty library paths count as missing.
+- Featured performer parsing preserves version text such as `(Remix)` in the title.
+- Tag updates restore snapshots after returned errors and panic unwinding. Failed restoration retains snapshots and reports both saved and original paths.
+- Cooperative tag updates lock canonical paths in a fixed order through snapshot, update, and restoration. Persistent sidecar files keep lock identity stable between processes. Separate hard-link names and unrelated tag writers do not share this path-based coordination.
+- Runner claim and registration hold the same mutex used by shutdown. An interrupted wait cannot miss a claimed but unregistered job.
+- Quality documentation states the extension-only fallback. Tests cover successful probing, home expansion, malformed candidate exclusion, and database-only updates.
+
+The review's general documentation coverage target is not a runtime contract. Documentation was added where it explains behavior and recovery. Comments that only repeat code remain excluded.
+
+Verification: all 357 workspace tests and 192 feature scenarios passed. The final local HTTP test includes rejection of unknown-length partial responses. Strict workspace Clippy, formatting, spelling of changed files, documentation tests, documentation build, and dependency checks passed.
