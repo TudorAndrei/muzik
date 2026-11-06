@@ -133,7 +133,8 @@ impl Library {
             .iter()
             .filter_map(|item| {
                 let path = item.field("path")?;
-                let Some(path) = path_from_sql(path) else {
+                let Some(path) = path_from_sql(path).filter(|path| !path.as_os_str().is_empty())
+                else {
                     return Some(item.id);
                 };
                 let path = if path.is_absolute() {
@@ -371,4 +372,27 @@ fn put_attributes(
 )]
 const fn count_to_f64(count: usize) -> f64 {
     count as f64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_text_and_blob_paths_count_as_missing_for_prune_safety() {
+        let mut library = Library::empty().unwrap();
+        for path in [Value::Text(String::new()), Value::Blob(Vec::new())] {
+            library
+                .connection()
+                .execute("INSERT INTO items(path) VALUES (?1)", [path])
+                .unwrap();
+        }
+        assert!(matches!(
+            library.prune_missing_items(Path::new("."), 0.0),
+            Err(Error::PruneAborted {
+                missing: 2,
+                total: 2
+            })
+        ));
+    }
 }
