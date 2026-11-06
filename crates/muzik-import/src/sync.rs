@@ -67,7 +67,8 @@ fn sync_singletons<P: ReleaseProvider>(
             fields.insert("mb_trackid".into(), SqlValue::Text(id.0));
         }
         let path = path(&item)?;
-        crate::backup::with_backups(write_tags.then(|| path.clone()), || {
+        let database = library.path().to_path_buf();
+        crate::backup::with_backups(&database, write_tags.then(|| path.clone()), || {
             if write_tags {
                 write_fields_to_tags(&path, &fields)?;
             }
@@ -105,7 +106,9 @@ fn sync_album(
     if let Some(id) = release.release_group_id {
         album_fields.insert("mb_releasegroupid".into(), SqlValue::Text(id));
     }
+    let database = library.path().to_path_buf();
     crate::backup::with_backups(
+        &database,
         updates
             .iter()
             .filter(|_| write_tags)

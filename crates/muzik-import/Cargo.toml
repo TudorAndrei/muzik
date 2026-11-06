@@ -12,6 +12,8 @@ workspace = true
 [dependencies]
 deunicode = "1.6"
 fancy-regex = "0.20"
+hex = "0.4"
+sha2 = "0.11"
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }
 muzik-match = { path = "../muzik-match" }

@@ -218,19 +218,24 @@ pub fn write_mbids<P: ReleaseProvider>(
 ) -> Result<FillResult> {
     let artist_ids = provider.lookup_release_artist_ids(&candidate.release.id.0)?;
     let result = mbid_fields(album, candidate, &artist_ids);
-    crate::backup::with_backups(album.items.iter().map(|item| item.path.clone()), || {
-        for (item, (_, fields)) in album.items.iter().zip(&result.items) {
-            muzik_tags::write(&item.path, &tag_data(fields))?;
-        }
-        library.transaction(|writer| {
-            writer.update_album(album.album_id, &result.album, &Fields::new())?;
-            for (id, fields) in &result.items {
-                writer.update_item(*id, fields, &Fields::new())?;
+    let database = library.path().to_path_buf();
+    crate::backup::with_backups(
+        &database,
+        album.items.iter().map(|item| item.path.clone()),
+        || {
+            for (item, (_, fields)) in album.items.iter().zip(&result.items) {
+                muzik_tags::write(&item.path, &tag_data(fields))?;
             }
+            library.transaction(|writer| {
+                writer.update_album(album.album_id, &result.album, &Fields::new())?;
+                for (id, fields) in &result.items {
+                    writer.update_item(*id, fields, &Fields::new())?;
+                }
+                Ok(())
+            })?;
             Ok(())
-        })?;
-        Ok(())
-    })?;
+        },
+    )?;
     Ok(result)
 }
 
