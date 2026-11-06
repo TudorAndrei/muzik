@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 static FEATURED: LazyLock<Regex> = LazyLock::new(|| {
     literal(
-        r"(?i)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+(.+)$)",
+        r"(?i)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+([^\(\[]+))",
     )
 });
 static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| literal(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*"));
@@ -33,11 +33,39 @@ pub fn parse(title: &str) -> (String, Vec<String>) {
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
         .collect();
-    let clean = FEATURED.replacen(title, 1, "");
+    let found = capture.get_match();
+    let before = title.get(..found.start()).unwrap_or_default();
+    let after = title.get(found.end()..).unwrap_or_default();
+    let clean = if capture.get(2).is_some() {
+        format!("{} {}", before.trim_end(), after.trim_start())
+    } else {
+        format!("{before}{after}")
+    };
     let clean = if clean.trim().is_empty() {
         title.trim()
     } else {
         clean.trim()
     };
     (clean.to_owned(), featured)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn unbracketed_credits_keep_the_version_in_the_title() {
+        for title in ["Song ft. A (Remix)", "Song featuring A [Live]"] {
+            let version = if title.ends_with("(Remix)") {
+                "Song (Remix)"
+            } else {
+                "Song [Live]"
+            };
+            assert_eq!(parse(title), (version.to_owned(), vec!["A".to_owned()]));
+        }
+        assert_eq!(
+            parse("Song (feat. A) (Remix)"),
+            ("Song (Remix)".to_owned(), vec!["A".to_owned()])
+        );
+    }
 }

@@ -80,6 +80,10 @@ pub enum Error {
     NotMapping { layer: &'static str },
     #[error("beets config has no {key} path")]
     MissingPath { key: String },
+    #[error(
+        "cannot resolve beets {key} path: HOME and USERPROFILE have no absolute home directory"
+    )]
+    HomeUnavailable { key: String },
 }
 
 /// The beets defaults, user config, and muzik overrides as one YAML tree.
@@ -136,7 +140,7 @@ impl BeetsConfig {
     /// Resolve a configured path against the directory of its config file.
     ///
     /// # Errors
-    /// Returns an error if the key does not contain a path string.
+    /// Returns an error if the key has no path string or a home path has no home directory.
     pub fn configured_path(&self, config_path: &Path, key: &str) -> Result<PathBuf, Error> {
         let raw = self
             .get(&[key])
@@ -145,12 +149,15 @@ impl BeetsConfig {
                 key: key.to_owned(),
             })?;
         let expanded = if raw == "~" || raw.starts_with("~/") {
-            env::var_os("HOME").map_or_else(
-                || PathBuf::from(raw),
-                |home| {
-                    PathBuf::from(home).join(raw.trim_start_matches('~').trim_start_matches('/'))
-                },
-            )
+            let home = ["HOME", "USERPROFILE"]
+                .into_iter()
+                .filter_map(env::var_os)
+                .map(PathBuf::from)
+                .find(|path| path.is_absolute())
+                .ok_or_else(|| Error::HomeUnavailable {
+                    key: key.to_owned(),
+                })?;
+            home.join(raw.trim_start_matches('~').trim_start_matches('/'))
         } else {
             PathBuf::from(raw)
         };
