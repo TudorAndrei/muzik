@@ -71,29 +71,6 @@ pub enum SyncOutcome {
     Updated(SyncResult),
 }
 
-fn configured_path(config: &BeetsConfig, config_path: &Path, key: &str) -> Result<PathBuf> {
-    let raw = config
-        .get(&[key])
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| format!("beets config has no {key} path"))?;
-    let expanded = if raw == "~" || raw.starts_with("~/") {
-        std::env::var_os("HOME").map_or_else(
-            || PathBuf::from(raw),
-            |home| PathBuf::from(home).join(raw.trim_start_matches('~').trim_start_matches('/')),
-        )
-    } else {
-        PathBuf::from(raw)
-    };
-    Ok(if expanded.is_absolute() {
-        expanded
-    } else {
-        config_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .join(expanded)
-    })
-}
-
 /// # Errors
 /// Returns an error when the beets config cannot be loaded or lacks a required path.
 pub fn load_paths(
@@ -103,9 +80,15 @@ pub fn load_paths(
     let config_path = config_path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     let config = BeetsConfig::load(&config_path, overrides).map_err(|error| error.to_string())?;
     let paths = BeetsPaths {
-        library: configured_path(&config, &config_path, "library")?,
-        directory: configured_path(&config, &config_path, "directory")?,
-        statefile: configured_path(&config, &config_path, "statefile")?,
+        library: config
+            .configured_path(&config_path, "library")
+            .map_err(|error| error.to_string())?,
+        directory: config
+            .configured_path(&config_path, "directory")
+            .map_err(|error| error.to_string())?,
+        statefile: config
+            .configured_path(&config_path, "statefile")
+            .map_err(|error| error.to_string())?,
         config: config_path,
     };
     Ok((config, paths))

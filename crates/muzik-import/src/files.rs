@@ -60,7 +60,6 @@ fn move_file(source: &Path, destination: &Path) -> io::Result<()> {
 }
 
 fn copy_then_remove(source: &Path, destination: &Path) -> io::Result<()> {
-    // Copy to the destination filesystem before deleting the source.
     let parent = destination
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;

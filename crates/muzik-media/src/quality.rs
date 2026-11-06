@@ -23,11 +23,15 @@ pub enum QualityDecision {
     Replace,
 }
 
-/// # Errors
-/// Never returns an error now; an unknown or unreadable file gives `Ok(None)`.
-pub fn measure(path: &Path) -> Result<Option<MeasuredQuality>, String> {
+/// Probe the audio properties.
+///
+/// If probing fails, DSF, DFF, WMA, and TTA paths
+/// use their extension to identify the codec, including missing or unreadable files.
+/// Other files that cannot be probed give `None`.
+#[must_use]
+pub fn measure(path: &Path) -> Option<MeasuredQuality> {
     if let Ok(properties) = muzik_tags::probe(path) {
-        return Ok(Some(MeasuredQuality::from(properties)));
+        return Some(MeasuredQuality::from(properties));
     }
     let extension = path
         .extension()
@@ -39,9 +43,9 @@ pub fn measure(path: &Path) -> Result<Option<MeasuredQuality>, String> {
         "dff" => Codec::Dsd("dsd_msbf".into()),
         "wma" => Codec::WmaV2,
         "tta" => Codec::Tta,
-        _ => return Ok(None),
+        _ => return None,
     };
-    Ok(Some(MeasuredQuality {
+    Some(MeasuredQuality {
         lossless: format.is_lossless(),
         format,
         bitrate_kbps: None,
@@ -49,7 +53,7 @@ pub fn measure(path: &Path) -> Result<Option<MeasuredQuality>, String> {
         bit_depth: None,
         channels: None,
         size: path.metadata().ok().map(|metadata| metadata.len()),
-    }))
+    })
 }
 
 impl From<AudioProperties> for MeasuredQuality {
@@ -110,6 +114,7 @@ mod tests {
     use muzik_core::QualityPolicy;
     use muzik_core::audio::{AudioFormat, Codec};
     use muzik_tags::AudioProperties;
+    use std::path::Path;
 
     fn properties(format: AudioFormat, codec: Option<Codec>) -> AudioProperties {
         AudioProperties {
@@ -163,16 +168,28 @@ mod tests {
     }
 
     #[test]
+    fn readable_audio_uses_probed_quality() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../muzik-tags/tests/fixtures/mediafile.flac");
+        let measured = measure(&path).unwrap();
+        assert_eq!(measured.format, Codec::Flac);
+        assert!(measured.lossless);
+        assert_eq!(measured.sample_rate, Some(48_000));
+        assert_eq!(measured.channels, Some(1));
+        assert!(measured.size.is_some_and(|size| size > 0));
+    }
+
+    #[test]
     fn formats_lofty_cannot_read_are_named_from_the_extension() {
         let directory = tempfile::tempdir().unwrap();
         let dsd = directory.path().join("track.DSF");
         std::fs::write(&dsd, b"not audio").unwrap();
-        let measured = measure(&dsd).unwrap().unwrap();
+        let measured = measure(&dsd).unwrap();
         assert!(measured.lossless);
         assert_eq!(measured.size, Some(9));
 
         let broken = directory.path().join("track.mp3");
         std::fs::write(&broken, b"not audio").unwrap();
-        assert_eq!(measure(&broken).unwrap(), None);
+        assert_eq!(measure(&broken), None);
     }
 }

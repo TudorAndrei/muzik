@@ -8,6 +8,7 @@ pub mod config_choices;
 mod decision;
 pub mod downloads;
 mod error;
+pub mod featured;
 mod job_event;
 pub mod paths;
 pub mod sidecar;

@@ -1,4 +1,5 @@
-use crate::{Muzik, Page};
+use crate::Muzik;
+use crate::navigation::{PAGES, Page};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
 use gpui_kit::component::{IconName, IndexPath, WindowExt as _};
@@ -49,39 +50,6 @@ pub enum AppCommand {
     Refresh,
     Library(LibraryTask),
 }
-
-const GO_TO: [(Page, &str, IconName, &[&str]); 5] = [
-    (
-        Page::Workflow,
-        "Workflow",
-        IconName::Play,
-        &["run", "download", "split"],
-    ),
-    (
-        Page::Watchlist,
-        "Watchlist",
-        IconName::Eye,
-        &["playlist", "sources"],
-    ),
-    (
-        Page::Library,
-        "Library",
-        IconName::BookOpen,
-        &["beets", "albums"],
-    ),
-    (
-        Page::Settings,
-        "Settings",
-        IconName::Settings,
-        &["config", "preferences"],
-    ),
-    (
-        Page::Spotify,
-        "Spotify",
-        IconName::Globe,
-        &["login", "import"],
-    ),
-];
 
 const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 6] = [
     (
@@ -134,9 +102,7 @@ pub fn page_action(page: Page) -> Box<dyn Action> {
 
 pub fn command_at(index: IndexPath) -> Option<AppCommand> {
     match index.section {
-        0 => GO_TO
-            .get(index.row)
-            .map(|(page, ..)| AppCommand::Show(*page)),
+        0 => PAGES.get(index.row).map(|info| AppCommand::Show(info.page)),
         1 => ACTIONS.get(index.row).map(|(command, ..)| *command),
         _ => None,
     }
@@ -216,15 +182,17 @@ pub fn open_palette(
                     Command::new(&palette)
                         .bordered(false)
                         .placeholder("Go to a page or run a command")
-                        .group(CommandGroup::new().label("Go to").items(GO_TO.iter().map(
-                            |(page, label, icon, keywords)| {
-                                CommandItem::new()
-                                    .label(*label)
-                                    .icon(icon.clone())
-                                    .keywords(keywords.iter().copied())
-                                    .action(page_action(*page))
-                            },
-                        )))
+                        .group(
+                            CommandGroup::new()
+                                .label("Go to")
+                                .items(PAGES.iter().map(|info| {
+                                    CommandItem::new()
+                                        .label(info.label)
+                                        .icon(info.icon.clone())
+                                        .keywords(info.keywords.iter().copied())
+                                        .action(page_action(info.page))
+                                })),
+                        )
                         .group(
                             CommandGroup::new()
                                 .label("Actions")

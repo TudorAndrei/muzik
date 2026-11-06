@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use anyhow::Context;
@@ -23,12 +25,12 @@ pub fn download(args: &Bandcamp) -> anyhow::Result<()> {
         .clone()
         .unwrap_or_else(|| paths::data_dir().join("bandcamp"));
     let purchases = bandcamp::collection(&login)?;
+    let folders = purchase_folders(&output, &purchases)?;
     println!("{} purchase(s) in the collection", purchases.len());
     let cancelled = AtomicBool::new(false);
-    for purchase in &purchases {
+    for (purchase, folder) in purchases.iter().zip(&folders) {
         let label = purchase.label();
-        let folder = output.join(folder_name(&label));
-        if !args.force && !bandcamp::audio_files(&folder).is_empty() {
+        if !args.force && !bandcamp::audio_files(folder).is_empty() {
             println!("Already downloaded: {label}");
             continue;
         }
@@ -41,13 +43,32 @@ pub fn download(args: &Bandcamp) -> anyhow::Result<()> {
             &login,
             &purchase.download_page,
             args.format,
-            &folder,
+            folder,
             &cancelled,
             &mut |_, _| {},
         )?;
         println!("  {} file(s) in {}", files.len(), folder.display());
     }
     Ok(())
+}
+
+fn purchase_folders(
+    output: &Path,
+    purchases: &[bandcamp::Purchase],
+) -> anyhow::Result<Vec<PathBuf>> {
+    let mut owners = HashMap::new();
+    let mut folders = Vec::new();
+    for purchase in purchases {
+        let name = folder_name(&purchase.label());
+        if let Some(previous) = owners.insert(name.to_lowercase(), &purchase.key) {
+            anyhow::bail!(
+                "Bandcamp purchases {previous} and {} use the same folder: {name}. Download them to separate folders.",
+                purchase.key
+            );
+        }
+        folders.push(output.join(name));
+    }
+    Ok(folders)
 }
 
 fn folder_name(label: &str) -> String {
@@ -71,7 +92,30 @@ fn folder_name(label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::folder_name;
+    use super::{folder_name, purchase_folders};
+
+    #[test]
+    fn purchases_need_distinct_download_folders() {
+        let make = |key: &str, title: &str| muzik_bandcamp::Purchase {
+            key: key.into(),
+            artist: "Band".into(),
+            title: title.into(),
+            single: false,
+            download_page: "https://bandcamp.com/download".into(),
+            item_url: None,
+            art_url: None,
+        };
+        let output = std::path::Path::new("downloads");
+        for (first, other) in [("Album", "Album"), ("Album", "album"), ("A/B", "A:B")] {
+            let error =
+                purchase_folders(output, &[make("a1", first), make("t2", other)]).unwrap_err();
+            assert!(error.to_string().contains("a1 and t2"));
+        }
+        assert_eq!(
+            purchase_folders(output, &[make("a1", "Album"), make("t2", "Single")]).unwrap(),
+            [output.join("Band - Album"), output.join("Band - Single")]
+        );
+    }
 
     #[test]
     fn a_purchase_label_becomes_one_safe_folder_name() {

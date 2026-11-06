@@ -1,9 +1,9 @@
 //! Transactional writes to the existing beets schema.
 
-use crate::{Entity, Error, Fields, Library, Value};
+use crate::{Entity, Error, Fields, Library, Value, path_from_sql};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params, params_from_iter};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct LibraryWrite<'a> {
     transaction: Transaction<'a>,
@@ -133,12 +133,10 @@ impl Library {
             .iter()
             .filter_map(|item| {
                 let path = item.field("path")?;
-                let bytes = match path {
-                    Value::Blob(bytes) => bytes.clone(),
-                    Value::Text(text) => text.as_bytes().to_vec(),
-                    _ => return Some(item.id),
+                let Some(path) = path_from_sql(path).filter(|path| !path.as_os_str().is_empty())
+                else {
+                    return Some(item.id);
                 };
-                let path = bytes_to_path(&bytes);
                 let path = if path.is_absolute() {
                     path
                 } else {
@@ -376,13 +374,25 @@ const fn count_to_f64(count: usize) -> f64 {
     count as f64
 }
 
-#[cfg(unix)]
-fn bytes_to_path(bytes: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(not(unix))]
-fn bytes_to_path(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
+    #[test]
+    fn empty_text_and_blob_paths_count_as_missing_for_prune_safety() {
+        let mut library = Library::empty().unwrap();
+        for path in [Value::Text(String::new()), Value::Blob(Vec::new())] {
+            library
+                .connection()
+                .execute("INSERT INTO items(path) VALUES (?1)", [path])
+                .unwrap();
+        }
+        assert!(matches!(
+            library.prune_missing_items(Path::new("."), 0.0),
+            Err(Error::PruneAborted {
+                missing: 2,
+                total: 2
+            })
+        ));
+    }
 }

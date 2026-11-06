@@ -127,6 +127,11 @@ impl Library {
         })
     }
 
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     pub const fn connection(&self) -> &Connection {
         &self.connection
     }

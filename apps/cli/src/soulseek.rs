@@ -59,8 +59,9 @@ pub fn check_library(args: &SoulseekCheckLibrary) -> anyhow::Result<()> {
     let library =
         Library::open_read_only(&paths.library).context("Could not open the music library")?;
     let items = library.query_items(args.query.as_deref().unwrap_or(""))?;
-    let (scanned, mut flagged) =
-        scan_library(items, &paths.directory, args.min_bitrate, quality::measure)?;
+    let (scanned, mut flagged) = scan_library(items, &paths.directory, args.min_bitrate, |path| {
+        Ok(quality::measure(path))
+    })?;
     flagged.sort_by(|left, right| {
         (&left.sort_artist, &left.album, &left.title).cmp(&(
             &right.sort_artist,

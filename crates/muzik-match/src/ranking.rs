@@ -56,8 +56,6 @@ pub fn assign_items(
     })
 }
 
-// Solver indices are unique and dense within each input slice. Store only their
-// membership bits; the records stay in their original arrays.
 fn unmatched<T>(
     values: &[T],
     assigned: impl ExactSizeIterator<Item = usize>,

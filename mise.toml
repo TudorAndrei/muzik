@@ -109,13 +109,13 @@ run = """
 cargo bolero test -p muzik-soulseek --sanitizer NONE -T "${usage_seconds}s" \
   fetch::tests::local_files_stay_directly_inside_the_root_for_any_peer_names
 cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
-  tests::any_archive_writes_only_inside_the_destination
+  download::tests::any_archive_writes_only_inside_the_destination
 cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
-  tests::any_download_name_is_one_file_name_inside_the_destination
+  download::tests::any_download_name_is_one_file_name_inside_the_destination
 cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
-  tests::any_accepted_content_range_is_well_formed
+  download::tests::any_accepted_content_range_is_well_formed
 cargo bolero test -p muzik-bandcamp --sanitizer NONE -T "${usage_seconds}s" \
-  tests::any_numeric_content_range_is_accepted_only_inside_the_length
+  download::tests::any_numeric_content_range_is_accepted_only_inside_the_length
 cargo bolero test -p muzik-media --sanitizer NONE -T "${usage_seconds}s" \
   splitter::tests::any_title_gives_one_normal_file_name
 cargo bolero test -p muzik-core --sanitizer NONE -T "${usage_seconds}s" \

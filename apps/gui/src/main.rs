@@ -2,6 +2,7 @@ mod activity;
 mod backend;
 mod commands;
 mod library;
+mod navigation;
 mod pages;
 mod requests;
 mod settings;
@@ -52,6 +53,7 @@ use muzik_runner::library_tasks::LibraryTask;
 use muzik_store::watchlist::{
     ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
 };
+use navigation::{PAGES, Page};
 use requests::{Command, PendingAction, Read};
 use serde_json::{Value, json};
 use settings::ConfigView;
@@ -60,23 +62,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Page {
-    Workflow,
-    Watchlist,
-    Library,
-    Settings,
-    Spotify,
-}
-
-const PAGES: [(Page, &str); 5] = [
-    (Page::Workflow, "Workflow"),
-    (Page::Watchlist, "Watchlist"),
-    (Page::Library, "Library"),
-    (Page::Settings, "Settings"),
-    (Page::Spotify, "Spotify"),
-];
 
 struct ChapterRow {
     index: Entity<InputState>,
@@ -655,7 +640,7 @@ impl Muzik {
     fn header(&self, cx: &Context<Self>) -> AnyElement {
         let selected = PAGES
             .iter()
-            .position(|(page, _)| *page == self.page)
+            .position(|info| info.page == self.page)
             .unwrap_or(0);
         TitleBar::new()
             .child(
@@ -677,10 +662,10 @@ impl Muzik {
                                 .segmented()
                                 .small()
                                 .selected_index(selected)
-                                .children(PAGES.iter().map(|(_, label)| Tab::new().label(*label)))
+                                .children(PAGES.iter().map(|info| Tab::new().label(info.label)))
                                 .on_click(cx.listener(|view, index: &usize, window, cx| {
-                                    if let Some((page, _)) = PAGES.get(*index) {
-                                        view.set_page(*page, window, cx);
+                                    if let Some(info) = PAGES.get(*index) {
+                                        view.set_page(info.page, window, cx);
                                     }
                                 })),
                         ),

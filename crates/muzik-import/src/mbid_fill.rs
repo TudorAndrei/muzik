@@ -1,6 +1,5 @@
 //! Find `MusicBrainz` releases for library albums without IDs and write only their IDs.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use muzik_core::BeetsConfig;
@@ -219,31 +218,24 @@ pub fn write_mbids<P: ReleaseProvider>(
 ) -> Result<FillResult> {
     let artist_ids = provider.lookup_release_artist_ids(&candidate.release.id.0)?;
     let result = mbid_fields(album, candidate, &artist_ids);
-    let backup = tempfile::tempdir()?;
-    for (index, item) in album.items.iter().enumerate() {
-        fs::copy(&item.path, backup.path().join(index.to_string()))?;
-    }
-    let update = (|| -> Result<()> {
-        for (item, (_, fields)) in album.items.iter().zip(&result.items) {
-            muzik_tags::write(&item.path, &tag_data(fields))?;
-        }
-        library.transaction(|writer| {
-            writer.update_album(album.album_id, &result.album, &Fields::new())?;
-            for (id, fields) in &result.items {
-                writer.update_item(*id, fields, &Fields::new())?;
+    let database = library.path().to_path_buf();
+    crate::backup::with_backups(
+        &database,
+        album.items.iter().map(|item| item.path.clone()),
+        || {
+            for (item, (_, fields)) in album.items.iter().zip(&result.items) {
+                muzik_tags::write(&item.path, &tag_data(fields))?;
             }
+            library.transaction(|writer| {
+                writer.update_album(album.album_id, &result.album, &Fields::new())?;
+                for (id, fields) in &result.items {
+                    writer.update_item(*id, fields, &Fields::new())?;
+                }
+                Ok(())
+            })?;
             Ok(())
-        })?;
-        Ok(())
-    })();
-    if let Err(error) = update {
-        for (index, item) in album.items.iter().enumerate() {
-            if let Err(restore) = fs::copy(backup.path().join(index.to_string()), &item.path) {
-                tracing::warn!(path = %item.path.display(), %restore, "cannot restore MusicBrainz ID backup");
-            }
-        }
-        return Err(error);
-    }
+        },
+    )?;
     Ok(result)
 }
 

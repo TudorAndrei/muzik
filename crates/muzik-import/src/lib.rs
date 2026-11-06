@@ -50,6 +50,12 @@ pub enum Error {
     UnsafeReplacePath(PathBuf),
     #[error("cannot restore replaced file after failed import: {0}")]
     RestoreFailed(PathBuf),
+    #[error("{source}; cannot restore tag files: {failures:?}; backups retained at {directory}")]
+    TagRestore {
+        source: Box<Self>,
+        directory: PathBuf,
+        failures: Vec<String>,
+    },
     #[error("item {0} has no audio path")]
     MissingPath(i64),
     #[error("import cancelled")]
@@ -89,4 +95,5 @@ pub mod paths;
 pub mod plan;
 pub mod sync;
 
+mod backup;
 mod fields;

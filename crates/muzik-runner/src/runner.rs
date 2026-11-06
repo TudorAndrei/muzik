@@ -54,9 +54,20 @@ struct Shared {
     ask: Ask,
     chooser: Option<Arc<dyn Chooser>>,
     generation: Arc<AtomicU64>,
+    _lock: Option<RunnerLock>,
 }
 
 impl Shared {
+    fn stop(&self) {
+        let running = self.running();
+        self.stop.store(true, Ordering::SeqCst);
+        for cancel in running.values() {
+            cancel.store(true, Ordering::SeqCst);
+        }
+        drop(running);
+        self.wake.notify_all();
+    }
+
     fn store(&self) -> MutexGuard<'_, Store> {
         self.jobs.store()
     }
@@ -83,13 +94,11 @@ impl Shared {
 
 pub struct Runner {
     shared: Arc<Shared>,
-    _lock: Option<RunnerLock>,
 }
 
 impl Drop for Runner {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
-        self.shared.wake.notify_all();
+        self.shared.stop();
     }
 }
 
@@ -115,6 +124,7 @@ impl Runner {
             ask: options.ask,
             chooser: options.chooser,
             generation: options.generation,
+            _lock: lock,
         });
         let sink = Arc::clone(&shared.sink);
         gates::listen(move |snapshot| sink(AppEvent::QueuesUpdated(snapshot)));
@@ -124,10 +134,7 @@ impl Runner {
         }
         let watcher = Arc::clone(&shared);
         thread::spawn(move || watcher.watch());
-        Ok(Some(Self {
-            shared,
-            _lock: lock,
-        }))
+        Ok(Some(Self { shared }))
     }
 
     #[must_use]
@@ -164,13 +171,9 @@ impl Runner {
     pub fn wait_until_idle(&self, interrupted: &AtomicBool) {
         loop {
             if interrupted.load(Ordering::SeqCst) {
-                self.shared.stop.store(true, Ordering::SeqCst);
-                let running = self.shared.running();
-                if running.is_empty() {
+                self.shared.stop();
+                if self.shared.running().is_empty() {
                     return;
-                }
-                for cancel in running.values() {
-                    cancel.store(true, Ordering::SeqCst);
                 }
             } else if self.is_idle() {
                 return;
@@ -183,13 +186,23 @@ impl Runner {
 impl Shared {
     fn work(&self) {
         while !self.stop.load(Ordering::SeqCst) {
-            let claimed = self.store().claim_any(&QUEUES).ok().flatten();
-            let Some(job) = claimed else {
+            let claimed = {
+                let mut running = self.running();
+                if self.stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                self.store().claim_any(&QUEUES).ok().flatten().map(|job| {
+                    let cancel = Arc::new(AtomicBool::new(false));
+                    running.insert(job.id, Arc::clone(&cancel));
+                    (job, cancel)
+                })
+            };
+            let Some((job, cancel)) = claimed else {
                 let mut idle = self.idle.lock();
                 self.wake.wait_for(&mut idle, Duration::from_secs(1));
                 continue;
             };
-            self.run_job(&job);
+            self.run_job(&job, &cancel);
         }
     }
 
@@ -214,10 +227,8 @@ impl Shared {
         }
     }
 
-    fn run_job(&self, job: &Job) {
+    fn run_job(&self, job: &Job, cancel: &AtomicBool) {
         let id = job_id(job.id);
-        let cancel = Arc::new(AtomicBool::new(false));
-        self.running().insert(job.id, Arc::clone(&cancel));
         self.generation.fetch_add(1, Ordering::SeqCst);
         gates::set_label(&job.title);
         (self.sink)(AppEvent::JobStarted {
@@ -227,10 +238,10 @@ impl Shared {
         });
         self.publish();
         let result = match job.kind {
-            Kind::Refresh => self.run_refresh(job, &id, &cancel),
-            Kind::Item => self.run_item(job, &id, &cancel),
-            Kind::Workflow => self.run_workflow(job, &id, &cancel),
-            Kind::Library => self.run_library(job, &id, &cancel),
+            Kind::Refresh => self.run_refresh(job, &id, cancel),
+            Kind::Item => self.run_item(job, &id, cancel),
+            Kind::Workflow => self.run_workflow(job, &id, cancel),
+            Kind::Library => self.run_library(job, &id, cancel),
         };
         {
             let store = self.store();
@@ -614,20 +625,63 @@ mod tests {
     }
 
     #[test]
-    fn an_interrupt_stops_the_runner_and_keeps_queued_jobs() {
+    fn dropping_a_runner_cancels_work_and_keeps_ownership_until_it_stops() {
         let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
         let audio = dir.path().join("track.flac");
         std::fs::write(&audio, b"audio").unwrap();
-        let jobs = Arc::new(Jobs::in_memory(&Paths::under(dir.path())).unwrap());
-        let (runner, _receiver) = runner(&jobs).unwrap();
-        runner.wait_until_idle(&AtomicBool::new(true));
-        let id = jobs
-            .workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
-            .unwrap();
-        runner.wake();
-        std::thread::sleep(Duration::from_millis(1500));
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let params = json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true});
+        let active = jobs.workflow(&params).unwrap();
+        let (started, start) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let released = parking_lot::Mutex::new(released);
+        let (events, received) = mpsc::channel();
+        let runner = Runner::start(
+            Arc::clone(&jobs),
+            Options {
+                workers: 1,
+                sink: Arc::new(move |event| {
+                    if matches!(event, AppEvent::JobStarted { .. }) {
+                        started.send(()).unwrap();
+                        released
+                            .lock()
+                            .recv_timeout(Duration::from_secs(10))
+                            .unwrap();
+                    }
+                    let _ = events.send(event);
+                }),
+                ask: Arc::new(|_| Err("no answer in tests".into())),
+                chooser: None,
+                generation: Arc::new(AtomicU64::new(0)),
+            },
+        )
+        .unwrap()
+        .unwrap();
+        start.recv_timeout(Duration::from_secs(10)).unwrap();
+        let running = runner.running();
+        let cancel = Arc::clone(running.lock().get(&active).unwrap());
+        let queued = jobs.workflow(&params).unwrap();
+
+        drop(runner);
+
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            muzik_store::jobs::RunnerLock::try_acquire(&paths.data.join("jobs.lock"))
+                .unwrap()
+                .is_none()
+        );
+        release.send(()).unwrap();
+        loop {
+            if let AppEvent::JobCancelled { job_id } =
+                received.recv_timeout(Duration::from_secs(10)).unwrap()
+            {
+                assert_eq!(job_id, super::job_id(active));
+                break;
+            }
+        }
         assert_eq!(
-            jobs.store().get(id).unwrap().map(|job| job.status),
+            jobs.store().get(queued).unwrap().map(|job| job.status),
             Some(muzik_store::jobs::Status::Queued)
         );
     }

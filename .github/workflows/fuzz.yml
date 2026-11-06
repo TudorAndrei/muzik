@@ -32,19 +32,19 @@ jobs:
             corpus: crates/muzik-soulseek/src/__fuzz__
           - id: bandcamp-archive
             package: muzik-bandcamp
-            harness: tests::any_archive_writes_only_inside_the_destination
+            harness: download::tests::any_archive_writes_only_inside_the_destination
             corpus: crates/muzik-bandcamp/src/__fuzz__
           - id: bandcamp-download-name
             package: muzik-bandcamp
-            harness: tests::any_download_name_is_one_file_name_inside_the_destination
+            harness: download::tests::any_download_name_is_one_file_name_inside_the_destination
             corpus: crates/muzik-bandcamp/src/__fuzz__
           - id: bandcamp-content-range
             package: muzik-bandcamp
-            harness: tests::any_accepted_content_range_is_well_formed
+            harness: download::tests::any_accepted_content_range_is_well_formed
             corpus: crates/muzik-bandcamp/src/__fuzz__
           - id: bandcamp-numeric-content-range
             package: muzik-bandcamp
-            harness: tests::any_numeric_content_range_is_accepted_only_inside_the_length
+            harness: download::tests::any_numeric_content_range_is_accepted_only_inside_the_length
             corpus: crates/muzik-bandcamp/src/__fuzz__
           - id: media-split-folder
             package: muzik-media

@@ -72,9 +72,6 @@ impl Source for Bandcamp {
                 })?;
             let login = bandcamp::Login::load(&adapter.prepared.settings.paths)
                 .ok_or_else(|| JobError::Operation(LOGIN.into()))?;
-            if directory.exists() {
-                std::fs::remove_dir_all(&directory).map_err(|error| error.to_string())?;
-            }
             let _permit =
                 gates::enter(Gate::Download, cancelled).map_err(|_| JobError::Cancelled)?;
             let on_import_event = &mut *adapter.on_import_event;
@@ -172,6 +169,32 @@ mod tests {
     use super::items;
     use muzik_store::watchlist::SourceKind;
     use serde_json::json;
+
+    #[test]
+    fn a_failed_download_again_keeps_the_previous_purchase() {
+        use crate::sources::of;
+        use crate::sources::testing::{settings, with_adapter};
+        use muzik_store::watchlist::{ItemAction, WatchItem};
+        let root = tempfile::tempdir().unwrap();
+        let settings = settings(
+            root.path(),
+            &json!({"output":root.path(), "no_organize":true}),
+        )
+        .unwrap();
+        muzik_bandcamp::Login::save(&settings.paths, Some("listener"), "identity=test").unwrap();
+        let directory = root.path().join("bandcamp-watchlist/p12");
+        std::fs::create_dir_all(&directory).unwrap();
+        let audio = directory.join("previous.flac");
+        std::fs::write(&audio, b"previous purchase").unwrap();
+        let mut item = WatchItem::new(1, "Band - Album", SourceKind::Bandcamp);
+        item.entry_id = Some("p12".into());
+        item.track = Some(json!({"download_page":"https://untrusted.invalid/download"}));
+        let result = with_adapter(&settings, |adapter, cancelled| {
+            of(SourceKind::Bandcamp).process(adapter, &item, ItemAction::DownloadAgain, cancelled)
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(audio).unwrap(), b"previous purchase");
+    }
 
     #[test]
     fn purchases_become_items_with_their_download_page() {
