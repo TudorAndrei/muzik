@@ -353,7 +353,6 @@ fn accept_album(
     track: &Track,
     on_event: &mut dyn FnMut(JobEvent),
 ) -> Option<QualityUpgradeResult> {
-    // Every part of a multi-file album must pass a post-download quality check.
     if files.iter().any(|file| {
         !backend
             .measure(file)
@@ -479,7 +478,7 @@ impl Backend for SoulseekBackend {
     }
 
     fn measure(&mut self, path: &Path) -> Result<Option<MeasuredQuality>> {
-        Ok(quality::measure(path)?)
+        Ok(quality::measure(path))
     }
 
     fn track(&mut self, path: &Path) -> Result<Option<Track>> {

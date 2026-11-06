@@ -5261,7 +5261,6 @@ dependencies = [
  "muzik-metadata",
  "muzik-tags",
  "reflink-copy",
- "regex",
  "serde",
  "serde-pickle",
  "serde_json",

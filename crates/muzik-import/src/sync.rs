@@ -1,6 +1,5 @@
 //! Update selected library albums from their `MusicBrainz` release IDs.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::ftclean;
@@ -68,26 +67,13 @@ fn sync_singletons<P: ReleaseProvider>(
             fields.insert("mb_trackid".into(), SqlValue::Text(id.0));
         }
         let path = path(&item)?;
-        let backup = if write_tags {
-            let temporary = tempfile::NamedTempFile::new()?;
-            fs::copy(&path, temporary.path())?;
-            Some(temporary)
-        } else {
-            None
-        };
-        let update = (|| -> Result<(), SyncError> {
+        crate::backup::with_backups(write_tags.then(|| path.clone()), || {
             if write_tags {
                 write_fields_to_tags(&path, &fields)?;
             }
             library.update_item(item.id, &fields, &Fields::new())?;
             Ok(())
-        })();
-        if let Err(error) = update {
-            if let Some(backup) = &backup {
-                restore(backup.path(), &path);
-            }
-            return Err(error);
-        }
+        })?;
         result.singletons_updated = result.singletons_updated.saturating_add(1);
         result.items_updated = result.items_updated.saturating_add(1);
     }
@@ -119,40 +105,27 @@ fn sync_album(
     if let Some(id) = release.release_group_id {
         album_fields.insert("mb_releasegroupid".into(), SqlValue::Text(id));
     }
-    let backup = if write_tags {
-        let temporary = tempfile::tempdir()?;
-        for (index, (_, path, _)) in updates.iter().enumerate() {
-            fs::copy(path, temporary.path().join(index.to_string()))?;
-        }
-        Some(temporary)
-    } else {
-        None
-    };
-    let update = (|| -> Result<(), SyncError> {
-        if write_tags {
-            for (_, path, fields) in &updates {
-                write_fields_to_tags(path, fields)?;
-            }
-        }
-        library.transaction(|writer| {
-            writer.update_album(album_id, &album_fields, &Fields::new())?;
-            for (id, _, fields) in &updates {
-                writer.update_item(*id, fields, &Fields::new())?;
-            }
-            Ok(())
-        })?;
-        Ok(())
-    })();
-    if let Err(error) = update {
-        if let Some(backup) = &backup {
-            for (index, (_, path, _)) in updates.iter().enumerate() {
-                if let Err(restore) = fs::copy(backup.path().join(index.to_string()), path) {
-                    tracing::warn!(path = %path.display(), %restore, "cannot restore sync tag backup");
+    crate::backup::with_backups(
+        updates
+            .iter()
+            .filter(|_| write_tags)
+            .map(|(_, path, _)| path.clone()),
+        || {
+            if write_tags {
+                for (_, path, fields) in &updates {
+                    write_fields_to_tags(path, fields)?;
                 }
             }
-        }
-        return Err(error);
-    }
+            library.transaction(|writer| {
+                writer.update_album(album_id, &album_fields, &Fields::new())?;
+                for (id, _, fields) in &updates {
+                    writer.update_item(*id, fields, &Fields::new())?;
+                }
+                Ok(())
+            })?;
+            Ok(())
+        },
+    )?;
     result.albums_updated = result.albums_updated.saturating_add(1);
     result.items_updated = result.items_updated.saturating_add(updates.len());
     Ok(())
@@ -191,12 +164,6 @@ fn write_fields_to_tags(path: &Path, fields: &Fields) -> Result<(), SyncError> {
     crate::fields::apply_sync_fields(&mut tags, fields);
     muzik_tags::write(path, &tags)?;
     Ok(())
-}
-
-fn restore(backup: &Path, path: &Path) {
-    if let Err(error) = fs::copy(backup, path) {
-        tracing::warn!(path = %path.display(), %error, "cannot restore sync tag backup");
-    }
 }
 
 fn text<'a>(fields: &'a Fields, key: &str) -> Option<&'a str> {
@@ -261,19 +228,7 @@ fn match_recording<'a>(
 }
 
 fn path(item: &Item) -> Result<PathBuf, SyncError> {
-    match item.fields.get("path") {
-        Some(SqlValue::Blob(bytes)) => {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStringExt;
-                Ok(std::ffi::OsString::from_vec(bytes.clone()).into())
-            }
-            #[cfg(not(unix))]
-            {
-                Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
-            }
-        }
-        Some(SqlValue::Text(value)) => Ok(Path::new(value).to_owned()),
-        _ => Err(SyncError::MissingPath(item.id)),
-    }
+    item.field("path")
+        .and_then(muzik_library::path_from_sql)
+        .ok_or(SyncError::MissingPath(item.id))
 }

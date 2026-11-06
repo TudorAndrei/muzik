@@ -2,6 +2,7 @@
 
 use crate::ffmpeg::{self, Cut, Ffmpeg, TrackTags};
 use muzik_core::chapters::{Chapter, Sidecar};
+use muzik_core::featured::parse as strip_featured;
 use parking_lot::Mutex;
 use rayon::prelude::*;
 use regex::Regex;
@@ -225,7 +226,6 @@ fn prepare_output(
                 }
                 return Err(SplitError::OutputNotEmpty(output.to_path_buf()));
             }
-            // Resolve the destination again immediately before forced deletion.
             validate_output(output)?;
             fs::remove_dir_all(output)?;
         }
@@ -667,38 +667,6 @@ fn parse_artist_title(title: &str) -> Option<(&str, &str)> {
     let artist = parts.next()?.trim();
     let song = parts.next()?.trim();
     (!artist.is_empty() && !song.is_empty()).then_some((artist, song))
-}
-
-fn strip_featured(title: &str) -> (String, Vec<String>) {
-    let Ok(pattern) = Regex::new(
-        r"(?i)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+(.+)$)",
-    ) else {
-        return (title.trim().into(), Vec::new());
-    };
-    let Some(capture) = pattern.captures(title) else {
-        return (title.trim().into(), Vec::new());
-    };
-    let names = capture
-        .get(1)
-        .or_else(|| capture.get(2))
-        .map_or("", |name| name.as_str());
-    let Ok(separator) = Regex::new(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*") else {
-        return (title.trim().into(), Vec::new());
-    };
-    let featured = separator
-        .split(names)
-        .filter(|name| !name.trim().is_empty())
-        .map(|name| name.trim().to_owned())
-        .collect();
-    let clean = pattern.replacen(title, 1, "").trim().to_owned();
-    (
-        if clean.is_empty() {
-            title.trim().into()
-        } else {
-            clean
-        },
-        featured,
-    )
 }
 
 fn safe_filename(title: &str) -> String {

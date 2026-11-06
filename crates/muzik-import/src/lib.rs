@@ -89,4 +89,5 @@ pub mod paths;
 pub mod plan;
 pub mod sync;
 
+mod backup;
 mod fields;

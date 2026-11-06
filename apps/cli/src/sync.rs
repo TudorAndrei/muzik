@@ -61,7 +61,7 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
             delete: args.delete,
             jobs: args.jobs,
         },
-        &quality::measure,
+        &|path| Ok(quality::measure(path)),
     )?;
     print_plan(&prepared);
     if let Some(shortfall) = prepared.shortfall() {
