@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 static FEATURED: LazyLock<Regex> = LazyLock::new(|| {
     literal(
-        r"(?i)\s*(?:[\(\[]\s*(?:feat|ft|featuring)\.?\s+([^\)\]]+?)\s*[\)\]]|(?:feat|ft|featuring)\.?\s+([^\(\[]+))",
+        r"(?i)\s*(?:[\(\[]\s*\b(?:feat|ft|featuring)\b\.?\s+([^\)\]]+?)\s*[\)\]]|\b(?:feat|ft|featuring)\b\.?\s+([^\(\[]+))",
     )
 });
 static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| literal(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*"));
@@ -52,6 +52,13 @@ pub fn parse(title: &str) -> (String, Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::parse;
+
+    #[test]
+    fn credit_keywords_inside_words_leave_titles_unchanged() {
+        for title in ["Left Behind", "Soft Rain", "Gift of Love", "Defeat Me"] {
+            assert_eq!(parse(title), (title.to_owned(), Vec::new()));
+        }
+    }
 
     #[test]
     fn unbracketed_credits_keep_the_version_in_the_title() {
