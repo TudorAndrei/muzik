@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1"
 async-channel = "2.5"
-gpui-kit = "=0.8.1"
+gpui-kit = { version = "=0.8.1", features = ["gpui-fast"] }
 keyring = "4.2"
 parking_lot = "0.13"
 serde = { version = "1", features = ["derive"] }

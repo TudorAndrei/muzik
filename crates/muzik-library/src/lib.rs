@@ -316,9 +316,10 @@ fn row_id(fields: &Fields, table: &'static str) -> Result<i64, Error> {
     }
 }
 
+/// Reads named columns into library fields while preserving SQLite value types.
 fn row_fields(row: &Row<'_>) -> rusqlite::Result<Fields> {
     let mut fields = Fields::new();
-    for (index, column) in row.as_ref().column_names().iter().enumerate() {
+    for (index, column) in row.as_ref().column_names().enumerate() {
         let value = match row.get_ref(index)? {
             ValueRef::Null => Value::Null,
             ValueRef::Integer(value) => Value::Integer(value),
@@ -326,7 +327,7 @@ fn row_fields(row: &Row<'_>) -> rusqlite::Result<Fields> {
             ValueRef::Text(value) => Value::Text(String::from_utf8_lossy(value).into_owned()),
             ValueRef::Blob(value) => Value::Blob(value.to_vec()),
         };
-        fields.insert((*column).to_string(), value);
+        fields.insert(column.to_string(), value);
     }
     Ok(fields)
 }
