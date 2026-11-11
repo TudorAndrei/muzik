@@ -7178,9 +7178,9 @@ dependencies = [
 
 [[package]]
 name = "reflink-copy"
-version = "0.1.30"
+version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9dd7ab4af0363d5ccfd2838d782a28196cf32a5cc2e4fe3c5dc83f2be588b8b"
+checksum = "1ad64f61357bcf16105a0f353f9783733409c8bd889bc326ad857959605ea927"
 dependencies = [
  "cfg-if",
  "libc",
@@ -9413,9 +9413,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.5.0"
+version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
+checksum = "e7be76686bdf7198002062423ca0d8cf9b75a27c8e1de804513b97e97b555d9d"
 dependencies = [
  "base64 0.23.1",
  "cookie_store",
@@ -9433,9 +9433,9 @@ dependencies = [
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.5"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
+checksum = "622dce33c252115466d83f63e9744a18f12b4406aae51a01c15ad8fcf1185eb3"
 dependencies = [
  "base64 0.23.1",
  "http",
@@ -9472,15 +9472,15 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "usage-argv"
-version = "7.1.4"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efe46853f97c3d98dfd2eaafc6f45a024cfe13ff0d3cd45917def41ba1553b05"
+checksum = "e4876429514ea5b79a0a41546c5087db5c19d502405321098868874ea940ebab"
 
 [[package]]
 name = "usage-derive"
-version = "7.1.4"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8493ece72a0823c6dd994f95ae27d8323133b8d63f3fb83c628b361ab68ab1bc"
+checksum = "ccf026069d7f6a6cc0e691a277906829279e702c1b73c8666f9931928be5a8bf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -9489,9 +9489,9 @@ dependencies = [
 
 [[package]]
 name = "usage-rs"
-version = "7.1.4"
+version = "7.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65e8d1988254f73031f4248dd7ae322f98e11b66b965e432f059c6b39457b89b"
+checksum = "24160c6943ce835603f12c899a7239dac16d0f4f3ab693cf41a1d4146684bcdc"
 dependencies = [
  "usage-argv",
  "usage-derive",
@@ -9500,9 +9500,9 @@ dependencies = [
 
 [[package]]
 name = "usage-test"
-version = "7.1.4"
+version = "7.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87d6e5859e58321ecb1a2cd7483493a214bedd69a6384920beef6d1f4fef6905"
+checksum = "300900090803c08c8f04456302ed54aa2f32da5caa4cdbbeb1607a9ec7dd313d"
 dependencies = [
  "usage-argv",
 ]
@@ -11261,14 +11261,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.1.3"
+version = "9.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1156b39d142a34b999c2310a50455e0cb3760bf7efad0122f796d813bee26ccb"
+checksum = "eaeb7f16d2605b49aef586996ded29e65642fab7259a3077e537351df6d80426"
 dependencies = [
  "crc32fast",
  "flate2",
  "getrandom 0.4.3",
  "indexmap",
+ "libc",
  "memchr",
  "nix",
  "typed-path",
