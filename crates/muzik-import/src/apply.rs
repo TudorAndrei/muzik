@@ -3,7 +3,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::fields::{insert_dates, release_tags, sql_scalar};
 use crate::files::{self, Placement};
@@ -890,9 +889,7 @@ fn safe_old_path(mut path: PathBuf, library_root: &Path) -> Result<PathBuf, Appl
 }
 
 fn now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0.0, |duration| duration.as_secs_f64())
+    jiff::Timestamp::now().as_duration().as_secs_f64()
 }
 
 fn rollback(paths: &[PathBuf]) {

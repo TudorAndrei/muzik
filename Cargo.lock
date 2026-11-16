@@ -5311,6 +5311,7 @@ dependencies = [
  "deunicode",
  "fancy-regex",
  "hex",
+ "jiff",
  "muzik-core",
  "muzik-library",
  "muzik-match",
