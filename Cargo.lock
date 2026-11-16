@@ -5346,8 +5346,8 @@ dependencies = [
 name = "muzik-match"
 version = "2.14.1"
 dependencies = [
- "chrono",
  "deunicode",
+ "jiff",
  "lsap",
  "muzik-core",
  "regex",

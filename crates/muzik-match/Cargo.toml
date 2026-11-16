@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 deunicode = "1.6"
+jiff = "0.2"
 lsap = "=1.0.2"
 muzik-core = { path = "../muzik-core" }
 regex = "1.13"
@@ -22,7 +23,6 @@ strum = "0.28"
 strum_macros = "0.28"
 thiserror = "2"
 tracing = "0.1"
-chrono = "0.4"
 
 [[bench]]
 name = "assignment"

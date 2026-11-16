@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 
-use chrono::{Datelike, Local};
 use muzik_core::BeetsConfig;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
@@ -266,7 +265,7 @@ impl MatchConfig {
                 .collect(),
             metadata_source_count: 1,
             data_source_penalties: BTreeMap::new(),
-            current_year: Local::now().year(),
+            current_year: i32::from(jiff::Zoned::now().year()),
         })
     }
 
