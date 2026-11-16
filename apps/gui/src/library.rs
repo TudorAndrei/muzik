@@ -1,6 +1,5 @@
 use super::*;
 use crate::watchlist_view::empty_state;
-use chrono::{DateTime, Local};
 use gpui_kit::component::sheet::Sheet;
 use gpui_kit::component::skeleton::Skeleton;
 use gpui_kit::component::table::{
@@ -214,8 +213,12 @@ fn date(added: f64) -> String {
     i64::try_from(seconds(added))
         .ok()
         .filter(|stamp| *stamp > 0)
-        .and_then(|stamp| DateTime::from_timestamp(stamp, 0))
-        .map(|at| at.with_timezone(&Local).format("%Y-%m-%d").to_string())
+        .and_then(|stamp| jiff::Timestamp::from_second(stamp).ok())
+        .map(|at| {
+            at.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d")
+                .to_string()
+        })
         .unwrap_or_default()
 }
 

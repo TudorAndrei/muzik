@@ -5279,8 +5279,8 @@ version = "2.14.1"
 dependencies = [
  "anyhow",
  "async-channel",
- "chrono",
  "gpui-kit",
+ "jiff",
  "keyring",
  "muzik-bandcamp",
  "muzik-core",
