@@ -4,7 +4,6 @@ use rusqlite::{Connection, OptionalExtension, Row, ToSql, TransactionBehavior, p
 use serde_json::Value;
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
 
 const COLUMNS: &str = "id, queue, kind, item_key, title, status, params, question, answer, error";
@@ -473,11 +472,7 @@ fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
 }
 
 fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
-        })
+    jiff::Timestamp::now().as_second()
 }
 
 #[cfg(test)]
