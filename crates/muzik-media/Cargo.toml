@@ -11,9 +11,9 @@ description = "ffmpeg, audio quality, and the chapter splitter for muzik"
 workspace = true
 
 [dependencies]
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 ebur128 = "0.1"
 hex = "0.4"
+jiff = "0.2"
 muzik-core = { path = "../muzik-core" }
 muzik-tags = { path = "../muzik-tags" }
 parking_lot = "0.13"

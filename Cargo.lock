@@ -5365,9 +5365,9 @@ name = "muzik-media"
 version = "2.14.1"
 dependencies = [
  "bolero",
- "chrono",
  "ebur128",
  "hex",
+ "jiff",
  "muzik-core",
  "muzik-tags",
  "parking_lot 0.13.0",
