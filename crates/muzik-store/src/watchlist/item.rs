@@ -1,6 +1,5 @@
 use super::{ItemAction, SourceKind, Stage, StageStatus};
 use crate::{Error, Result};
-use chrono::{Local, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -241,7 +240,9 @@ impl std::fmt::Display for ItemId {
 
 #[must_use]
 pub fn now() -> String {
-    Local::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+    jiff::Zoned::now()
+        .strftime("%Y-%m-%dT%H:%M:%S%:z")
+        .to_string()
 }
 
 impl Watchlist {
