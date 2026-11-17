@@ -18,8 +18,6 @@ const TEXT_FIELDS: &[&str] = &[
     "country",
     "media",
     "albumdisambig",
-];
-const ID_FIELDS: &[&str] = &[
     "mb_trackid",
     "mb_releasetrackid",
     "mb_workid",
@@ -55,23 +53,12 @@ fn text() -> BoxedStrategy<String> {
     "[^\u{0}]{1,30}".boxed()
 }
 
-fn field(
-    name: &'static str,
-    value: BoxedStrategy<String>,
-) -> impl Strategy<Value = Option<(String, String)>> {
-    proptest::option::of(value).prop_map(move |value| value.map(|value| (name.to_owned(), value)))
+fn field(name: &'static str) -> impl Strategy<Value = Option<(String, String)>> {
+    proptest::option::of(text()).prop_map(move |value| value.map(|value| (name.to_owned(), value)))
 }
 
 fn tag_data() -> impl Strategy<Value = TagData> {
-    let fields: Vec<_> = TEXT_FIELDS
-        .iter()
-        .map(|name| field(name, text()))
-        .chain(
-            ID_FIELDS
-                .iter()
-                .map(|name| field(name, "[ -~]{1,36}".boxed())),
-        )
-        .collect();
+    let fields: Vec<_> = TEXT_FIELDS.iter().map(|name| field(name)).collect();
     (
         fields,
         proptest::collection::btree_map(
@@ -112,6 +99,23 @@ proptest! {
             for (key, value) in &data.fields {
                 prop_assert_eq!(reread.fields.get(key), Some(value), "{}: {}", suffix, key);
             }
+        }
+    }
+
+    #[test]
+    fn writing_other_fields_keeps_the_recording_id(recording_id in text(), title in text()) {
+        let scratch = Scratch::new()?;
+        let mut first = TagData::default();
+        first.fields.insert("mb_trackid".into(), recording_id.clone());
+        let mut second = TagData::default();
+        second.fields.insert("title".into(), title);
+        for suffix in SUFFIXES {
+            let path = scratch.0.join(format!("blank.{suffix}"));
+            fs::copy(fixtures().join(format!("blank.{suffix}")), &path)?;
+            write(&path, &first)?;
+            write(&path, &second)?;
+            let reread = read(&path, &[])?;
+            prop_assert_eq!(reread.fields.get("mb_trackid"), Some(&recording_id), "{}", suffix);
         }
     }
 }
