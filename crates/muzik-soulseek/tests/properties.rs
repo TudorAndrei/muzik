@@ -54,7 +54,7 @@ fn candidate() -> impl Strategy<Value = Candidate> {
 proptest! {
     #[test]
     fn search_query_adds_the_quality_term_only_once(
-        query in "[ ]{0,2}[A-Za-z0-9-]{1,8}( [A-Za-z0-9-]{1,8}){0,3}[ ]{0,2}",
+        query in "[ ]{0,2}([A-Za-z0-9-]{1,8}( [A-Za-z0-9-]{1,8}){0,3})?[ ]{0,2}",
         prefer in preference(),
     ) {
         let once = search_query(&query, prefer);
