@@ -5352,6 +5352,7 @@ dependencies = [
  "jiff",
  "lsap",
  "muzik-core",
+ "proptest",
  "regex",
  "serde",
  "serde_json",
