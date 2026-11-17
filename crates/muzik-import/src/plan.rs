@@ -544,6 +544,41 @@ fn field_text<'a>(fields: &'a muzik_library::Fields, key: &str) -> Option<&'a st
     }
 }
 
+const FULL_ALBUM_TAGS: [&str; 4] = ["full album", "full lp", "complete album", "official album"];
+
+fn comparable(text: &str) -> String {
+    text.split_whitespace()
+        .flat_map(|word| {
+            word.chars()
+                .map(|c| {
+                    if matches!(c, '’' | '‘' | '`') {
+                        '\''
+                    } else {
+                        c
+                    }
+                })
+                .flat_map(char::to_lowercase)
+                .chain([' '])
+        })
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
+fn album_title_key(title: &str) -> String {
+    let mut key = comparable(title);
+    while let Some(inner) = key
+        .strip_suffix(']')
+        .and_then(|rest| rest.rsplit_once('['))
+        .or_else(|| key.strip_suffix(')').and_then(|rest| rest.rsplit_once('(')))
+        .filter(|(_, tag)| FULL_ALBUM_TAGS.contains(&tag.trim()))
+        .map(|(rest, _)| rest.trim_end().to_owned())
+    {
+        key = inner;
+    }
+    key
+}
+
 fn find_duplicates(
     items: &[PlanItem],
     releases: &[ReleaseCandidate],
@@ -587,8 +622,10 @@ fn find_duplicates(
             } else {
                 &first.match_item.album_artist
             };
-            (artist.is_some_and(|value| value.eq_ignore_ascii_case(local_artist))
-                && title.is_some_and(|value| value.eq_ignore_ascii_case(&first.match_item.album)))
+            (artist.is_some_and(|value| comparable(value) == comparable(local_artist))
+                && title.is_some_and(|value| {
+                    album_title_key(value) == album_title_key(&first.match_item.album)
+                }))
             .then_some(DuplicateReason::ArtistAndAlbum)
         } else {
             None
