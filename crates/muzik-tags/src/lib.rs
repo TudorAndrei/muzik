@@ -16,7 +16,7 @@ use std::path::Path;
 use lofty::config::{ParseOptions, WriteOptions};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
 use lofty::flac::FlacFile;
-use lofty::id3::v2::Id3v2Tag;
+use lofty::id3::v2::{Frame, Id3v2Tag, UniqueFileIdentifierFrame};
 use lofty::mp4::Mp4File;
 use lofty::mp4::{Atom, AtomData, AtomIdent, Ilst};
 use lofty::mpeg::MpegFile;
@@ -226,7 +226,7 @@ pub fn read(path: impl AsRef<Path>, custom_keys: &[&str]) -> Result<TagData, Tag
         if let Some(key) = disambig_key {
             keys.push(key);
         }
-        data.custom = read_customs(path, file.file_type(), &keys)?;
+        read_native(path, file.file_type(), &keys, &mut data)?;
         if let Some(key) = disambig_key
             && let Some(value) = data.custom.remove(key)
         {
@@ -279,7 +279,18 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     }
     match tag_type {
         TagType::Id3v2 => {
+            let recording_id = match data.fields.get("mb_trackid") {
+                Some(value) => Some(value.as_bytes().to_vec()),
+                None => existing_recording_id(path)?,
+            };
+            tag.remove_key(ItemKey::MusicBrainzRecordingId);
             let mut native = Id3v2Tag::from(tag);
+            if let Some(identifier) = recording_id {
+                native.insert(Frame::UniqueFileIdentifier(UniqueFileIdentifierFrame::new(
+                    MUSICBRAINZ_UFID_OWNER,
+                    identifier,
+                )));
+            }
             for (key, value) in &custom {
                 native.insert_user_text(key.clone(), value.clone());
             }
@@ -310,6 +321,50 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     Ok(())
 }
 
+const MUSICBRAINZ_UFID_OWNER: &str = "http://musicbrainz.org";
+
+fn musicbrainz_ufid(tag: &Id3v2Tag) -> Option<&[u8]> {
+    tag.iter().find_map(|frame| match frame {
+        Frame::UniqueFileIdentifier(ufid) if ufid.owner == MUSICBRAINZ_UFID_OWNER => {
+            Some(ufid.identifier.as_ref())
+        }
+        _ => None,
+    })
+}
+
+fn existing_recording_id(path: &Path) -> Result<Option<Vec<u8>>, TagsError> {
+    let file = MpegFile::read_from(&mut File::open(path)?, ParseOptions::default())?;
+    Ok(file.id3v2().and_then(musicbrainz_ufid).map(<[u8]>::to_vec))
+}
+
+fn read_native(
+    path: &Path,
+    kind: FileType,
+    keys: &[&str],
+    data: &mut TagData,
+) -> Result<(), TagsError> {
+    if kind == FileType::Mpeg {
+        let file = MpegFile::read_from(&mut File::open(path)?, ParseOptions::default())?;
+        if let Some(tag) = file.id3v2() {
+            if let Some(identifier) = musicbrainz_ufid(tag) {
+                let recording_id = identifier
+                    .utf8_chunks()
+                    .map(|chunk| chunk.valid())
+                    .collect();
+                data.fields.insert("mb_trackid".into(), recording_id);
+            }
+            for &key in keys {
+                if let Some(value) = tag.get_user_text(key) {
+                    data.custom.insert(key.into(), value.into());
+                }
+            }
+        }
+        return Ok(());
+    }
+    data.custom = read_customs(path, kind, keys)?;
+    Ok(())
+}
+
 fn read_customs(
     path: &Path,
     kind: FileType,
@@ -322,16 +377,6 @@ fn read_customs(
     let mut reader = File::open(path)?;
     let options = ParseOptions::default();
     match kind {
-        FileType::Mpeg => {
-            let file = MpegFile::read_from(&mut reader, options)?;
-            if let Some(tag) = file.id3v2() {
-                for &key in keys {
-                    if let Some(value) = tag.get_user_text(key) {
-                        result.insert(key.into(), value.into());
-                    }
-                }
-            }
-        }
         FileType::Mp4 => {
             let file = Mp4File::read_from(&mut reader, options)?;
             if let Some(tag) = file.ilst() {

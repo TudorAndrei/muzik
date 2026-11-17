@@ -19,6 +19,7 @@ pub fn search_query(query: &str, prefer: PreferredAudio) -> String {
         .collect();
     prefer
         .search_suffix(&tokens)
+        .filter(|_| !query.is_empty())
         .map_or_else(|| query.to_owned(), |suffix| format!("{query} {suffix}"))
 }
 

@@ -22,3 +22,4 @@ serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 bolero = "0.13"
+proptest = { version = "1.12", default-features = false, features = ["std"] }

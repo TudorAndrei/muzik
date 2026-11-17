@@ -15,6 +15,7 @@ use muzik_workflow::{WorkflowInput, WorkflowOperations, classify_input};
 use serde_json::{Value, json};
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -296,15 +297,26 @@ fn refresh_chapters_with(
         ));
     }
     check_cancelled(cancelled)?;
-    let text = found
-        .iter()
-        .map(|chapter| format!("{} {}", format_time(chapter.start), chapter.title))
-        .collect::<Vec<_>>()
-        .join("\n")
-        + "\n";
     let path = Sidecar::Chapters.path(audio);
-    atomic_write(&path, &text)?;
+    atomic_write(&path, &chapters_text(&found))?;
     Ok(path)
+}
+
+fn chapters_text(chapters: &[chapters::Chapter]) -> String {
+    chapters.iter().fold(String::new(), |mut text, chapter| {
+        let title = chapter
+            .title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let title = if title.is_empty() {
+            format!("Track {}", chapter.index)
+        } else {
+            title
+        };
+        let _ = writeln!(text, "{} {title}", format_time(chapter.start));
+        text
+    })
 }
 
 fn atomic_write(path: &Path, text: &str) -> crate::Result<()> {
@@ -342,6 +354,7 @@ fn parse_chapter_record(value: &Value) -> Result<chapters::Chapter, JobError> {
 }
 
 fn format_time(seconds: i64) -> String {
+    let seconds = seconds.max(0);
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let seconds = seconds % 60;
@@ -405,15 +418,59 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_quality_result, items, ready_quality_directory, refresh_chapters_with};
+    use super::{
+        apply_quality_result, chapters_text, items, ready_quality_directory, refresh_chapters_with,
+    };
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
+    use muzik_core::chapters::{Chapter, parse_chapters};
     use muzik_core::{ChapterAnswer, DecisionKind};
     use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
     use muzik_workflow::quality::QualityUpgradeResult;
+    use proptest::prelude::*;
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
+
+    fn title() -> impl Strategy<Value = String> {
+        prop_oneof![any::<String>(), "[ \t\n\r\u{85}\u{2028}a-z:0-9]{0,12}"]
+    }
+
+    proptest! {
+        #[test]
+        fn written_chapters_parse_back_unchanged(
+            found in proptest::collection::btree_map(
+                prop_oneof![any::<i64>(), -5_i64..100_000],
+                title(),
+                1..20,
+            ),
+        ) {
+            let found: Vec<_> = found
+                .into_iter()
+                .zip(1_u32..)
+                .map(|((start, title), index)| Chapter { index, start, end: None, title })
+                .collect();
+            let mut expected: Vec<(i64, String)> = Vec::new();
+            for chapter in &found {
+                let start = chapter.start.max(0);
+                if expected.last().is_some_and(|(last, _)| *last == start) {
+                    continue;
+                }
+                let title = chapter.title.split_whitespace().collect::<Vec<_>>().join(" ");
+                let title = if title.is_empty() { format!("Track {}", chapter.index) } else { title };
+                expected.push((start, title));
+            }
+            let parsed = parse_chapters(&chapters_text(&found));
+            prop_assert_eq!(parsed.len(), expected.len());
+            for (position, (chapter, (start, title))) in parsed.iter().zip(&expected).enumerate() {
+                prop_assert_eq!(usize::try_from(chapter.index).ok(), position.checked_add(1));
+                prop_assert_eq!(chapter.start, *start);
+                prop_assert_eq!(&chapter.title, title);
+                let next = expected.get(position.saturating_add(1)).map(|(next, _)| *next);
+                prop_assert_eq!(chapter.end, next);
+            }
+        }
+    }
 
     #[test]
     fn split_again_rejects_a_parent_directory_album_name() {

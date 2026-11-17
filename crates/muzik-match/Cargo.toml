@@ -24,6 +24,9 @@ strum_macros = "0.28"
 thiserror = "2"
 tracing = "0.1"
 
+[dev-dependencies]
+proptest = { version = "1.12", default-features = false, features = ["std"] }
+
 [[bench]]
 name = "assignment"
 harness = false

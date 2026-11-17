@@ -396,14 +396,190 @@ fn sort_value<'a>(fields: &'a Fields, attributes: &'a Fields, field: &str) -> Op
 }
 
 fn compare_values(left: Option<&Value>, right: Option<&Value>) -> Ordering {
-    match (left, right) {
-        (None | Some(Value::Null), None | Some(Value::Null)) => Ordering::Equal,
-        (None | Some(Value::Null), Some(_)) => Ordering::Less,
-        (Some(_), None | Some(Value::Null)) => Ordering::Greater,
-        (Some(Value::Integer(left)), Some(Value::Integer(right))) => left.cmp(right),
-        (Some(Value::Real(left)), Some(Value::Real(right))) => left.total_cmp(right),
-        (Some(left), Some(right)) => value_text(left)
-            .to_ascii_lowercase()
-            .cmp(&value_text(right).to_ascii_lowercase()),
+    match (sort_key(left), sort_key(right)) {
+        (SortKey::Integer(left), SortKey::Integer(right)) => left.cmp(&right),
+        (SortKey::Real(left), SortKey::Real(right)) => {
+            left.partial_cmp(&right).unwrap_or(Ordering::Equal)
+        }
+        (SortKey::Integer(left), SortKey::Real(right)) => compare_integer_real(left, right),
+        (SortKey::Real(left), SortKey::Integer(right)) => {
+            compare_integer_real(right, left).reverse()
+        }
+        (SortKey::Text(left), SortKey::Text(right)) => left
+            .iter()
+            .map(u8::to_ascii_lowercase)
+            .cmp(right.iter().map(u8::to_ascii_lowercase)),
+        (left, right) => left.rank().cmp(&right.rank()),
+    }
+}
+
+enum SortKey<'a> {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(&'a [u8]),
+}
+
+impl SortKey<'_> {
+    const fn rank(&self) -> u8 {
+        match self {
+            Self::Null => 0,
+            Self::Integer(_) | Self::Real(_) => 1,
+            Self::Text(_) => 2,
+        }
+    }
+}
+
+fn sort_key(value: Option<&Value>) -> SortKey<'_> {
+    match value {
+        None | Some(Value::Null) => SortKey::Null,
+        Some(Value::Real(real)) if real.is_nan() => SortKey::Null,
+        Some(Value::Integer(integer)) => SortKey::Integer(*integer),
+        Some(Value::Real(real)) => SortKey::Real(*real),
+        Some(Value::Text(text)) => SortKey::Text(text.as_bytes()),
+        Some(Value::Blob(bytes)) => SortKey::Text(bytes),
+    }
+}
+
+const INTEGER_LIMIT: f64 = 9_223_372_036_854_775_808.0;
+
+fn compare_integer_real(integer: i64, real: f64) -> Ordering {
+    if real >= INTEGER_LIMIT {
+        return Ordering::Less;
+    }
+    if real < -INTEGER_LIMIT {
+        return Ordering::Greater;
+    }
+    integer
+        .cmp(&whole_real_to_integer(real.trunc()))
+        .then_with(|| {
+            0.0_f64
+                .partial_cmp(&real.fract())
+                .unwrap_or(Ordering::Equal)
+        })
+}
+
+#[expect(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    reason = "callers pass a whole number inside the i64 range, which converts exactly"
+)]
+const fn whole_real_to_integer(real: f64) -> i64 {
+    real as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn value() -> impl Strategy<Value = Option<Value>> {
+        prop_oneof![
+            Just(None),
+            Just(Some(Value::Null)),
+            (-3_i64..3).prop_map(|number| Some(Value::Integer(number))),
+            any::<i64>().prop_map(|number| Some(Value::Integer(number))),
+            (-3_i32..3).prop_map(|number| Some(Value::Real(f64::from(number)))),
+            (-3.0_f64..3.0).prop_map(|number| Some(Value::Real(number))),
+            any::<f64>().prop_map(|number| Some(Value::Real(number))),
+            prop_oneof![
+                Just(INTEGER_LIMIT),
+                Just(-INTEGER_LIMIT),
+                Just(9_223_372_036_854_774_784.0),
+                Just(-0.0),
+            ]
+            .prop_map(|number| Some(Value::Real(number))),
+            "[a-cA-C0-9]{0,3}".prop_map(|text| Some(Value::Text(text))),
+            proptest::collection::vec(prop_oneof![Just(b'a'), Just(b'B'), Just(0xff)], 0..3)
+                .prop_map(|bytes| Some(Value::Blob(bytes))),
+        ]
+    }
+
+    fn item(id: i64, year: Option<Value>) -> Item {
+        Item {
+            id,
+            fields: year
+                .map(|year| Fields::from([("year".to_owned(), year)]))
+                .unwrap_or_default(),
+            attributes: Fields::new(),
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn sort_order_is_antisymmetric(left in value(), right in value()) {
+            prop_assert_eq!(
+                compare_values(left.as_ref(), right.as_ref()),
+                compare_values(right.as_ref(), left.as_ref()).reverse()
+            );
+        }
+
+        #[test]
+        fn sort_order_is_transitive(first in value(), second in value(), third in value()) {
+            let (first, second, third) = (first.as_ref(), second.as_ref(), third.as_ref());
+            let first_second = compare_values(first, second);
+            let second_third = compare_values(second, third);
+            if first_second != Ordering::Greater && second_third != Ordering::Greater {
+                prop_assert_ne!(compare_values(first, third), Ordering::Greater);
+            }
+            if first_second == Ordering::Equal && second_third == Ordering::Equal {
+                prop_assert_eq!(compare_values(first, third), Ordering::Equal);
+            }
+        }
+
+        #[test]
+        fn items_sort_like_the_beets_sql_order(years in proptest::collection::vec(value(), 0..12)) {
+            let connection = rusqlite::Connection::open_in_memory()?;
+            connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, year)", [])?;
+            let mut items = Vec::new();
+            for (id, year) in (1_i64..).zip(years) {
+                connection.execute(
+                    "INSERT INTO items (id, year) VALUES (?1, ?2)",
+                    (id, year.clone().unwrap_or(Value::Null)),
+                )?;
+                items.push(item(id, year));
+            }
+            let mut statement = connection.prepare(
+                "SELECT id FROM items ORDER BY (CASE \
+                 WHEN TYPEOF(year)='text' THEN LOWER(year) \
+                 WHEN TYPEOF(year)='blob' THEN LOWER(year) \
+                 ELSE year END) ASC, id",
+            )?;
+            let beets: Vec<i64> = statement
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+            Query::parse("year+")?.sort_items(&mut items);
+            let muzik: Vec<i64> = items.iter().map(|item| item.id).collect();
+            prop_assert_eq!(muzik, beets);
+        }
+    }
+
+    #[test]
+    fn numbers_sort_before_text_and_compare_exactly_across_types() {
+        let order = |left: Value, right: Value| compare_values(Some(&left), Some(&right));
+        assert_eq!(
+            order(Value::Integer(10), Value::Text("2".into())),
+            Ordering::Less
+        );
+        assert_eq!(order(Value::Real(2.5), Value::Integer(3)), Ordering::Less);
+        assert_eq!(
+            order(Value::Integer(-2), Value::Real(-2.5)),
+            Ordering::Greater
+        );
+        assert_eq!(
+            order(Value::Integer(i64::MAX), Value::Real(INTEGER_LIMIT)),
+            Ordering::Less
+        );
+        assert_eq!(
+            order(
+                Value::Integer(9_223_372_036_854_774_785),
+                Value::Real(9_223_372_036_854_774_784.0)
+            ),
+            Ordering::Greater
+        );
+        assert_eq!(
+            order(Value::Text("abc".into()), Value::Blob(b"ABX".to_vec())),
+            Ordering::Less
+        );
     }
 }
