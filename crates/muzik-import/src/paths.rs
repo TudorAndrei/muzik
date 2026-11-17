@@ -480,7 +480,10 @@ fn call(name: &str, args: &[String], context: &TemplateContext) -> Option<String
         "lower" => first.to_lowercase(),
         "upper" => first.to_uppercase(),
         "title" => first
-            .split_whitespace()
+            .split(|character: char| {
+                character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
+            })
+            .filter(|word| !word.is_empty())
             .map(capitalize)
             .collect::<Vec<_>>()
             .join(" "),
@@ -491,12 +494,76 @@ fn call(name: &str, args: &[String], context: &TemplateContext) -> Option<String
     Some(result)
 }
 
-fn capitalize(value: &str) -> String {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
+const TITLECASE: &[(char, &str)] = &[
+    ('\u{df}', "Ss"),
+    ('\u{1c4}', "\u{1c5}"),
+    ('\u{1c5}', "\u{1c5}"),
+    ('\u{1c6}', "\u{1c5}"),
+    ('\u{1c7}', "\u{1c8}"),
+    ('\u{1c8}', "\u{1c8}"),
+    ('\u{1c9}', "\u{1c8}"),
+    ('\u{1ca}', "\u{1cb}"),
+    ('\u{1cb}', "\u{1cb}"),
+    ('\u{1cc}', "\u{1cb}"),
+    ('\u{1f1}', "\u{1f2}"),
+    ('\u{1f2}', "\u{1f2}"),
+    ('\u{1f3}', "\u{1f2}"),
+    ('\u{587}', "\u{535}\u{582}"),
+    ('\u{1fb2}', "\u{1fba}\u{345}"),
+    ('\u{1fb3}', "\u{1fbc}"),
+    ('\u{1fb4}', "\u{386}\u{345}"),
+    ('\u{1fb7}', "\u{391}\u{342}\u{345}"),
+    ('\u{1fbc}', "\u{1fbc}"),
+    ('\u{1fc2}', "\u{1fca}\u{345}"),
+    ('\u{1fc3}', "\u{1fcc}"),
+    ('\u{1fc4}', "\u{389}\u{345}"),
+    ('\u{1fc7}', "\u{397}\u{342}\u{345}"),
+    ('\u{1fcc}', "\u{1fcc}"),
+    ('\u{1ff2}', "\u{1ffa}\u{345}"),
+    ('\u{1ff3}', "\u{1ffc}"),
+    ('\u{1ff4}', "\u{38f}\u{345}"),
+    ('\u{1ff7}', "\u{3a9}\u{342}\u{345}"),
+    ('\u{1ffc}', "\u{1ffc}"),
+    ('\u{fb00}', "Ff"),
+    ('\u{fb01}', "Fi"),
+    ('\u{fb02}', "Fl"),
+    ('\u{fb03}', "Ffi"),
+    ('\u{fb04}', "Ffl"),
+    ('\u{fb05}', "St"),
+    ('\u{fb06}', "St"),
+    ('\u{fb13}', "\u{544}\u{576}"),
+    ('\u{fb14}', "\u{544}\u{565}"),
+    ('\u{fb15}', "\u{544}\u{56b}"),
+    ('\u{fb16}', "\u{54e}\u{576}"),
+    ('\u{fb17}', "\u{544}\u{56d}"),
+];
+
+fn titlecase(character: char) -> String {
+    match u32::from(character) {
+        0x10d0..=0x10ff => character.to_string(),
+        code @ 0x1f80..=0x1faf => char::from_u32(code | 0x08).unwrap_or(character).to_string(),
+        _ => TITLECASE
+            .binary_search_by_key(&character, |(from, _)| *from)
+            .ok()
+            .and_then(|index| TITLECASE.get(index))
+            .map_or_else(
+                || character.to_uppercase().collect(),
+                |(_, to)| (*to).to_owned(),
+            ),
+    }
+}
+
+fn capitalize(word: &str) -> String {
+    let Some(first) = word.chars().next() else {
         return String::new();
     };
-    format!("{}{}", first.to_uppercase(), chars.as_str().to_lowercase())
+    let lower = word.to_lowercase();
+    let skip = first.to_lowercase().map(char::len_utf8).sum::<usize>();
+    format!(
+        "{}{}",
+        titlecase(first),
+        lower.get(skip..).unwrap_or_default()
+    )
 }
 
 #[cfg(test)]
@@ -523,6 +590,28 @@ mod tests {
                 prop_assert!(!component.is_empty(), "{path:?}");
                 prop_assert!(component.len() <= max, "{path:?}");
             }
+        }
+
+        #[test]
+        fn title_case_is_stable(text in "[^$%{},\u{149}]*") {
+            let context = TemplateContext::default();
+            let once = context.render(&format!("%title{{{text}}}"));
+            prop_assert_eq!(context.render(&format!("%title{{{once}}}")), once);
+        }
+    }
+
+    #[test]
+    fn title_case_matches_python_capwords() {
+        let context = TemplateContext::default();
+        for (text, python) in [
+            ("ßa", "Ssa"),
+            ("ǆungla", "ǅungla"),
+            ("ﬁx", "Fix"),
+            ("ᾳ", "ᾼ"),
+            ("ΑΣ", "Ας"),
+            ("a\u{1c}b", "A B"),
+        ] {
+            assert_eq!(context.render(&format!("%title{{{text}}}")), python);
         }
     }
 

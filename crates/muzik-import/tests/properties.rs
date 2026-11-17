@@ -40,6 +40,12 @@ proptest! {
     }
 
     #[test]
+    fn cleaning_twice_changes_nothing(title in credited_title(), artist in "[A-Za-z ]{0,8}") {
+        let (title, artist) = clean(&title, &artist);
+        prop_assert_eq!(clean(&title, &artist), (title, artist));
+    }
+
+    #[test]
     fn credited_artists_keep_their_existing_credit(
         title in credited_title(),
         artist in "[A-Za-z ]{0,4}(feat|ft\\.)[A-Za-z ]{0,4}",
