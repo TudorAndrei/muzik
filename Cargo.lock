@@ -5335,6 +5335,7 @@ version = "2.14.1"
 dependencies = [
  "deunicode",
  "fancy-regex",
+ "proptest",
  "rusqlite",
  "serde_json",
  "shlex",

@@ -46,11 +46,16 @@ pub fn scalar_text(value: &SqlValue) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
 
-    #[test]
-    fn a_path_survives_the_round_trip_through_sql() {
-        let path = Path::new("/music/Artist/Song.flac");
-        assert_eq!(path_from_sql(&path_to_sql(path)), Some(path.to_path_buf()));
+    proptest! {
+        #[test]
+        fn any_path_survives_the_round_trip_through_sql(bytes in any::<Vec<u8>>()) {
+            let path = PathBuf::from(OsString::from_vec(bytes));
+            prop_assert_eq!(path_from_sql(&path_to_sql(&path)), Some(path));
+        }
     }
 
     #[test]
