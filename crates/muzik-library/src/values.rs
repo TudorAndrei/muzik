@@ -46,10 +46,14 @@ pub fn scalar_text(value: &SqlValue) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use proptest::prelude::*;
+    #[cfg(unix)]
     use std::ffi::OsString;
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 
+    #[cfg(unix)]
     proptest! {
         #[test]
         fn any_path_survives_the_round_trip_through_sql(bytes in any::<Vec<u8>>()) {
