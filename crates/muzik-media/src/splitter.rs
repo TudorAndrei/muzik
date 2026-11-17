@@ -991,6 +991,48 @@ mod tests {
         assert_eq!(safe_filename("Vol. 1"), "vol.-1");
     }
 
+    proptest::proptest! {
+        #[test]
+        fn a_safe_file_name_is_a_clean_slug(title in proptest::prelude::any::<String>()) {
+            let name = safe_filename(&title);
+            proptest::prop_assert_eq!(&safe_filename(&name), &name);
+            proptest::prop_assert!(!name.is_empty());
+            proptest::prop_assert!(name.chars().all(|character| {
+                character.is_ascii_graphic()
+                    && !character.is_ascii_uppercase()
+                    && !"<>:\"/\\|?*".contains(character)
+            }), "{name:?}");
+            proptest::prop_assert!(!name.contains("--"), "{name:?}");
+            proptest::prop_assert!(!name.starts_with('-') && !name.ends_with('-'), "{name:?}");
+        }
+
+        #[test]
+        fn valid_chapters_get_distinct_track_names(
+            chapters in proptest::collection::vec((1_u32..4, "[aA ?.-]{0,3}( - [ab]| \\(feat\\. c\\))?"), 1..6),
+            compilation in proptest::prelude::any::<bool>(),
+            source in "album(\\.opus|\\.flac)?",
+        ) {
+            let source = PathBuf::from(source);
+            let chapters: Vec<_> = chapters
+                .into_iter()
+                .zip((0_i64..).step_by(10))
+                .map(|((index, title), start)| Chapter {
+                    index,
+                    start,
+                    end: None,
+                    title,
+                })
+                .collect();
+            if validate_chapters(&chapters, &source, compilation).is_ok() {
+                let names: HashSet<_> = chapters
+                    .iter()
+                    .map(|chapter| expected_track_name(&source, chapter, compilation))
+                    .collect();
+                proptest::prop_assert_eq!(names.len(), chapters.len());
+            }
+        }
+    }
+
     #[test]
     fn any_title_gives_one_normal_file_name() {
         bolero::check!().with_type::<String>().for_each(|title| {
