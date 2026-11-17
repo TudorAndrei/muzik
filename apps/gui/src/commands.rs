@@ -180,6 +180,7 @@ pub fn open_palette(
                 let view = view.clone();
                 content.child(
                     Command::new(&palette)
+                        .highlight_matches(true)
                         .bordered(false)
                         .placeholder("Go to a page or run a command")
                         .group(

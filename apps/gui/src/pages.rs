@@ -318,11 +318,12 @@ fn spotify_playlists_table(
     cx: &Context<Muzik>,
 ) -> Table {
     let mut body = TableBody::new();
-    for (index, playlist) in playlists.iter().enumerate() {
+    for playlist in playlists {
         let uri = playlist.uri.to_string();
         let saved = saved_ids.contains(uri.as_str());
         body = body.child(
             TableRow::new()
+                .id(SharedString::from(playlist.uri.to_string()))
                 .child(
                     TableCell::new().child(div().min_w_0().truncate().child(playlist.name.clone())),
                 )
@@ -334,7 +335,7 @@ fn spotify_playlists_table(
                 )
                 .child(
                     TableCell::new().text_right().child(
-                        Button::new(("spotify-add", index))
+                        Button::new("spotify-add")
                             .small()
                             .label(if saved { "Saved" } else { "Add to watchlist" })
                             .disabled(saved)

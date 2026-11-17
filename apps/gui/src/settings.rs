@@ -6,6 +6,7 @@ use gpui_kit::component::setting::{
     NumberFieldOptions, RenderOptions, SettingField, SettingGroup, SettingItem, SettingPage,
     Settings,
 };
+use muzik_core::app_config::MotionPreference;
 use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 
 const PATHS: [(&str, &str, bool); 3] = [
@@ -449,6 +450,29 @@ impl ConfigView {
             .group(self.agent_group(&view))
     }
 
+    fn appearance_page(&self, cx: &Context<Self>) -> SettingPage {
+        let view = cx.entity().downgrade();
+        let current = self.defaults.motion.to_string();
+        SettingPage::new("Appearance")
+            .description("Control animation in the desktop app.")
+            .resettable(false)
+            .group(SettingGroup::new().title("Motion").item(
+                SettingItem::new("Animations", SettingField::dropdown(
+                    [
+                        (MotionPreference::System, "Follow system"),
+                        (MotionPreference::Reduce, "Reduce motion"),
+                        (MotionPreference::Allow, "Allow motion"),
+                    ].into_iter().map(|(value, label)| (value.to_string().into(), label.into())).collect(),
+                    move |_| SharedString::from(current.clone()),
+                    move |value, cx| {
+                        if let Ok(preference) = value.parse() {
+                            edit(&view, cx, |defaults| defaults.motion = preference);
+                        }
+                    },
+                )).description("Select Save config to apply. Follow system uses your device's motion setting."),
+            ))
+    }
+
     fn library_page(&self, cx: &Context<Self>) -> SettingPage {
         let view = cx.entity().downgrade();
         let main = self.main.clone();
@@ -634,7 +658,7 @@ impl ConfigView {
                 "Port",
                 SettingField::render(move |options, _, _| {
                     control_width(
-                        NumberInput::new(&port).accessibility_label("Port"),
+                        NumberInput::new(&port).stepper(false).accessibility_label("Port"),
                         options,
                         px(140.),
                     )
@@ -716,6 +740,7 @@ impl Render for ConfigView {
             self.accounts_page(cx),
             self.services_page(),
             self.library_page(cx),
+            self.appearance_page(cx),
         ];
         div()
             .v_flex()
@@ -753,6 +778,65 @@ impl Render for ConfigView {
 #[cfg(test)]
 mod tests {
     use super::{ChoiceField, Flag, GuiDefaults};
+
+    #[gpui_kit::test]
+    fn motion_choices_are_saved_and_applied_to_the_running_app(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+        use muzik_core::app_config::{self, MotionPreference};
+        use muzik_core::paths::Paths;
+        let directory = tempfile::tempdir().unwrap();
+        let paths = Paths::under(directory.path());
+        let (handle, main) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_reduce_motion(false);
+            gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let mut main = super::Muzik::new_with_backend(window, cx, false);
+                    main.apply_defaults(app_config::load_gui_defaults(&paths), cx);
+                    main
+                })
+            })
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.within("pages").click(3usize, cx);
+            window.render_frame(cx);
+            window.within("settings-sidebar").click("0-4", cx);
+            window.render_frame(cx);
+        })
+        .unwrap();
+        for (index, preference, reduce) in [
+            (1usize, MotionPreference::Reduce, true),
+            (2usize, MotionPreference::Allow, false),
+        ] {
+            cx.update_window(handle, |_, window, cx| {
+                window.click("btn", cx);
+                window.render_frame(cx);
+                window.within("popup-menu").click(index, cx);
+                window.render_frame(cx);
+                let settings = main.read(cx).config_view.clone().unwrap();
+                let selected = settings.read(cx).defaults.clone();
+                assert_eq!(selected.motion, preference);
+                assert_ne!(
+                    cx.reduce_motion(),
+                    reduce,
+                    "the unsaved choice must not change motion"
+                );
+                let saved =
+                    app_config::save_gui_defaults(&paths, &serde_json::to_value(selected).unwrap())
+                        .unwrap();
+                assert_eq!(saved, app_config::load_gui_defaults(&paths));
+                main.update(cx, |main, cx| main.apply_defaults(saved, cx));
+                assert_eq!(cx.reduce_motion(), reduce);
+                // GUI appearance settings do not enter workflow requests.
+                let params = main.read(cx).launcher_params(cx);
+                assert!(muzik_runner::Settings::resolve(&paths, &params).is_ok());
+            })
+            .unwrap();
+        }
+    }
 
     #[test]
     fn the_after_import_switches_change_only_their_own_settings() {

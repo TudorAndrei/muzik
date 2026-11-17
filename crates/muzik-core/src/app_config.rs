@@ -16,6 +16,28 @@ pub fn path() -> PathBuf {
     Paths::user().config_file()
 }
 
+/// Whether the desktop app follows system animations or overrides them.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    strum_macros::Display,
+    strum_macros::EnumString,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum MotionPreference {
+    #[default]
+    System,
+    Reduce,
+    Allow,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[expect(
@@ -23,6 +45,7 @@ pub fn path() -> PathBuf {
     reason = "mirrors the flat native_gui config section and GUI form fields"
 )]
 pub struct GuiDefaults {
+    pub motion: MotionPreference,
     pub output: PathBuf,
     pub splits: PathBuf,
     pub review: bool,
@@ -53,6 +76,7 @@ pub struct GuiDefaults {
 impl Default for GuiDefaults {
     fn default() -> Self {
         Self {
+            motion: MotionPreference::default(),
             output: PathBuf::new(),
             splits: PathBuf::new(),
             review: false,
@@ -250,6 +274,7 @@ mod tests {
             json!({"raw": "song.flac"}),
             json!({"jobs": -1}),
             json!({"audio_source": "invalid"}),
+            json!({"motion": "invalid"}),
         ] {
             assert!(save_gui_defaults(&paths, &value).is_err());
             assert!(!paths.config_file().exists());
