@@ -30,3 +30,4 @@ unicode-normalization = "0.1"
 
 [dev-dependencies]
 bolero = "0.13"
+proptest = { version = "1.12", default-features = false, features = ["std"] }

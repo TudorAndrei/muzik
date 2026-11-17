@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use muzik_core::chapters::Sidecar;
+use muzik_core::chapters::{Sidecar, parse_chapters};
 use serde_json::Value;
 use strum_macros::Display;
 
@@ -141,7 +141,7 @@ fn check(path: &Path) -> anyhow::Result<(FileKind, String, Vec<String>)> {
         }
         FileKind::Chapters => {
             let source = fs::read_to_string(path)?;
-            let count = source.lines().filter(|line| chapter_line(line)).count();
+            let count = parse_chapters(&source).len();
             if count == 0 {
                 bail!("no valid chapter lines found");
             }
@@ -211,16 +211,6 @@ fn read_object(path: &Path) -> anyhow::Result<Value> {
     Ok(value)
 }
 
-fn chapter_line(line: &str) -> bool {
-    let Some((timestamp, title)) = line.trim().split_once(char::is_whitespace) else {
-        return false;
-    };
-    let parts: Vec<_> = timestamp.split(':').collect();
-    (parts.len() == 2 || parts.len() == 3)
-        && parts.iter().all(|part| part.parse::<u64>().is_ok())
-        && !title.trim().is_empty()
-}
-
 fn count_audio(root: &Path) -> anyhow::Result<usize> {
     Ok(collect(root, true)?
         .into_iter()
@@ -230,15 +220,20 @@ fn count_audio(root: &Path) -> anyhow::Result<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{chapter_line, check};
+    use super::check;
     use std::fs;
 
     #[test]
-    fn chapter_lines_need_a_time_and_title() {
-        assert!(chapter_line("01:23 First track"));
-        assert!(chapter_line("01:02:03 Last track"));
-        assert!(!chapter_line("01:23"));
-        assert!(!chapter_line("Track title"));
+    fn chapter_count_matches_the_chapters_the_splitter_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let sidecar = dir.path().join("Mix.chapters.txt");
+        fs::write(
+            &sidecar,
+            "01:23 First track\n1:2 Short seconds\n01:23 Repeated start\n01:02:03 Last track\n01:30\nTrack title\n",
+        )
+        .unwrap();
+        let (_, details, _) = check(&sidecar).unwrap();
+        assert_eq!(details, "2 chapters");
     }
 
     #[test]

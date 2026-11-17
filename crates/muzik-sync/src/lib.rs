@@ -251,10 +251,12 @@ impl Target {
         let relative = sanitize(source.strip_prefix(directory).ok()?)?;
         Some(match action {
             Action::Copy => self.path.join(relative),
-            Action::Convert(encoding) => self
-                .path
-                .join(relative)
-                .with_extension(encoding.extension()),
+            Action::Convert(encoding) => {
+                let mut name = relative.file_stem()?.to_os_string();
+                name.push(".");
+                name.push(encoding.extension());
+                self.path.join(relative.with_file_name(name))
+            }
         })
     }
 }
