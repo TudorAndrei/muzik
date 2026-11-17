@@ -5,8 +5,6 @@ pub enum Error {
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error(transparent)]
-    Migration(#[from] rusqlite_migration::Error),
-    #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Integer(#[from] std::num::TryFromIntError),

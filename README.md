@@ -324,6 +324,14 @@ job to stop at the next safe point.
 The **Library** page lists the audio already in the output folder, so you can
 see what is downloaded before you start a run.
 
+Use **Settings → Appearance → Animations** to follow the system motion setting,
+reduce motion, or allow motion. Select **Save config** to apply and save the
+choice. **Follow system** is the default.
+
+The command palette highlights matching text as you type. Library and watchlist
+tables keep scrollbars visible when their content extends beyond the view.
+Watchlist actions stay at the right edge while you scroll through error details.
+
 ### Playlist watchlist
 
 Use **Watchlist** when you follow YouTube playlists and only want to ingest new

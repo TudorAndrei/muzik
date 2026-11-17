@@ -215,7 +215,7 @@ fn date(added: f64) -> String {
         .filter(|stamp| *stamp > 0)
         .and_then(|stamp| jiff::Timestamp::from_second(stamp).ok())
         .map(|at| {
-            at.to_zoned(jiff::tz::TimeZone::system())
+            at.to_zoned_datetime(jiff::tz::TimeZone::system())
                 .strftime("%Y-%m-%d")
                 .to_string()
         })
@@ -485,7 +485,11 @@ impl Muzik {
                                 Self::open_album_sheet(album, window, cx);
                             }
                         }))
-                        .child(DataTable::new(&self.library_table).stripe(true)),
+                        .child(
+                            DataTable::new(&self.library_table)
+                                .stripe(true)
+                                .scrollbar_mode(gpui_kit::base::ScrollbarMode::Always),
+                        ),
                 ),
             Some(info) => page.child(empty_state(
                 "The library is empty",
@@ -503,7 +507,11 @@ impl Muzik {
                         .disabled(true),
                 )
                 .child(
-                    pages::table_frame().child(DataTable::new(&self.library_table).stripe(true)),
+                    pages::table_frame().child(
+                        DataTable::new(&self.library_table)
+                            .stripe(true)
+                            .scrollbar_mode(gpui_kit::base::ScrollbarMode::Always),
+                    ),
                 ),
             None => page.child(empty_state(
                 "No library",

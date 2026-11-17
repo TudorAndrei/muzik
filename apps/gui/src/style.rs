@@ -62,6 +62,18 @@ pub fn apply_theme(cx: &mut App) {
     Theme::sync_system_appearance(None, cx);
 }
 
+pub fn apply_motion(preference: muzik_core::app_config::MotionPreference, cx: &mut App) {
+    use gpui_kit::base::{ReduceMotionPreference, set_reduce_motion_preference};
+    use muzik_core::app_config::MotionPreference;
+    let preference = match preference {
+        MotionPreference::System => ReduceMotionPreference::System,
+        MotionPreference::Reduce => ReduceMotionPreference::Reduce,
+        MotionPreference::Allow => ReduceMotionPreference::Allow,
+    };
+    set_reduce_motion_preference(preference, cx);
+    cx.refresh_windows();
+}
+
 pub fn logo() -> std::sync::Arc<Image> {
     std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, LOGO.to_vec()))
 }

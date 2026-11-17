@@ -205,7 +205,11 @@ impl Muzik {
                             view.open_item_sheet(key, window, cx);
                         }
                     }))
-                    .child(DataTable::new(&self.watch_table).stripe(true)),
+                    .child(
+                        DataTable::new(&self.watch_table)
+                            .stripe(true)
+                            .scrollbar_mode(gpui_kit::base::ScrollbarMode::Always),
+                    ),
             )
             .into_any_element()
     }

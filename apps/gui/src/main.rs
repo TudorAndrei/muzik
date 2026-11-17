@@ -297,11 +297,13 @@ impl Muzik {
             Ok(Value::Object(params)) => params,
             _ => serde_json::Map::new(),
         };
+        params.remove("motion");
         params.insert("raw".into(), json!(self.raw.read(cx).value().to_string()));
         Value::Object(params)
     }
 
     fn apply_defaults(&mut self, defaults: GuiDefaults, cx: &mut Context<Self>) {
+        style::apply_motion(defaults.motion, cx);
         self.defaults = Some(defaults);
         cx.notify();
     }

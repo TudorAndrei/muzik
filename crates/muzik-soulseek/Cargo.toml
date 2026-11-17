@@ -14,12 +14,12 @@ workspace = true
 keyring-core = "1.0"
 muzik-core = { path = "../muzik-core" }
 parking_lot = "0.13"
-soulseek_rs = { package = "soulseek-rs-lib", version = "19.1" }
+soulseek_rs = { package = "soulseek-rs-lib", version = "20.0" }
 thiserror = "2"
 tracing = "0.1"
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-bolero = "0.13"
+bolero = "0.13.7"
 proptest = { version = "1.12", default-features = false, features = ["std"] }

@@ -61,8 +61,8 @@ impl WatchColumn {
         Self::Title,
         Self::Stages,
         Self::Status,
-        Self::Action,
         Self::Error,
+        Self::Action,
     ];
 
     fn at(index: usize) -> Option<Self> {
@@ -184,6 +184,11 @@ impl TableDelegate for WatchTable {
             return Column::new("", "");
         };
         let header = Column::new(column.key(), column.name()).width(px(column.width()));
+        let header = if column == WatchColumn::Action {
+            header.fixed_right()
+        } else {
+            header
+        };
         if column.sortable() {
             header.sortable()
         } else {
@@ -325,6 +330,48 @@ mod tests {
     use muzik_store::watchlist::Summary;
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[gpui_kit::test]
+    fn retry_stays_visible_when_error_details_scroll(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::AppContext as _;
+        use gpui_kit::test::TestWindowExt as _;
+        let (handle, main) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let mut main = super::Muzik::new_with_backend(window, cx, false);
+                    main.watchlist = serde_json::from_value(json!({"playlists":[{
+                        "playlist_id":"PL1", "url":"https://youtube.com/playlist?list=PL1", "items":[{
+                            "position":1, "title":"Failed download", "video_id":"abc",
+                            "last_error":"A long error message that extends beyond the viewport",
+                            "summary":"Failed", "primary_action":{"action":"retry", "label":"Retry"},
+                            "actions":{"retry":{"enabled":true}}
+                        }]
+                    }]})).unwrap();
+                    main.sync_watch_table(cx);
+                    main
+                })
+            }).unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
+            window.within("pages").click(1usize, cx);
+            window.render_frame(cx);
+            let id = format!(
+                "watch-action-{}",
+                muzik_store::watchlist::ItemId::new("PL1", 1, Some("abc"))
+            );
+            let before = window.find(id.clone());
+            assert!(before.visible());
+            let table = main.read(cx).watch_table.clone();
+            table.update(cx, |state, cx| state.scroll_to_col(4, cx));
+            window.render_frame(cx);
+            let after = window.find(id);
+            assert!(after.visible());
+            assert_eq!(before.bounds().origin.x, after.bounds().origin.x);
+        })
+        .unwrap();
+    }
 
     #[test]
     fn rows_follow_the_filter_and_mark_queued_items() {

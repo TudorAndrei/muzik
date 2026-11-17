@@ -1,16 +1,20 @@
 [advisories]
 ignore = [
-    { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; only gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; only gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained; only gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0206", reason = "rustybuzz is unmaintained; only gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained; only gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained; only the Linux backend of gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained; only the Linux backend of gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained; only the Linux backend of gpui-kit 0.8 pulls it in" },
-    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; the rspotify token types, musicbrainz_rs and gpui-kit 0.8 still need it" },
+    { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; only gpui-kit 0.10 pulls it in" },
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; only gpui-kit 0.10 pulls it in" },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile is unmaintained; only gpui-kit 0.10 pulls it in" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz is unmaintained; only gpui-kit 0.10 pulls it in" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser is unmaintained; only gpui-kit 0.10 pulls it in" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant is unmaintained; the Linux backend of gpui-kit 0.10 and the CLI keyring secret-service store still need it" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names is unmaintained; the Linux backend of gpui-kit 0.10 and the CLI keyring secret-service store still need it" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive is unmaintained; the Linux backend of gpui-kit 0.10 and the CLI keyring secret-service store still need it" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained; the rspotify token types, musicbrainz_rs and gpui-kit 0.10 still need it" },
     { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained; only cucumber 0.23 pulls it in for the feature tests" },
 ]
+
+[sources]
+allow-git = ["https://github.com/camshaft/bolero"]
+required-git-spec = "rev"
 
 [licenses]
 allow = [

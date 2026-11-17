@@ -23,7 +23,7 @@ muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-spotify = { path = "../muzik-spotify" }
 muzik-workflow = { path = "../muzik-workflow" }
 parking_lot = "0.13"
-rusqlite = { version = "0.41", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 strum = "0.28"
@@ -34,4 +34,4 @@ thiserror = "2"
 [dev-dependencies]
 keyring-core = "1.0"
 proptest = { version = "1.12", default-features = false, features = ["std"] }
-shuttle = "0.9"
+shuttle = "0.9.10"
