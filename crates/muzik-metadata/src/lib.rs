@@ -469,6 +469,38 @@ fn release_tracks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn unescape(escaped: &str) -> Option<String> {
+        let mut text = String::new();
+        let mut characters = escaped.chars();
+        while let Some(character) = characters.next() {
+            if character == '\\' {
+                text.push(characters.next()?);
+            } else if "-+&|!(){}[]^\"~*?:\\/".contains(character) {
+                return None;
+            } else {
+                text.push(character);
+            }
+        }
+        Some(text)
+    }
+
+    proptest! {
+        #[test]
+        fn a_term_escapes_every_lucene_operator(field in "[a-z]{1,8}", value in any::<String>()) {
+            let expected = value.trim().to_lowercase();
+            match term(&field, &value) {
+                None => prop_assert!(expected.is_empty()),
+                Some(text) => {
+                    let escaped = text
+                        .strip_prefix(&format!("{field}:("))
+                        .and_then(|rest| rest.strip_suffix(')'));
+                    prop_assert_eq!(escaped.and_then(unescape), Some(expected));
+                }
+            }
+        }
+    }
 
     #[test]
     fn search_query_uses_beets_fields_and_escapes_values() {
