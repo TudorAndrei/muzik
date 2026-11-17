@@ -314,6 +314,43 @@ fn page_blob(html: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    fn cookies() -> impl Strategy<Value = Vec<Cookie>> {
+        (
+            "[!-~]{1,8}",
+            proptest::collection::vec(("[a-z_]{1,8}", "[!-~]{1,8}"), 0..5),
+        )
+            .prop_map(|(identity, others)| {
+                std::iter::once(Cookie {
+                    name: "identity".into(),
+                    value: identity,
+                })
+                .chain(
+                    others
+                        .into_iter()
+                        .map(|(name, value)| Cookie { name, value }),
+                )
+                .collect()
+            })
+    }
+
+    proptest! {
+        #[test]
+        fn saved_cookies_parse_back_unchanged(cookies in cookies()) {
+            prop_assert_eq!(parse_cookies(&netscape(&cookies)).ok(), Some(cookies));
+        }
+
+        #[test]
+        fn header_cookies_parse_back_unchanged(
+            cookies in cookies().prop_filter("no ';' in values", |cookies| {
+                cookies.iter().all(|cookie| !cookie.value.contains(';'))
+            })
+        ) {
+            prop_assert_eq!(parse_cookies(&cookie_header(&cookies)).ok(), Some(cookies));
+        }
+    }
+
     #[test]
     fn cookies_parse_from_a_header_a_cookie_file_and_json() {
         let header =
