@@ -1,6 +1,7 @@
 //! Parse featured performer credits shared by import and track splitting.
 
 use regex::Regex;
+use std::ops::Range;
 use std::sync::LazyLock;
 
 static FEATURED: LazyLock<Regex> = LazyLock::new(|| {
@@ -18,35 +19,55 @@ fn literal(pattern: &str) -> Regex {
     Regex::new(pattern).unwrap()
 }
 
+struct Credit {
+    range: Range<usize>,
+    names: Vec<String>,
+    bracketed: bool,
+}
+
+fn next_credit(text: &str) -> Option<Credit> {
+    FEATURED.captures_iter(text).find_map(|capture| {
+        let (names, bracketed) = match capture.get(1) {
+            Some(names) => (names, true),
+            None => (capture.get(2)?, false),
+        };
+        let names: Vec<_> = SEPARATOR
+            .split(names.as_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect();
+        (!names.is_empty()).then(|| Credit {
+            range: capture.get_match().range(),
+            names,
+            bracketed,
+        })
+    })
+}
+
 #[must_use]
 pub fn parse(title: &str) -> (String, Vec<String>) {
-    let unchanged = || (title.trim().to_owned(), Vec::new());
-    let Some(capture) = FEATURED.captures(title) else {
-        return unchanged();
-    };
-    let Some(names) = capture.get(1).or_else(|| capture.get(2)) else {
-        return unchanged();
-    };
-    let featured = SEPARATOR
-        .split(names.as_str())
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .collect();
-    let found = capture.get_match();
-    let before = title.get(..found.start()).unwrap_or_default();
-    let after = title.get(found.end()..).unwrap_or_default();
-    let clean = if capture.get(2).is_some() {
-        format!("{} {}", before.trim_end(), after.trim_start())
-    } else {
-        format!("{before}{after}")
-    };
-    let clean = if clean.trim().is_empty() {
-        title.trim()
-    } else {
-        clean.trim()
-    };
-    (clean.to_owned(), featured)
+    let mut clean = title.trim().to_owned();
+    let mut featured = Vec::new();
+    while let Some(credit) = next_credit(&clean) {
+        for name in credit.names {
+            if !featured.contains(&name) {
+                featured.push(name);
+            }
+        }
+        let before = clean.get(..credit.range.start).unwrap_or_default();
+        let after = clean.get(credit.range.end..).unwrap_or_default();
+        let joined = if credit.bracketed {
+            format!("{before}{after}")
+        } else {
+            format!("{} {}", before.trim_end(), after.trim_start())
+        };
+        joined.trim().clone_into(&mut clean);
+    }
+    if clean.is_empty() {
+        return (title.trim().to_owned(), featured);
+    }
+    (clean, featured)
 }
 
 #[cfg(test)]
@@ -73,6 +94,17 @@ mod tests {
         assert_eq!(
             parse("Song (feat. A) (Remix)"),
             ("Song (Remix)".to_owned(), vec!["A".to_owned()])
+        );
+    }
+
+    #[test]
+    fn every_credit_moves_out_of_the_title() {
+        assert_eq!(
+            parse("Song (feat. A) [ft. B & A] feat. C"),
+            (
+                "Song".to_owned(),
+                vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]
+            )
         );
     }
 }

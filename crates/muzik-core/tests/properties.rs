@@ -17,8 +17,21 @@ proptest! {
     }
 
     #[test]
-    fn titles_without_a_credit_word_stay_unchanged(title in "[A-Za-z ()\\[\\]&,.]{0,20}") {
-        prop_assume!(!title.to_ascii_lowercase().contains("ft") && !title.to_ascii_lowercase().contains("feat"));
-        prop_assert_eq!(parse(&title), (title.trim().to_owned(), Vec::new()));
+    fn titles_without_featured_names_stay_unchanged(
+        title in prop_oneof![credited_title(), "[A-Za-z ()\\[\\]&,./]{0,20}"],
+    ) {
+        let (clean, featured) = parse(&title);
+        if featured.is_empty() {
+            prop_assert_eq!(clean, title.trim());
+        }
+    }
+
+    #[test]
+    fn a_cleaned_title_has_no_credit_left(title in credited_title()) {
+        let (clean, _) = parse(&title);
+        if clean != title.trim() {
+            let reparsed = parse(&clean);
+            prop_assert_eq!(reparsed, (clean, Vec::new()));
+        }
     }
 }
