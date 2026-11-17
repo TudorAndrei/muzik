@@ -503,7 +503,28 @@ fn capitalize(value: &str) -> String {
 mod tests {
     use super::*;
 
+    use proptest::prelude::*;
     use serde_json::Value;
+
+    fn subpath() -> impl Strategy<Value = String> {
+        prop::collection::vec("[a. \\-\\x00/:?é]{0,250}", 1..4).prop_map(|parts| parts.join("/"))
+    }
+
+    proptest! {
+        #[test]
+        fn legalized_paths_fit_the_length_limit_and_keep_the_extension(
+            subpath in subpath(),
+            extension in "\\.[a-z0-9]{1,4}",
+            max in 8_usize..300,
+        ) {
+            let path = PathSanitizer::new(&[], max)?.legalize(&subpath, &extension)?;
+            prop_assert!(path.ends_with(&extension), "{path:?}");
+            for component in path.split('/') {
+                prop_assert!(!component.is_empty(), "{path:?}");
+                prop_assert!(component.len() <= max, "{path:?}");
+            }
+        }
+    }
 
     #[test]
     fn renders_fields_and_nested_functions() {
