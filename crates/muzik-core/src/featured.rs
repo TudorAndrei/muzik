@@ -9,7 +9,8 @@ static FEATURED: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)\s*(?:[\(\[]\s*\b(?:feat|ft|featuring)\b\.?\s+([^\)\]]+?)\s*[\)\]]|\b(?:feat|ft|featuring)\b\.?\s+([^\(\[]+))",
     )
 });
-static SEPARATOR: LazyLock<Regex> = LazyLock::new(|| literal(r"(?i)\s*(?:,|&|/|\bx\b|\band\b)\s*"));
+static SEPARATOR: LazyLock<Regex> =
+    LazyLock::new(|| literal(r"(?i)\s*(?:,|&|/|\bx\b|\band\b|\b(?:feat|ft|featuring)\b\.?)\s*"));
 
 #[expect(
     clippy::unwrap_used,
@@ -57,7 +58,9 @@ pub fn parse(title: &str) -> (String, Vec<String>) {
         }
         let before = clean.get(..credit.range.start).unwrap_or_default();
         let after = clean.get(credit.range.end..).unwrap_or_default();
-        let joined = if credit.bracketed {
+        let seam =
+            before.ends_with(char::is_alphanumeric) && after.starts_with(char::is_alphanumeric);
+        let joined = if credit.bracketed && !seam {
             format!("{before}{after}")
         } else {
             format!("{} {}", before.trim_end(), after.trim_start())
@@ -105,6 +108,17 @@ mod tests {
                 "Song".to_owned(),
                 vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]
             )
+        );
+        assert_eq!(
+            parse("Song (feat. A) feat. B feat. C"),
+            (
+                "Song".to_owned(),
+                vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]
+            )
+        );
+        assert_eq!(
+            parse("A (feat. P) (feat. Q)B"),
+            ("A B".to_owned(), vec!["P".to_owned(), "Q".to_owned()])
         );
     }
 }
