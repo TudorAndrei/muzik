@@ -65,6 +65,17 @@ Feature: Duplicate albums
     When muzik imports the album with the best match and replaces duplicates
     Then that album is still in the library
 
+  Scenario Outline: An album title that differs only by a full album tag is a duplicate
+    Given the library has the album "<title>" by "MARA VALE" with the MusicBrainz id "other-release"
+    When muzik plans the import of the songs
+    Then the planned album lists that album as a duplicate
+
+    Examples:
+      | title                    |
+      | Night Lines [Full album] |
+      | NIGHT LINES (Full Album) |
+      | Night Lines [FULL LP]    |
+
   Scenario: Replace can reuse the destination of the old album
     Given muzik copies files into the library
     And the import uses the default path "$albumartist/$album/$track $title"
