@@ -75,8 +75,8 @@ proptest! {
         for pair in ranked.windows(2) {
             let (first, second) = (&pair[0], &pair[1]);
             prop_assert!(
-                first.score > second.score
-                    || (first.score.total_cmp(&second.score).is_eq()
+                first.score.total_cmp(&second.score).is_gt()
+                    ||(first.score.total_cmp(&second.score).is_eq()
                         && first.candidate.username <= second.candidate.username)
             );
         }
