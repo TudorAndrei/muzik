@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 ebur128 = "0.1"
 hex = "0.4"
-jiff = "0.2"
+jiff = "1.0"
 muzik-core = { path = "../muzik-core" }
 muzik-tags = { path = "../muzik-tags" }
 parking_lot = "0.13"
@@ -29,5 +29,5 @@ thiserror = "2"
 unicode-normalization = "0.1"
 
 [dev-dependencies]
-bolero = "0.13"
+bolero = "0.13.7"
 proptest = { version = "1.12", default-features = false, features = ["std"] }

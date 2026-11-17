@@ -2,6 +2,11 @@
 members = ["crates/*", "apps/cli", "apps/gui"]
 resolver = "3"
 
+[patch.crates-io]
+# The published 0.13.5 pins indexmap 2.11.2, which conflicts with GPUI's
+# proc-macro-crate. Upstream has removed that pin; keep the fix reproducible.
+bolero-generator-derive = { git = "https://github.com/camshaft/bolero", rev = "968b6b3510acbc22123e035278b1665e671a4c21" }
+
 [workspace.package]
 version = "2.14.1"
 edition = "2024"

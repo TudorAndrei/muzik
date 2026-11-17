@@ -2,7 +2,6 @@
 
 use crate::{Error, Result};
 use rusqlite::{Connection, TransactionBehavior};
-use rusqlite_migration::{M, MigrationDefinitionError, Migrations};
 use std::path::Path;
 use std::time::Duration;
 
@@ -75,23 +74,23 @@ fn prepare(mut connection: Connection) -> Result<Connection> {
     Ok(connection)
 }
 
-fn migrations() -> Migrations<'static> {
-    Migrations::new(MIGRATIONS.iter().copied().map(M::up).collect())
-}
-
 fn migrate(connection: &mut Connection) -> Result<()> {
-    let migrations = migrations();
-    connection.set_transaction_behavior(TransactionBehavior::Immediate);
-    let migrated = migrations
-        .to_latest(connection)
-        .or_else(|_| migrations.to_latest(connection));
-    connection.set_transaction_behavior(TransactionBehavior::Deferred);
-    migrated.map_err(|error| match error {
-        rusqlite_migration::Error::MigrationDefinition(
-            MigrationDefinitionError::DatabaseTooFarAhead,
-        ) => Error::from("muzik.db has a newer version than this build supports"),
-        error => Error::from(error),
-    })
+    // Read the version only after taking the write lock. Another opener may
+    // have completed the migrations while this connection waited for it.
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let version = usize::try_from(version)?;
+    if version > MIGRATIONS.len() {
+        return Err(Error::from(
+            "muzik.db has a newer version than this build supports",
+        ));
+    }
+    for sql in MIGRATIONS.iter().skip(version) {
+        transaction.execute_batch(sql)?;
+    }
+    transaction.pragma_update(None, "user_version", integer(MIGRATIONS.len())?)?;
+    transaction.commit()?;
+    Ok(())
 }
 
 pub(crate) fn integer(value: usize) -> Result<i64> {
@@ -115,8 +114,29 @@ mod tests {
     }
 
     #[test]
-    fn the_migrations_are_valid() {
-        migrations().validate().unwrap();
+    fn failed_migrations_roll_back_schema_and_version() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO meta VALUES ('existing', 'keep');",
+            )
+            .unwrap();
+        assert!(migrate(&mut connection).is_err());
+        assert_eq!(count(&connection, "PRAGMA user_version"), 0);
+        assert_eq!(
+            count(
+                &connection,
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('jobs', 'watchlist_playlists')"
+            ),
+            0
+        );
+        let value: String = connection
+            .query_row("SELECT value FROM meta WHERE key = 'existing'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(value, "keep");
     }
 
     const SEEDS: &[&str] = &[
@@ -138,8 +158,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         {
-            let mut connection = Connection::open(&path).unwrap();
-            migrations().to_version(&mut connection, version).unwrap();
+            let connection = Connection::open(&path).unwrap();
+            for sql in &MIGRATIONS[..version] {
+                connection.execute_batch(sql).unwrap();
+            }
+            connection
+                .pragma_update(None, "user_version", integer(version).unwrap())
+                .unwrap();
             for seed in &SEEDS[..version] {
                 connection.execute_batch(seed).unwrap();
             }

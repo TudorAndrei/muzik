@@ -524,7 +524,7 @@ fn split_track(context: &SplitTrackContext<'_>, chapter: &Chapter) -> Result<(),
         let sidecar = destination.with_extension("muzik.json");
         let payload = json!({
             "version": 1,
-            "downloaded_at": jiff::Zoned::now().strftime("%Y-%m-%dT%H:%M:%S").to_string(),
+            "downloaded_at": jiff::ZonedDateTime::now().strftime("%Y-%m-%dT%H:%M:%S").to_string(),
             "source_id": source_id,
         });
         let text = serde_json::to_string_pretty(&payload).map_err(io::Error::other)?;

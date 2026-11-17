@@ -266,7 +266,7 @@ impl MatchConfig {
                 .collect(),
             metadata_source_count: 1,
             data_source_penalties: BTreeMap::new(),
-            current_year: i32::from(jiff::Zoned::now().year()),
+            current_year: i32::from(jiff::ZonedDateTime::now().year()),
         })
     }
 

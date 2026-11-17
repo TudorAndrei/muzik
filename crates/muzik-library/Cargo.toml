@@ -12,8 +12,8 @@ workspace = true
 
 [dependencies]
 deunicode = "1.6"
-fancy-regex = "0.20"
-rusqlite = { version = "0.41", features = ["bundled", "functions"] }
+fancy-regex = "0.20.2"
+rusqlite = { version = "0.43", features = ["bundled", "functions"] }
 shlex = "2"
 thiserror = "2"
 tracing = "0.1"

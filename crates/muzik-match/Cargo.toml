@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 deunicode = "1.6"
-jiff = "0.2"
+jiff = "1.0"
 lsap = "=1.0.2"
 muzik-core = { path = "../muzik-core" }
 regex = "1.13"

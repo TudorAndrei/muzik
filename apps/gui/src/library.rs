@@ -215,7 +215,7 @@ fn date(added: f64) -> String {
         .filter(|stamp| *stamp > 0)
         .and_then(|stamp| jiff::Timestamp::from_second(stamp).ok())
         .map(|at| {
-            at.to_zoned(jiff::tz::TimeZone::system())
+            at.to_zoned_datetime(jiff::tz::TimeZone::system())
                 .strftime("%Y-%m-%d")
                 .to_string()
         })
