@@ -12,6 +12,7 @@ use crate::string_dist;
 use crate::string_distance::count_to_f64;
 
 const VA_ARTISTS: &[&str] = &["", "various artists", "various", "va", "unknown"];
+const MAX_NUMBER_PENALTIES: u32 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Display, EnumString)]
 #[strum(serialize_all = "snake_case")]
@@ -323,7 +324,7 @@ impl Distance {
         right: u32,
     ) -> Result<(), Error> {
         let difference = left.abs_diff(right);
-        for _ in 0..difference.max(1) {
+        for _ in 0..difference.clamp(1, MAX_NUMBER_PENALTIES) {
             self.add(key, if difference == 0 { 0.0 } else { 1.0 })?;
         }
         Ok(())
@@ -687,5 +688,33 @@ impl Distance {
             self.add(DistanceKey::UnmatchedTracks, 1.0)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    fn count() -> impl Strategy<Value = u32> {
+        prop_oneof![0_u32..2_000, any::<u32>()]
+    }
+
+    proptest! {
+        #[test]
+        fn number_penalties_count_the_difference_up_to_the_limit(
+            left in count(),
+            right in count(),
+        ) {
+            let mut distance = Distance::default();
+            distance.add_number(DistanceKey::Mediums, left, right)?;
+            let difference = left.abs_diff(right);
+            let value = if difference == 0 { 0.0 } else { 1.0 };
+            let count = usize::try_from(difference.clamp(1, MAX_NUMBER_PENALTIES))?;
+            prop_assert_eq!(
+                distance.penalties(),
+                &[(DistanceKey::Mediums, vec![value; count])][..]
+            );
+        }
     }
 }

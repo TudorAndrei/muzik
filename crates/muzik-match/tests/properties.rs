@@ -37,22 +37,31 @@ fn track() -> impl Strategy<Value = MatchTrack> {
 }
 
 fn local_item() -> impl Strategy<Value = MatchItem> {
-    (item(), title(), title(), 0_u32..4, 1950_i32..2030).prop_map(
-        |(item, artist, album, disc_total, year)| MatchItem {
+    (
+        item(),
+        title(),
+        title(),
+        prop_oneof![0_u32..4, any::<u32>()],
+        1950_i32..2030,
+    )
+        .prop_map(|(item, artist, album, disc_total, year)| MatchItem {
             artist,
             album,
             disc_total,
             year,
             ..item
-        },
-    )
+        })
 }
 
 fn album() -> impl Strategy<Value = MatchAlbum> {
     (
         (title(), title(), proptest::collection::vec(track(), 0..8)),
         (of("[a-c]"), of("[xy]"), any::<bool>()),
-        (of(1_u32..4), of(1950_i32..2030), of(1950_i32..2030)),
+        (
+            of(prop_oneof![1_u32..4, any::<u32>()]),
+            of(1950_i32..2030),
+            of(1950_i32..2030),
+        ),
     )
         .prop_map(
             |(
