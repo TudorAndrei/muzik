@@ -405,15 +405,49 @@ fn items(playlist: &Playlist, source: &Value) -> LoadedSource {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_quality_result, items, ready_quality_directory, refresh_chapters_with};
+    use super::{
+        apply_quality_result, format_time, items, ready_quality_directory, refresh_chapters_with,
+    };
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
+    use muzik_core::chapters::parse_chapters;
     use muzik_core::{ChapterAnswer, DecisionKind};
     use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
     use muzik_workflow::quality::QualityUpgradeResult;
+    use proptest::prelude::*;
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
+
+    fn sidecar(chapters: &[(i64, String)]) -> String {
+        chapters
+            .iter()
+            .map(|(start, title)| format!("{} {title}", format_time(*start)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    proptest! {
+        #[test]
+        fn written_chapters_parse_back_unchanged(
+            written in proptest::collection::btree_map(
+                0_i64..i64::MAX,
+                "[^\\s][^\n]{0,18}[^\\s]|[^\\s]",
+                1..20,
+            )
+            .prop_map(|chapters| chapters.into_iter().collect::<Vec<_>>()),
+        ) {
+            let parsed = parse_chapters(&sidecar(&written));
+            prop_assert_eq!(parsed.len(), written.len());
+            for (position, (chapter, (start, title))) in parsed.iter().zip(&written).enumerate() {
+                prop_assert_eq!(usize::try_from(chapter.index).ok(), position.checked_add(1));
+                prop_assert_eq!(chapter.start, *start);
+                prop_assert_eq!(&chapter.title, title);
+                let next = written.get(position.saturating_add(1)).map(|(next, _)| *next);
+                prop_assert_eq!(chapter.end, next);
+            }
+        }
+    }
 
     #[test]
     fn split_again_rejects_a_parent_directory_album_name() {
