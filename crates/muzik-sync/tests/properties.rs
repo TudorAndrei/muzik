@@ -111,6 +111,37 @@ fn planned(
     )
 }
 
+#[test]
+fn a_converted_track_keeps_its_folder_and_dotted_stem() {
+    let target = Target {
+        path: PathBuf::from(DEVICE),
+        preset: SyncPreset::Mp3,
+        bitrate: None,
+        covers: false,
+    };
+    let flac = MeasuredQuality {
+        lossless: true,
+        format: Codec::Flac,
+        bitrate_kbps: Some(900),
+        sample_rate: Some(44_100),
+        bit_depth: Some(16),
+        channels: Some(2),
+        size: Some(1),
+    };
+    let plan = planned(
+        &target,
+        &[(Path::new(LIBRARY).join("A/a.b.flac"), Some(flac))],
+        &[],
+        1,
+    );
+    assert_eq!(plan.pending.len(), 1);
+    assert!(matches!(plan.pending[0].action, Action::Convert(_)));
+    assert_eq!(
+        plan.pending[0].destination,
+        Path::new(DEVICE).join("A/a.b.mp3")
+    );
+}
+
 proptest! {
     #[test]
     fn every_source_gets_exactly_one_outcome(
