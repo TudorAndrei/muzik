@@ -75,7 +75,7 @@ fn target() -> impl Strategy<Value = Target> {
 }
 
 fn track() -> impl Strategy<Value = (PathBuf, Option<MeasuredQuality>)> {
-    let inside = "[aAb .?*:<|\t]{1,3}(/[aAb .?\"]{1,3}){0,2}/[aAb ?*][aAb .]{0,2}\\.(flac|Flac|mp3|opus|m4a|wav|txt)"
+    let inside = "[aAb .?*:<|\t]{1,3}(/[aAb .?\"]{1,3}){0,2}/[aAb .?*]{1,3}\\.(flac|Flac|mp3|opus|m4a|wav|txt)"
         .prop_map(|relative| Path::new(LIBRARY).join(relative));
     let outside = "[ab]{1,3}\\.flac".prop_map(|name| Path::new("/elsewhere").join(name));
     (
