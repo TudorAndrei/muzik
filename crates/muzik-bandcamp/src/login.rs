@@ -30,11 +30,15 @@ fn parse_cookies(text: &str) -> Result<Vec<Cookie>> {
     } else {
         header_cookies(text)
     };
-    cookies.retain(|cookie| !cookie.name.is_empty());
+    cookies.retain(|cookie| storable(&cookie.name) && storable(&cookie.value));
     if !cookies.iter().any(|cookie| cookie.name == "identity") {
         return Err("The cookies have no Bandcamp login. Log in to Bandcamp in the browser, then copy the cookies again.".into());
     }
     Ok(cookies)
+}
+
+fn storable(text: &str) -> bool {
+    !text.is_empty() && !text.contains(char::is_control)
 }
 
 fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
@@ -64,8 +68,8 @@ fn json_cookies(text: &str) -> Result<Vec<Cookie>> {
                 .iter()
                 .find_map(|key| cookie[key].as_str())?;
             Some(Cookie {
-                name: name.to_owned(),
-                value: value.to_owned(),
+                name: name.trim().to_owned(),
+                value: value.trim().to_owned(),
             })
         })
         .collect())
@@ -335,10 +339,37 @@ mod tests {
             })
     }
 
+    fn pasted_cookies() -> impl Strategy<Value = String> {
+        let pair = || ("[a-z_\t ]{0,6}", "[^;]{0,6}");
+        prop_oneof![
+            any::<String>(),
+            (pair(), proptest::collection::vec(pair(), 0..4)).prop_map(|(identity, others)| {
+                std::iter::once(("identity".to_owned(), identity.1))
+                    .chain(others)
+                    .map(|(name, value)| format!("{name}={value}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            }),
+            proptest::collection::vec((any::<String>(), any::<String>()), 0..4).prop_map(
+                |others| {
+                    json!(
+                        std::iter::once((" identity".to_owned(), "\tx\n".to_owned()))
+                            .chain(others)
+                            .map(|(name, value)| json!({"name": name, "value": value}))
+                            .collect::<Vec<_>>()
+                    )
+                    .to_string()
+                }
+            ),
+        ]
+    }
+
     proptest! {
         #[test]
-        fn saved_cookies_parse_back_unchanged(cookies in cookies()) {
-            prop_assert_eq!(parse_cookies(&netscape(&cookies)).ok(), Some(cookies));
+        fn accepted_cookies_load_back_unchanged(text in pasted_cookies()) {
+            if let Ok(cookies) = parse_cookies(&text) {
+                prop_assert_eq!(parse_cookies(&netscape(&cookies)).ok(), Some(cookies));
+            }
         }
 
         #[test]
@@ -383,6 +414,7 @@ mod tests {
             }]
         );
         assert!(parse_cookies("client_id=abc").is_err());
+        assert!(parse_cookies("client_id=abc; identity=").is_err());
         assert!(parse_cookies("").is_err());
     }
 
