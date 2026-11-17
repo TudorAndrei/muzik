@@ -25,4 +25,5 @@ strum_macros = "0.28"
 thiserror = "2"
 
 [dev-dependencies]
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 tempfile = "3"

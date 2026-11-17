@@ -32,3 +32,4 @@ walkdir = "2.5"
 
 [dev-dependencies]
 bolero = "0.13"
+proptest = { version = "1.12", default-features = false, features = ["std"] }

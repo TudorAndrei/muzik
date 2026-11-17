@@ -33,4 +33,5 @@ thiserror = "2"
 
 [dev-dependencies]
 keyring-core = "1.0"
+proptest = { version = "1.12", default-features = false, features = ["std"] }
 shuttle = "0.9"
