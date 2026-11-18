@@ -60,8 +60,14 @@ jobs:
       - name: Set release Git access
         if: inputs.tag == ''
         env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh auth setup-git
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/release_key
+          chmod 600 ~/.ssh/release_key
+          git config core.sshCommand "ssh -i ~/.ssh/release_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git remote set-url --push origin "git@github.com:${GITHUB_REPOSITORY}.git"
       - name: Bump workspace version and create tag
         if: inputs.tag == ''
         id: bump
@@ -217,9 +223,18 @@ jobs:
           [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::No valid checksum for $TAG"; exit 1; }
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Set release Git access
+        env:
+          DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/release_key
+          chmod 600 ~/.ssh/release_key
+          git config core.sshCommand "ssh -i ~/.ssh/release_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          git remote set-url --push origin "git@github.com:${GITHUB_REPOSITORY}.git"
       - name: Update the cask in this repository
         env:
-          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.release.outputs.version }}
           SHA: ${{ steps.release.outputs.sha }}
         run: |
@@ -232,7 +247,6 @@ jobs:
             echo "The cask is already current."
             exit 0
           fi
-          gh auth setup-git
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "chore(homebrew): update the cask to v${VERSION}"
