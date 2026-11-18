@@ -201,12 +201,6 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
     let mut occurrences = HashMap::<String, usize>::new();
     let mut items = Vec::new();
     for (track, position) in entries.iter().zip(1_u64..) {
-        let source = track["source_id"]
-            .as_str()
-            .map_or_else(|| format!("spotify:{position}"), str::to_owned);
-        let occurrence = occurrences.entry(source.clone()).or_default();
-        let entry_id = format!("{source}#{occurrence}");
-        *occurrence = occurrence.saturating_add(1);
         let artists = track["artists"]
             .as_array()
             .map(|values| {
@@ -223,8 +217,15 @@ fn items(document: &Value) -> Result<LoadedSource, JobError> {
         } else {
             format!("{artists} - {title}")
         };
+        let source_id = track["source_id"].as_str().filter(|id| !id.is_empty());
+        let source = source_id.map_or_else(|| format!("spotify:title:{label}"), str::to_owned);
+        let occurrence = occurrences.entry(source.clone()).or_default();
+        let entry_id = format!("{source}#{occurrence}");
+        *occurrence = occurrence.saturating_add(1);
         let mut item = WatchItem::new(position, &label, SourceKind::Spotify);
-        item.video_id = Some(source.rsplit(':').next().unwrap_or("").to_owned());
+        item.video_id = source_id
+            .and_then(|id| id.rsplit(':').next())
+            .map(str::to_owned);
         item.video_url = track["source_url"].as_str().map(str::to_owned);
         item.thumbnail_url = track
             .pointer("/source_metadata/image")
@@ -292,9 +293,16 @@ mod tests {
     fn repeated_tracks_keep_separate_state_keys() {
         let loaded = items(&json!({"title":"Album","entries":[
             {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"},
-            {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"}
+            {"title":"One","artists":["Alex"],"source_id":"spotify:track:t1","source_url":"https://open.spotify.com/track/t1"},
+            {"title":"Gone","artists":["Alex"],"source_id":null}
         ]}))
         .unwrap();
+        assert_eq!(
+            loaded.items[2].entry_id.as_deref(),
+            Some("spotify:title:Alex - Gone#0")
+        );
+        assert_eq!(loaded.items[2].video_id, None);
+        assert_eq!(loaded.items[1].video_id.as_deref(), Some("t1"));
         assert_eq!(
             loaded.items[0].entry_id.as_deref(),
             Some("spotify:track:t1#0")
