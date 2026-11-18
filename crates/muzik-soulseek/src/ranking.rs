@@ -482,9 +482,9 @@ mod tests {
         );
         assert!(
             picked(
-                &["Artist\\Album\\01 Cafe\u{301}.flac"],
+                &["Artist\\Album\\01 Rose\u{301}.flac"],
                 "Artist",
-                "Calf\u{e9}"
+                "Ros\u{e9}"
             )
             .is_some()
         );
