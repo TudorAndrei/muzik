@@ -27,10 +27,10 @@ pub trait Source {
     fn process(
         &self,
         adapter: &mut Adapter<'_, '_>,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError>;
+    ) -> Result<(), JobError>;
 }
 
 pub fn of(kind: SourceKind) -> &'static dyn Source {
@@ -89,6 +89,7 @@ fn mark_full(
         mut split,
         was_split,
     } = outputs;
+    item.release_held()?;
     for stage in Stage::ALL.iter().copied() {
         let skipped = match stage {
             Stage::Download => false,
@@ -121,16 +122,10 @@ fn required<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, JobError> 
         .ok_or_else(|| JobError::Operation(format!("{key} must be a non-empty string")))
 }
 
-fn safe_name(id: &str) -> String {
-    id.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn download_folder(adapter: &Adapter<'_, '_>, item: &WatchItem) -> Result<PathBuf, JobError> {
+    required(item.entry_id.as_deref(), "entry_id")?;
+    item.download_folder(&adapter.prepared.settings.request.output)
+        .ok_or_else(|| JobError::Operation("This item has no download folder.".into()))
 }
 
 fn workflow_error(error: muzik_workflow::Error) -> JobError {

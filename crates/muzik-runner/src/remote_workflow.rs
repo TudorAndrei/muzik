@@ -19,15 +19,57 @@ use muzik_workflow::{
     run_workflow_with_events,
 };
 use serde_json::{Value, json};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+pub struct Progress {
+    pub stage: Cell<Stage>,
+    audio: RefCell<Option<PathBuf>>,
+    split: RefCell<Option<PathBuf>>,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            stage: Cell::new(Stage::Download),
+            audio: RefCell::new(None),
+            split: RefCell::new(None),
+        }
+    }
+}
+
+impl Progress {
+    pub fn audio(&self) -> Option<PathBuf> {
+        self.audio.borrow().clone().filter(|path| path.is_file())
+    }
+
+    pub fn split(&self) -> Option<PathBuf> {
+        self.split.borrow().clone().filter(|path| path.is_dir())
+    }
+
+    fn observe(&self, event: &WorkflowEvent) {
+        match event {
+            WorkflowEvent::AcquisitionCompleted { files } => {
+                self.audio
+                    .replace(files.iter().find(|path| path.is_file()).cloned());
+            }
+            WorkflowEvent::SplitCompleted { output } => {
+                self.split.replace(Some(output.clone()));
+            }
+            WorkflowEvent::OrganizeStarted { target } if target.is_dir() => {
+                self.split.replace(Some(target.clone()));
+            }
+            _ => {}
+        }
+    }
+}
 
 pub fn run(
     input: WorkflowInput,
     settings: &Settings,
     cancelled: &AtomicBool,
-    stage: &Cell<Stage>,
+    progress: &Progress,
     on_event: &mut dyn FnMut(JobEvent),
     on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -40,7 +82,7 @@ pub fn run(
             decide,
             on_import_event,
             cancelled,
-            stage,
+            stage: &progress.stage,
             after_import: settings.after_import,
         },
         paths: settings.paths.clone(),
@@ -51,7 +93,10 @@ pub fn run(
         output: settings.request.output.clone(),
         acquired_from: None,
     };
-    let mut report = |event| on_event(event_record(event));
+    let mut report = |event: WorkflowEvent| {
+        progress.observe(&event);
+        on_event(event_record(event));
+    };
     if let WorkflowInput::SpotifyExport(ref path) = input {
         let result = playlist::run_spotify_export(
             &settings.request,
@@ -420,6 +465,32 @@ mod tests {
     use super::{acquire_spotify_audio, candidate_row};
     use muzik_core::{AudioFallback, AudioSource};
     use muzik_soulseek::types::{Candidate, FileEntry};
+    use muzik_workflow::WorkflowEvent;
+
+    #[test]
+    fn progress_keeps_the_outputs_of_finished_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("Song [abcdefghijk].flac");
+        std::fs::write(&audio, b"audio").unwrap();
+        let split = directory.path().join("Song");
+        std::fs::create_dir(&split).unwrap();
+        let progress = super::Progress::default();
+        progress.observe(&WorkflowEvent::AcquisitionCompleted {
+            files: vec![directory.path().join("missing.flac"), audio.clone()],
+        });
+        assert_eq!(progress.audio(), Some(audio.clone()));
+        assert_eq!(progress.split(), None);
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: audio.clone(),
+        });
+        assert_eq!(progress.split(), None);
+        progress.observe(&WorkflowEvent::SplitCompleted {
+            output: split.clone(),
+        });
+        assert_eq!(progress.split(), Some(split));
+        std::fs::remove_file(&audio).unwrap();
+        assert_eq!(progress.audio(), None);
+    }
 
     #[test]
     fn spotify_youtube_source_does_not_call_soulseek() {

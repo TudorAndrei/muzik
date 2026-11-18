@@ -2,8 +2,8 @@
 
 use super::source::availability;
 use super::{
-    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, WatchItem,
-    Watchlist, now, view,
+    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, StageStatus,
+    WatchItem, Watchlist, now, view,
 };
 use crate::Result;
 use muzik_core::{JobEvent, Severity, Task};
@@ -61,7 +61,7 @@ pub enum ItemOutcome {
 }
 
 /// Implement source lookup and item processing with Rust adapters.
-/// `process` returns the item with its final stage state.
+/// `process` records each stage on `item` when the stage ends.
 /// `park` runs in the transaction that saves a waiting stage.
 pub trait Operations {
     /// # Errors
@@ -72,10 +72,10 @@ pub trait Operations {
     fn process(
         &mut self,
         playlist: &Playlist,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError>;
+    ) -> Result<(), JobError>;
     /// # Errors
     /// Returns an error if the waiting job cannot be saved.
     fn park(
@@ -297,51 +297,53 @@ pub fn run_item(
 ) -> Result<ItemOutcome, JobError> {
     check_cancelled(cancelled)?;
     let stage = action.stage();
-    let (playlist, item) = repository.update(|document| {
+    let (playlist, mut run) = repository.update(|document| {
         let (playlist, index) = find_item_mut(document, id)?;
         let source = playlist.clone();
         let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
-        check_available(saved, action, options.output)?;
+        if let Err(error) = check_available(saved, action, options.output) {
+            saved.fail_held(&error.to_string())?;
+            return Ok(Err(error));
+        }
         let item = saved.clone();
         saved.start(action)?;
-        Ok((source, item))
-    })?;
-    let result = operations.process(&playlist, &item, action, cancelled);
+        Ok(Ok((source, item)))
+    })??;
+    let result = operations.process(&playlist, &mut run, action, cancelled);
     let result = match result {
-        Ok(_) if cancelled.load(Ordering::SeqCst) => Err(JobError::Cancelled),
+        Ok(()) if cancelled.load(Ordering::SeqCst) => Err(JobError::Cancelled),
         other => other,
     };
-    repository.update_with(|document, connection| {
+    let saved = repository.update_with(|document, connection| {
         let Ok((playlist, index)) = find_item_mut(document, id) else {
-            return Ok(());
+            return Ok(false);
         };
-        let position = playlist.items.get(index).ok_or(MISSING_VIDEO)?.position;
-        let mut card = item.clone();
-        card.position = position;
         match &result {
-            Ok(updated) => {
-                card = updated.clone();
-                card.position = position;
-                card.finish(stage, action)?;
-                if let Some(key) = item.key() {
-                    for other in playlist
-                        .items
-                        .iter_mut()
-                        .filter(|other| other.key() == Some(key))
-                    {
-                        let position = other.position;
-                        *other = card.clone();
-                        other.position = position;
+            Ok(()) => {
+                run.release_held()?;
+                run.finish(stage, action)?;
+                let key = run.key().map(str::to_owned);
+                for (slot, other) in playlist.items.iter_mut().enumerate() {
+                    let copy = key.is_some()
+                        && other.key() == key.as_deref()
+                        && !other.statuses().any(StageStatus::is_held);
+                    if slot == index || copy {
+                        other.record_run(&run);
                     }
-                    playlist.mark_processed(key, card.is_done());
                 }
+                if let Some(key) = key {
+                    playlist.mark_processed(&key, run.is_done());
+                }
+                return Ok(true);
             }
             Err(JobError::Waiting {
                 stage: waiting,
                 question,
             }) => {
-                card.wait(*waiting, action, question.clone())?;
-                operations.park(connection, id, &item.title, *waiting, question)?;
+                run.release_held()?;
+                run.wait(*waiting, action, question.clone())?;
+                let title = &playlist.items.get(index).ok_or(MISSING_VIDEO)?.title;
+                operations.park(connection, id, title, *waiting, question)?;
             }
             Err(JobError::Cancelled) => {}
             Err(error) => {
@@ -349,14 +351,21 @@ pub fn run_item(
                     JobError::Failed { stage, .. } => *stage,
                     _ => stage,
                 };
-                card.fail(failed, action, &error.to_string())?;
+                run.release_held()?;
+                run.fail(failed, action, &error.to_string())?;
             }
         }
-        *playlist.items.get_mut(index).ok_or(MISSING_VIDEO)? = card;
-        Ok(())
+        playlist
+            .items
+            .get_mut(index)
+            .ok_or(MISSING_VIDEO)?
+            .record_run(&run);
+        Ok(true)
     })?;
     match result {
-        Ok(_) => Ok(ItemOutcome::Completed { stage }),
+        Err(JobError::Cancelled) => Err(JobError::Cancelled),
+        _ if !saved => Err(JobError::Operation(GONE_VIDEO.into())),
+        Ok(()) => Ok(ItemOutcome::Completed { stage }),
         Err(JobError::Waiting { stage, question }) => Ok(ItemOutcome::Waiting { stage, question }),
         Err(error) => Err(error),
     }
@@ -364,6 +373,21 @@ pub fn run_item(
 
 const MISSING_PLAYLIST: &str = "The selected playlist is no longer available.";
 const MISSING_VIDEO: &str = "The selected video is no longer available.";
+const GONE_VIDEO: &str =
+    "The video left its playlist while it was processed. Muzik could not save the result.";
+
+/// # Errors
+/// Returns an error if the watchlist cannot be saved.
+pub fn abandon(repository: &Repository, id: &ItemId, message: &str) -> Result<()> {
+    repository.update(|document| {
+        if let Ok((playlist, index)) = find_item_mut(document, id)
+            && let Some(item) = playlist.items.get_mut(index)
+        {
+            item.fail_held(message)?;
+        }
+        Ok(())
+    })
+}
 
 fn find_item<'a>(document: &'a Watchlist, id: &ItemId) -> Result<&'a WatchItem> {
     let playlist = document

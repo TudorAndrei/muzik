@@ -92,6 +92,15 @@ pub(crate) fn action(
     )
 }
 
+pub(crate) fn abandon(
+    paths: &muzik_core::paths::Paths,
+    params: &Value,
+    message: &str,
+) -> Result<(), JobError> {
+    let (id, _) = item_request(params)?;
+    Ok(jobs::abandon(&Repository::open(paths), &id, message)?)
+}
+
 pub(crate) struct Prepared<'a> {
     pub(crate) settings: &'a Settings,
     repository: Repository,
@@ -150,10 +159,10 @@ impl Operations for Adapter<'_, '_> {
     fn process(
         &mut self,
         _playlist: &Playlist,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError> {
+    ) -> Result<(), JobError> {
         check_cancelled(cancelled)?;
         self.parked.replace(None);
         let result = sources::of(item.kind).process(self, item, action, cancelled);

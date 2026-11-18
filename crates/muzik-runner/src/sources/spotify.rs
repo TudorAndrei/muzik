@@ -1,5 +1,5 @@
 use super::{
-    Outputs, Source, at, check_cancelled, mark_full, required, safe_name, workflow_error, youtube,
+    Outputs, Source, at, check_cancelled, download_folder, mark_full, workflow_error, youtube,
 };
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
@@ -7,7 +7,7 @@ use crate::{local_workflow, remote_workflow};
 use muzik_soulseek::ranking::Track;
 use muzik_spotify as spotify;
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
-use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
+use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageEvent, WatchItem};
 use muzik_workflow::playlist::{SpotifyTags, write_spotify_tags};
 use muzik_workflow::process_audio_plan_with_events;
 use muzik_workflow::ytdlp::{Download, YtDlp};
@@ -38,10 +38,10 @@ impl Source for Spotify {
     fn process(
         &self,
         adapter: &mut Adapter<'_, '_>,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError> {
+    ) -> Result<(), JobError> {
         if action == ItemAction::OrganizeAgain {
             return match adapter.prepared.audio(item) {
                 Some(file) => import_file(adapter, item, file, cancelled),
@@ -54,8 +54,8 @@ impl Source for Spotify {
             )));
         }
         let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
-        if !fresh && let Some(file) = item.path(Stage::Download).filter(|path| path.is_file()) {
-            return import_file(adapter, item, file.to_path_buf(), cancelled);
+        if !fresh && let Some(file) = adapter.prepared.audio(item) {
+            return import_file(adapter, item, file, cancelled);
         }
         let track = item
             .track
@@ -80,13 +80,8 @@ impl Source for Spotify {
             })
             .unwrap_or_default();
         let query = format!("{artists} - {title}");
-        let entry_id = required(item.entry_id.as_deref(), "entry_id")?;
+        let root = download_folder(adapter, item)?;
         let settings = adapter.prepared.settings;
-        let root = settings
-            .request
-            .output
-            .join("spotify-watchlist")
-            .join(safe_name(entry_id));
         let decide = &mut *adapter.decide;
         let acquired = remote_workflow::acquire_spotify_audio(
             settings.options.audio_source,
@@ -131,10 +126,11 @@ impl Source for Spotify {
 
 fn import_file(
     adapter: &mut Adapter<'_, '_>,
-    item: &WatchItem,
+    item: &mut WatchItem,
     file: PathBuf,
     cancelled: &AtomicBool,
-) -> Result<WatchItem, JobError> {
+) -> Result<(), JobError> {
+    item.apply(Stage::Download, StageEvent::Complete(Some(file.clone())))?;
     let track = item.track.clone().unwrap_or(Value::Null);
     write_spotify_tags(&file, &tags(&track)).map_err(|error| JobError::Operation(error.into()))?;
     let mut options = adapter.prepared.settings.options.clone();
@@ -159,22 +155,20 @@ fn import_file(
         &mut |event| (events.borrow_mut())(local_workflow::event_record(event)),
     )
     .map_err(|error| at(stage.get(), workflow_error(error)))?;
-    let mut updated = item.clone();
     let audio = if file.is_file() {
         Some(file)
     } else {
         item.kept_path(Stage::Download)
     };
     mark_full(
-        &mut updated,
+        item,
         &options,
         Outputs {
             audio,
             split: None,
             was_split: false,
         },
-    )?;
-    Ok(updated)
+    )
 }
 
 fn tags(track: &Value) -> SpotifyTags {
@@ -270,11 +264,16 @@ mod tests {
             "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
             "track_number":2,"disc_number":1,"release_date":"2017-10-13"
         }));
-        let result = with_adapter(&settings, |adapter, cancelled| {
-            of(SourceKind::Spotify).process(adapter, &item, ItemAction::OrganizeAgain, cancelled)
+        with_adapter(&settings, |adapter, cancelled| {
+            of(SourceKind::Spotify).process(
+                adapter,
+                &mut item,
+                ItemAction::OrganizeAgain,
+                cancelled,
+            )
         })
         .unwrap();
-        assert_eq!(result.status(Stage::Organize), StageStatus::Complete);
+        assert_eq!(item.status(Stage::Organize), StageStatus::Complete);
         let imported = muzik_library::Library::open_read_only(&directory.path().join("library.db"))
             .unwrap()
             .items()
@@ -287,6 +286,32 @@ mod tests {
         assert_eq!(text("album"), "Warhaus");
         assert_eq!(text("title"), "Love's a Stranger");
         assert_eq!(text("albumartist"), "Warhaus");
+    }
+
+    #[test]
+    fn a_failed_import_keeps_the_acquired_audio() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory
+            .path()
+            .join("spotify-watchlist/spotify_track_t1_0/youtube-x");
+        fs::create_dir_all(&folder).unwrap();
+        let audio = folder.join("Alex - One [5OIeIaAhQOg].flac");
+        fs::write(&audio, b"not audio").unwrap();
+        let settings = settings(
+            directory.path(),
+            &json!({"output":directory.path(),"quality_policy":"off"}),
+        )
+        .unwrap();
+        let mut item = WatchItem::new(1, "Alex - One", SourceKind::Spotify);
+        item.video_id = Some("t1".into());
+        item.entry_id = Some("spotify:track:t1#0".into());
+        item.track = Some(json!({"title":"One","artists":["Alex"]}));
+        let result = with_adapter(&settings, |adapter, cancelled| {
+            of(SourceKind::Spotify).process(adapter, &mut item, ItemAction::Run, cancelled)
+        });
+        assert!(result.is_err());
+        assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
+        assert_eq!(item.status(Stage::Organize), StageStatus::NotStarted);
     }
 
     #[test]

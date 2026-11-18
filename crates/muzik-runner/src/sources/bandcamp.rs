@@ -1,4 +1,4 @@
-use super::{Outputs, Source, check_cancelled, mark_full, organize, required, safe_name};
+use super::{Outputs, Source, check_cancelled, download_folder, mark_full, organize};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_bandcamp as bandcamp;
@@ -6,7 +6,7 @@ use muzik_core::paths::Paths;
 use muzik_core::{JobEvent, Task};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{
-    ItemAction, Playlist, Repository, SourceKind, Stage, WatchItem, bandcamp_source,
+    ItemAction, Playlist, Repository, SourceKind, Stage, StageEvent, WatchItem, bandcamp_source,
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,18 +35,11 @@ impl Source for Bandcamp {
     fn process(
         &self,
         adapter: &mut Adapter<'_, '_>,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError> {
-        let entry_id = required(item.entry_id.as_deref(), "entry_id")?;
-        let directory = adapter
-            .prepared
-            .settings
-            .request
-            .output
-            .join("bandcamp-watchlist")
-            .join(safe_name(entry_id));
+    ) -> Result<(), JobError> {
+        let directory = download_folder(adapter, item)?;
         let fresh = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain);
         let saved = !fresh && !bandcamp::audio_files(&directory).is_empty();
         if action == ItemAction::OrganizeAgain && !saved {
@@ -116,6 +109,10 @@ impl Source for Bandcamp {
                 task: Task::BandcampDownload,
                 success: true,
             });
+            item.apply(
+                Stage::Download,
+                StageEvent::Complete(Some(directory.clone())),
+            )?;
         }
         let mut options = adapter.prepared.settings.options.clone();
         options.no_split = true;
@@ -127,17 +124,15 @@ impl Source for Bandcamp {
         if !options.no_organize {
             organize(adapter, &directory, &options, cancelled)?;
         }
-        let mut updated = item.clone();
         mark_full(
-            &mut updated,
+            item,
             &options,
             Outputs {
                 audio: Some(directory),
                 split: None,
                 was_split: false,
             },
-        )?;
-        Ok(updated)
+        )
     }
 }
 
@@ -197,7 +192,12 @@ mod tests {
         item.entry_id = Some("p12".into());
         item.track = Some(json!({"download_page":"https://untrusted.invalid/download"}));
         let result = with_adapter(&settings, |adapter, cancelled| {
-            of(SourceKind::Bandcamp).process(adapter, &item, ItemAction::DownloadAgain, cancelled)
+            of(SourceKind::Bandcamp).process(
+                adapter,
+                &mut item,
+                ItemAction::DownloadAgain,
+                cancelled,
+            )
         });
         assert!(result.is_err());
         assert_eq!(std::fs::read(audio).unwrap(), b"previous purchase");

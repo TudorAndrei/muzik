@@ -512,6 +512,35 @@ impl WatchItem {
         self.apply(stage, StageEvent::Fail(message.to_owned()))
     }
 
+    /// # Errors
+    /// Returns an error if a held stage cannot be released.
+    pub fn release_held(&mut self) -> Result<()> {
+        for stage in Stage::ALL {
+            if self.status(*stage).is_held() {
+                self.apply(*stage, StageEvent::Release)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// # Errors
+    /// Returns an error if a held stage cannot fail.
+    pub fn fail_held(&mut self, message: &str) -> Result<()> {
+        for stage in Stage::ALL {
+            if self.status(*stage).is_held() {
+                self.last_error = Some(message.to_owned());
+                self.apply(*stage, StageEvent::Fail(message.to_owned()))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn record_run(&mut self, run: &Self) {
+        self.stages.clone_from(&run.stages);
+        self.last_action.clone_from(&run.last_action);
+        self.last_error.clone_from(&run.last_error);
+    }
+
     pub fn is_done(&self) -> bool {
         self.statuses().all(StageStatus::is_done)
     }

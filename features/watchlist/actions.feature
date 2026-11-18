@@ -78,3 +78,75 @@ Feature: Watchlist item actions
       | PL123  | 1    | organize | stale    |
       | PL123  | 2    | download | complete |
       | PL123  | 2    | organize | stale    |
+
+  Scenario: A question after the download keeps the download
+    Given the watched playlist "PL123" has the videos "video_a"
+    And processing saves the download before the later stages
+    And the video "video_a" asks an "import_match" question at the organize stage
+    When the action "run" runs on the video "video_a" of "PL123"
+    Then the action waits at the organize stage
+    And the saved watchlist has the stages:
+      | source | item | stage    | status   |
+      | PL123  | 1    | download | complete |
+      | PL123  | 1    | organize | waiting  |
+    And item 1 of "PL123" in the saved watchlist has the download path "video_a.opus"
+
+  Scenario: A failure after the download keeps the download
+    Given the watched playlist "PL123" has the videos "video_a"
+    And processing saves the download before the later stages
+    And the split stage fails with the error "split failed"
+    When the item "video_a" of "PL123" runs
+    Then the item fails at a stage
+    And the saved watchlist has the stages:
+      | source | item | stage    | status   |
+      | PL123  | 1    | download | complete |
+      | PL123  | 1    | split    | failed   |
+    And item 1 of "PL123" in the saved watchlist has the download path "video_a.opus"
+
+  Scenario: A cancel after the download keeps the download
+    Given the watched playlist "PL123" has the videos "video_a"
+    And processing saves the download before the later stages
+    And the job is cancelled while the video is processed
+    When the action "run" runs on the video "video_a" of "PL123"
+    Then the job is cancelled
+    And the saved watchlist has the stages:
+      | source | item | stage    | status      |
+      | PL123  | 1    | download | complete    |
+      | PL123  | 1    | organize | not_started |
+    And item 1 of "PL123" in the saved watchlist has the download path "video_a.opus"
+
+  Scenario: A result keeps the title that a sync saved during the run
+    Given the watched playlist "PL123" has the video "video_a" titled "Old title"
+    And a sync renames the video "video_a" to "New title" while it is processed
+    And the video "video_a" asks an "import_match" question at the organize stage
+    When the action "run" runs on the video "video_a" of "PL123"
+    Then the action waits at the organize stage
+    And item 1 of "PL123" in the saved watchlist has the title "New title"
+
+  Scenario: A video that leaves its playlist during the run fails the job
+    Given the watched playlist "PL123" has the videos "video_a, video_b"
+    And a sync removes the video "video_a" while it is processed
+    And the video "video_a" asks an "import_match" question at the organize stage
+    When the action "run" runs on the video "video_a" of "PL123"
+    Then the job fails
+    And the saved source "PL123" has 1 item
+
+  Scenario: A choice that cannot resume does not keep the item waiting
+    Given the watched playlist "PL123" has the videos "video_a"
+    And the video "video_a" in "PL123" waits at the organize stage for an "import_match" question
+    When the action "organize_again" runs on the video "video_a" of "PL123"
+    Then the job fails
+    And no video was processed
+    And the saved watchlist has the stages:
+      | source | item | stage    | status |
+      | PL123  | 1    | organize | failed |
+    And item 1 of "PL123" in the saved watchlist has the error "No downloaded audio or split directory is available."
+
+  Scenario: A job that ends before it starts does not keep the item waiting
+    Given the watched playlist "PL123" has the videos "video_a"
+    And the video "video_a" in "PL123" waits at the organize stage for an "import_match" question
+    When the job of the video "video_a" of "PL123" ends before it starts with the error "settings are invalid"
+    Then the saved watchlist has the stages:
+      | source | item | stage    | status |
+      | PL123  | 1    | organize | failed |
+    And item 1 of "PL123" in the saved watchlist has the error "settings are invalid"

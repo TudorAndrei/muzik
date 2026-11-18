@@ -1,5 +1,5 @@
 use crate::documents::{field, list};
-use crate::operations::{FakeOperations, Processing, Question, card};
+use crate::operations::{DuringRun, FakeOperations, Processing, Question, Sync, card};
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
@@ -164,6 +164,51 @@ fn processing_downloads_again(world: &mut WatchlistWorld) {
 #[given("the job is cancelled while the second video is processed")]
 fn cancelled_at_second_video(world: &mut WatchlistWorld) {
     world.operations.processing = Processing::StopAtSecond;
+}
+
+#[given("the job is cancelled while the video is processed")]
+fn cancelled_while_processed(world: &mut WatchlistWorld) {
+    world.operations.processing = Processing::CancelAfterStart;
+}
+
+#[given("processing saves the download before the later stages")]
+const fn processing_downloads_first(world: &mut WatchlistWorld) {
+    world.operations.downloads_first = true;
+}
+
+#[given(expr = "a sync renames the video {string} to {string} while it is processed")]
+fn sync_renames_during_run(world: &mut WatchlistWorld, video: String, title: String) {
+    world.operations.during_run = Some(DuringRun {
+        database: world.database(),
+        video,
+        sync: Sync::Retitle(title),
+    });
+}
+
+#[given(expr = "a sync removes the video {string} while it is processed")]
+fn sync_removes_during_run(world: &mut WatchlistWorld, video: String) {
+    world.operations.during_run = Some(DuringRun {
+        database: world.database(),
+        video,
+        sync: Sync::Remove,
+    });
+}
+
+#[when(
+    expr = "the job of the video {string} of {string} ends before it starts with the error {string}"
+)]
+fn job_ends_before_start(
+    world: &mut WatchlistWorld,
+    video: String,
+    id: String,
+    message: String,
+) -> StepResult {
+    jobs::abandon(
+        &world.repository(),
+        &ItemId::new(&id, Some(&video), 0),
+        &message,
+    )?;
+    Ok(())
 }
 
 #[given("jobs are dry runs")]

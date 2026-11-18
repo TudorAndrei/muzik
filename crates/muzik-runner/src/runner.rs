@@ -8,11 +8,9 @@ use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_import::beets;
 use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
-use muzik_store::watchlist::Stage;
 use muzik_workflow::{WorkflowInput, classify_input};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{Value, json};
-use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -288,7 +286,14 @@ impl Shared {
     }
 
     fn run_item(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
-        let settings = self.settings(job)?;
+        let settings = self.settings(job).map_err(|error| {
+            let message = error.to_string();
+            let error = match watchlist::abandon(self.jobs.paths(), &job.params, &message) {
+                Ok(()) => error,
+                Err(saved) => crate::Error::from(format!("{message} {saved}")),
+            };
+            JobFailure::from(error)
+        })?;
         let model = settings.agent_model.as_deref();
         let parked = RefCell::new(None);
         let mut resume = job.answer.as_ref().and_then(|answer| {
@@ -349,7 +354,7 @@ impl Shared {
                 input,
                 &settings,
                 cancel,
-                &Cell::new(Stage::Download),
+                &remote_workflow::Progress::default(),
                 &mut workflow_event,
                 &mut import_event,
                 &mut decide,
@@ -452,7 +457,7 @@ mod tests {
     use crate::queue::Jobs;
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{
-        Repository, SourceKind, Stage, StageEvent, StageStatus, WatchItem,
+        ItemAction, Repository, SourceKind, Stage, StageEvent, StageStatus, WatchItem,
     };
     use serde_json::json;
     use std::sync::Arc;
@@ -583,6 +588,59 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn a_waiting_spotify_track_organizes_the_audio_in_its_download_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let output = dir.path().join("downloads");
+        let folder = output.join("spotify-watchlist/spotify_track_1lb3H41lbvAN28N7yqRNL9_0");
+        std::fs::create_dir_all(&folder).unwrap();
+        let audio = folder.join("Gibran Alcocer - Idea 10 [5OIeIaAhQOg].flac");
+        std::fs::copy(crate::sources::testing::fixture(), &audio).unwrap();
+        let config = crate::sources::testing::library_config(dir.path()).unwrap();
+        let repository = Repository::open(&paths);
+        let playlist = repository
+            .add("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M")
+            .unwrap()
+            .playlist_id;
+        repository
+            .update(|document| {
+                let mut item = WatchItem::new(1, "Gibran Alcocer - Idea 10", SourceKind::Spotify);
+                item.video_id = Some("1lb3H41lbvAN28N7yqRNL9".into());
+                item.video_url =
+                    Some("https://open.spotify.com/track/1lb3H41lbvAN28N7yqRNL9".into());
+                item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#0".into());
+                item.track = Some(json!({"title":"Idea 10","artists":["Gibran Alcocer"]}));
+                item.apply(
+                    Stage::Organize,
+                    StageEvent::Wait(json!({"kind":"import_match","payload":{"task":{}}})),
+                )?;
+                document.playlist_mut(&playlist).ok_or("no playlist")?.items = vec![item];
+                Ok(())
+            })
+            .unwrap();
+        let shown = muzik_store::watchlist::view(
+            &repository.load().unwrap(),
+            &output,
+            &dir.path().join("cache"),
+        );
+        assert!(shown.playlists[0].items[0].actions[&ItemAction::OrganizeAgain].enabled);
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let (runner, _) = runner(&jobs).unwrap();
+        jobs.item(&json!({
+            "playlist_id":playlist,"key":"spotify:track:1lb3H41lbvAN28N7yqRNL9#0","occurrence":0,
+            "title":"Gibran Alcocer - Idea 10","action":"organize_again","output":output,
+            "config":config
+        }))
+        .unwrap();
+        runner.wake();
+        runner.wait_until_idle(&AtomicBool::new(false));
+        let item = repository.load().unwrap().playlists[0].items[0].clone();
+        assert_eq!(item.status(Stage::Organize), StageStatus::Complete);
+        assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
+        assert_eq!(item.last_error, None);
     }
 
     #[test]
