@@ -4,7 +4,7 @@ use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
 use muzik_core::{DecisionKind, JobEvent};
-use muzik_store::jobs::{Kind, Queue};
+use muzik_store::jobs::{Kind, NewJob, Queue};
 use muzik_store::watchlist::jobs::{self, JobError, PendingItem};
 use muzik_store::watchlist::{ItemAction, ItemId, Stage};
 use serde_json::{Value, json};
@@ -211,9 +211,36 @@ fn job_ends_before_start(
         .first()
         .ok_or_else(|| anyhow::anyhow!("the video has no open job"))?;
     anyhow::ensure!(store.answer(waiting.id, &json!("as_is"))?, "no answer");
-    let job = store
+    abandon_next(world, &item, &message)
+}
+
+#[when(
+    expr = "a {string} job of the video {string} of {string} ends before it starts with the error {string}"
+)]
+fn new_job_ends_before_start(
+    world: &mut WatchlistWorld,
+    action: String,
+    video: String,
+    id: String,
+    message: String,
+) -> StepResult {
+    let item = ItemId::new(&id, Some(&video), 0);
+    let mut params = json!({"title": video, "action": ItemAction::from_str(&action)?});
+    item.write(&mut params)?;
+    world.jobs()?.enqueue(&NewJob {
+        kind: Kind::Item,
+        item_key: &item.to_string(),
+        title: &video,
+        params: &params,
+    })?;
+    abandon_next(world, &item, &message)
+}
+
+fn abandon_next(world: &WatchlistWorld, item: &ItemId, message: &str) -> StepResult {
+    let job = world
+        .jobs()?
         .claim(Queue::Item)?
-        .ok_or_else(|| anyhow::anyhow!("the answered job did not start"))?;
+        .ok_or_else(|| anyhow::anyhow!("the job did not start"))?;
     let action = job
         .params
         .get("action")
@@ -222,9 +249,9 @@ fn job_ends_before_start(
     jobs::abandon(
         &world.repository(),
         job.id,
-        &item,
+        item,
         ItemAction::from_str(action)?,
-        &message,
+        message,
     )?;
     Ok(())
 }

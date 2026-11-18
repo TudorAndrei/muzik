@@ -477,6 +477,13 @@ impl WatchItem {
         self.apply(stage, StageEvent::Fail(message.to_owned()));
     }
 
+    /// Fails `stage` for a job that ended before it started, unless the stage is done.
+    pub fn fail_before_start(&mut self, stage: Stage, action: ItemAction, message: &str) {
+        if !self.status(stage).is_done() {
+            self.fail(stage, action, message);
+        }
+    }
+
     pub(super) fn record_run(&mut self, run: &Self) {
         self.stages.clone_from(&run.stages);
         self.last_action.clone_from(&run.last_action);

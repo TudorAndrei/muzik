@@ -330,7 +330,7 @@ pub fn run_item(
         let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
         if let Err(error) = check_available(saved, action, options.output) {
             let message = error.to_string();
-            saved.fail(stage, action, &message);
+            saved.fail_before_start(stage, action, &message);
             end_job(connection, options, Ending::Failed(&message))?;
             return Ok(Err(error.into()));
         }
@@ -445,7 +445,7 @@ const GONE_VIDEO: &str =
     "The video left its playlist while it was processed. Muzik could not save the result.";
 
 /// Fails a running item job that ends before `run_item` starts, and saves the failure on
-/// the stage of `action` in the same transaction.
+/// the stage of `action` in the same transaction unless that stage is done.
 /// # Errors
 /// Returns an error if the watchlist or the job cannot be saved.
 pub fn abandon(
@@ -460,7 +460,7 @@ pub fn abandon(
             && let Ok((playlist, index)) = find_item_mut(document, id)
             && let Some(item) = playlist.items.get_mut(index)
         {
-            item.fail(action.stage(), action, message);
+            item.fail_before_start(action.stage(), action, message);
         }
         Ok(())
     })
