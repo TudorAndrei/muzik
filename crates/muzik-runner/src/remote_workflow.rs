@@ -7,6 +7,7 @@ use crate::workflow_result::WorkflowResult;
 use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent, PreferredAudio, Step, app_config, chapters::Chapter};
 use muzik_soulseek::fetch::Timeouts;
+use muzik_soulseek::ranking::Track;
 use muzik_soulseek::session::{Session, SessionSettings, setting};
 use muzik_soulseek::types::Candidate;
 use muzik_store::watchlist::Stage;
@@ -150,7 +151,7 @@ impl WorkflowOperations for RemoteOperations<'_> {
             self.interactive,
             self.local.cancelled,
             self.local.decide,
-            false,
+            None,
             None,
         )?)
     }
@@ -183,7 +184,10 @@ impl WorkflowOperations for RemoteOperations<'_> {
                     interactive,
                     cancelled,
                     decide,
-                    false,
+                    Some(Track {
+                        artist: &track.artist,
+                        title: &track.title,
+                    }),
                     None,
                 )
             },
@@ -273,7 +277,7 @@ pub fn soulseek_ready(paths: &Paths) -> bool {
         .is_ok_and(|config| SessionSettings::configured(&config).is_some())
 }
 
-fn acquire_spotify_audio<S, Y>(
+pub fn acquire_spotify_audio<S, Y>(
     source: AudioSource,
     fallback: AudioFallback,
     soulseek_ready: bool,
@@ -321,7 +325,7 @@ pub fn soulseek_download(
     interactive: bool,
     cancelled: &AtomicBool,
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
-    single_file: bool,
+    track: Option<Track<'_>>,
     output_root: Option<&Path>,
 ) -> crate::Result<Vec<PathBuf>> {
     if cancelled.load(Ordering::SeqCst) {
@@ -333,7 +337,12 @@ pub fn soulseek_download(
         .ok_or("Set Soulseek credentials in configuration first.")?;
     let session = Session::shared(settings)?;
     let timeouts = Timeouts::configured(&config);
-    let ranked = session.search(query, prefer, 10, timeouts.search, cancelled)?;
+    let ranked = match track {
+        Some(track) => {
+            session.search_track(query, track, prefer, 10, timeouts.search, cancelled)?
+        }
+        None => session.search(query, prefer, 10, timeouts.search, cancelled)?,
+    };
     if ranked.is_empty() {
         return Err(format!("No Soulseek audio found for {query}.").into());
     }
@@ -368,9 +377,7 @@ pub fn soulseek_download(
         .prefix("soulseek-")
         .tempdir_in(&output)?;
     session.fetch(
-        &selected
-            .candidate
-            .audio_only(if single_file { 1 } else { usize::MAX }),
+        &selected.candidate.audio_only(usize::MAX),
         destination.path(),
         timeouts.download,
         cancelled,

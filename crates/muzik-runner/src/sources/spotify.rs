@@ -1,13 +1,14 @@
-use super::{
-    Source, at, cancel_or, check_cancelled, mark_full, required, safe_name, workflow_error, youtube,
-};
+use super::{Source, at, check_cancelled, mark_full, required, safe_name, workflow_error, youtube};
+use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
+use muzik_soulseek::ranking::Track;
 use muzik_spotify as spotify;
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, WatchItem};
 use muzik_workflow::playlist::{SpotifyTags, write_spotify_tags};
 use muzik_workflow::process_audio_plan_with_events;
+use muzik_workflow::ytdlp::{Download, YtDlp};
 use serde_json::Value;
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -84,21 +85,39 @@ impl Source for Spotify {
             .output
             .join("spotify-watchlist")
             .join(safe_name(entry_id));
-        let files = remote_workflow::soulseek_download(
-            &settings.paths,
-            &query,
-            settings.options.prefer,
-            false,
+        let decide = &mut *adapter.decide;
+        let acquired = remote_workflow::acquire_spotify_audio(
+            settings.options.audio_source,
+            settings.options.fallback,
+            remote_workflow::soulseek_ready(&settings.paths),
             cancelled,
-            adapter.decide,
-            true,
-            Some(&root),
+            || {
+                remote_workflow::soulseek_download(
+                    &settings.paths,
+                    &query,
+                    settings.options.prefer,
+                    false,
+                    cancelled,
+                    decide,
+                    Some(Track {
+                        artist: &artists,
+                        title,
+                    }),
+                    Some(&root),
+                )
+            },
+            || {
+                let _permit = gates::enter(Gate::Download, cancelled)?;
+                Ok(YtDlp::default()
+                    .download_search(&Download::audio(&query, &root, fresh), cancelled)?)
+            },
         )
-        .map_err(|error| cancel_or(cancelled, error))?;
-        let file = files
+        .map_err(workflow_error)?;
+        let file = acquired
+            .files
             .into_iter()
             .next()
-            .ok_or_else(|| JobError::Operation("Soulseek returned no audio file.".into()))?;
+            .ok_or_else(|| JobError::Operation("No audio file was downloaded.".into()))?;
         import_file(adapter, item, file, cancelled)
     }
 }
