@@ -108,8 +108,13 @@ impl Source for Spotify {
             },
             || {
                 let _permit = gates::enter(Gate::Download, cancelled)?;
+                std::fs::create_dir_all(&root)?;
+                let output = tempfile::Builder::new()
+                    .prefix("youtube-")
+                    .tempdir_in(&root)?
+                    .keep();
                 Ok(YtDlp::default()
-                    .download_search(&Download::audio(&query, &root, fresh), cancelled)?)
+                    .download_search(&Download::audio(&query, &output, fresh), cancelled)?)
             },
         )
         .map_err(workflow_error)?;
