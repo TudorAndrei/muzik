@@ -2,6 +2,22 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.15.1 - 2026-11-18
+#### Bug Fixes
+- (**core**) stop adding "best" to Soulseek searches - (cc5df16) - TudorAndrei
+- (**runner**) give each Spotify YouTube download its own folder - (1601b0f) - TudorAndrei
+- (**runner**) download the matching track and fall back to YouTube for Spotify - (653871a) - TudorAndrei
+- (**soulseek**) tighten track file matching - (a5b8382) - TudorAndrei
+- (**soulseek**) match one track file inside a search result - (f94297c) - TudorAndrei
+#### Tests
+- (**soulseek**) use a Unicode test word that the typos hook keeps - (d6f7369) - TudorAndrei
+#### Continuous Integration
+- pin Ubuntu runners to 24.04 - (5e93ce5) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.15.0 - (fad8228) - github-actions[bot]
+
+- - -
+
 ## v2.15.0 - 2026-11-18
 #### Features
 - (**cli**) add library task commands - (bed1822) - TudorAndrei
