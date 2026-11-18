@@ -151,11 +151,74 @@ fn score(candidate: &Candidate, query: &str, prefer: PreferredAudio) -> f64 {
     (score * 1000.0).round() / 1000.0
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Track<'a> {
+    pub artist: &'a str,
+    pub title: &'a str,
+}
+
+/// Narrow a search result to the one audio file that is this track.
+#[must_use]
+pub fn track_candidate(candidate: &Candidate, track: Track<'_>) -> Option<Candidate> {
+    let title = muzik_core::featured::parse(track.title).0;
+    let title = title.split(" - ").next().unwrap_or(&title);
+    let wanted = tokens(&without_brackets(title));
+    if wanted.is_empty() {
+        return None;
+    }
+    let artist: HashSet<_> = tokens(track.artist).into_iter().collect();
+    let file = candidate
+        .files
+        .iter()
+        .filter(|file| format(file).is_some())
+        .find(|file| {
+            let stem = name(&file.name);
+            let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
+            let found = tokens(&without_brackets(stem));
+            let Some(prefix) = found
+                .len()
+                .checked_sub(wanted.len())
+                .filter(|&start| found.get(start..) == Some(wanted.as_slice()))
+                .and_then(|start| found.get(..start))
+            else {
+                return false;
+            };
+            let folder: HashSet<_> = tokens(parent(&file.name)).into_iter().collect();
+            prefix.iter().all(|token| {
+                token.chars().all(|character| character.is_ascii_digit())
+                    || artist.contains(token)
+                    || folder.contains(token)
+            })
+        })?;
+    Some(Candidate {
+        files: vec![file.clone()],
+        ..candidate.clone()
+    })
+}
+
+fn without_brackets(value: &str) -> String {
+    let mut depth = 0_usize;
+    value
+        .chars()
+        .filter(|&character| match character {
+            '(' | '[' => {
+                depth = depth.saturating_add(1);
+                false
+            }
+            ')' | ']' => {
+                depth = depth.saturating_sub(1);
+                false
+            }
+            _ => depth == 0,
+        })
+        .collect()
+}
+
 fn tokens(value: &str) -> Vec<String> {
     value
-        .split(|character: char| !character.is_ascii_alphanumeric())
+        .split(|character: char| !character.is_alphanumeric())
         .filter(|token| !token.is_empty())
-        .map(str::to_ascii_lowercase)
+        .map(str::to_lowercase)
         .collect()
 }
 
@@ -186,25 +249,73 @@ fn numbered(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{rank, search_query};
+    use super::{Track, rank, search_query, track_candidate};
     use crate::types::{Candidate, FileEntry};
     use muzik_core::PreferredAudio;
 
     fn candidate(name: &str) -> Candidate {
+        folder(&[name])
+    }
+
+    fn folder(names: &[&str]) -> Candidate {
         Candidate {
             username: "peer".into(),
             slots: 1,
             speed: 100_000,
-            files: vec![FileEntry {
-                name: name.into(),
-                size: 100,
-                bitrate_kbps: Some(320),
-                duration_seconds: None,
-                vbr: None,
-                sample_rate_hz: None,
-                bit_depth: None,
-            }],
+            files: names
+                .iter()
+                .map(|name| FileEntry {
+                    name: (*name).into(),
+                    size: 100,
+                    bitrate_kbps: Some(320),
+                    duration_seconds: None,
+                    vbr: None,
+                    sample_rate_hz: None,
+                    bit_depth: None,
+                })
+                .collect(),
         }
+    }
+
+    fn picked(names: &[&str], artist: &str, title: &str) -> Option<String> {
+        track_candidate(&folder(names), Track { artist, title })
+            .and_then(|candidate| candidate.files.into_iter().next())
+            .map(|file| file.name)
+    }
+
+    #[test]
+    fn track_download_takes_the_title_file_from_an_album_folder() {
+        let album = [
+            "Music\\Kevin Morby\\Harlem River (2013)\\cover.jpg",
+            "Music\\Kevin Morby\\Harlem River (2013)\\Kevin Morby - Harlem River - 01 - Miles, Miles, Miles.flac",
+            "Music\\Kevin Morby\\Harlem River (2013)\\Kevin Morby - Harlem River - 03 - Harlem River.flac",
+        ];
+        assert_eq!(
+            picked(&album, "Kevin Morby", "Harlem River").as_deref(),
+            Some(album[2])
+        );
+        assert_eq!(picked(&album[..2], "Kevin Morby", "Harlem River"), None);
+    }
+
+    #[test]
+    fn track_title_ignores_credits_and_versions_but_not_other_words() {
+        assert!(
+            picked(
+                &["Gorillaz\\Cracker Island\\05. Dirty Harry [2023 Remaster].flac"],
+                "Gorillaz, Bootie Brown",
+                "Dirty Harry (feat. Bootie Brown) - Live"
+            )
+            .is_some()
+        );
+        assert!(picked(&["Various\\Hits\\07 Twenty One.mp3"], "Someone", "One").is_none());
+        assert!(
+            picked(
+                &["Subcarpaţi\\Album\\02 Oamenii Sunt Încă Frumoși.flac"],
+                "Subcarpaţi",
+                "Oamenii Sunt Încă Frumoși"
+            )
+            .is_some()
+        );
     }
 
     #[test]

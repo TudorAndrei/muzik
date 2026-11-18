@@ -11,7 +11,7 @@ use serde_json::Value;
 use soulseek_rs::DownloadStatus;
 
 use crate::error::{BridgeError, Result};
-use crate::ranking::{RankedCandidate, format, rank, search_query};
+use crate::ranking::{RankedCandidate, Track, format, rank, search_query, track_candidate};
 use crate::session::{Session, setting};
 use crate::types::Candidate;
 
@@ -111,6 +111,38 @@ impl Session {
         timeout: f64,
         cancelled: &AtomicBool,
     ) -> Result<Vec<RankedCandidate>> {
+        let found = self.found(query, prefer, timeout, cancelled)?;
+        Ok(rank(found, query, prefer, limit))
+    }
+
+    /// Search for one track and keep only the matching audio file of each result.
+    ///
+    /// # Errors
+    /// Returns an error when the query is invalid, the search is cancelled, or the search fails.
+    pub fn search_track(
+        &self,
+        query: &str,
+        track: Track<'_>,
+        prefer: PreferredAudio,
+        limit: usize,
+        timeout: f64,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<RankedCandidate>> {
+        let found = self
+            .found(query, prefer, timeout, cancelled)?
+            .iter()
+            .filter_map(|candidate| track_candidate(candidate, track))
+            .collect();
+        Ok(rank(found, query, prefer, limit))
+    }
+
+    fn found(
+        &self,
+        query: &str,
+        prefer: PreferredAudio,
+        timeout: f64,
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<Candidate>> {
         if query.trim().is_empty() || query.chars().any(char::is_control) {
             return Err("Enter a Soulseek search without control characters.".into());
         }
@@ -135,12 +167,7 @@ impl Session {
             return Err("Soulseek search cancelled".into());
         }
         match found {
-            Ok(Ok(results)) => Ok(rank(
-                results.into_iter().map(Candidate::from).collect(),
-                query,
-                prefer,
-                limit,
-            )),
+            Ok(Ok(results)) => Ok(results.into_iter().map(Candidate::from).collect()),
             Ok(Err(error)) => {
                 Self::forget_shared();
                 Err(format!("Soulseek search failed: {}", BridgeError::from(error)).into())
