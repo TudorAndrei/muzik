@@ -397,7 +397,7 @@ impl Muzik {
         for event in events {
             self.app_event(event, window, cx);
         }
-        if std::mem::take(&mut self.reload_watchlist) {
+        if std::mem::take(&mut self.reload_watchlist) | self.activity.take_holds_changed() {
             self.load_watchlist(cx);
         }
         cx.notify();

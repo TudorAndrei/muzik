@@ -55,6 +55,8 @@ pub struct Activity {
     runs: Vec<Run>,
     finished_runs: HashSet<String>,
     queued_items: HashSet<ItemId>,
+    held_items: HashSet<(String, bool)>,
+    holds_changed: bool,
     sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Decision>,
@@ -187,6 +189,9 @@ impl Activity {
     }
     pub const fn queued_items(&self) -> &HashSet<ItemId> {
         &self.queued_items
+    }
+    pub const fn take_holds_changed(&mut self) -> bool {
+        std::mem::replace(&mut self.holds_changed, false)
     }
     pub fn sections(&self) -> &[ActivitySection] {
         &self.sections
@@ -374,6 +379,25 @@ impl Activity {
             .iter()
             .filter_map(|job| job["item"].as_str()?.parse().ok())
             .collect();
+        let held: HashSet<(String, bool)> = open
+            .iter()
+            .filter(|job| {
+                job["status"]
+                    .as_str()
+                    .and_then(|status| status.parse::<JobStatus>().ok())
+                    == Some(JobStatus::Running)
+            })
+            .filter_map(|job| Some((job["item"].as_str()?.to_owned(), false)))
+            .chain(
+                self.waiting
+                    .iter()
+                    .filter_map(|choice| Some((choice.item.clone()?, true))),
+            )
+            .collect();
+        if held != self.held_items {
+            self.held_items = held;
+            self.holds_changed = true;
+        }
         let listed: HashSet<&str> = open
             .iter()
             .filter_map(|job| job["job_id"].as_str())
@@ -594,6 +618,23 @@ mod tests {
             source: muzik_runner::Source::Native,
             event,
         }
+    }
+
+    #[test]
+    fn the_watchlist_reloads_only_when_an_item_starts_or_stops_running_or_waiting() {
+        let mut activity = Activity::default();
+        let open = |status: &str| json!({"open":[{"job_id":"queue-1","kind":"item","title":"Track","status":status,"item":"a"}],"waiting":[]});
+        activity.apply_jobs(&open("queued"));
+        assert!(!activity.take_holds_changed());
+        activity.apply_jobs(&open("running"));
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(&open("running"));
+        assert!(!activity.take_holds_changed());
+        activity
+            .apply_jobs(&json!({"open":[],"waiting":[{"id":1,"item":"a","kind":"import_match"}]}));
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(&json!({"open":[],"waiting":[]}));
+        assert!(activity.take_holds_changed());
     }
 
     #[test]

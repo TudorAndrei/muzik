@@ -242,6 +242,9 @@ impl Muzik {
                     view.prepare_decision(window, cx);
                 }
                 view.sync_watch_table(cx);
+                if view.activity.take_holds_changed() {
+                    view.load_watchlist(cx);
+                }
                 view.gates = jobs.get("gates").cloned().unwrap_or_default();
             },
         );
