@@ -285,12 +285,12 @@ impl Muzik {
                         .tooltip("Copy source link"),
                 );
         }
-        let retries: Vec<ItemRequest> = items
-            .iter()
-            .filter(|item| {
-                retryable(item) && !self.is_queued(&id, item_position(item), &item_video_id(item))
-            })
-            .map(|item| self.item_request(ItemId::of(&id, &item.item), ItemAction::Retry))
+        let retries: Vec<ItemRequest> = playlist
+            .item_ids()
+            .into_iter()
+            .zip(items)
+            .filter(|(key, item)| retryable(item) && !self.activity.queued_items().contains(key))
+            .map(|(key, _)| self.item_request(key, ItemAction::Retry))
             .collect();
         if !retries.is_empty() {
             tools = tools.child(
@@ -367,29 +367,22 @@ impl Muzik {
         });
     }
 
-    fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
-        self.activity
-            .queued_items()
-            .contains(&ItemId::new(playlist_id, position, Some(video_id)))
-    }
-
     pub(crate) fn item_request(&self, id: ItemId, action: ItemAction) -> ItemRequest {
         let title = self.find_item(&id).map_or_else(
-            || id.video_id.clone().unwrap_or_default(),
+            || id.key.clone().unwrap_or_default(),
             |item| item.item.title,
         );
         ItemRequest { id, title, action }
     }
 
     fn find_item(&self, key: &ItemId) -> Option<ItemView> {
-        self.watchlist
+        let playlist = self
+            .watchlist
             .playlists
             .iter()
-            .find(|playlist| playlist.playlist_id == key.playlist_id)?
-            .items
-            .iter()
-            .find(|item| ItemId::of(&key.playlist_id, &item.item) == *key)
-            .cloned()
+            .find(|playlist| playlist.playlist_id == key.playlist_id)?;
+        let index = playlist.item_ids().iter().position(|id| id == key)?;
+        playlist.items.get(index).cloned()
     }
 
     pub(crate) fn open_item_sheet(
@@ -398,7 +391,7 @@ impl Muzik {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sheet_item.clone_from(&key.video_id);
+        self.sheet_item = self.find_item(&key).and_then(|item| item.item.video_id);
         self.cache_visible_thumbnails(cx);
         let view = cx.entity().downgrade();
         window.open_sheet(cx, move |sheet, _, cx| {
@@ -449,13 +442,13 @@ fn item_sheet(
     let mut facts = DescriptionList::horizontal()
         .columns(1)
         .label_width(px(110.))
-        .item(id_label, key.video_id.clone().unwrap_or_default(), 1);
+        .item(id_label, item.item.video_id.clone().unwrap_or_default(), 1);
     for (stage, state) in states {
         facts = facts.item(style::stage_label(stage), style::status_word(state), 1);
     }
     let mut links = div().flex().items_center().gap_2().child(
         Clipboard::new("copy-item-id")
-            .value(key.video_id.clone().unwrap_or_default())
+            .value(item.item.video_id.clone().unwrap_or_default())
             .tooltip("Copy ID"),
     );
     if let Some(url) = item.item.video_url.as_deref() {
@@ -606,10 +599,6 @@ fn playlist_title(playlist: &PlaylistView) -> &str {
     playlist.title.as_deref().unwrap_or(&playlist.playlist_id)
 }
 
-const fn item_position(item: &ItemView) -> u64 {
-    item.item.position
-}
-
 fn retryable(item: &ItemView) -> bool {
     item.summary == Summary::Failed
         && item
@@ -620,10 +609,6 @@ fn retryable(item: &ItemView) -> bool {
             .actions
             .get(&ItemAction::Retry)
             .is_some_and(|retry| retry.enabled)
-}
-
-fn item_video_id(item: &ItemView) -> String {
-    item.item.video_id.clone().unwrap_or_default()
 }
 
 fn filter_tab(filter: Option<Summary>) -> usize {
@@ -668,8 +653,8 @@ mod tests {
                         {"position":2,"title":"Missing ID","video_id":null,"summary":"Unavailable","actions":{}}
                     ]
                 }]})).unwrap();
-                for (position, title) in [(1,"Empty ID"),(2,"Missing ID")] {
-                    let key = super::ItemId::new("PL1", position, None);
+                for (occurrence, title) in [(0,"Empty ID"),(1,"Missing ID")] {
+                    let key = super::ItemId::new("PL1", None, occurrence);
                     assert_eq!(view.find_item(&key).unwrap().item.title, title);
                 }
             });

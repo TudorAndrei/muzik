@@ -48,7 +48,58 @@ const MIGRATIONS: &[&str] = &[
         destination TEXT PRIMARY KEY,
         encoding TEXT NOT NULL
     ) WITHOUT ROWID;",
+    REKEY_ITEM_JOBS,
 ];
+
+pub(crate) const REKEY_ITEM_JOBS: &str = "
+    WITH items AS (
+        SELECT
+            playlist_id,
+            ordinal,
+            json_extract(data, '$.position') AS position,
+            nullif(json_extract(data, '$.video_id'), '') AS video_id,
+            nullif(
+                CASE coalesce(json_extract(data, '$.kind'), 'youtube')
+                    WHEN 'youtube' THEN json_extract(data, '$.video_id')
+                    ELSE json_extract(data, '$.entry_id')
+                END,
+                ''
+            ) AS key
+        FROM watchlist_items
+        WHERE json_valid(data)
+    ),
+    numbered AS (
+        SELECT *, row_number() OVER (PARTITION BY playlist_id, key ORDER BY ordinal) - 1 AS occurrence
+        FROM items
+    ),
+    old AS (
+        SELECT id, CASE WHEN json_valid(params) THEN params END AS params
+        FROM jobs
+        WHERE kind = 'item'
+    ),
+    targets AS (
+        SELECT
+            old.id,
+            json_extract(old.params, '$.playlist_id') AS playlist_id,
+            coalesce(numbered.key, nullif(json_extract(old.params, '$.video_id'), '')) AS key,
+            coalesce(numbered.occurrence, 0) AS occurrence
+        FROM old
+        LEFT JOIN numbered
+            ON numbered.playlist_id = json_extract(old.params, '$.playlist_id')
+            AND numbered.position = json_extract(old.params, '$.position')
+            AND numbered.video_id IS nullif(json_extract(old.params, '$.video_id'), '')
+        WHERE json_type(old.params, '$.position') IS NOT NULL
+            AND json_type(old.params, '$.occurrence') IS NULL
+    )
+    UPDATE jobs
+    SET item_key = json_array(targets.playlist_id, targets.key, targets.occurrence),
+        params = json_remove(
+            json_set(jobs.params, '$.key', targets.key, '$.occurrence', targets.occurrence),
+            '$.position',
+            '$.video_id'
+        )
+    FROM targets
+    WHERE jobs.id = targets.id;";
 
 /// # Errors
 /// Returns an error if the directory or database cannot be created, opened, or migrated.
@@ -140,12 +191,25 @@ mod tests {
     }
 
     const SEEDS: &[&str] = &[
-        "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
-         INSERT INTO watchlist_items (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
-         UPDATE watchlist_revision SET revision = 3;",
-        "INSERT INTO jobs (queue, kind, item_key, status, created_at, updated_at)
-         VALUES ('item', 'item', 'PL1:1:x', 'queued', 1, 1);",
+        r#"INSERT INTO watchlist_playlists (playlist_id, ordinal, data)
+         VALUES ('PL1', 0, '{}'), ('spotify:playlist:p', 1, '{}');
+         INSERT INTO watchlist_items (playlist_id, ordinal, data) VALUES
+         ('PL1', 0, '{"position":1,"title":"A","video_id":"aaaaaaaaaaa"}'),
+         ('PL1', 1, '{"position":2,"title":"B","video_id":"bbbbbbbbbbb"}'),
+         ('PL1', 2, '{"position":3,"title":"A","video_id":"aaaaaaaaaaa"}'),
+         ('spotify:playlist:p', 0,
+          '{"position":1,"title":"T","kind":"spotify","video_id":"t","entry_id":"spotify:track:t#0"}');
+         UPDATE watchlist_revision SET revision = 3;"#,
+        r#"INSERT INTO jobs (queue, kind, item_key, status, params, created_at, updated_at) VALUES
+         ('item', 'item', 'PL1:3:aaaaaaaaaaa', 'queued',
+          '{"playlist_id":"PL1","position":3,"video_id":"aaaaaaaaaaa","action":"run"}', 1, 1),
+         ('item', 'item', 'spotify:playlist:p:1:t', 'waiting',
+          '{"playlist_id":"spotify:playlist:p","position":1,"video_id":"t","action":"organize_again"}', 1, 1),
+         ('item', 'item', 'PL1:9:zzzzzzzzzzz', 'queued',
+          '{"playlist_id":"PL1","position":9,"video_id":"zzzzzzzzzzz","action":"run"}', 1, 1),
+         ('refresh', 'refresh', 'refresh', 'queued', '{}', 1, 1);"#,
         "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1');",
+        "INSERT INTO sync_files (destination, encoding) VALUES ('/device/b.mp3', '{}');",
     ];
 
     const TABLES: &[&str] = &["watchlist_playlists", "jobs", "meta", "sync_files"];
@@ -194,8 +258,43 @@ mod tests {
                 count(&connection, "SELECT COUNT(*) FROM meta"),
                 count(&connection, "SELECT COUNT(*) FROM sync_files"),
             ],
-            [1, 1, 3, seeded(1), seeded(2), 0]
+            [
+                2,
+                4,
+                3,
+                if version > 1 { 4 } else { 0 },
+                seeded(2),
+                seeded(3)
+            ]
         );
+        let jobs: Vec<(String, String)> = connection
+            .prepare("SELECT item_key, params FROM jobs ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let expected = [
+            (
+                r#"["PL1","aaaaaaaaaaa",1]"#,
+                r#"{"playlist_id":"PL1","action":"run","key":"aaaaaaaaaaa","occurrence":1}"#,
+            ),
+            (
+                r#"["spotify:playlist:p","spotify:track:t#0",0]"#,
+                r#"{"playlist_id":"spotify:playlist:p","action":"organize_again","key":"spotify:track:t#0","occurrence":0}"#,
+            ),
+            (
+                r#"["PL1","zzzzzzzzzzz",0]"#,
+                r#"{"playlist_id":"PL1","action":"run","key":"zzzzzzzzzzz","occurrence":0}"#,
+            ),
+            ("refresh", "{}"),
+        ];
+        let expected: Vec<(String, String)> = expected
+            .iter()
+            .take(if version > 1 { 4 } else { 0 })
+            .map(|(key, params)| ((*key).to_owned(), (*params).to_owned()))
+            .collect();
+        assert_eq!(jobs, expected);
         connection
             .execute(
                 "INSERT INTO sync_files (destination, encoding) VALUES ('/device/a.mp3', '{}')",
@@ -217,6 +316,11 @@ mod tests {
     #[test]
     fn a_version_three_database_upgrades_with_its_rows() {
         upgrade_from(3);
+    }
+
+    #[test]
+    fn a_version_four_database_upgrades_with_its_rows() {
+        upgrade_from(4);
     }
 
     #[test]

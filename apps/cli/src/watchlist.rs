@@ -98,19 +98,15 @@ pub fn item(
     let playlist = document
         .playlist(playlist_id)
         .with_context(|| format!("{playlist_id} is not in the watchlist."))?;
-    let item = playlist
-        .items
-        .iter()
-        .find(|item| item.position == position)
+    let (id, item) = playlist
+        .item_ids()
+        .into_iter()
+        .zip(&playlist.items)
+        .find(|(_, item)| item.position == position)
         .with_context(|| format!("{playlist_id} has no item at position {position}."))?;
     let title = item.title.clone();
-    let params = json!({
-        "playlist_id": playlist_id,
-        "position": position,
-        "video_id": item.video_id,
-        "title": title,
-        "action": action,
-    });
+    let mut params = json!({"title": title, "action": action});
+    id.write(&mut params)?;
     let jobs = jobs::open()?;
     let id = jobs.item(&params)?;
     println!("Queued {action} for {title} as {}.", job_id(id));

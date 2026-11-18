@@ -145,7 +145,7 @@ impl Jobs {
         let key = id.to_string();
         let title = params["title"]
             .as_str()
-            .or_else(|| params["video_id"].as_str())
+            .or_else(|| params["key"].as_str())
             .unwrap_or("Item")
             .to_owned();
         self.store()
@@ -338,17 +338,18 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
 
+    const KEY: &str = r#"["PL1","abcdefghijk",1]"#;
+
     #[test]
     fn an_item_has_one_open_job_and_a_waiting_one_gives_way() {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
-        let params =
-            json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run"});
+        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":1,"action":"run"});
         let waiting = jobs
             .store()
             .park(
                 &NewJob {
                     kind: Kind::Item,
-                    item_key: "PL1:2:abcdefghijk",
+                    item_key: KEY,
                     title: "Song",
                     params: &params,
                 },
@@ -362,10 +363,10 @@ mod tests {
         );
         assert!(matches!(jobs.item(&params), Err(EnqueueError::Busy(_))));
         assert!(matches!(
-            jobs.item(&json!({"playlist_id":"PL1","position":2,"action":"sing"})),
+            jobs.item(&json!({"playlist_id":"PL1","key":"abcdefghijk","action":"sing"})),
             Err(EnqueueError::Invalid(_))
         ));
-        assert_eq!(jobs.snapshot()["open"][0]["item"], "PL1:2:abcdefghijk");
+        assert_eq!(jobs.snapshot()["open"][0]["item"], KEY);
         jobs.cancel(first).unwrap();
         assert_eq!(jobs.snapshot()["open"], json!([]));
         assert_eq!(parse_job_id("queue-7"), Some(7));
@@ -396,17 +397,15 @@ mod tests {
     fn a_refresh_keeps_open_item_jobs_and_counts_new_ones() {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
         let existing = jobs
-            .item(
-                &json!({"playlist_id":"PL1","position":1,"video_id":"abcdefghijk","action":"run"}),
-            )
+            .item(&json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":0,"action":"run"}))
             .unwrap();
         let pending = [
             PendingItem {
-                id: ItemId::new("PL1", 1, Some("abcdefghijk")),
+                id: ItemId::new("PL1", Some("abcdefghijk"), 0),
                 title: "Old".into(),
             },
             PendingItem {
-                id: ItemId::new("PL1", 2, Some("bcdefghijkl")),
+                id: ItemId::new("PL1", Some("bcdefghijkl"), 0),
                 title: "New".into(),
             },
         ];
@@ -424,10 +423,13 @@ mod tests {
         assert_eq!(
             open,
             [
-                (json!(super::job_id(existing)), json!("PL1:1:abcdefghijk")),
+                (
+                    json!(super::job_id(existing)),
+                    json!(r#"["PL1","abcdefghijk",0]"#)
+                ),
                 (
                     json!(super::job_id(existing + 1)),
-                    json!("PL1:2:bcdefghijkl")
+                    json!(r#"["PL1","bcdefghijkl",0]"#)
                 ),
             ]
         );
@@ -438,15 +440,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let jobs = Jobs::open(&paths).unwrap();
-        let params =
-            json!({"playlist_id":"PL1","position":2,"video_id":"abcdefghijk","action":"run"});
+        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":1,"action":"run"});
         let question = json!({"kind":"import_match","payload":{}});
         let waiting = jobs
             .store()
             .park(
                 &NewJob {
                     kind: Kind::Item,
-                    item_key: "PL1:2:abcdefghijk",
+                    item_key: KEY,
                     title: "Song",
                     params: &params,
                 },
@@ -457,8 +458,8 @@ mod tests {
             .unwrap()
             .execute(
                 "INSERT INTO jobs (queue, kind, item_key, status, created_at, updated_at)
-             VALUES ('item', 'item', 'PL1:2:abcdefghijk', 'queued', 1, 1)",
-                [],
+             VALUES ('item', 'item', ?1, 'queued', 1, 1)",
+                [KEY],
             )
             .unwrap();
         assert!(matches!(jobs.item(&params), Err(EnqueueError::Busy(_))));
@@ -488,9 +489,9 @@ mod tests {
             jobs.store().park(
                 &muzik_store::jobs::NewJob {
                     kind: muzik_store::jobs::Kind::Item,
-                    item_key: &format!("{playlist}:1:x"),
+                    item_key: &ItemId::new(playlist, Some("x"), 0).to_string(),
                     title: "Song",
-                    params: &json!({"playlist_id":playlist,"position":1,"action":"organize_again"}),
+                    params: &json!({"playlist_id":playlist,"key":"x","occurrence":0,"action":"organize_again"}),
                 },
                 &json!({"kind":kind,"payload":{}}),
             )

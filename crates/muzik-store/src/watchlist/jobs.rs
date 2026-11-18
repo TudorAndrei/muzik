@@ -188,8 +188,8 @@ pub fn sync(
                 playlist
                     .pending()
                     .into_iter()
-                    .map(|item| PendingItem {
-                        id: ItemId::of(&id, item),
+                    .map(|(id, item)| PendingItem {
+                        id,
                         title: item.title.clone(),
                     })
                     .collect()
@@ -315,11 +315,13 @@ pub fn run_item(
         let Ok((playlist, index)) = find_item_mut(document, id) else {
             return Ok(());
         };
+        let position = playlist.items.get(index).ok_or(MISSING_VIDEO)?.position;
         let mut card = item.clone();
+        card.position = position;
         match &result {
             Ok(updated) => {
                 card = updated.clone();
-                card.position = id.position;
+                card.position = position;
                 card.finish(stage, action)?;
                 if let Some(key) = item.key() {
                     for other in playlist

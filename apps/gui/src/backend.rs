@@ -541,7 +541,7 @@ mod tests {
     fn cancel_removes_a_queued_item_job() {
         let (_state, backend, _) = started(false).unwrap();
         let item = ItemRequest {
-            id: ItemId::new("PL1", 2, Some("abcdefghijk")),
+            id: ItemId::new("PL1", Some("abcdefghijk"), 0),
             title: "Song".into(),
             action: ItemAction::Run,
         };

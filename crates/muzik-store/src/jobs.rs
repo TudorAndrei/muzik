@@ -184,6 +184,7 @@ impl Store {
                     params![queue, kind, item_key, title, status, params, question, answer, created, time],
                 )?;
         }
+        self.connection.execute_batch(crate::db::REKEY_ITEM_JOBS)?;
         let mut backup = path.as_os_str().to_owned();
         backup.push(".migrated");
         std::fs::rename(path, backup)?;
@@ -841,7 +842,8 @@ mod tests {
                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
                  INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at) VALUES
                  ('item', 'item', 'PL1:1:a', 'Waiting', 'waiting', '{}', '{\"kind\":\"import_match\"}', 1, 1),
-                 ('item', 'item', 'PL1:2:b', 'Running', 'running', '{}', NULL, 1, 1),
+                 ('item', 'item', 'PL1:2:b', 'Running', 'running',
+                  '{\"playlist_id\":\"PL1\",\"position\":2,\"video_id\":\"b\",\"action\":\"run\"}', NULL, 1, 1),
                  ('item', 'item', 'PL1:3:c', 'Done', 'done', '{}', NULL, 1, 1);",
             )
             .unwrap();
@@ -854,6 +856,11 @@ mod tests {
         let waiting = store.list(Status::Waiting).unwrap();
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
-        assert_eq!(store.list(Status::Queued).unwrap()[0].item_key, "PL1:2:b");
+        let queued = &store.list(Status::Queued).unwrap()[0];
+        assert_eq!(queued.item_key, r#"["PL1","b",0]"#);
+        assert_eq!(
+            queued.params,
+            json!({"playlist_id":"PL1","key":"b","occurrence":0,"action":"run"})
+        );
     }
 }

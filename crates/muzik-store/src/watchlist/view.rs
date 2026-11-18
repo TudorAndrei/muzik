@@ -65,6 +65,12 @@ pub struct ItemView {
     pub actions: HashMap<ItemAction, Availability>,
 }
 
+impl AsRef<WatchItem> for ItemView {
+    fn as_ref(&self) -> &WatchItem {
+        &self.item
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrimaryAction {
     pub action: ItemAction,

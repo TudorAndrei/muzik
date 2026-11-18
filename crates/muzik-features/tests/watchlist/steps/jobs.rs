@@ -201,21 +201,20 @@ fn watchlist_is_synced(world: &mut WatchlistWorld) -> StepResult {
     Ok(())
 }
 
-#[when(expr = "the action {string} runs on the video {string} at position {int} of {string}")]
+#[when(expr = "the action {string} runs on the video {string} of {string}")]
 fn action_runs(
     world: &mut WatchlistWorld,
     action: String,
     video: String,
-    position: u64,
     id: String,
 ) -> StepResult {
-    let item = ItemId::new(&id, position, Some(&video));
+    let item = ItemId::new(&id, Some(&video), 0);
     run_on_item(world, &item, ItemAction::from_str(&action)?, false)
 }
 
-#[when(expr = "the item {string} at position {int} of {string} runs")]
-fn item_runs(world: &mut WatchlistWorld, video: String, position: u64, id: String) -> StepResult {
-    let item = ItemId::new(&id, position, Some(&video));
+#[when(expr = "the item {string} of {string} runs")]
+fn item_runs(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
+    let item = ItemId::new(&id, Some(&video), 0);
     run_on_item(world, &item, ItemAction::Run, true)
 }
 
@@ -329,16 +328,11 @@ fn action_waits(world: &mut WatchlistWorld, stage: String) -> StepResult {
 fn pending_videos(world: &mut WatchlistWorld, id: String, videos: String) -> StepResult {
     let expected = list(&videos)
         .iter()
-        .map(|entry| {
-            let (video, position) = entry
-                .split_once(" at ")
-                .ok_or_else(|| anyhow::anyhow!("{entry} has no position"))?;
-            Ok(PendingItem {
-                id: ItemId::new(&id, position.parse()?, Some(video)),
-                title: video.to_owned(),
-            })
+        .map(|video| PendingItem {
+            id: ItemId::new(&id, Some(video), 0),
+            title: video.clone(),
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     let actual = world
         .pending
         .as_ref()

@@ -599,13 +599,13 @@ mod tests {
     #[test]
     fn snapshots_and_live_progress_describe_one_run_until_it_finishes() {
         let mut activity = Activity::default();
-        let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":"PL1:1:video"}], "waiting":[]});
+        let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":r#"["spotify:playlist:p","spotify:track:t#1",0]"#}], "waiting":[]});
         activity.apply_jobs(&snapshot);
-        assert!(
-            activity
-                .queued_items()
-                .contains(&ItemId::new("PL1", 1, Some("video")))
-        );
+        assert!(activity.queued_items().contains(&ItemId::new(
+            "spotify:playlist:p",
+            Some("spotify:track:t#1"),
+            0
+        )));
         activity.apply(&job_event(JobEvent::ProgressStarted {
             task: JobTask::LocalSplit,
             description: "Split tracks".into(),

@@ -478,6 +478,19 @@ mod tests {
         Ok((runner, receiver))
     }
 
+    fn listed(videos: &[&str]) -> Vec<WatchItem> {
+        videos
+            .iter()
+            .zip(1_u64..)
+            .map(|(video, position)| {
+                let mut item = WatchItem::new(position, video, SourceKind::Youtube);
+                item.video_id = Some((*video).to_owned());
+                item.video_url = Some(format!("https://www.youtube.com/watch?v={video}"));
+                item
+            })
+            .collect()
+    }
+
     #[test]
     fn an_item_that_needs_a_choice_parks_and_resumes_with_the_answer() {
         let dir = tempfile::tempdir().unwrap();
@@ -504,10 +517,16 @@ mod tests {
         let jobs = Arc::new(Jobs::open(&paths).unwrap());
         let (runner, _) = runner(&jobs).unwrap();
         jobs.item(&json!({
-            "playlist_id":"PL1","position":1,"video_id":"abcdefghijk","title":"Song",
+            "playlist_id":"PL1","key":"abcdefghijk","occurrence":0,"title":"Song",
             "action":"organize_again","output":output,"config":config,"interactive":true
         }))
         .unwrap();
+        repository
+            .update(|document| {
+                document.playlists[0].merge_items(listed(&["newvideo001", "abcdefghijk"]));
+                Ok(())
+            })
+            .unwrap();
         runner.wake();
         let started = Instant::now();
         let waiting = loop {
@@ -524,19 +543,38 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         };
         assert_eq!(waiting["kind"], "import_match");
-        assert_eq!(waiting["item"], "PL1:1:abcdefghijk");
+        assert_eq!(waiting["item"], r#"["PL1","abcdefghijk",0]"#);
         assert_eq!(
-            repository.load().unwrap().playlists[0].items[0].status(Stage::Organize),
+            repository.load().unwrap().playlists[0].items[1].status(Stage::Organize),
             StageStatus::Waiting
         );
+        repository
+            .update(|document| {
+                document.playlists[0].merge_items(listed(&[
+                    "newvideo001",
+                    "newvideo002",
+                    "abcdefghijk",
+                ]));
+                Ok(())
+            })
+            .unwrap();
         let id = waiting["id"].as_i64().unwrap();
         assert!(jobs.answer(id, &json!("as_is")).unwrap());
         runner.wake();
         runner.wait_until_idle(&AtomicBool::new(false));
+        let items = repository.load().unwrap().playlists[0].items.clone();
         assert_eq!(
-            repository.load().unwrap().playlists[0].items[0].status(Stage::Organize),
-            StageStatus::Complete
+            items
+                .iter()
+                .map(|item| (item.position, item.status(Stage::Organize)))
+                .collect::<Vec<_>>(),
+            [
+                (1, StageStatus::NotStarted),
+                (2, StageStatus::NotStarted),
+                (3, StageStatus::Complete)
+            ]
         );
+        assert_eq!(jobs.snapshot()["open"], json!([]));
         assert_eq!(
             muzik_library::Library::open_read_only(&dir.path().join("library.db"))
                 .unwrap()
