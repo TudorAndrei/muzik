@@ -543,47 +543,70 @@ impl WatchItem {
         self.path(Stage::Download)
             .filter(|path| path.is_file())
             .map(Path::to_path_buf)
+            .or_else(|| {
+                self.download_folder(&index.output)
+                    .and_then(|folder| first_audio(&folder))
+            })
             .or_else(|| index.find(self.video_id.as_deref()?))
     }
 }
 
-#[derive(Default)]
 pub struct AudioIndex {
+    output: PathBuf,
     by_id: HashMap<String, PathBuf>,
 }
 
 impl AudioIndex {
+    #[must_use]
     pub fn scan(output: &Path) -> Self {
-        let mut index = Self::default();
-        let mut pending = vec![output.to_path_buf()];
-        while let Some(directory) = pending.pop() {
-            let Ok(entries) = fs::read_dir(&directory) else {
-                continue;
-            };
-            for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-                if path.is_dir() {
-                    pending.push(path);
-                } else if muzik_core::audio::is_audio(&path)
-                    && let Some(id) = bracketed_id(&path)
-                {
-                    index
-                        .by_id
-                        .entry(id)
-                        .and_modify(|current| {
-                            if path < *current {
-                                current.clone_from(&path);
-                            }
-                        })
-                        .or_insert(path);
-                }
+        let mut by_id = HashMap::<String, PathBuf>::new();
+        walk_audio(output, |path| {
+            if let Some(id) = bracketed_id(&path) {
+                by_id
+                    .entry(id)
+                    .and_modify(|current| {
+                        if path < *current {
+                            current.clone_from(&path);
+                        }
+                    })
+                    .or_insert(path);
             }
+        });
+        Self {
+            output: output.to_path_buf(),
+            by_id,
         }
-        index
     }
 
     #[must_use]
     pub fn find(&self, id: &str) -> Option<PathBuf> {
         self.by_id.get(id).cloned()
+    }
+}
+
+fn first_audio(folder: &Path) -> Option<PathBuf> {
+    let mut first: Option<PathBuf> = None;
+    walk_audio(folder, |path| {
+        if first.as_ref().is_none_or(|current| path < *current) {
+            first = Some(path);
+        }
+    });
+    first
+}
+
+fn walk_audio(root: &Path, mut found: impl FnMut(PathBuf)) {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                pending.push(path);
+            } else if muzik_core::audio::is_audio(&path) {
+                found(path);
+            }
+        }
     }
 }
 
@@ -780,6 +803,25 @@ mod tests {
             Some(nested.join("Song [abcdefghijk].opus"))
         );
         item.video_id = Some("missing".into());
+        assert_eq!(item.downloaded_audio(&index), None);
+    }
+
+    #[test]
+    fn spotify_audio_is_found_in_the_download_folder_of_its_track() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory
+            .path()
+            .join("spotify-watchlist/spotify_track_1lb3H41lbvAN28N7yqRNL9_0");
+        fs::create_dir_all(folder.join("youtube-x")).unwrap();
+        let audio = folder.join("youtube-x/Gibran Alcocer - Idea 10 [5OIeIaAhQOg].opus");
+        fs::write(&audio, b"").unwrap();
+        fs::write(folder.join("cover.jpg"), b"").unwrap();
+        let mut item = WatchItem::new(1, "Gibran Alcocer - Idea 10", SourceKind::Spotify);
+        item.video_id = Some("1lb3H41lbvAN28N7yqRNL9".into());
+        item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#0".into());
+        let index = AudioIndex::scan(directory.path());
+        assert_eq!(item.downloaded_audio(&index), Some(audio));
+        item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#1".into());
         assert_eq!(item.downloaded_audio(&index), None);
     }
 }
