@@ -37,9 +37,10 @@ impl PreferredAudio {
         match self {
             Self::Lossless => (!tokens.contains("flac") && !tokens.contains("lossless"))
                 .then(|| "flac".to_owned()),
-            Self::Any => None,
-            other => {
-                let text = other.to_string();
+            Self::Best | Self::Any => None,
+            Self::Mp3_320 => (!tokens.contains("mp3")).then(|| "mp3".to_owned()),
+            Self::Format(format) => {
+                let text = format.to_string();
                 (!tokens.contains(&text)).then_some(text)
             }
         }
@@ -371,11 +372,16 @@ mod tests {
             PreferredAudio::Lossless.search_suffix(&tokens(&["flac"])),
             None
         );
-        assert_eq!(
-            PreferredAudio::Best.search_suffix(&tokens(&[])),
-            Some("best".into())
-        );
+        assert_eq!(PreferredAudio::Best.search_suffix(&tokens(&[])), None);
         assert_eq!(PreferredAudio::Any.search_suffix(&tokens(&[])), None);
+        assert_eq!(
+            PreferredAudio::Mp3_320.search_suffix(&tokens(&[])),
+            Some("mp3".into())
+        );
+        assert_eq!(
+            PreferredAudio::Format(AudioFormat::Mp3).search_suffix(&tokens(&[])),
+            Some("mp3".into())
+        );
     }
 
     #[test]
