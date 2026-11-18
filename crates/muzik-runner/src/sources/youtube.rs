@@ -52,7 +52,8 @@ impl Source for Youtube {
             if !adapter.prepared.settings.options.no_organize {
                 return local_stage(adapter, item, ItemAction::OrganizeAgain, cancelled);
             }
-            return Ok(item.apply(Stage::Organize, StageEvent::Skip)?);
+            item.apply(Stage::Organize, StageEvent::Skip);
+            return Ok(());
         }
         let url = required(item.video_url.as_deref(), "video_url")?;
         let mut settings = adapter.prepared.settings.clone();
@@ -86,29 +87,28 @@ impl Source for Youtube {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                keep_progress(item, &progress)?;
+                keep_progress(item, &progress);
                 return Err(at(progress.stage.get(), workflow_error(error)));
             }
         };
         let outputs = output_paths(adapter, item, &result);
         if action == ItemAction::DownloadAgain {
-            item.apply(Stage::Download, StageEvent::Complete(outputs.audio))?;
-            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize])?;
-            Ok(())
+            item.apply(Stage::Download, StageEvent::Complete(outputs.audio));
+            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         } else {
-            mark_full(item, &adapter.prepared.settings.options, outputs)
+            mark_full(item, &adapter.prepared.settings.options, outputs);
         }
+        Ok(())
     }
 }
 
-fn keep_progress(item: &mut WatchItem, progress: &Progress) -> Result<(), JobError> {
+fn keep_progress(item: &mut WatchItem, progress: &Progress) {
     if let Some(audio) = progress.audio() {
-        item.apply(Stage::Download, StageEvent::Complete(Some(audio)))?;
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio)));
     }
     if let Some(split) = progress.split() {
-        item.apply(Stage::Split, StageEvent::Complete(Some(split)))?;
+        item.apply(Stage::Split, StageEvent::Complete(Some(split)));
     }
-    Ok(())
 }
 
 fn output_paths(adapter: &Adapter<'_, '_>, item: &WatchItem, result: &WorkflowResult) -> Outputs {
@@ -146,12 +146,13 @@ pub(super) fn local_stage(
         options.force = true;
         options.no_organize = false;
         organize(adapter, &target, &options, cancelled)?;
-        return Ok(item.apply(Stage::Organize, StageEvent::Complete(None))?);
+        item.apply(Stage::Organize, StageEvent::Complete(None));
+        return Ok(());
     }
     let audio =
         audio.ok_or_else(|| JobError::Operation("Downloaded audio is not available.".into()))?;
     if action == ItemAction::CheckQualityAgain {
-        item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())))?;
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())));
         let _permit = gates::enter(Gate::Process, cancelled).map_err(|_| JobError::Cancelled)?;
         let options = &adapter.prepared.settings.options;
         let events = adapter.events;
@@ -166,13 +167,15 @@ pub(super) fn local_stage(
             adapter.decide,
         )
         .map_err(|error| cancel_or(cancelled, error))?;
-        return apply_quality_result(item, &result);
+        apply_quality_result(item, &result);
+        return Ok(());
     }
     if action == ItemAction::ParseAgain {
         let video_url = required(item.video_url.as_deref(), "video_url")?;
         let chapter_path = refresh_chapters(&audio, video_url, cancelled, adapter.decide)?;
-        item.apply(Stage::Parse, StageEvent::Complete(Some(chapter_path)))?;
-        return Ok(item.invalidate(&[Stage::Split, Stage::Organize])?);
+        item.apply(Stage::Parse, StageEvent::Complete(Some(chapter_path)));
+        item.invalidate(&[Stage::Split, Stage::Organize]);
+        return Ok(());
     }
     let found =
         chapters::find_chapters(&audio).map_err(|error| JobError::Operation(error.to_string()))?;
@@ -204,8 +207,9 @@ pub(super) fn local_stage(
         .split_with_cancel(&task, &options, cancelled, &mut |_| {})
         .map_err(JobError::Operation)?;
     check_cancelled(cancelled)?;
-    item.apply(Stage::Split, StageEvent::Complete(Some(output)))?;
-    Ok(item.invalidate(&[Stage::Organize])?)
+    item.apply(Stage::Split, StageEvent::Complete(Some(output)));
+    item.invalidate(&[Stage::Organize]);
+    Ok(())
 }
 
 fn ready_quality_directory(item: &WatchItem) -> Option<PathBuf> {
@@ -219,35 +223,31 @@ fn ready_quality_directory(item: &WatchItem) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn apply_quality_result(
-    item: &mut WatchItem,
-    result: &QualityUpgradeResult,
-) -> Result<(), JobError> {
+fn apply_quality_result(item: &mut WatchItem, result: &QualityUpgradeResult) {
     if let Some(directory) = result.pre_split_dirs.first() {
         item.apply(
             Stage::Quality,
             StageEvent::Complete(Some(directory.clone())),
-        )?;
-        item.apply(Stage::Parse, StageEvent::Skip)?;
-        item.apply(Stage::Split, StageEvent::Complete(Some(directory.clone())))?;
-        item.invalidate(&[Stage::Organize])?;
+        );
+        item.apply(Stage::Parse, StageEvent::Skip);
+        item.apply(Stage::Split, StageEvent::Complete(Some(directory.clone())));
+        item.invalidate(&[Stage::Organize]);
     } else if let Some(replacement) = result.audio_files.first()
         && item.path(Stage::Download) != Some(replacement.as_path())
     {
         item.apply(
             Stage::Download,
             StageEvent::Complete(Some(replacement.clone())),
-        )?;
+        );
         item.apply(
             Stage::Quality,
             StageEvent::Complete(Some(replacement.clone())),
-        )?;
-        item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize])?;
+        );
+        item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
     } else {
         let kept = item.kept_path(Stage::Quality);
-        item.apply(Stage::Quality, StageEvent::Complete(kept))?;
+        item.apply(Stage::Quality, StageEvent::Complete(kept));
     }
-    Ok(())
 }
 
 fn refresh_chapters(
@@ -521,8 +521,7 @@ mod tests {
         )
         .unwrap();
         let mut item = WatchItem::new(1, "Album", SourceKind::Youtube);
-        item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())))
-            .unwrap();
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())));
         let result = with_adapter(&settings, |adapter, cancelled| {
             of(SourceKind::Youtube).process(adapter, &mut item, ItemAction::SplitAgain, cancelled)
         });
@@ -560,8 +559,7 @@ mod tests {
             assert_eq!(outputs.audio, Some(audio.clone()));
             assert_eq!(outputs.split, Some(split.clone()));
             assert!(outputs.was_split);
-            item.apply(Stage::Download, StageEvent::Complete(outputs.audio))
-                .unwrap();
+            item.apply(Stage::Download, StageEvent::Complete(outputs.audio));
             result.audio_files = Some(vec![replacement.clone()]);
             result.split_dirs.clear();
             let outputs = super::output_paths(adapter, &item, &result);
@@ -585,16 +583,14 @@ mod tests {
         item.apply(
             Stage::Download,
             StageEvent::Complete(Some(original.clone())),
-        )
-        .unwrap();
+        );
         apply_quality_result(
             &mut item,
             &QualityUpgradeResult {
                 audio_files: Vec::new(),
                 pre_split_dirs: vec![album.clone()],
             },
-        )
-        .unwrap();
+        );
         assert_eq!(item.path(Stage::Download), Some(original.as_path()));
         assert_eq!(ready_quality_directory(&item), Some(album));
         assert_eq!(item.status(Stage::Parse), StageStatus::Skipped);

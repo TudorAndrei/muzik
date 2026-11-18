@@ -51,7 +51,7 @@ impl LocalChecks {
             self.latest.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
         };
         let options = options()?;
-        let saved = view(&repository.load()?, &options.output, &options.cache);
+        let saved = view(&repository.snapshot()?, &options.output, &options.cache);
         Ok((
             saved,
             LocalCheck {
@@ -106,14 +106,14 @@ impl LocalCheck {
             if busy() || !self.current() {
                 return Ok(None);
             }
-            let (mut checked, revision) = self.repository.load_revision()?;
-            checked.reconcile(options)?;
+            let (mut checked, revision) = self.repository.snapshot_revision()?;
+            checked.document.reconcile(options, &checked.holds)?;
             let written = {
                 let _gate = self.gate.lock();
                 if busy() || !self.current() {
                     return Ok(None);
                 }
-                self.repository.save_at(revision, &checked)?
+                self.repository.save_at(revision, &checked.document)?
             };
             if written == CheckedWrite::Conflict {
                 continue;

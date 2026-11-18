@@ -172,12 +172,10 @@ mod tests {
         assert!(!availability(&spotify, ItemAction::SplitAgain, Some(&audio)).0);
         let mut bandcamp = item(SourceKind::Bandcamp);
         assert!(!availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
-        bandcamp
-            .apply(
-                Stage::Download,
-                StageEvent::Complete(Some(directory.path().to_path_buf())),
-            )
-            .unwrap();
+        bandcamp.apply(
+            Stage::Download,
+            StageEvent::Complete(Some(directory.path().to_path_buf())),
+        );
         assert!(availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
         assert!(!availability(&bandcamp, ItemAction::ParseAgain, None).0);
     }

@@ -78,15 +78,14 @@ pub fn card(position: u64, id: &str, title: &str) -> WatchItem {
     item
 }
 
-fn processed(item: &mut WatchItem) -> Result<(), JobError> {
+fn processed(item: &mut WatchItem) {
     for stage in [Stage::Download, Stage::Parse, Stage::Organize] {
         let path = item.kept_path(stage);
-        item.apply(stage, StageEvent::Complete(path))?;
+        item.apply(stage, StageEvent::Complete(path));
     }
     for stage in [Stage::Quality, Stage::Split] {
-        item.apply(stage, StageEvent::Skip)?;
+        item.apply(stage, StageEvent::Skip);
     }
-    Ok(())
 }
 
 impl Operations for FakeOperations {
@@ -123,7 +122,7 @@ impl Operations for FakeOperations {
             item.apply(
                 Stage::Download,
                 StageEvent::Complete(Some(PathBuf::from(format!("{id}.opus")))),
-            )?;
+            );
         }
         if let Some(during) = self.during_run.take() {
             during.happen()?;
@@ -143,7 +142,10 @@ impl Operations for FakeOperations {
                 cancelled.store(true, Ordering::SeqCst);
                 Err(JobError::Cancelled)
             }
-            Processing::Complete | Processing::StopAtSecond => processed(item),
+            Processing::Complete | Processing::StopAtSecond => {
+                processed(item);
+                Ok(())
+            }
             Processing::Unchanged => Ok(()),
             Processing::Fail(message) => Err(JobError::Operation(message.clone())),
             Processing::FailStage(stage, message) => Err(JobError::Failed {
@@ -151,8 +153,8 @@ impl Operations for FakeOperations {
                 message: message.clone(),
             }),
             Processing::DownloadAgain => {
-                item.apply(Stage::Download, StageEvent::Complete(None))?;
-                item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize])?;
+                item.apply(Stage::Download, StageEvent::Complete(None));
+                item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
                 Ok(())
             }
         }

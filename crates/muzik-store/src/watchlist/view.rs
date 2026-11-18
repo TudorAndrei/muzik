@@ -1,5 +1,8 @@
 use super::source::availability;
-use super::{AudioIndex, ItemAction, Playlist, StageStatus, WatchItem, Watchlist};
+use super::{
+    AudioIndex, Hold, ItemAction, Playlist, Snapshot, Stage, StageStatus, WatchItem, Watchlist,
+    hold,
+};
 use muzik_core::thumbnails;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,8 +37,11 @@ impl Summary {
     pub const ALL: &'static [Self] = <Self as strum::VariantArray>::VARIANTS;
 
     #[must_use]
-    pub fn of(item: &WatchItem) -> Self {
-        let statuses: Vec<StageStatus> = item.statuses().collect();
+    pub fn of(item: &WatchItem, hold: Option<&Hold>) -> Self {
+        let statuses: Vec<StageStatus> = Stage::ALL
+            .iter()
+            .map(|stage| hold::status(item, hold, *stage))
+            .collect();
         if item.is_unavailable() {
             Self::Unavailable
         } else if statuses.contains(&StageStatus::Running) {
@@ -59,10 +65,19 @@ pub type PlaylistView = Playlist<ItemView>;
 pub struct ItemView {
     #[serde(flatten)]
     pub item: WatchItem,
+    #[serde(default)]
+    pub hold: Option<Hold>,
     pub thumbnail_path: Option<String>,
     pub summary: Summary,
     pub primary_action: Option<PrimaryAction>,
     pub actions: HashMap<ItemAction, Availability>,
+}
+
+impl ItemView {
+    #[must_use]
+    pub fn status(&self, stage: Stage) -> StageStatus {
+        hold::status(&self.item, self.hold.as_ref(), stage)
+    }
 }
 
 impl AsRef<WatchItem> for ItemView {
@@ -85,8 +100,9 @@ pub struct Availability {
 
 /// Builds the display data without changing the saved watchlist.
 #[must_use]
-pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> WatchlistView {
+pub fn view(snapshot: &Snapshot, output: &Path, cache: &Path) -> WatchlistView {
     let index = AudioIndex::scan(output);
+    let document = &snapshot.document;
     Watchlist {
         version: document.version,
         playlists: document
@@ -98,9 +114,10 @@ pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> WatchlistView 
                 kind: playlist.kind,
                 title: playlist.title.clone(),
                 items: playlist
-                    .items
+                    .item_ids()
                     .iter()
-                    .map(|item| enrich(item, &index, cache))
+                    .zip(&playlist.items)
+                    .map(|(id, item)| enrich(item, snapshot.holds.get(id), &index, cache))
                     .collect(),
                 processed_video_ids: playlist.processed_video_ids.clone(),
                 last_checked_at: playlist.last_checked_at.clone(),
@@ -111,8 +128,8 @@ pub fn view(document: &Watchlist, output: &Path, cache: &Path) -> WatchlistView 
     }
 }
 
-fn enrich(item: &WatchItem, index: &AudioIndex, cache: &Path) -> ItemView {
-    let summary = Summary::of(item);
+fn enrich(item: &WatchItem, hold: Option<&Hold>, index: &AudioIndex, cache: &Path) -> ItemView {
+    let summary = Summary::of(item, hold);
     let primary_action = if matches!(
         summary,
         Summary::Unavailable | Summary::Processed | Summary::Waiting
@@ -152,6 +169,7 @@ fn enrich(item: &WatchItem, index: &AudioIndex, cache: &Path) -> ItemView {
         .collect();
     ItemView {
         item: item.clone(),
+        hold: hold.cloned(),
         thumbnail_path,
         summary,
         primary_action,

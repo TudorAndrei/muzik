@@ -4,6 +4,7 @@ use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
 use muzik_core::{DecisionKind, JobEvent};
+use muzik_store::jobs::{Kind, Queue};
 use muzik_store::watchlist::jobs::{self, JobError, PendingItem};
 use muzik_store::watchlist::{ItemAction, ItemId, Stage};
 use serde_json::{Value, json};
@@ -203,11 +204,36 @@ fn job_ends_before_start(
     id: String,
     message: String,
 ) -> StepResult {
+    let item = ItemId::new(&id, Some(&video), 0);
+    let store = world.jobs()?;
+    let open = store.find_open(Kind::Item, &item.to_string())?;
+    let waiting = open
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("the video has no open job"))?;
+    anyhow::ensure!(store.answer(waiting.id, &json!("as_is"))?, "no answer");
+    let job = store
+        .claim(Queue::Item)?
+        .ok_or_else(|| anyhow::anyhow!("the answered job did not start"))?;
+    let action = job
+        .params
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("the job has no action"))?;
     jobs::abandon(
         &world.repository(),
-        &ItemId::new(&id, Some(&video), 0),
+        job.id,
+        &item,
+        ItemAction::from_str(action)?,
         &message,
     )?;
+    Ok(())
+}
+
+#[then(expr = "the video {string} of {string} has no open job")]
+fn no_open_job(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
+    let item = ItemId::new(&id, Some(&video), 0);
+    let open = world.jobs()?.find_open(Kind::Item, &item.to_string())?;
+    anyhow::ensure!(open.is_empty(), "the open jobs are {open:?}");
     Ok(())
 }
 

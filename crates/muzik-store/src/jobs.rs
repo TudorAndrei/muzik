@@ -222,10 +222,7 @@ impl Store {
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn recover(&self) -> Result<usize> {
-        Ok(self.connection.execute(
-            "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
-            params![now()],
-        )?)
+        recover_on(&self.connection)
     }
 
     /// # Errors
@@ -318,12 +315,7 @@ impl Store {
     }
 
     fn cancel_open(&self, id: i64) -> Result<bool> {
-        let changed = self.connection.execute(
-            "UPDATE jobs SET status = 'cancelled', updated_at = ?1
-                 WHERE id = ?2 AND status IN ('queued', 'waiting')",
-            params![now(), id],
-        )?;
-        Ok(changed == 1)
+        cancel_open_on(&self.connection, id)
     }
 
     /// # Errors
@@ -337,33 +329,11 @@ impl Store {
         Ok(changed == 1)
     }
 
+    /// Ends a running job. A cancelled job that has a question waits for a new answer.
     /// # Errors
     /// Returns an error if the database query fails.
-    pub fn reopen(&self, id: i64) -> Result<()> {
-        self.connection.execute(
-            "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
-                 WHERE id = ?2 AND question IS NOT NULL",
-            params![now(), id],
-        )?;
-        Ok(())
-    }
-
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn finish(&self, id: i64) -> Result<()> {
-        self.set_status(id, Status::Done, None)
-    }
-
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn fail(&self, id: i64, error: &str) -> Result<()> {
-        self.set_status(id, Status::Failed, Some(error))
-    }
-
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn cancel(&self, id: i64) -> Result<()> {
-        self.set_status(id, Status::Cancelled, None)
+    pub fn end(&self, id: i64, ending: Ending<'_>) -> Result<bool> {
+        end_on(&self.connection, id, ending)
     }
 
     /// # Errors
@@ -399,14 +369,105 @@ impl Store {
         let rows = statement.query_map(params![kind, item_key], job)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
+}
 
-    fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<()> {
-        self.connection.execute(
-            "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ending<'a> {
+    Done,
+    Failed(&'a str),
+    Cancelled,
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn end_on(connection: &Connection, id: i64, ending: Ending<'_>) -> Result<bool> {
+    let close = |status: Status, error: Option<&str>| {
+        connection.execute(
+            "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3
+             WHERE id = ?4 AND status = 'running'",
             params![status, error, now(), id],
-        )?;
-        Ok(())
-    }
+        )
+    };
+    let changed = match ending {
+        Ending::Done => close(Status::Done, None)?,
+        Ending::Failed(error) => close(Status::Failed, Some(error))?,
+        Ending::Cancelled => connection.execute(
+            "UPDATE jobs SET status = CASE WHEN question IS NULL THEN 'cancelled' ELSE 'waiting' END,
+                 answer = NULL, updated_at = ?1
+             WHERE id = ?2 AND status = 'running'",
+            params![now(), id],
+        )?,
+    };
+    Ok(changed == 1)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn recover_on(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
+        params![now()],
+    )?)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn held_on(connection: &Connection) -> Result<Vec<Job>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM jobs WHERE kind = 'item' AND status IN ('running', 'waiting') ORDER BY id"
+    ))?;
+    let rows = statement.query_map([], job)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn open_items_on(connection: &Connection) -> Result<Vec<Job>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM jobs WHERE kind = 'item' AND status IN ('queued', 'waiting') ORDER BY id"
+    ))?;
+    let rows = statement.query_map([], job)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// Cancels jobs that wait in the queue or for an answer. A running job keeps its status.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_open_on(connection: &Connection, id: i64) -> Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+             WHERE id = ?2 AND status IN ('queued', 'waiting')",
+        params![now(), id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// Cancels the waiting job of an item, except the job `keep`.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_waiting_on(connection: &Connection, item_key: &str, keep: Option<i64>) -> Result<()> {
+    connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+         WHERE kind = 'item' AND item_key = ?2 AND status = 'waiting' AND id IS NOT ?3",
+        params![now(), item_key, keep],
+    )?;
+    Ok(())
+}
+
+/// Keeps one open job for each item: a running job, else the oldest one.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_duplicates_on(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+         WHERE kind = 'item' AND status IN ('queued', 'waiting') AND EXISTS (
+             SELECT 1 FROM jobs AS other
+             WHERE other.kind = 'item' AND other.item_key = jobs.item_key AND other.id != jobs.id
+                 AND (other.status = 'running'
+                      OR (other.status IN ('queued', 'waiting') AND other.id < jobs.id))
+         )",
+        params![now()],
+    )?)
 }
 
 /// # Errors
@@ -478,7 +539,7 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Admission, CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
+    use super::{Admission, CancelRequest, Ending, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
     fn memory() -> Store {
@@ -629,16 +690,56 @@ mod tests {
         assert_eq!(claimed.answer, Some(json!("as_is")));
         assert_eq!(claimed.question, Some(json!({"kind": "chapter_review"})));
         assert_eq!(claimed.params, params);
-        store.reopen(claimed.id).unwrap();
+        assert!(store.end(claimed.id, Ending::Cancelled).unwrap());
         let reopened = store.get(id).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Waiting);
         assert_eq!(reopened.answer, None);
+        assert!(!store.end(id, Ending::Done).unwrap());
         assert!(store.answer(id, &json!("as_is")).unwrap());
         store.claim(Queue::Item).unwrap();
-        store.finish(id).unwrap();
+        assert!(store.end(id, Ending::Done).unwrap());
+        assert!(!store.end(id, Ending::Failed("late")).unwrap());
         assert_eq!(
-            store.get(id).unwrap().map(|job| job.status),
-            Some(Status::Done)
+            store.get(id).unwrap().map(|job| (job.status, job.error)),
+            Some((Status::Done, None))
+        );
+    }
+
+    #[test]
+    fn one_open_job_stays_for_each_item() {
+        let mut store = memory();
+        let params = json!({});
+        let question = json!({"kind":"import_match"});
+        let waiting = store
+            .park(&job(Kind::Item, "a", &params), &question)
+            .unwrap();
+        let running = store.enqueue(&job(Kind::Item, "b", &params)).unwrap().id();
+        store.claim(Queue::Item).unwrap();
+        let queued = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "a", &params),
+            Status::Queued,
+            None,
+        )
+        .unwrap();
+        let behind = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "b", &params),
+            Status::Waiting,
+            Some(&question),
+        )
+        .unwrap();
+        assert_eq!(super::cancel_duplicates_on(&store.connection).unwrap(), 2);
+        let statuses = [waiting, queued, running, behind]
+            .map(|id| store.get(id).unwrap().map(|job| job.status));
+        assert_eq!(
+            statuses,
+            [
+                Some(Status::Waiting),
+                Some(Status::Cancelled),
+                Some(Status::Running),
+                Some(Status::Cancelled)
+            ]
         );
     }
 
@@ -661,7 +762,7 @@ mod tests {
             CancelRequest::Requested
         );
         assert_eq!(store.cancel_requests().unwrap(), [running]);
-        store.cancel(running).unwrap();
+        assert!(store.end(running, Ending::Cancelled).unwrap());
         assert_eq!(
             store.request_cancel(running).unwrap(),
             CancelRequest::NotOpen

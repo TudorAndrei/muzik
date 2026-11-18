@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 mod check;
+mod hold;
 mod item;
 pub mod jobs;
 mod legacy;
@@ -22,10 +23,11 @@ mod stage;
 mod view;
 
 pub use check::{LocalCheck, LocalCheckOptions, LocalChecks};
+pub use hold::{Hold, Holds, Snapshot, status};
 pub use item::{AudioIndex, ItemId, LastAction, Playlist, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
 pub use reconcile::ReconcileOptions;
-pub use stage::{IllegalTransition, StageEvent, StageRecord, StageState, Stages};
+pub use stage::{StageEvent, StageRecord, StageState, Stages};
 pub use view::{Availability, ItemView, PlaylistView, PrimaryAction, Summary, WatchlistView, view};
 
 #[derive(
@@ -113,11 +115,6 @@ impl StageStatus {
     #[must_use]
     pub const fn is_done(self) -> bool {
         matches!(self, Self::Complete | Self::Skipped)
-    }
-
-    #[must_use]
-    pub const fn is_held(self) -> bool {
-        matches!(self, Self::Running | Self::Waiting)
     }
 }
 
@@ -307,13 +304,19 @@ impl Repository {
 
     /// # Errors
     /// Returns an error if the database cannot be opened or holds an invalid watchlist.
-    pub fn load_revision(&self) -> Result<(Watchlist, i64)> {
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        Ok(self.snapshot_revision()?.0)
+    }
+
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
+    pub fn snapshot_revision(&self) -> Result<(Snapshot, i64)> {
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
         let revision = read_revision(&transaction)?;
-        let document = read_document(&transaction)?;
+        let snapshot = Snapshot::new(read_document(&transaction)?, Holds::read(&transaction)?);
         transaction.commit()?;
-        Ok((document, revision))
+        Ok((snapshot, revision))
     }
 
     /// # Errors
@@ -555,8 +558,28 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
             "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
             [],
         )?;
+        cancel_orphans(connection, after)?;
     }
     Ok(())
+}
+
+fn cancel_orphans(connection: &Connection, document: &Watchlist) -> Result<usize> {
+    let ids: HashSet<ItemId> = document
+        .playlists
+        .iter()
+        .flat_map(Playlist::item_ids)
+        .collect();
+    let mut cancelled: usize = 0;
+    for job in crate::jobs::open_items_on(connection)? {
+        let orphan = job
+            .item_key
+            .parse::<ItemId>()
+            .is_ok_and(|id| !ids.contains(&id));
+        if orphan && crate::jobs::cancel_open_on(connection, job.id)? {
+            cancelled = cancelled.saturating_add(1);
+        }
+    }
+    Ok(cancelled)
 }
 
 /// # Errors

@@ -1,4 +1,4 @@
-use super::{ItemAction, SourceKind, Stage, StageEvent, StageRecord, StageStatus, Stages};
+use super::{Holds, ItemAction, SourceKind, Stage, StageEvent, StageRecord, StageStatus, Stages};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -329,12 +329,12 @@ impl Playlist {
     }
 
     #[must_use]
-    pub fn pending(&self) -> Vec<(ItemId, &WatchItem)> {
+    pub fn pending(&self, holds: &Holds) -> Vec<(ItemId, &WatchItem)> {
         let mut seen = HashSet::new();
         self.item_ids()
             .into_iter()
             .zip(&self.items)
-            .filter(|(_, item)| !item.is_waiting() && !item.is_unavailable())
+            .filter(|(id, item)| !holds.is_waiting(id) && !item.is_unavailable())
             .filter(|(_, item)| {
                 item.key()
                     .is_some_and(|key| !self.is_processed(key) && seen.insert(key.to_owned()))
@@ -427,7 +427,7 @@ impl WatchItem {
         }
     }
 
-    const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
+    pub(super) const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
         match stage {
             Stage::Download => &mut self.stages.download,
             Stage::Quality => &mut self.stages.quality,
@@ -456,83 +456,25 @@ impl WatchItem {
         self.path(stage).map(Path::to_path_buf)
     }
 
-    /// # Errors
-    /// Returns an error if `event` is not allowed from the current state of `stage`.
-    pub fn apply(&mut self, stage: Stage, event: StageEvent) -> Result<()> {
-        self.stage_mut(stage).apply(event).map_err(|refused| {
-            format!(
-                "The {stage} stage cannot {} while it is {}.",
-                refused.event, refused.from
-            )
-            .into()
-        })
+    pub fn apply(&mut self, stage: Stage, event: StageEvent) {
+        self.stage_mut(stage).apply(event);
     }
 
-    /// # Errors
-    /// Returns an error if a stage in `stages` is running or waiting.
-    pub fn invalidate(&mut self, stages: &[Stage]) -> Result<()> {
+    pub fn invalidate(&mut self, stages: &[Stage]) {
         for stage in stages {
-            self.apply(*stage, StageEvent::Invalidate)?;
+            self.apply(*stage, StageEvent::Invalidate);
         }
-        Ok(())
     }
 
-    /// # Errors
-    /// Returns an error if the stage of `action` cannot start.
-    pub fn start(&mut self, action: ItemAction) -> Result<()> {
+    pub fn record_action(&mut self, action: ItemAction) {
         self.last_action = Some(action.into());
         self.last_error = None;
-        self.apply(action.stage(), StageEvent::Start)
     }
 
-    /// # Errors
-    /// Returns an error if `stage` is running and cannot complete.
-    pub fn finish(&mut self, stage: Stage, action: ItemAction) -> Result<()> {
-        self.last_action = Some(action.into());
-        self.last_error = None;
-        if self.status(stage) == StageStatus::Running {
-            self.apply(stage, StageEvent::Complete(None))?;
-        }
-        Ok(())
-    }
-
-    /// # Errors
-    /// Returns an error if `stage` cannot wait.
-    pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) -> Result<()> {
-        self.last_action = Some(action.into());
-        self.last_error = None;
-        self.apply(stage, StageEvent::Wait(question))
-    }
-
-    /// # Errors
-    /// Returns an error if `stage` cannot fail.
-    pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) -> Result<()> {
+    pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) {
         self.last_action = Some(action.into());
         self.last_error = Some(message.to_owned());
-        self.apply(stage, StageEvent::Fail(message.to_owned()))
-    }
-
-    /// # Errors
-    /// Returns an error if a held stage cannot be released.
-    pub fn release_held(&mut self) -> Result<()> {
-        for stage in Stage::ALL {
-            if self.status(*stage).is_held() {
-                self.apply(*stage, StageEvent::Release)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// # Errors
-    /// Returns an error if a held stage cannot fail.
-    pub fn fail_held(&mut self, message: &str) -> Result<()> {
-        for stage in Stage::ALL {
-            if self.status(*stage).is_held() {
-                self.last_error = Some(message.to_owned());
-                self.apply(*stage, StageEvent::Fail(message.to_owned()))?;
-            }
-        }
-        Ok(())
+        self.apply(stage, StageEvent::Fail(message.to_owned()));
     }
 
     pub(super) fn record_run(&mut self, run: &Self) {
@@ -543,11 +485,6 @@ impl WatchItem {
 
     pub fn is_done(&self) -> bool {
         self.statuses().all(StageStatus::is_done)
-    }
-
-    #[must_use]
-    pub fn is_waiting(&self) -> bool {
-        self.statuses().any(|status| status == StageStatus::Waiting)
     }
 
     #[must_use]
@@ -661,8 +598,8 @@ mod tests {
             "items":[{"position":1,"title":"Song","video_id":"abcdefghijk","video_url":"u",
                 "thumbnail_url":null,"entry_id":null,"kind":"youtube","last_action":null,
                 "last_error":null,"track":null,"note":1,
-                "stages":{"download":{"status":"waiting","updated_at":null,"path":"/a.flac",
-                    "error":null,"question":{"kind":"import_match"}}}}]}]});
+                "stages":{"download":{"status":"complete","updated_at":null,"path":"/a.flac",
+                    "error":null}}}]}]});
         let watchlist = Watchlist::from_value(stored).unwrap();
         let value = watchlist.to_value().unwrap();
         assert_eq!(value["version"], 3);
@@ -670,10 +607,7 @@ mod tests {
         assert_eq!(value["playlists"][0]["processed_video_ids"], json!(["a"]));
         let item = &value["playlists"][0]["items"][0];
         assert_eq!(item["note"], 1);
-        assert_eq!(
-            item["stages"]["download"]["question"]["kind"],
-            "import_match"
-        );
+        assert_eq!(item["stages"]["download"]["path"], "/a.flac");
         assert_eq!(item["stages"]["quality"]["status"], "not_started");
         assert!(item.get("unavailable").is_none());
         assert_eq!(Watchlist::from_value(value).unwrap(), watchlist);
@@ -745,9 +679,7 @@ mod tests {
         let ids = playlist.item_ids();
         assert_eq!(ids[0], super::ItemId::new("PL1", Some("aaaaaaaaaaa"), 0));
         assert_eq!(ids[2], super::ItemId::new("PL1", Some("aaaaaaaaaaa"), 1));
-        playlist.items[2]
-            .apply(Stage::Download, StageEvent::Complete(None))
-            .unwrap();
+        playlist.items[2].apply(Stage::Download, StageEvent::Complete(None));
         playlist.merge_items(vec![
             item(1, "ccccccccccc"),
             item(2, "aaaaaaaaaaa"),
@@ -787,32 +719,18 @@ mod tests {
         item.apply(
             Stage::Download,
             StageEvent::Complete(Some("/a.flac".into())),
-        )
-        .unwrap();
-        item.start(ItemAction::ParseAgain).unwrap();
-        assert_eq!(item.status(Stage::Parse), StageStatus::Running);
-        item.wait(
-            Stage::Parse,
-            ItemAction::ParseAgain,
-            json!({"kind":"chapter_review"}),
-        )
-        .unwrap();
-        assert!(item.is_waiting());
-        let refused = item.invalidate(&[Stage::Parse]).unwrap_err();
-        assert_eq!(
-            refused.to_string(),
-            "The parse stage cannot invalidate while it is waiting."
         );
-        assert!(item.is_waiting());
-        item.fail(Stage::Split, ItemAction::SplitAgain, "split failed")
-            .unwrap();
+        item.fail(Stage::Split, ItemAction::SplitAgain, "split failed");
         assert_eq!(item.last_error.as_deref(), Some("split failed"));
         assert_eq!(item.stage(Stage::Split).error(), Some("split failed"));
         assert_eq!(
             item.path(Stage::Download),
             Some(std::path::Path::new("/a.flac"))
         );
-        item.invalidate(&[Stage::Organize]).unwrap();
+        item.record_action(ItemAction::ParseAgain);
+        assert_eq!(item.last_error, None);
+        assert_eq!(item.stage(Stage::Split).error(), Some("split failed"));
+        item.invalidate(&[Stage::Organize]);
         assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
         assert!(item.stage(Stage::Organize).updated_at().is_some());
     }

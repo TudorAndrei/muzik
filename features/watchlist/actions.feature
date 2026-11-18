@@ -137,6 +137,7 @@ Feature: Watchlist item actions
     When the action "organize_again" runs on the video "video_a" of "PL123"
     Then the job fails
     And no video was processed
+    And the video "video_a" of "PL123" has no open job
     And the saved watchlist has the stages:
       | source | item | stage    | status |
       | PL123  | 1    | organize | failed |
@@ -146,7 +147,8 @@ Feature: Watchlist item actions
     Given the watched playlist "PL123" has the videos "video_a"
     And the video "video_a" in "PL123" waits at the organize stage for an "import_match" question
     When the job of the video "video_a" of "PL123" ends before it starts with the error "settings are invalid"
-    Then the saved watchlist has the stages:
+    Then the video "video_a" of "PL123" has no open job
+    And the saved watchlist has the stages:
       | source | item | stage    | status |
       | PL123  | 1    | organize | failed |
     And item 1 of "PL123" in the saved watchlist has the error "settings are invalid"

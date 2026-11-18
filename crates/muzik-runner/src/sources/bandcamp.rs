@@ -112,7 +112,7 @@ impl Source for Bandcamp {
             item.apply(
                 Stage::Download,
                 StageEvent::Complete(Some(directory.clone())),
-            )?;
+            );
         }
         let mut options = adapter.prepared.settings.options.clone();
         options.no_split = true;
@@ -132,7 +132,8 @@ impl Source for Bandcamp {
                 split: None,
                 was_split: false,
             },
-        )
+        );
+        Ok(())
     }
 }
 

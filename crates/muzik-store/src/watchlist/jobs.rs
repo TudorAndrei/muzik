@@ -2,14 +2,15 @@
 
 use super::source::availability;
 use super::{
-    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, StageStatus,
-    WatchItem, Watchlist, now, view,
+    AudioIndex, Holds, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Snapshot, Stage,
+    WatchItem, Watchlist, cancel_orphans, now, view,
 };
 use crate::Result;
+use crate::jobs::{self, Ending, Kind, NewJob, Status};
 use muzik_core::{JobEvent, Severity, Task};
 use rusqlite::Connection;
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug, thiserror::Error)]
@@ -62,7 +63,6 @@ pub enum ItemOutcome {
 
 /// Implement source lookup and item processing with Rust adapters.
 /// `process` records each stage on `item` when the stage ends.
-/// `park` runs in the transaction that saves a waiting stage.
 pub trait Operations {
     /// # Errors
     /// Returns an error if the source cannot be read, or `JobError::Cancelled` after a cancel.
@@ -76,18 +76,13 @@ pub trait Operations {
         action: ItemAction,
         cancelled: &AtomicBool,
     ) -> Result<(), JobError>;
-    /// # Errors
-    /// Returns an error if the waiting job cannot be saved.
-    fn park(
-        &mut self,
-        _connection: &Connection,
-        _id: &ItemId,
-        _title: &str,
-        _stage: Stage,
-        _question: &Value,
-    ) -> Result<()> {
-        Ok(())
-    }
+}
+
+/// The running queue job that runs an item. Its status changes with the item result.
+#[derive(Clone, Copy)]
+pub struct RunningJob<'a> {
+    pub id: i64,
+    pub params: &'a Value,
 }
 
 #[derive(Clone, Copy)]
@@ -97,6 +92,7 @@ pub struct JobOptions<'a> {
     pub cache: &'a Path,
     pub dry_run: bool,
     pub playlist_id: Option<&'a str>,
+    pub job: Option<RunningJob<'a>>,
 }
 
 /// # Errors
@@ -108,8 +104,9 @@ pub fn sync(
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(JobEvent),
 ) -> Result<Synced, JobError> {
-    let mut draft = repository.load()?;
+    let mut draft = repository.snapshot()?;
     let mut ids: Vec<String> = draft
+        .document
         .playlists
         .iter()
         .map(|playlist| playlist.playlist_id.clone())
@@ -136,14 +133,14 @@ pub fn sync(
     let mut loaded_ids = Vec::new();
     for id in &ids {
         check_cancelled(cancelled)?;
-        let Some(playlist) = draft.playlist(id) else {
+        let Some(playlist) = draft.document.playlist(id) else {
             continue;
         };
         match operations.load(playlist) {
             Err(JobError::Cancelled) => return Err(JobError::Cancelled),
             Err(error) => {
                 let message = error.to_string();
-                write(repository, options.dry_run, &mut draft, |document| {
+                write(repository, options.dry_run, &mut draft, |document, _| {
                     if let Some(saved) = document.playlist_mut(id) {
                         saved.last_checked_at = Some(now());
                         saved.last_error = Some(message.clone());
@@ -159,17 +156,24 @@ pub fn sync(
             }
             Ok(loaded) => {
                 check_cancelled(cancelled)?;
-                write(repository, options.dry_run, &mut draft, |document| {
-                    if let Some(saved) = document.playlist_mut(id) {
-                        if let Some(title) = loaded.title.filter(|title| !title.trim().is_empty()) {
-                            saved.title = Some(title);
+                write(
+                    repository,
+                    options.dry_run,
+                    &mut draft,
+                    |document, holds| {
+                        if let Some(saved) = document.playlist_mut(id) {
+                            if let Some(title) =
+                                loaded.title.filter(|title| !title.trim().is_empty())
+                            {
+                                saved.title = Some(title);
+                            }
+                            saved.merge_items(loaded.items);
+                            saved.last_checked_at = Some(now());
+                            saved.last_error = None;
                         }
-                        saved.merge_items(loaded.items);
-                        saved.last_checked_at = Some(now());
-                        saved.last_error = None;
-                    }
-                    document.reconcile_keeping_running(options.reconcile)
-                })?;
+                        document.reconcile(options.reconcile, holds)
+                    },
+                )?;
                 on_event(JobEvent::WatchlistSaved);
                 loaded_ids.push(id.clone());
             }
@@ -182,19 +186,7 @@ pub fn sync(
     }
     let mut pending = Vec::new();
     for id in loaded_ids {
-        let items: Vec<PendingItem> = draft
-            .playlist(&id)
-            .map(|playlist| {
-                playlist
-                    .pending()
-                    .into_iter()
-                    .map(|(id, item)| PendingItem {
-                        id,
-                        title: item.title.clone(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let items = pending_of(&draft, &id);
         on_event(JobEvent::message(format!(
             "Playlist {id} has {} pending item(s).",
             items.len()
@@ -205,8 +197,25 @@ pub fn sync(
         checked: ids.len(),
         errors,
         pending,
-        document: draft,
+        document: draft.document,
     })
+}
+
+fn pending_of(snapshot: &Snapshot, playlist_id: &str) -> Vec<PendingItem> {
+    snapshot
+        .document
+        .playlist(playlist_id)
+        .map(|playlist| {
+            playlist
+                .pending(&snapshot.holds)
+                .into_iter()
+                .map(|(id, item)| PendingItem {
+                    id,
+                    title: item.title.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// # Errors
@@ -223,6 +232,10 @@ pub fn refresh(
     let mut failed: usize = 0;
     let mut waiting: usize = 0;
     if !options.dry_run {
+        let options = JobOptions {
+            job: None,
+            ..options
+        };
         for item in &synced.pending {
             check_cancelled(cancelled)?;
             match run_item(
@@ -246,13 +259,13 @@ pub fn refresh(
         task: Task::WatchlistRefresh,
         success: failed == 0 && synced.errors == 0,
     });
-    let document = if options.dry_run {
-        synced.document
+    let snapshot = if options.dry_run {
+        Snapshot::new(synced.document, repository.snapshot()?.holds)
     } else {
-        repository.load()?
+        repository.snapshot()?
     };
     let summary = json!({"playlists_checked":synced.checked, "pending_videos":synced.pending.len(), "completed_videos":completed, "failed_videos":failed, "waiting_videos":waiting, "playlist_errors":synced.errors});
-    Ok(json!({"summary":summary, "watchlist":view(&document, options.output, options.cache)}))
+    Ok(json!({"summary":summary, "watchlist":view(&snapshot, options.output, options.cache)}))
 }
 
 /// # Errors
@@ -267,12 +280,12 @@ pub fn action(
 ) -> Result<Value, JobError> {
     if options.dry_run {
         check_cancelled(cancelled)?;
-        let document = repository.load()?;
-        let item = find_item(&document, id)?;
+        let snapshot = repository.snapshot()?;
+        let item = find_item(&snapshot.document, id)?;
         check_available(item, action, options.output)?;
         return Ok(
             json!({"action":{"action":action,"planned_stage":action.stage(),"dry_run":true},
-            "watchlist":view(&document, options.output, options.cache)}),
+            "watchlist":view(&snapshot, options.output, options.cache)}),
         );
     }
     let outcome = run_item(repository, options, id, action, operations, cancelled)?;
@@ -281,10 +294,12 @@ pub fn action(
         ItemOutcome::Waiting { stage, .. } => json!({"action":action,"waiting_stage":stage}),
     };
     Ok(
-        json!({"action":summary, "watchlist":view(&repository.load()?, options.output, options.cache)}),
+        json!({"action":summary, "watchlist":view(&repository.snapshot()?, options.output, options.cache)}),
     )
 }
 
+/// Runs `action` on one item. The item result and the status of `options.job` are saved
+/// in one transaction.
 /// # Errors
 /// Returns an error if the item is missing or unavailable, its stage fails, or the job is cancelled.
 pub fn run_item(
@@ -295,19 +310,31 @@ pub fn run_item(
     operations: &mut impl Operations,
     cancelled: &AtomicBool,
 ) -> Result<ItemOutcome, JobError> {
-    check_cancelled(cancelled)?;
     let stage = action.stage();
-    let (playlist, mut run) = repository.update(|document| {
-        let (playlist, index) = find_item_mut(document, id)?;
+    let key = id.to_string();
+    let job_id = options.job.map(|job| job.id);
+    let (playlist, mut run) = repository.update_with(|document, connection| {
+        if cancelled.load(Ordering::SeqCst) {
+            end_job(connection, options, Ending::Cancelled)?;
+            return Ok(Err(JobError::Cancelled));
+        }
+        jobs::cancel_waiting_on(connection, &key, job_id)?;
+        let (playlist, index) = match find_item_mut(document, id) {
+            Ok(found) => found,
+            Err(error) => {
+                end_job(connection, options, Ending::Failed(&error.to_string()))?;
+                return Ok(Err(error.into()));
+            }
+        };
         let source = playlist.clone();
         let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
         if let Err(error) = check_available(saved, action, options.output) {
-            saved.fail_held(&error.to_string())?;
-            return Ok(Err(error));
+            let message = error.to_string();
+            saved.fail(stage, action, &message);
+            end_job(connection, options, Ending::Failed(&message))?;
+            return Ok(Err(error.into()));
         }
-        let item = saved.clone();
-        saved.start(action)?;
-        Ok(Ok((source, item)))
+        Ok(Ok((source, saved.clone())))
     })??;
     let result = operations.process(&playlist, &mut run, action, cancelled);
     let result = match result {
@@ -316,17 +343,21 @@ pub fn run_item(
     };
     let saved = repository.update_with(|document, connection| {
         let Ok((playlist, index)) = find_item_mut(document, id) else {
+            end_job(connection, options, Ending::Failed(GONE_VIDEO))?;
             return Ok(false);
         };
         match &result {
             Ok(()) => {
-                run.release_held()?;
-                run.finish(stage, action)?;
+                run.record_action(action);
+                let holds = Holds::read(connection)?;
+                let ids = playlist.item_ids();
                 let key = run.key().map(str::to_owned);
-                for (slot, other) in playlist.items.iter_mut().enumerate() {
+                for (slot, (other_id, other)) in
+                    ids.iter().zip(playlist.items.iter_mut()).enumerate()
+                {
                     let copy = key.is_some()
                         && other.key() == key.as_deref()
-                        && !other.statuses().any(StageStatus::is_held);
+                        && holds.get(other_id).is_none();
                     if slot == index || copy {
                         other.record_run(&run);
                     }
@@ -334,25 +365,29 @@ pub fn run_item(
                 if let Some(key) = key {
                     playlist.mark_processed(&key, run.is_done());
                 }
+                end_job(connection, options, Ending::Done)?;
                 return Ok(true);
             }
             Err(JobError::Waiting {
                 stage: waiting,
                 question,
             }) => {
-                run.release_held()?;
-                run.wait(*waiting, action, question.clone())?;
+                run.record_action(action);
                 let title = &playlist.items.get(index).ok_or(MISSING_VIDEO)?.title;
-                operations.park(connection, id, title, *waiting, question)?;
+                park(connection, options, id, title, *waiting, question)?;
+                end_job(connection, options, Ending::Done)?;
             }
-            Err(JobError::Cancelled) => {}
+            Err(JobError::Cancelled) => {
+                end_job(connection, options, Ending::Cancelled)?;
+            }
             Err(error) => {
                 let failed = match error {
                     JobError::Failed { stage, .. } => *stage,
                     _ => stage,
                 };
-                run.release_held()?;
-                run.fail(failed, action, &error.to_string())?;
+                let message = error.to_string();
+                run.fail(failed, action, &message);
+                end_job(connection, options, Ending::Failed(&message))?;
             }
         }
         playlist
@@ -371,21 +406,104 @@ pub fn run_item(
     }
 }
 
+fn end_job(connection: &Connection, options: JobOptions<'_>, ending: Ending<'_>) -> Result<()> {
+    if let Some(job) = options.job {
+        jobs::end_on(connection, job.id, ending)?;
+    }
+    Ok(())
+}
+
+fn park(
+    connection: &Connection,
+    options: JobOptions<'_>,
+    id: &ItemId,
+    title: &str,
+    stage: Stage,
+    question: &Value,
+) -> Result<()> {
+    let mut params = options.job.map_or(Value::Null, |job| job.params.clone());
+    id.write(&mut params)?;
+    if let Some(fields) = params.as_object_mut() {
+        fields.insert("action".into(), json!(stage.resume_action()));
+    }
+    jobs::park_on(
+        connection,
+        &NewJob {
+            kind: Kind::Item,
+            item_key: &id.to_string(),
+            title,
+            params: &params,
+        },
+        question,
+    )?;
+    Ok(())
+}
+
 const MISSING_PLAYLIST: &str = "The selected playlist is no longer available.";
 const MISSING_VIDEO: &str = "The selected video is no longer available.";
 const GONE_VIDEO: &str =
     "The video left its playlist while it was processed. Muzik could not save the result.";
 
+/// Fails a running item job that ends before `run_item` starts, and saves the failure on
+/// the stage of `action` in the same transaction.
 /// # Errors
-/// Returns an error if the watchlist cannot be saved.
-pub fn abandon(repository: &Repository, id: &ItemId, message: &str) -> Result<()> {
-    repository.update(|document| {
-        if let Ok((playlist, index)) = find_item_mut(document, id)
+/// Returns an error if the watchlist or the job cannot be saved.
+pub fn abandon(
+    repository: &Repository,
+    job_id: i64,
+    id: &ItemId,
+    action: ItemAction,
+    message: &str,
+) -> Result<()> {
+    repository.update_with(|document, connection| {
+        if jobs::end_on(connection, job_id, Ending::Failed(message))?
+            && let Ok((playlist, index)) = find_item_mut(document, id)
             && let Some(item) = playlist.items.get_mut(index)
         {
-            item.fail_held(message)?;
+            item.fail(action.stage(), action, message);
         }
         Ok(())
+    })
+}
+
+/// Brings the jobs back in line with the items after a stop.
+///
+/// Running jobs return to the queue, each item keeps one open job, jobs of missing items
+/// end, and a waiting job whose input is gone ends so that its item can run again.
+/// `output_of` gives the download folder for the parameters of a job.
+/// # Errors
+/// Returns an error if the watchlist or the jobs cannot be read or saved.
+pub fn repair(
+    repository: &Repository,
+    output_of: impl Fn(&Value) -> Option<PathBuf>,
+) -> Result<usize> {
+    repository.update_with(|document, connection| {
+        let mut changed = jobs::recover_on(connection)?;
+        changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
+        changed = changed.saturating_add(cancel_orphans(connection, document)?);
+        for job in jobs::open_items_on(connection)? {
+            if job.status != Status::Waiting {
+                continue;
+            }
+            let Ok(id) = job.item_key.parse::<ItemId>() else {
+                continue;
+            };
+            let Some(output) = output_of(&job.params) else {
+                continue;
+            };
+            let action = job
+                .params
+                .get("action")
+                .and_then(Value::as_str)
+                .and_then(|action| action.parse::<ItemAction>().ok())
+                .unwrap_or(ItemAction::Run);
+            let answerable = find_item(document, &id)
+                .is_ok_and(|item| check_available(item, action, &output).is_ok());
+            if !answerable && jobs::cancel_open_on(connection, job.id)? {
+                changed = changed.saturating_add(1);
+            }
+        }
+        Ok(changed)
     })
 }
 
@@ -428,17 +546,18 @@ fn check_available(item: &WatchItem, action: ItemAction, output: &Path) -> Resul
 fn write<T>(
     repository: &Repository,
     dry_run: bool,
-    draft: &mut Watchlist,
-    change: impl FnOnce(&mut Watchlist) -> Result<T>,
+    draft: &mut Snapshot,
+    change: impl FnOnce(&mut Watchlist, &Holds) -> Result<T>,
 ) -> Result<T, JobError> {
     if dry_run {
-        return Ok(change(draft)?);
+        return Ok(change(&mut draft.document, &draft.holds)?);
     }
-    let (result, document) = repository.update(|document| {
-        let result = change(document)?;
-        Ok((result, document.clone()))
+    let (result, snapshot) = repository.update_with(|document, connection| {
+        let holds = Holds::read(connection)?;
+        let result = change(document, &holds)?;
+        Ok((result, Snapshot::new(document.clone(), holds)))
     })?;
-    *draft = document;
+    *draft = snapshot;
     Ok(result)
 }
 

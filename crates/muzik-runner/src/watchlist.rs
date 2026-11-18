@@ -4,14 +4,12 @@ use crate::queue::item_request;
 use crate::settings::Settings;
 use crate::sources;
 use muzik_core::{DecisionKind, JobEvent, Task};
-use muzik_store::jobs::{Kind, NewJob, park_on};
 use muzik_store::watchlist::jobs::{
-    self, JobError, JobOptions, LoadedSource, Operations, PendingItem,
+    self, JobError, JobOptions, LoadedSource, Operations, PendingItem, RunningJob,
 };
 use muzik_store::watchlist::{
-    AudioIndex, ItemAction, ItemId, Playlist, Repository, Stage, WatchItem, import_cache,
+    AudioIndex, ItemAction, Playlist, Repository, Stage, WatchItem, import_cache,
 };
-use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -30,14 +28,13 @@ pub(crate) fn sync(
     let parked = RefCell::new(None);
     let mut adapter = Adapter {
         prepared: &prepared,
-        params: &Value::Null,
         events: &events,
         on_import_event: &mut |_| {},
         decide: &mut |_, _| Err("A playlist check does not ask for choices.".into()),
         parked: &parked,
         cancelled,
     };
-    let mut options = prepared.job_options();
+    let mut options = prepared.job_options(None);
     options.playlist_id = playlist_id.filter(|id| !id.is_empty());
     let synced = jobs::sync(
         &prepared.repository,
@@ -61,9 +58,14 @@ pub fn ensure_sources(paths: &muzik_core::paths::Paths) -> crate::Result<bool> {
     sources::ensure(&Repository::open(paths), paths)
 }
 
+pub(crate) struct ItemJob<'a> {
+    pub(crate) id: i64,
+    pub(crate) params: &'a Value,
+}
+
 pub(crate) fn action(
     settings: &Settings,
-    params: &Value,
+    job: &ItemJob<'_>,
     cancelled: &AtomicBool,
     on_event: &mut dyn FnMut(JobEvent),
     on_import_event: &mut dyn FnMut(JobEvent),
@@ -71,11 +73,10 @@ pub(crate) fn action(
     parked: &RefCell<Option<Parked>>,
 ) -> Result<Value, JobError> {
     let prepared = Prepared::new(settings);
-    let (id, action) = item_request(params)?;
+    let (id, action) = item_request(job.params)?;
     let events = RefCell::new(on_event);
     let mut adapter = Adapter {
         prepared: &prepared,
-        params,
         events: &events,
         on_import_event,
         decide,
@@ -84,7 +85,10 @@ pub(crate) fn action(
     };
     jobs::action(
         &prepared.repository,
-        prepared.job_options(),
+        prepared.job_options(Some(RunningJob {
+            id: job.id,
+            params: job.params,
+        })),
         &id,
         action,
         &mut adapter,
@@ -94,11 +98,17 @@ pub(crate) fn action(
 
 pub(crate) fn abandon(
     paths: &muzik_core::paths::Paths,
-    params: &Value,
+    job: &ItemJob<'_>,
     message: &str,
 ) -> Result<(), JobError> {
-    let (id, _) = item_request(params)?;
-    Ok(jobs::abandon(&Repository::open(paths), &id, message)?)
+    let (id, action) = item_request(job.params)?;
+    Ok(jobs::abandon(
+        &Repository::open(paths),
+        job.id,
+        &id,
+        action,
+        message,
+    )?)
 }
 
 pub(crate) struct Prepared<'a> {
@@ -125,13 +135,14 @@ impl<'a> Prepared<'a> {
         }
     }
 
-    fn job_options(&self) -> JobOptions<'_> {
+    fn job_options<'b>(&'b self, job: Option<RunningJob<'b>>) -> JobOptions<'b> {
         JobOptions {
             reconcile: self.settings.reconcile(),
             output: &self.settings.request.output,
             cache: &self.settings.paths.cache,
             dry_run: self.settings.options.dry_run,
             playlist_id: None,
+            job,
         }
     }
 
@@ -142,7 +153,6 @@ impl<'a> Prepared<'a> {
 
 pub(crate) struct Adapter<'a, 'b> {
     pub(crate) prepared: &'a Prepared<'a>,
-    pub(crate) params: &'a Value,
     pub(crate) events: &'a RefCell<&'b mut dyn FnMut(JobEvent)>,
     pub(crate) on_import_event: &'a mut dyn FnMut(JobEvent),
     pub(crate) decide: &'a mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -178,32 +188,6 @@ impl Operations for Adapter<'_, '_> {
             });
             JobError::Waiting { stage, question }
         })
-    }
-
-    fn park(
-        &mut self,
-        connection: &Connection,
-        id: &ItemId,
-        title: &str,
-        stage: Stage,
-        question: &Value,
-    ) -> muzik_store::Result<()> {
-        let mut params = self.params.clone();
-        id.write(&mut params)?;
-        if let Some(fields) = params.as_object_mut() {
-            fields.insert("action".into(), json!(stage.resume_action()));
-        }
-        park_on(
-            connection,
-            &NewJob {
-                kind: Kind::Item,
-                item_key: &id.to_string(),
-                title,
-                params: &params,
-            },
-            question,
-        )
-        .map(drop)
     }
 }
 

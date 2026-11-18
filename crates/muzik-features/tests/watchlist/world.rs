@@ -1,9 +1,11 @@
 use crate::operations::FakeOperations;
 use cucumber::World;
 use muzik_core::{JobEvent, QualityPolicy};
+use muzik_store::jobs::Store;
 use muzik_store::watchlist::jobs::{JobError, JobOptions, PendingItem};
 use muzik_store::watchlist::{
-    CheckedWrite, LocalCheck, LocalChecks, Playlist, ReconcileOptions, Repository, Stage, Watchlist,
+    CheckedWrite, LocalCheck, LocalChecks, Playlist, ReconcileOptions, Repository, Stage,
+    Watchlist, view,
 };
 use serde_json::Value;
 use std::fmt;
@@ -131,6 +133,20 @@ impl WatchlistWorld {
         }
     }
 
+    pub fn jobs(&self) -> anyhow::Result<Store> {
+        Ok(Store::from_connection(muzik_store::db::open(
+            &self.database(),
+        )?))
+    }
+
+    pub fn saved_view(&self) -> anyhow::Result<Value> {
+        Ok(serde_json::to_value(view(
+            &self.repository().snapshot()?,
+            &self.downloads(),
+            &self.cache(),
+        ))?)
+    }
+
     pub fn snapshot(&mut self) -> anyhow::Result<()> {
         let repository = self.repository();
         self.before = Some((repository.revision()?, repository.load()?));
@@ -160,13 +176,14 @@ impl WatchlistWorld {
                 cache: reconcile.cache,
                 dry_run: self.dry_run,
                 playlist_id: self.only.as_deref(),
+                job: None,
             })
         })
     }
 
     pub fn document(&self, which: &str) -> anyhow::Result<Value> {
         let document = match which {
-            "saved" => Some(self.repository().load()?.to_value()?),
+            "saved" => Some(self.saved_view()?),
             "loaded" => self.loaded.as_ref().map(Watchlist::to_value).transpose()?,
             "checked" => self.checked.clone(),
             "shown" => self.shown.clone(),

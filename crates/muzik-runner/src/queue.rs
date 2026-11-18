@@ -4,7 +4,7 @@ use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
-use muzik_store::watchlist::jobs::PendingItem;
+use muzik_store::watchlist::jobs::{self as watchlist_jobs, PendingItem};
 use muzik_store::watchlist::{ItemAction, ItemId, Repository};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Value, json};
@@ -215,6 +215,17 @@ impl Jobs {
             .and_then(|question| question.get("kind").cloned())
             .unwrap_or(Value::Null);
         Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
+    }
+
+    pub(crate) fn repair(&self) -> crate::Result<usize> {
+        let recovered = self.store().recover()?;
+        let paths = &self.paths;
+        let repaired = watchlist_jobs::repair(&Repository::open(paths), |params| {
+            Settings::resolve(paths, params)
+                .ok()
+                .map(|settings| settings.request.output)
+        })?;
+        Ok(recovered.saturating_add(repaired))
     }
 
     pub(crate) fn release_import_questions(&self) -> crate::Result<usize> {

@@ -209,14 +209,14 @@ fn check(rows: &[Value], scratch: &Path) -> Result<()> {
         }
         bi.stages = serde_json::from_value(serde_json::Value::Object(stages))?;
         assert_eq!(
-            serde_json::to_value(muzik_store::watchlist::Summary::of(&bi))?,
+            serde_json::to_value(muzik_store::watchlist::Summary::of(&bi, None))?,
             serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci))?
         );
     }
     bi.unavailable = Some(true);
     ci.unavailable = Some(true);
     assert_eq!(
-        serde_json::to_value(muzik_store::watchlist::Summary::of(&bi))?,
+        serde_json::to_value(muzik_store::watchlist::Summary::of(&bi, None))?,
         serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci))?
     );
     // Generated peers use sampled text and duration. Additional controls check exact boundaries and equal winners.
@@ -298,6 +298,7 @@ fn check(rows: &[Value], scratch: &Path) -> Result<()> {
         let raw = watchlist(&rows[..rows.len().min(n)]);
         let b: muzik_store::watchlist::Watchlist = serde_json::from_value(raw.clone())?;
         let c: muzik_store_dod::watchlist::Watchlist = serde_json::from_value(raw)?;
+        let b = muzik_store::watchlist::Snapshot::new(b, muzik_store::watchlist::Holds::default());
         let bv = serde_json::to_value(muzik_store::watchlist::view(&b, scratch, scratch))?;
         let cv = serde_json::to_value(muzik_store_dod::watchlist::view(&c, scratch, scratch))?;
         assert_eq!(bv, cv, "watchlist {n}");
@@ -435,6 +436,7 @@ fn benchmarks(rows: &[Value], scratch: &Path) -> Result<()> {
     for n in [20, 200, 1000] {
         let raw = watchlist(&rows[..rows.len().min(n)]);
         let b: muzik_store::watchlist::Watchlist = serde_json::from_value(raw.clone())?;
+        let b = muzik_store::watchlist::Snapshot::new(b, muzik_store::watchlist::Holds::default());
         let c: muzik_store_dod::watchlist::Watchlist = serde_json::from_value(raw)?;
         bench(
             "watchlist_fixed_actions_summary",

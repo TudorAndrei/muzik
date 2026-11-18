@@ -15,9 +15,9 @@ fn settings() -> anyhow::Result<Settings> {
 }
 
 pub fn list(items: bool) -> anyhow::Result<()> {
-    let document = repository().load()?;
+    let snapshot = repository().snapshot()?;
     let settings = settings()?;
-    let visible = watchlist::view(&document, &settings.request.output, &settings.paths.cache);
+    let visible = watchlist::view(&snapshot, &settings.request.output, &settings.paths.cache);
     let playlists = &visible.playlists;
     if playlists.is_empty() {
         println!("The watchlist is empty. Add a playlist with `muzik watchlist add <url>`.");

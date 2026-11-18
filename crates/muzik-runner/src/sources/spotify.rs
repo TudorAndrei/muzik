@@ -130,7 +130,7 @@ fn import_file(
     file: PathBuf,
     cancelled: &AtomicBool,
 ) -> Result<(), JobError> {
-    item.apply(Stage::Download, StageEvent::Complete(Some(file.clone())))?;
+    item.apply(Stage::Download, StageEvent::Complete(Some(file.clone())));
     let track = item.track.clone().unwrap_or(Value::Null);
     write_spotify_tags(&file, &tags(&track)).map_err(|error| JobError::Operation(error.into()))?;
     let mut options = adapter.prepared.settings.options.clone();
@@ -168,7 +168,8 @@ fn import_file(
             split: None,
             was_split: false,
         },
-    )
+    );
+    Ok(())
 }
 
 fn tags(track: &Value) -> SpotifyTags {
@@ -258,8 +259,7 @@ mod tests {
         )
         .unwrap();
         let mut item = WatchItem::new(1, "Warhaus - Love's a Stranger", SourceKind::Spotify);
-        item.apply(Stage::Download, StageEvent::Complete(Some(audio)))
-            .unwrap();
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio)));
         item.track = Some(json!({
             "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
             "track_number":2,"disc_number":1,"release_date":"2017-10-13"

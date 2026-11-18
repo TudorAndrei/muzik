@@ -78,18 +78,13 @@ struct Outputs {
     was_split: bool,
 }
 
-fn mark_full(
-    item: &mut WatchItem,
-    options: &WorkflowOptions,
-    outputs: Outputs,
-) -> Result<(), JobError> {
+fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, outputs: Outputs) {
     let single_file = item.kind.single_file();
     let Outputs {
         mut audio,
         mut split,
         was_split,
     } = outputs;
-    item.release_held()?;
     for stage in Stage::ALL.iter().copied() {
         let skipped = match stage {
             Stage::Download => false,
@@ -111,9 +106,8 @@ fn mark_full(
             };
             StageEvent::Complete(path)
         };
-        item.apply(stage, event)?;
+        item.apply(stage, event);
     }
-    Ok(())
 }
 
 fn required<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, JobError> {
@@ -201,7 +195,6 @@ pub mod testing {
         let parked = RefCell::new(None);
         let mut adapter = Adapter {
             prepared: &prepared,
-            params: &Value::Null,
             events: &events,
             on_import_event: &mut imported,
             decide: &mut decide,

@@ -7,7 +7,7 @@ use crate::settings::Settings;
 use crate::{gates, local_workflow, remote_workflow, watchlist};
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_import::beets;
-use muzik_store::jobs::{Job, Kind, Queue, RunnerLock, Store};
+use muzik_store::jobs::{Ending, Job, Kind, Queue, RunnerLock, Store};
 use muzik_workflow::{WorkflowInput, classify_input};
 use parking_lot::{Condvar, Mutex, MutexGuard};
 use serde_json::{Value, json};
@@ -110,7 +110,7 @@ impl Runner {
             RunnerClaim::Locked(lock) => Some(lock),
         };
         jobs.import_legacy()?;
-        jobs.store().recover()?;
+        jobs.repair()?;
         jobs.release_import_questions()?;
         let shared = Arc::new(Shared {
             jobs,
@@ -242,13 +242,16 @@ impl Shared {
             Kind::Library => self.run_library(job, &id, cancel),
         };
         {
-            let store = self.store();
-            let _ = match &result {
-                Ok(_) => store.finish(job.id),
-                Err(JobFailure::Cancelled) if job.question.is_some() => store.reopen(job.id),
-                Err(JobFailure::Cancelled) => store.cancel(job.id),
-                Err(JobFailure::Failed(error)) => store.fail(job.id, &error.to_string()),
+            let message = match &result {
+                Err(JobFailure::Failed(error)) => error.to_string(),
+                Ok(_) | Err(JobFailure::Cancelled) => String::new(),
             };
+            let ending = match &result {
+                Ok(_) => Ending::Done,
+                Err(JobFailure::Cancelled) => Ending::Cancelled,
+                Err(JobFailure::Failed(_)) => Ending::Failed(&message),
+            };
+            let _ = self.store().end(job.id, ending);
         }
         self.running().remove(&job.id);
         self.generation.fetch_add(1, Ordering::SeqCst);
@@ -286,9 +289,13 @@ impl Shared {
     }
 
     fn run_item(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {
+        let item = watchlist::ItemJob {
+            id: job.id,
+            params: &job.params,
+        };
         let settings = self.settings(job).map_err(|error| {
             let message = error.to_string();
-            let error = match watchlist::abandon(self.jobs.paths(), &job.params, &message) {
+            let error = match watchlist::abandon(self.jobs.paths(), &item, &message) {
                 Ok(()) => error,
                 Err(saved) => crate::Error::from(format!("{message} {saved}")),
             };
@@ -319,7 +326,7 @@ impl Shared {
         };
         watchlist::action(
             &settings,
-            &job.params,
+            &item,
             cancel,
             &mut workflow_event,
             &mut import_event,
@@ -514,7 +521,7 @@ mod tests {
                 let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
                 item.video_id = Some("abcdefghijk".into());
                 item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
-                item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())))?;
+                item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())));
                 document.playlists[0].items = vec![item];
                 Ok(())
             })
@@ -549,8 +556,13 @@ mod tests {
         };
         assert_eq!(waiting["kind"], "import_match");
         assert_eq!(waiting["item"], r#"["PL1","abcdefghijk",0]"#);
+        let shown = muzik_store::watchlist::view(
+            &repository.snapshot().unwrap(),
+            &output,
+            &dir.path().join("cache"),
+        );
         assert_eq!(
-            repository.load().unwrap().playlists[0].items[1].status(Stage::Organize),
+            shown.playlists[0].items[1].status(Stage::Organize),
             StageStatus::Waiting
         );
         repository
@@ -591,7 +603,7 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_spotify_track_organizes_the_audio_in_its_download_folder() {
+    fn a_waiting_spotify_track_resumes_at_start_with_the_audio_in_its_download_folder() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let output = dir.path().join("downloads");
@@ -613,34 +625,91 @@ mod tests {
                     Some("https://open.spotify.com/track/1lb3H41lbvAN28N7yqRNL9".into());
                 item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#0".into());
                 item.track = Some(json!({"title":"Idea 10","artists":["Gibran Alcocer"]}));
-                item.apply(
-                    Stage::Organize,
-                    StageEvent::Wait(json!({"kind":"import_match","payload":{"task":{}}})),
-                )?;
                 document.playlist_mut(&playlist).ok_or("no playlist")?.items = vec![item];
                 Ok(())
             })
             .unwrap();
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let key = r#"["spotify:playlist:37i9dQZF1DXcBWIGoYBM5M","spotify:track:1lb3H41lbvAN28N7yqRNL9#0",0]"#;
+        jobs.store()
+            .park(
+                &muzik_store::jobs::NewJob {
+                    kind: muzik_store::jobs::Kind::Item,
+                    item_key: key,
+                    title: "Gibran Alcocer - Idea 10",
+                    params: &json!({
+                        "playlist_id":playlist,"key":"spotify:track:1lb3H41lbvAN28N7yqRNL9#0",
+                        "occurrence":0,"action":"organize_again","output":output,"config":config
+                    }),
+                },
+                &json!({"kind":"import_match","payload":{"task":{}}}),
+            )
+            .unwrap();
         let shown = muzik_store::watchlist::view(
-            &repository.load().unwrap(),
+            &repository.snapshot().unwrap(),
             &output,
             &dir.path().join("cache"),
         );
-        assert!(shown.playlists[0].items[0].actions[&ItemAction::OrganizeAgain].enabled);
-        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let card = &shown.playlists[0].items[0];
+        assert_eq!(card.status(Stage::Organize), StageStatus::Waiting);
+        assert!(card.actions[&ItemAction::OrganizeAgain].enabled);
         let (runner, _) = runner(&jobs).unwrap();
-        jobs.item(&json!({
-            "playlist_id":playlist,"key":"spotify:track:1lb3H41lbvAN28N7yqRNL9#0","occurrence":0,
-            "title":"Gibran Alcocer - Idea 10","action":"organize_again","output":output,
-            "config":config
-        }))
-        .unwrap();
         runner.wake();
         runner.wait_until_idle(&AtomicBool::new(false));
         let item = repository.load().unwrap().playlists[0].items[0].clone();
         assert_eq!(item.status(Stage::Organize), StageStatus::Complete);
         assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
         assert_eq!(item.last_error, None);
+    }
+
+    #[test]
+    fn a_waiting_job_without_its_audio_ends_at_start_and_the_item_can_run_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let output = dir.path().join("downloads");
+        std::fs::create_dir_all(&output).unwrap();
+        let repository = Repository::open(&paths);
+        repository
+            .add("https://www.youtube.com/playlist?list=PL1")
+            .unwrap();
+        repository
+            .update(|document| {
+                document.playlists[0].merge_items(listed(&["abcdefghijk"]));
+                Ok(())
+            })
+            .unwrap();
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
+        let waiting = jobs
+            .store()
+            .park(
+                &muzik_store::jobs::NewJob {
+                    kind: muzik_store::jobs::Kind::Item,
+                    item_key: r#"["PL1","abcdefghijk",0]"#,
+                    title: "abcdefghijk",
+                    params: &json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":0,
+                        "action":"organize_again","output":output}),
+                },
+                &json!({"kind":"import_match","payload":{"task":{}}}),
+            )
+            .unwrap();
+        let (runner, _) = runner(&jobs).unwrap();
+        assert_eq!(
+            jobs.get(waiting).unwrap().map(|job| job.status),
+            Some(muzik_store::jobs::Status::Cancelled)
+        );
+        let shown = muzik_store::watchlist::view(
+            &repository.snapshot().unwrap(),
+            &output,
+            &dir.path().join("cache"),
+        );
+        let card = &shown.playlists[0].items[0];
+        assert_eq!(card.status(Stage::Organize), StageStatus::NotStarted);
+        assert_eq!(card.summary, muzik_store::watchlist::Summary::Pending);
+        assert_eq!(
+            card.primary_action.as_ref().map(|primary| primary.action),
+            Some(ItemAction::Run)
+        );
+        drop(runner);
     }
 
     #[test]

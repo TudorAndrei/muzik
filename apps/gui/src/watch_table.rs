@@ -230,7 +230,7 @@ impl TableDelegate for WatchTable {
                 .into_any_element(),
             WatchColumn::Stages => style::stage_track(
                 SharedString::from(format!("watch-stages-{}", row.key)),
-                &row.item.item,
+                &row.item,
                 cx,
             ),
             WatchColumn::Status => {

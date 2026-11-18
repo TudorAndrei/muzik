@@ -429,16 +429,15 @@ fn item_sheet(
                 .object_fit(ObjectFit::Cover),
         );
     }
-    let mut state =
-        div()
-            .v_flex()
-            .gap_1()
-            .child(style::stage_track("sheet-stages", &item.item, cx));
+    let mut state = div()
+        .v_flex()
+        .gap_1()
+        .child(style::stage_track("sheet-stages", item, cx));
     if let Some(error) = item.item.last_error.as_deref() {
         state = state.child(div().text_sm().child(error.to_string()));
     }
     body = body.child(state);
-    let states = style::stage_states(&item.item);
+    let states = style::stage_states(item);
     let mut facts = DescriptionList::horizontal()
         .columns(1)
         .label_width(px(110.))
@@ -473,7 +472,7 @@ fn item_sheet(
         .iter()
         .find(|job| job.item.as_deref() == Some(item_id.as_str()))
         .and_then(Decision::queue_job);
-    let waiting_stage = style::stage_states(&item.item)
+    let waiting_stage = style::stage_states(item)
         .into_iter()
         .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
         .map(|(stage, _)| stage);
@@ -512,7 +511,7 @@ fn item_commands(
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Div {
-    let is_waiting = style::stage_states(&item.item)
+    let is_waiting = style::stage_states(item)
         .iter()
         .any(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting);
     let mut commands = div()

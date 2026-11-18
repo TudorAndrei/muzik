@@ -1,5 +1,5 @@
 use super::library_lookup::MusicLibrary;
-use super::{AudioIndex, LastAction, Stage, StageEvent, StageStatus, WatchItem, Watchlist};
+use super::{AudioIndex, Holds, LastAction, Stage, StageEvent, StageStatus, WatchItem, Watchlist};
 use crate::Result;
 use muzik_core::QualityPolicy;
 use std::path::Path;
@@ -18,41 +18,28 @@ pub struct ReconcileOptions<'a> {
 }
 
 impl Watchlist {
+    /// Items that a job holds keep their saved state.
     /// # Errors
     /// Returns an error if the updated watchlist is not valid.
-    pub fn reconcile(&mut self, options: ReconcileOptions<'_>) -> Result<()> {
-        self.reconcile_items(options, false)
-    }
-
-    pub(super) fn reconcile_keeping_running(
-        &mut self,
-        options: ReconcileOptions<'_>,
-    ) -> Result<()> {
-        self.reconcile_items(options, true)
-    }
-
-    fn reconcile_items(&mut self, options: ReconcileOptions<'_>, keep_running: bool) -> Result<()> {
+    pub fn reconcile(&mut self, options: ReconcileOptions<'_>, holds: &Holds) -> Result<()> {
         let music_library = MusicLibrary::open(options.config);
         let audio = AudioIndex::scan(options.output);
         for playlist in &mut self.playlists {
             let mut processed = playlist.processed_video_ids.clone();
-            for item in &mut playlist.items {
-                if item.is_waiting() {
-                    for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
-                        .into_iter()
-                        .flatten()
-                    {
-                        processed.retain(|processed| processed != key);
+            let ids = playlist.item_ids();
+            for (id, item) in ids.iter().zip(&mut playlist.items) {
+                match holds.get(id) {
+                    Some(hold) if hold.is_waiting() => {
+                        for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            processed.retain(|processed| processed != key);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                if keep_running && item.statuses().any(|status| status == StageStatus::Running) {
-                    continue;
-                }
-                for stage in Stage::ALL {
-                    if item.status(*stage) == StageStatus::Running {
-                        item.apply(*stage, StageEvent::Release)?;
-                    }
+                    Some(_) => continue,
+                    None => {}
                 }
                 if item.statuses().any(|status| status == StageStatus::Stale) {
                     if let Some(key) = item.key() {
@@ -63,7 +50,7 @@ impl Watchlist {
                 if item.kind.single_file() {
                     for stage in [Stage::Quality, Stage::Parse, Stage::Split] {
                         if item.status(stage) != StageStatus::Skipped {
-                            item.apply(stage, StageEvent::Skip)?;
+                            item.apply(stage, StageEvent::Skip);
                         }
                     }
                     continue;
@@ -72,7 +59,7 @@ impl Watchlist {
                     continue;
                 };
                 if processed.contains(&video_id) {
-                    mark_completed(item, options)?;
+                    mark_completed(item, options);
                     continue;
                 }
                 if let Some(path) = audio.find(&video_id) {
@@ -80,17 +67,17 @@ impl Watchlist {
                         .path(Stage::Download)
                         .is_none_or(|saved| !saved.is_file())
                     {
-                        item.apply(Stage::Download, StageEvent::Complete(Some(path)))?;
+                        item.apply(Stage::Download, StageEvent::Complete(Some(path)));
                     }
                 } else if let Some(path) = music_library
                     .as_ref()
                     .and_then(|library| library.find(&video_id, &item.title))
                 {
-                    item.apply(Stage::Download, StageEvent::Complete(Some(path)))?;
+                    item.apply(Stage::Download, StageEvent::Complete(Some(path)));
                     let parse = item.kept_path(Stage::Parse);
-                    item.apply(Stage::Parse, StageEvent::Complete(parse))?;
-                    item.apply(Stage::Split, StageEvent::Skip)?;
-                    item.apply(Stage::Organize, StageEvent::Complete(None))?;
+                    item.apply(Stage::Parse, StageEvent::Complete(parse));
+                    item.apply(Stage::Split, StageEvent::Skip);
+                    item.apply(Stage::Organize, StageEvent::Complete(None));
                     processed.push(video_id);
                 }
             }
@@ -101,7 +88,7 @@ impl Watchlist {
     }
 }
 
-fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) -> Result<()> {
+fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) {
     let done = |skipped: bool| {
         if skipped {
             StageStatus::Skipped
@@ -129,7 +116,7 @@ fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) -> Result
         .all(|(stage, status)| item.status(*stage) == *status)
         && item.last_error.is_none()
     {
-        return Ok(());
+        return;
     }
     item.last_action = Some(LastAction::Refresh);
     item.last_error = None;
@@ -139,7 +126,6 @@ fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) -> Result
         } else {
             StageEvent::Complete(item.kept_path(stage))
         };
-        item.apply(stage, event)?;
+        item.apply(stage, event);
     }
-    Ok(())
 }

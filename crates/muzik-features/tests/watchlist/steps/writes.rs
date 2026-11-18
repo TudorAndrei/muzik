@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 fn read(world: &mut WatchlistWorld) -> StepResult {
     let repository = world.repository();
-    let (document, revision) = repository.load_revision()?;
+    let (snapshot, revision) = repository.snapshot_revision()?;
+    let document = snapshot.document;
     let current = repository.revision()?;
     anyhow::ensure!(
         revision == current,
@@ -72,7 +73,8 @@ fn runner_completes_download(world: &mut WatchlistWorld, ordinal: usize, id: Str
             .playlist_mut(&id)
             .and_then(|playlist| playlist.items.get_mut(ordinal.checked_sub(1)?))
             .ok_or("the item is not watched")?
-            .apply(Stage::Download, StageEvent::Complete(None))
+            .apply(Stage::Download, StageEvent::Complete(None));
+        Ok(())
     })?;
     Ok(())
 }
