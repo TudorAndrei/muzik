@@ -451,7 +451,9 @@ mod tests {
     use crate::library_tasks::{LibraryRequest, LibraryTask, TaskReport};
     use crate::queue::Jobs;
     use muzik_core::paths::Paths;
-    use muzik_store::watchlist::{Repository, SourceKind, Stage, StageStatus, WatchItem};
+    use muzik_store::watchlist::{
+        Repository, SourceKind, Stage, StageEvent, StageStatus, WatchItem,
+    };
     use serde_json::json;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -494,7 +496,7 @@ mod tests {
                 let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
                 item.video_id = Some("abcdefghijk".into());
                 item.video_url = Some("https://www.youtube.com/watch?v=abcdefghijk".into());
-                item.complete(Stage::Download, Some(audio.clone()));
+                item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())))?;
                 document.playlists[0].items = vec![item];
                 Ok(())
             })

@@ -1,4 +1,4 @@
-use super::{ItemAction, SourceKind, Stage, StageStatus};
+use super::{ItemAction, SourceKind, Stage, StageEvent, StageRecord, StageStatus, Stages};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -107,34 +107,6 @@ impl From<LastAction> for String {
             LastAction::Other(text) => text,
         }
     }
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Stages {
-    #[serde(default)]
-    pub download: StageRecord,
-    #[serde(default)]
-    pub quality: StageRecord,
-    #[serde(default)]
-    pub parse: StageRecord,
-    #[serde(default)]
-    pub split: StageRecord,
-    #[serde(default)]
-    pub organize: StageRecord,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StageRecord {
-    #[serde(default)]
-    pub status: StageStatus,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub path: Option<PathBuf>,
-    #[serde(default)]
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -441,7 +413,7 @@ impl WatchItem {
         }
     }
 
-    pub const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
+    const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
         match stage {
             Stage::Download => &mut self.stages.download,
             Stage::Quality => &mut self.stages.quality,
@@ -453,7 +425,7 @@ impl WatchItem {
 
     #[must_use]
     pub const fn status(&self, stage: Stage) -> StageStatus {
-        self.stage(stage).status
+        self.stage(stage).status()
     }
 
     pub fn statuses(&self) -> impl Iterator<Item = StageStatus> + '_ {
@@ -462,70 +434,68 @@ impl WatchItem {
 
     #[must_use]
     pub fn path(&self, stage: Stage) -> Option<&Path> {
-        self.stage(stage).path.as_deref()
+        self.stage(stage).path()
     }
 
-    pub fn set(&mut self, stage: Stage, status: StageStatus) {
-        let record = self.stage_mut(stage);
-        record.status = status;
-        record.updated_at = Some(now());
+    #[must_use]
+    pub fn kept_path(&self, stage: Stage) -> Option<PathBuf> {
+        self.path(stage).map(Path::to_path_buf)
     }
 
-    pub fn set_path(&mut self, stage: Stage, path: Option<PathBuf>) {
-        self.stage_mut(stage).path = path;
+    /// # Errors
+    /// Returns an error if `event` is not allowed from the current state of `stage`.
+    pub fn apply(&mut self, stage: Stage, event: StageEvent) -> Result<()> {
+        self.stage_mut(stage).apply(event).map_err(|refused| {
+            format!(
+                "The {stage} stage cannot {} while it is {}.",
+                refused.event, refused.from
+            )
+            .into()
+        })
     }
 
-    pub fn complete(&mut self, stage: Stage, path: Option<PathBuf>) {
-        self.set(stage, StageStatus::Complete);
-        self.set_path(stage, path);
-    }
-
-    pub fn invalidate(&mut self, stages: &[Stage]) {
+    /// # Errors
+    /// Returns an error if a stage in `stages` is running or waiting.
+    pub fn invalidate(&mut self, stages: &[Stage]) -> Result<()> {
         for stage in stages {
-            self.set(*stage, StageStatus::Stale);
+            self.apply(*stage, StageEvent::Invalidate)?;
         }
+        Ok(())
     }
 
-    pub fn start(&mut self, action: ItemAction) {
+    /// # Errors
+    /// Returns an error if the stage of `action` cannot start.
+    pub fn start(&mut self, action: ItemAction) -> Result<()> {
         self.last_action = Some(action.into());
         self.last_error = None;
-        *self.stage_mut(action.stage()) = StageRecord {
-            status: StageStatus::Running,
-            updated_at: Some(now()),
-            ..StageRecord::default()
-        };
+        self.apply(action.stage(), StageEvent::Start)
     }
 
-    pub fn finish(&mut self, stage: Stage, action: ItemAction) {
+    /// # Errors
+    /// Returns an error if `stage` is running and cannot complete.
+    pub fn finish(&mut self, stage: Stage, action: ItemAction) -> Result<()> {
         self.last_action = Some(action.into());
         self.last_error = None;
         if self.status(stage) == StageStatus::Running {
-            *self.stage_mut(stage) = StageRecord {
-                status: StageStatus::Complete,
-                updated_at: Some(now()),
-                ..StageRecord::default()
-            };
+            self.apply(stage, StageEvent::Complete(None))?;
         }
+        Ok(())
     }
 
-    pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) {
+    /// # Errors
+    /// Returns an error if `stage` cannot wait.
+    pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) -> Result<()> {
         self.last_action = Some(action.into());
         self.last_error = None;
-        let record = self.stage_mut(stage);
-        record.status = StageStatus::Waiting;
-        record.updated_at = Some(now());
-        record.question = Some(question);
+        self.apply(stage, StageEvent::Wait(question))
     }
 
-    pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) {
+    /// # Errors
+    /// Returns an error if `stage` cannot fail.
+    pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) -> Result<()> {
         self.last_action = Some(action.into());
         self.last_error = Some(message.to_owned());
-        *self.stage_mut(stage) = StageRecord {
-            status: StageStatus::Failed,
-            updated_at: Some(now()),
-            error: Some(message.to_owned()),
-            ..StageRecord::default()
-        };
+        self.apply(stage, StageEvent::Fail(message.to_owned()))
     }
 
     pub fn is_done(&self) -> bool {
@@ -541,18 +511,14 @@ impl WatchItem {
     pub fn is_gone(&self) -> bool {
         self.unavailable == Some(true)
             || self.status(Stage::Download) == StageStatus::Failed
-                && self
-                    .stage(Stage::Download)
-                    .error
-                    .as_deref()
-                    .is_some_and(|error| {
-                        error.lines().any(|line| {
-                            line.contains("ERROR:")
-                                && [": Video unavailable", ": Private video"]
-                                    .iter()
-                                    .any(|end| line.trim_end().ends_with(end))
-                        })
+                && self.stage(Stage::Download).error().is_some_and(|error| {
+                    error.lines().any(|line| {
+                        line.contains("ERROR:")
+                            && [": Video unavailable", ": Private video"]
+                                .iter()
+                                .any(|end| line.trim_end().ends_with(end))
                     })
+                })
     }
 
     pub fn is_unavailable(&self) -> bool {
@@ -616,7 +582,7 @@ fn bracketed_id(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{AudioIndex, LastAction, WatchItem, Watchlist};
-    use crate::watchlist::{ItemAction, SourceKind, Stage, StageStatus};
+    use crate::watchlist::{ItemAction, SourceKind, Stage, StageEvent, StageStatus};
     use serde_json::json;
     use std::fs;
 
@@ -714,28 +680,37 @@ mod tests {
     #[test]
     fn transitions_keep_one_record_rule() {
         let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
-        item.complete(Stage::Download, Some("/a.flac".into()));
-        item.start(ItemAction::ParseAgain);
+        item.apply(
+            Stage::Download,
+            StageEvent::Complete(Some("/a.flac".into())),
+        )
+        .unwrap();
+        item.start(ItemAction::ParseAgain).unwrap();
         assert_eq!(item.status(Stage::Parse), StageStatus::Running);
         item.wait(
             Stage::Parse,
             ItemAction::ParseAgain,
             json!({"kind":"chapter_review"}),
+        )
+        .unwrap();
+        assert!(item.is_waiting());
+        let refused = item.invalidate(&[Stage::Parse]).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "The parse stage cannot invalidate while it is waiting."
         );
         assert!(item.is_waiting());
-        item.fail(Stage::Split, ItemAction::SplitAgain, "split failed");
+        item.fail(Stage::Split, ItemAction::SplitAgain, "split failed")
+            .unwrap();
         assert_eq!(item.last_error.as_deref(), Some("split failed"));
-        assert_eq!(
-            item.stage(Stage::Split).error.as_deref(),
-            Some("split failed")
-        );
+        assert_eq!(item.stage(Stage::Split).error(), Some("split failed"));
         assert_eq!(
             item.path(Stage::Download),
             Some(std::path::Path::new("/a.flac"))
         );
-        item.invalidate(&[Stage::Organize]);
+        item.invalidate(&[Stage::Organize]).unwrap();
         assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
-        assert!(item.stage(Stage::Organize).updated_at.is_some());
+        assert!(item.stage(Stage::Organize).updated_at().is_some());
     }
 
     #[test]

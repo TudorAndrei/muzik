@@ -3,7 +3,7 @@ use crate::operations::card;
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::given;
-use muzik_store::watchlist::{ItemAction, SourceKind, Stage, StageStatus, WatchItem, Watchlist};
+use muzik_store::watchlist::{ItemAction, SourceKind, Stage, StageEvent, WatchItem, Watchlist};
 use serde_json::json;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -42,7 +42,7 @@ fn edit_item(
     world: &WatchlistWorld,
     id: &str,
     video: &str,
-    change: impl FnOnce(&mut WatchItem),
+    change: impl FnOnce(&mut WatchItem) -> muzik_store::Result<()>,
 ) -> StepResult {
     world.repository().update(|document| {
         let item = document
@@ -54,8 +54,7 @@ fn edit_item(
                     .find(|item| item.video_id.as_deref() == Some(video))
             })
             .ok_or("the video is not watched")?;
-        change(item);
-        Ok(())
+        change(item)
     })?;
     Ok(())
 }
@@ -115,9 +114,10 @@ fn video_waits(
 ) -> StepResult {
     let stage = Stage::from_str(&stage)?;
     edit_item(world, &id, &video, |item| {
-        let record = item.stage_mut(stage);
-        record.status = StageStatus::Waiting;
-        record.question = Some(json!({"kind": kind, "payload": {"task": {}}}));
+        item.apply(
+            stage,
+            StageEvent::Wait(json!({"kind": kind, "payload": {"task": {}}})),
+        )
     })
 }
 
@@ -136,7 +136,7 @@ fn video_was_processed(world: &mut WatchlistWorld, video: String, id: String) ->
 #[given(expr = "the download of the video {string} in {string} is running")]
 fn download_is_running(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
     edit_item(world, &id, &video, |item| {
-        item.set(Stage::Download, StageStatus::Running);
+        item.apply(Stage::Download, StageEvent::Start)
     })
 }
 
@@ -149,9 +149,7 @@ fn download_failed(
 ) -> StepResult {
     edit_item(world, &id, &video, |item| {
         item.last_error = Some(error.clone());
-        let record = item.stage_mut(Stage::Download);
-        record.status = StageStatus::Failed;
-        record.error = Some(error);
+        item.apply(Stage::Download, StageEvent::Fail(error))
     })
 }
 
@@ -159,6 +157,7 @@ fn download_failed(
 fn video_was_retried(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
     edit_item(world, &id, &video, |item| {
         item.last_action = Some(ItemAction::Retry.into());
+        Ok(())
     })
 }
 
@@ -171,7 +170,10 @@ fn video_was_downloaded(
 ) -> StepResult {
     add_items(world, &id, &[(video.clone(), "Song".to_owned())])?;
     edit_item(world, &id, &video, |item| {
-        item.complete(Stage::Download, Some(PathBuf::from(path)));
+        item.apply(
+            Stage::Download,
+            StageEvent::Complete(Some(PathBuf::from(path))),
+        )
     })
 }
 

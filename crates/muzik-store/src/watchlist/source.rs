@@ -118,7 +118,7 @@ fn split_exists(item: &WatchItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::availability;
-    use crate::watchlist::{ItemAction, SourceKind, Stage, WatchItem};
+    use crate::watchlist::{ItemAction, SourceKind, Stage, StageEvent, WatchItem};
     use serde_json::json;
 
     fn item(kind: SourceKind) -> WatchItem {
@@ -144,7 +144,12 @@ mod tests {
         assert!(!availability(&spotify, ItemAction::SplitAgain, Some(&audio)).0);
         let mut bandcamp = item(SourceKind::Bandcamp);
         assert!(!availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
-        bandcamp.set_path(Stage::Download, Some(directory.path().to_path_buf()));
+        bandcamp
+            .apply(
+                Stage::Download,
+                StageEvent::Complete(Some(directory.path().to_path_buf())),
+            )
+            .unwrap();
         assert!(availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
         assert!(!availability(&bandcamp, ItemAction::ParseAgain, None).0);
     }

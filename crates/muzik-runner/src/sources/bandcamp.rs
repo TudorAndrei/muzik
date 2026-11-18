@@ -1,4 +1,4 @@
-use super::{Source, check_cancelled, mark_full, organize, required, safe_name};
+use super::{Outputs, Source, check_cancelled, mark_full, organize, required, safe_name};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use muzik_bandcamp as bandcamp;
@@ -128,8 +128,15 @@ impl Source for Bandcamp {
             organize(adapter, &directory, &options, cancelled)?;
         }
         let mut updated = item.clone();
-        mark_full(&mut updated, &options, false);
-        updated.set_path(Stage::Download, Some(directory));
+        mark_full(
+            &mut updated,
+            &options,
+            Outputs {
+                audio: Some(directory),
+                split: None,
+                was_split: false,
+            },
+        )?;
         Ok(updated)
     }
 }

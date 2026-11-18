@@ -18,14 +18,14 @@ mod legacy;
 mod library_lookup;
 mod reconcile;
 pub mod source;
+mod stage;
 mod view;
 
 pub use check::{LocalCheck, LocalCheckOptions, LocalChecks};
-pub use item::{
-    AudioIndex, ItemId, LastAction, Playlist, StageRecord, Stages, WatchItem, Watchlist, now,
-};
+pub use item::{AudioIndex, ItemId, LastAction, Playlist, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
 pub use reconcile::ReconcileOptions;
+pub use stage::{IllegalTransition, StageEvent, StageRecord, StageState, Stages};
 pub use view::{Availability, ItemView, PlaylistView, PrimaryAction, Summary, WatchlistView, view};
 
 #[derive(
@@ -113,6 +113,11 @@ impl StageStatus {
     #[must_use]
     pub const fn is_done(self) -> bool {
         matches!(self, Self::Complete | Self::Skipped)
+    }
+
+    #[must_use]
+    pub const fn is_held(self) -> bool {
+        matches!(self, Self::Running | Self::Waiting)
     }
 }
 

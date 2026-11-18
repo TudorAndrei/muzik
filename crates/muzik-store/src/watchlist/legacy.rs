@@ -1,7 +1,8 @@
 //! A one-time import of the cache files that the Python version wrote.
 
 use super::{
-    LastAction, ReconcileOptions, Repository, Stage, StageStatus, WatchItem, Watchlist, now,
+    LastAction, ReconcileOptions, Repository, Stage, StageEvent, StageStatus, WatchItem, Watchlist,
+    now,
 };
 use crate::Result;
 use muzik_core::audio::is_audio;
@@ -89,7 +90,7 @@ pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> R
         if done.is_some() {
             return Ok(false);
         }
-        document.apply_legacy_cache(options);
+        document.apply_legacy_cache(options)?;
         connection.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)",
             [IMPORTED, &now()],
@@ -99,7 +100,7 @@ pub fn import_cache(repository: &Repository, options: ReconcileOptions<'_>) -> R
 }
 
 impl Watchlist {
-    fn apply_legacy_cache(&mut self, options: ReconcileOptions<'_>) {
+    fn apply_legacy_cache(&mut self, options: ReconcileOptions<'_>) -> Result<()> {
         for playlist in &mut self.playlists {
             let videos = read_state(
                 options.cache,
@@ -110,14 +111,8 @@ impl Watchlist {
                 if item.statuses().any(|status| status == StageStatus::Stale) {
                     continue;
                 }
-                let waiting: Vec<_> = Stage::ALL
-                    .iter()
-                    .filter(|stage| item.status(**stage) == StageStatus::Waiting)
-                    .map(|stage| (*stage, item.stage(*stage).clone()))
-                    .collect();
-                apply_item(item, &videos, &mut processed, options);
-                for (stage, record) in waiting {
-                    *item.stage_mut(stage) = record;
+                apply_item(item, &videos, &mut processed, options)?;
+                if item.is_waiting() {
                     for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
                         .into_iter()
                         .flatten()
@@ -128,7 +123,15 @@ impl Watchlist {
             }
             playlist.processed_video_ids = processed;
         }
+        Ok(())
     }
+}
+
+fn settle(item: &mut WatchItem, stage: Stage, event: StageEvent) -> Result<()> {
+    if item.status(stage).is_held() {
+        return Ok(());
+    }
+    item.apply(stage, event)
 }
 
 fn apply_item(
@@ -136,71 +139,72 @@ fn apply_item(
     videos: &HashMap<String, LegacyEntry>,
     processed: &mut Vec<String>,
     options: ReconcileOptions<'_>,
-) {
+) -> Result<()> {
     let Some(key) = item.key().map(str::to_owned) else {
-        return;
+        return Ok(());
     };
     let entry = videos.get(&key);
     if item.kind.single_file() {
         let Some(entry) = entry else {
-            return;
+            return Ok(());
         };
         if matches!(
             entry.status,
             Some(CacheStatus::Downloaded | CacheStatus::Organized)
         ) {
-            item.complete(Stage::Download, entry.first_file());
+            settle(
+                item,
+                Stage::Download,
+                StageEvent::Complete(entry.first_file()),
+            )?;
             if entry.status == Some(CacheStatus::Organized) {
-                item.set(Stage::Organize, StageStatus::Complete);
+                settle(item, Stage::Organize, StageEvent::Complete(None))?;
                 if !processed.contains(&key) {
                     processed.push(key);
                 }
             } else if options.no_organize {
-                item.set(Stage::Organize, StageStatus::Skipped);
+                settle(item, Stage::Organize, StageEvent::Skip)?;
             }
         }
-        return;
+        return Ok(());
     }
     if !options.no_organize
         && let Some(entry) = entry
         && let Some(target) = entry.remaining_organize_target(options.splits)
     {
         processed.retain(|id| id != &key);
-        mark_organize_failed(item, entry.audio_file.clone(), &target);
-        return;
+        return mark_organize_failed(item, entry.audio_file.clone(), &target);
     }
     if processed.contains(&key) {
-        return;
+        return Ok(());
     }
     let Some(entry) = entry
         .cloned()
         .or_else(|| legacy_entry(options.cache, options.splits, &key))
     else {
-        return;
+        return Ok(());
     };
     let Some(status) = entry.status else {
-        return;
+        return Ok(());
     };
-    item.complete(
+    settle(
+        item,
         Stage::Download,
-        entry.audio_file.clone().or_else(|| entry.first_file()),
-    );
+        StageEvent::Complete(entry.audio_file.clone().or_else(|| entry.first_file())),
+    )?;
     if matches!(status, CacheStatus::Split | CacheStatus::Organized) {
-        item.set(Stage::Parse, StageStatus::Complete);
-        item.set(
-            Stage::Split,
-            if entry.split_dir.is_some() {
-                StageStatus::Complete
-            } else {
-                StageStatus::Skipped
-            },
-        );
-        item.set_path(Stage::Split, entry.split_dir);
+        let parse = item.kept_path(Stage::Parse);
+        settle(item, Stage::Parse, StageEvent::Complete(parse))?;
+        let split = entry.split_dir.map_or(StageEvent::Skip, |directory| {
+            StageEvent::Complete(Some(directory))
+        });
+        settle(item, Stage::Split, split)?;
     }
     if status == CacheStatus::Organized {
-        item.set(Stage::Organize, StageStatus::Complete);
+        settle(item, Stage::Organize, StageEvent::Complete(None))?;
         processed.push(key);
     }
+    Ok(())
 }
 
 fn state_id(playlist_id: &str, single_file: bool) -> String {
@@ -277,21 +281,17 @@ fn contains_audio(path: &Path) -> bool {
         })
 }
 
-fn mark_organize_failed(item: &mut WatchItem, audio: Option<PathBuf>, target: &Path) {
+fn mark_organize_failed(item: &mut WatchItem, audio: Option<PathBuf>, target: &Path) -> Result<()> {
     let message = "The music library did not import this item. Select Retry.";
     item.last_action = Some(LastAction::Refresh);
     item.last_error = Some(message.into());
-    item.complete(Stage::Download, audio);
-    item.complete(Stage::Parse, None);
-    if target.is_dir() {
-        item.complete(Stage::Split, Some(target.to_path_buf()));
+    settle(item, Stage::Download, StageEvent::Complete(audio))?;
+    settle(item, Stage::Parse, StageEvent::Complete(None))?;
+    let split = if target.is_dir() {
+        StageEvent::Complete(Some(target.to_path_buf()))
     } else {
-        item.set(Stage::Split, StageStatus::Skipped);
-        item.set_path(Stage::Split, None);
-    }
-    let organize = item.stage_mut(Stage::Organize);
-    organize.status = StageStatus::Failed;
-    organize.updated_at = Some(now());
-    organize.path = None;
-    organize.error = Some(message.into());
+        StageEvent::Skip
+    };
+    settle(item, Stage::Split, split)?;
+    settle(item, Stage::Organize, StageEvent::Fail(message.into()))
 }

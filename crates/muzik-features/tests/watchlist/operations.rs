@@ -1,5 +1,5 @@
 use muzik_store::watchlist::jobs::{JobError, LoadedSource, Operations};
-use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageStatus, WatchItem};
+use muzik_store::watchlist::{ItemAction, Playlist, SourceKind, Stage, StageEvent, WatchItem};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -39,15 +39,15 @@ pub fn card(position: u64, id: &str, title: &str) -> WatchItem {
     item
 }
 
-fn processed(item: &WatchItem) -> WatchItem {
+fn processed(item: &WatchItem) -> Result<WatchItem, JobError> {
     let mut updated = item.clone();
     for stage in [Stage::Download, Stage::Parse, Stage::Organize] {
-        updated.set(stage, StageStatus::Complete);
+        updated.apply(stage, StageEvent::Complete(None))?;
     }
     for stage in [Stage::Quality, Stage::Split] {
-        updated.set(stage, StageStatus::Skipped);
+        updated.apply(stage, StageEvent::Skip)?;
     }
-    updated
+    Ok(updated)
 }
 
 impl Operations for FakeOperations {
@@ -91,7 +91,7 @@ impl Operations for FakeOperations {
                 cancelled.store(true, Ordering::SeqCst);
                 Err(JobError::Cancelled)
             }
-            Processing::Complete | Processing::StopAtSecond => Ok(processed(item)),
+            Processing::Complete | Processing::StopAtSecond => processed(item),
             Processing::Unchanged => Ok(item.clone()),
             Processing::Fail(message) => Err(JobError::Operation(message.clone())),
             Processing::FailStage(stage, message) => Err(JobError::Failed {
@@ -100,8 +100,8 @@ impl Operations for FakeOperations {
             }),
             Processing::DownloadAgain => {
                 let mut item = item.clone();
-                item.set(Stage::Download, StageStatus::Complete);
-                item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
+                item.apply(Stage::Download, StageEvent::Complete(None))?;
+                item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize])?;
                 Ok(item)
             }
         }

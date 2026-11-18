@@ -2,8 +2,8 @@
 
 use super::source::availability;
 use super::{
-    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, StageStatus,
-    WatchItem, Watchlist, now, view,
+    AudioIndex, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Stage, WatchItem,
+    Watchlist, now, view,
 };
 use crate::Result;
 use muzik_core::{JobEvent, Severity, Task};
@@ -303,7 +303,7 @@ pub fn run_item(
         let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
         check_available(saved, action, options.output)?;
         let item = saved.clone();
-        saved.start(action);
+        saved.start(action)?;
         Ok((source, item))
     })?;
     let result = operations.process(&playlist, &item, action, cancelled);
@@ -320,7 +320,7 @@ pub fn run_item(
             Ok(updated) => {
                 card = updated.clone();
                 card.position = id.position;
-                card.finish(stage, action);
+                card.finish(stage, action)?;
                 if let Some(key) = item.key() {
                     for other in playlist
                         .items
@@ -338,7 +338,7 @@ pub fn run_item(
                 stage: waiting,
                 question,
             }) => {
-                card.wait(*waiting, action, question.clone());
+                card.wait(*waiting, action, question.clone())?;
                 operations.park(connection, id, &item.title, *waiting, question)?;
             }
             Err(JobError::Cancelled) => {}
@@ -347,7 +347,7 @@ pub fn run_item(
                     JobError::Failed { stage, .. } => *stage,
                     _ => stage,
                 };
-                card.fail(failed, action, &error.to_string());
+                card.fail(failed, action, &error.to_string())?;
             }
         }
         *playlist.items.get_mut(index).ok_or(MISSING_VIDEO)? = card;
@@ -414,37 +414,6 @@ fn write<T>(
     })?;
     *draft = document;
     Ok(result)
-}
-
-impl Watchlist {
-    fn reconcile_keeping_running(&mut self, options: ReconcileOptions<'_>) -> Result<()> {
-        let mut running = Vec::new();
-        for (playlist_index, playlist) in self.playlists.iter().enumerate() {
-            for (item_index, item) in playlist.items.iter().enumerate() {
-                for stage in Stage::ALL {
-                    if item.status(*stage) == StageStatus::Running {
-                        running.push((
-                            playlist_index,
-                            item_index,
-                            *stage,
-                            item.stage(*stage).clone(),
-                        ));
-                    }
-                }
-            }
-        }
-        self.reconcile(options)?;
-        for (playlist_index, item_index, stage, record) in running {
-            if let Some(item) = self
-                .playlists
-                .get_mut(playlist_index)
-                .and_then(|playlist| playlist.items.get_mut(item_index))
-            {
-                *item.stage_mut(stage) = record;
-            }
-        }
-        Ok(())
-    }
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {

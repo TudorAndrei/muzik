@@ -1,5 +1,5 @@
 use super::library_lookup::MusicLibrary;
-use super::{AudioIndex, LastAction, Stage, StageStatus, WatchItem, Watchlist};
+use super::{AudioIndex, LastAction, Stage, StageEvent, StageStatus, WatchItem, Watchlist};
 use crate::Result;
 use muzik_core::QualityPolicy;
 use std::path::Path;
@@ -21,6 +21,17 @@ impl Watchlist {
     /// # Errors
     /// Returns an error if the updated watchlist is not valid.
     pub fn reconcile(&mut self, options: ReconcileOptions<'_>) -> Result<()> {
+        self.reconcile_items(options, false)
+    }
+
+    pub(super) fn reconcile_keeping_running(
+        &mut self,
+        options: ReconcileOptions<'_>,
+    ) -> Result<()> {
+        self.reconcile_items(options, true)
+    }
+
+    fn reconcile_items(&mut self, options: ReconcileOptions<'_>, keep_running: bool) -> Result<()> {
         let music_library = MusicLibrary::open(options.config);
         let audio = AudioIndex::scan(options.output);
         for playlist in &mut self.playlists {
@@ -35,9 +46,12 @@ impl Watchlist {
                     }
                     continue;
                 }
+                if keep_running && item.statuses().any(|status| status == StageStatus::Running) {
+                    continue;
+                }
                 for stage in Stage::ALL {
                     if item.status(*stage) == StageStatus::Running {
-                        item.set(*stage, StageStatus::NotStarted);
+                        item.apply(*stage, StageEvent::Release)?;
                     }
                 }
                 if item.statuses().any(|status| status == StageStatus::Stale) {
@@ -49,7 +63,7 @@ impl Watchlist {
                 if item.kind.single_file() {
                     for stage in [Stage::Quality, Stage::Parse, Stage::Split] {
                         if item.status(stage) != StageStatus::Skipped {
-                            item.set(stage, StageStatus::Skipped);
+                            item.apply(stage, StageEvent::Skip)?;
                         }
                     }
                     continue;
@@ -58,25 +72,25 @@ impl Watchlist {
                     continue;
                 };
                 if processed.contains(&video_id) {
-                    mark_completed(item, options);
+                    mark_completed(item, options)?;
                     continue;
                 }
                 if let Some(path) = audio.find(&video_id) {
-                    if item.status(Stage::Download) != StageStatus::Complete
-                        || item
-                            .path(Stage::Download)
-                            .is_none_or(|saved| !saved.is_file())
+                    if item
+                        .path(Stage::Download)
+                        .is_none_or(|saved| !saved.is_file())
                     {
-                        item.complete(Stage::Download, Some(path));
+                        item.apply(Stage::Download, StageEvent::Complete(Some(path)))?;
                     }
                 } else if let Some(path) = music_library
                     .as_ref()
                     .and_then(|library| library.find(&video_id, &item.title))
                 {
-                    item.complete(Stage::Download, Some(path));
-                    item.set(Stage::Parse, StageStatus::Complete);
-                    item.set(Stage::Split, StageStatus::Skipped);
-                    item.set(Stage::Organize, StageStatus::Complete);
+                    item.apply(Stage::Download, StageEvent::Complete(Some(path)))?;
+                    let parse = item.kept_path(Stage::Parse);
+                    item.apply(Stage::Parse, StageEvent::Complete(parse))?;
+                    item.apply(Stage::Split, StageEvent::Skip)?;
+                    item.apply(Stage::Organize, StageEvent::Complete(None))?;
                     processed.push(video_id);
                 }
             }
@@ -87,7 +101,7 @@ impl Watchlist {
     }
 }
 
-fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) {
+fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) -> Result<()> {
     let done = |skipped: bool| {
         if skipped {
             StageStatus::Skipped
@@ -115,11 +129,17 @@ fn mark_completed(item: &mut WatchItem, options: ReconcileOptions<'_>) {
         .all(|(stage, status)| item.status(*stage) == *status)
         && item.last_error.is_none()
     {
-        return;
+        return Ok(());
     }
     item.last_action = Some(LastAction::Refresh);
     item.last_error = None;
     for (stage, status) in wanted {
-        item.set(stage, status);
+        let event = if status == StageStatus::Skipped {
+            StageEvent::Skip
+        } else {
+            StageEvent::Complete(item.kept_path(stage))
+        };
+        item.apply(stage, event)?;
     }
+    Ok(())
 }

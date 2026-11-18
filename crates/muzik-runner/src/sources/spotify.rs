@@ -1,4 +1,6 @@
-use super::{Source, at, check_cancelled, mark_full, required, safe_name, workflow_error, youtube};
+use super::{
+    Outputs, Source, at, check_cancelled, mark_full, required, safe_name, workflow_error, youtube,
+};
 use crate::gates::{self, Gate};
 use crate::watchlist::Adapter;
 use crate::{local_workflow, remote_workflow};
@@ -158,10 +160,20 @@ fn import_file(
     )
     .map_err(|error| at(stage.get(), workflow_error(error)))?;
     let mut updated = item.clone();
-    mark_full(&mut updated, &options, false);
-    if file.is_file() {
-        updated.set_path(Stage::Download, Some(file));
-    }
+    let audio = if file.is_file() {
+        Some(file)
+    } else {
+        item.kept_path(Stage::Download)
+    };
+    mark_full(
+        &mut updated,
+        &options,
+        Outputs {
+            audio,
+            split: None,
+            was_split: false,
+        },
+    )?;
     Ok(updated)
 }
 
@@ -233,7 +245,9 @@ mod tests {
     use super::items;
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
-    use muzik_store::watchlist::{ItemAction, SourceKind, Stage, StageStatus, WatchItem};
+    use muzik_store::watchlist::{
+        ItemAction, SourceKind, Stage, StageEvent, StageStatus, WatchItem,
+    };
     use serde_json::json;
     use std::fs;
 
@@ -249,7 +263,8 @@ mod tests {
         )
         .unwrap();
         let mut item = WatchItem::new(1, "Warhaus - Love's a Stranger", SourceKind::Spotify);
-        item.set_path(Stage::Download, Some(audio));
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio)))
+            .unwrap();
         item.track = Some(json!({
             "title":"Love's a Stranger","artists":["Warhaus"],"album":"Warhaus",
             "track_number":2,"disc_number":1,"release_date":"2017-10-13"

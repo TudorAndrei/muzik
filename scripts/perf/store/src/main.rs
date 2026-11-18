@@ -197,15 +197,17 @@ fn check(rows: &[Value], scratch: &Path) -> Result<()> {
         "stale",
     ];
     for mut code in 0..7usize.pow(5) {
+        let mut stages = serde_json::Map::new();
         for (bs, cs) in muzik_store::watchlist::Stage::ALL
             .iter()
             .zip(muzik_store_dod::watchlist::Stage::ALL)
         {
             let status = statuses[code % 7];
             code /= 7;
-            bi.stage_mut(*bs).status = status.parse()?;
+            stages.insert(bs.to_string(), serde_json::json!({ "status": status }));
             ci.stage_mut(*cs).status = status.parse()?;
         }
+        bi.stages = serde_json::from_value(serde_json::Value::Object(stages))?;
         assert_eq!(
             serde_json::to_value(muzik_store::watchlist::Summary::of(&bi))?,
             serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci))?
