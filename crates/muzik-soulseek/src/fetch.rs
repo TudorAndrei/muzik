@@ -131,7 +131,7 @@ impl Session {
         let found = self
             .found(query, prefer, timeout, cancelled)?
             .iter()
-            .filter_map(|candidate| track_candidate(candidate, track))
+            .filter_map(|candidate| track_candidate(candidate, track, prefer))
             .collect();
         Ok(rank(found, query, prefer, limit))
     }

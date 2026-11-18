@@ -4,6 +4,7 @@ use crate::types::{Candidate, FileEntry};
 use muzik_core::PreferredAudio;
 use muzik_core::audio::AudioFormat;
 use std::collections::HashSet;
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Clone)]
 pub struct RankedCandidate {
@@ -157,61 +158,194 @@ pub struct Track<'a> {
     pub title: &'a str,
 }
 
-/// Narrow a search result to the one audio file that is this track.
+const VERSION_WORDS: [&str; 20] = [
+    "album",
+    "audio",
+    "bonus",
+    "clean",
+    "deluxe",
+    "digital",
+    "edit",
+    "explicit",
+    "hd",
+    "hq",
+    "mix",
+    "mono",
+    "original",
+    "radio",
+    "remaster",
+    "remastered",
+    "single",
+    "stereo",
+    "track",
+    "version",
+];
+
+const COVER_WORDS: [&str; 4] = ["cover", "covers", "karaoke", "tribute"];
+
+struct Word {
+    text: String,
+    separated: bool,
+}
+
+/// Narrow a search result to the best audio file that is this track.
 #[must_use]
-pub fn track_candidate(candidate: &Candidate, track: Track<'_>) -> Option<Candidate> {
-    let title = muzik_core::featured::parse(track.title).0;
-    let title = title.split(" - ").next().unwrap_or(&title);
-    let wanted = tokens(&without_brackets(title));
-    if wanted.is_empty() {
+pub fn track_candidate(
+    candidate: &Candidate,
+    track: Track<'_>,
+    prefer: PreferredAudio,
+) -> Option<Candidate> {
+    let titles: Vec<Vec<String>> = variants(track.title)
+        .iter()
+        .map(|text| texts(text))
+        .filter(|title| !title.is_empty())
+        .fold(Vec::new(), |mut titles, title| {
+            if !titles.contains(&title) {
+                titles.push(title);
+            }
+            titles
+        });
+    if titles.is_empty() {
         return None;
     }
-    let artist: HashSet<_> = tokens(track.artist).into_iter().collect();
+    let artist: HashSet<_> = texts(track.artist).into_iter().collect();
     let file = candidate
         .files
         .iter()
-        .filter(|file| format(file).is_some())
-        .find(|file| {
-            let stem = name(&file.name);
-            let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
-            let found = tokens(&without_brackets(stem));
-            let Some(prefix) = found
-                .len()
-                .checked_sub(wanted.len())
-                .filter(|&start| found.get(start..) == Some(wanted.as_slice()))
-                .and_then(|start| found.get(..start))
-            else {
-                return false;
-            };
-            let folder: HashSet<_> = tokens(parent(&file.name)).into_iter().collect();
-            prefix.iter().all(|token| {
-                token.chars().all(|character| character.is_ascii_digit())
-                    || artist.contains(token)
-                    || folder.contains(token)
-            })
-        })?;
+        .filter(|file| format(file).is_some() && is_track(file, &titles, &artist))
+        .max_by(|left, right| quality(left, prefer).total_cmp(&quality(right, prefer)))?;
     Some(Candidate {
         files: vec![file.clone()],
         ..candidate.clone()
     })
 }
 
-fn without_brackets(value: &str) -> String {
-    let mut depth = 0_usize;
-    value
-        .chars()
-        .filter(|&character| match character {
-            '(' | '[' => {
-                depth = depth.saturating_add(1);
-                false
-            }
-            ')' | ']' => {
-                depth = depth.saturating_sub(1);
-                false
-            }
-            _ => depth == 0,
+fn is_track(file: &FileEntry, titles: &[Vec<String>], artist: &HashSet<String>) -> bool {
+    let path: HashSet<_> = texts(&file.name).into_iter().collect();
+    if !artist.is_empty() && artist.is_disjoint(&path) {
+        return false;
+    }
+    let cover = COVER_WORDS.iter().any(|&word| {
+        path.contains(word)
+            && !artist.contains(word)
+            && !titles.iter().flatten().any(|title| title == word)
+    });
+    if cover {
+        return false;
+    }
+    let folder: HashSet<_> = texts(parent(&file.name)).into_iter().collect();
+    let stem = name(&file.name);
+    let stem = stem.rsplit_once('.').map_or(stem, |(stem, _)| stem);
+    variants(stem).iter().any(|text| {
+        let found = words(text);
+        titles
+            .iter()
+            .any(|title| ends_with_title(&found, title, artist, &folder))
+    })
+}
+
+fn ends_with_title(
+    found: &[Word],
+    title: &[String],
+    artist: &HashSet<String>,
+    folder: &HashSet<String>,
+) -> bool {
+    let Some(start) = found.len().checked_sub(title.len()) else {
+        return false;
+    };
+    let (prefix, rest) = found.split_at(start);
+    if !rest.iter().map(|word| &word.text).eq(title) {
+        return false;
+    }
+    let separated = match (prefix.last(), rest.first()) {
+        (Some(previous), Some(first)) => first.separated || numeric(&previous.text),
+        _ => true,
+    };
+    separated
+        && prefix.iter().all(|word| {
+            numeric(&word.text) || artist.contains(&word.text) || folder.contains(&word.text)
         })
-        .collect()
+}
+
+fn variants(value: &str) -> Vec<String> {
+    let mut found = vec![value.to_owned()];
+    let credited = muzik_core::featured::parse(value).0;
+    let plain = without_versions(&credited);
+    let cut = plain
+        .rsplit_once(" - ")
+        .filter(|(_, tail)| is_version(tail))
+        .map(|(head, _)| head.to_owned());
+    for text in [Some(credited), Some(plain), cut].into_iter().flatten() {
+        if !found.contains(&text) {
+            found.push(text);
+        }
+    }
+    found
+}
+
+fn without_versions(value: &str) -> String {
+    let mut kept = String::new();
+    let mut rest = value;
+    while let Some(open) = rest.find(['(', '[']) {
+        let (before, group) = rest.split_at(open);
+        let close = if group.starts_with('(') { ')' } else { ']' };
+        let Some(end) = group.find(close) else {
+            break;
+        };
+        let (group, after) = group.split_at(end.saturating_add(1));
+        let inner = group.get(1..end).unwrap_or_default();
+        let credit = inner.trim_start().to_lowercase().starts_with("with ");
+        kept.push_str(before);
+        if !credit && !is_version(inner) {
+            kept.push_str(group);
+        }
+        rest = after;
+    }
+    kept.push_str(rest);
+    kept.trim().to_owned()
+}
+
+fn is_version(value: &str) -> bool {
+    let found = texts(value);
+    !found.is_empty()
+        && found
+            .iter()
+            .all(|word| numeric(word) || VERSION_WORDS.contains(&word.as_str()))
+}
+
+fn numeric(value: &str) -> bool {
+    value.chars().all(char::is_numeric)
+}
+
+fn texts(value: &str) -> Vec<String> {
+    words(value).into_iter().map(|word| word.text).collect()
+}
+
+fn words(value: &str) -> Vec<Word> {
+    let mut found = Vec::new();
+    let mut current = String::new();
+    let mut separated = false;
+    for character in value.nfc() {
+        if character.is_alphanumeric() {
+            current.extend(character.to_lowercase());
+        } else {
+            if !current.is_empty() {
+                found.push(Word {
+                    text: std::mem::take(&mut current),
+                    separated,
+                });
+                separated = false;
+            }
+            separated |= !character.is_whitespace();
+        }
+    }
+    if !current.is_empty() {
+        found.push(Word {
+            text: current,
+            separated,
+        });
+    }
+    found
 }
 
 fn tokens(value: &str) -> Vec<String> {
@@ -278,9 +412,82 @@ mod tests {
     }
 
     fn picked(names: &[&str], artist: &str, title: &str) -> Option<String> {
-        track_candidate(&folder(names), Track { artist, title })
-            .and_then(|candidate| candidate.files.into_iter().next())
-            .map(|file| file.name)
+        track_candidate(
+            &folder(names),
+            Track { artist, title },
+            PreferredAudio::Best,
+        )
+        .and_then(|candidate| candidate.files.into_iter().next())
+        .map(|file| file.name)
+    }
+
+    #[test]
+    fn track_title_keeps_words_that_are_not_a_version() {
+        let album = [
+            "Artist\\Album\\02 Song.flac",
+            "Artist\\Album\\03 Song - Part Two.flac",
+        ];
+        assert_eq!(
+            picked(&album, "Artist", "Song - Part Two").as_deref(),
+            Some(album[1])
+        );
+        assert_eq!(
+            picked(&album[..1], "Artist", "Song - Remastered 2009").as_deref(),
+            Some(album[0])
+        );
+        assert!(picked(&album[..1], "Artist", "Song (Live)").is_none());
+        assert!(picked(&["Artist\\Album\\01 (Intro).flac"], "Artist", "(Intro)").is_some());
+    }
+
+    #[test]
+    fn track_file_needs_a_separate_title_and_the_artist() {
+        assert!(picked(&["Artist\\Twenty One\\01 Twenty One.flac"], "Artist", "One").is_none());
+        assert!(
+            picked(
+                &["Artist\\Album\\Artist - Album - 01 - One.flac"],
+                "Artist",
+                "One"
+            )
+            .is_some()
+        );
+        assert!(picked(&["Various\\Hits\\01 Home.flac"], "Artist A", "Home").is_none());
+        assert!(
+            picked(
+                &["Tribute to Artist A\\Cover Band\\01 Home.flac"],
+                "Artist A",
+                "Home"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn track_file_choice_prefers_quality_credits_and_equal_unicode() {
+        assert_eq!(
+            picked(
+                &["Artist\\Album\\01 Home.mp3", "Artist\\Album\\01 Home.flac"],
+                "Artist",
+                "Home"
+            )
+            .as_deref(),
+            Some("Artist\\Album\\01 Home.flac")
+        );
+        assert!(
+            picked(
+                &["Artist\\Album\\01 Home feat. Guest.flac"],
+                "Artist",
+                "Home (feat. Guest)"
+            )
+            .is_some()
+        );
+        assert!(
+            picked(
+                &["Artist\\Album\\01 Cafe\u{301}.flac"],
+                "Artist",
+                "Calf\u{e9}"
+            )
+            .is_some()
+        );
     }
 
     #[test]
@@ -303,11 +510,11 @@ mod tests {
             picked(
                 &["Gorillaz\\Cracker Island\\05. Dirty Harry [2023 Remaster].flac"],
                 "Gorillaz, Bootie Brown",
-                "Dirty Harry (feat. Bootie Brown) - Live"
+                "Dirty Harry (feat. Bootie Brown) - 2023 Remaster"
             )
             .is_some()
         );
-        assert!(picked(&["Various\\Hits\\07 Twenty One.mp3"], "Someone", "One").is_none());
+        assert!(picked(&["Someone\\Hits\\07 Twenty One.mp3"], "Someone", "One").is_none());
         assert!(
             picked(
                 &["Subcarpaţi\\Album\\02 Oamenii Sunt Încă Frumoși.flac"],
