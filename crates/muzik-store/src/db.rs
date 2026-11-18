@@ -49,7 +49,105 @@ const MIGRATIONS: &[&str] = &[
         encoding TEXT NOT NULL
     ) WITHOUT ROWID;",
     REKEY_ITEM_JOBS,
+    PARK_STORED_HOLDS,
 ];
+
+const PARK_STORED_HOLDS: &str = "
+    UPDATE watchlist_revision SET revision = revision + 1
+    WHERE EXISTS (
+        SELECT 1 FROM watchlist_items, json_each(watchlist_items.data, '$.stages') AS stage
+        WHERE json_valid(watchlist_items.data)
+            AND json_extract(stage.value, '$.status') IN ('running', 'waiting')
+    );
+    INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at)
+    WITH items AS (
+        SELECT
+            playlist_id,
+            ordinal,
+            data,
+            coalesce(json_extract(data, '$.title'), '') AS title,
+            nullif(
+                CASE coalesce(json_extract(data, '$.kind'), 'youtube')
+                    WHEN 'youtube' THEN json_extract(data, '$.video_id')
+                    ELSE json_extract(data, '$.entry_id')
+                END,
+                ''
+            ) AS key
+        FROM watchlist_items
+        WHERE json_valid(data)
+    ),
+    numbered AS (
+        SELECT *, row_number() OVER (PARTITION BY playlist_id, key ORDER BY ordinal) - 1 AS occurrence
+        FROM items
+    ),
+    asked AS (
+        SELECT
+            numbered.playlist_id,
+            numbered.key,
+            numbered.occurrence,
+            numbered.title,
+            stage.key AS stage,
+            json_extract(stage.value, '$.question') AS question,
+            row_number() OVER (
+                PARTITION BY numbered.playlist_id, numbered.ordinal
+                ORDER BY CASE stage.key
+                    WHEN 'download' THEN 0 WHEN 'quality' THEN 1 WHEN 'parse' THEN 2
+                    WHEN 'split' THEN 3 ELSE 4
+                END
+            ) AS rank
+        FROM numbered, json_each(numbered.data, '$.stages') AS stage
+        WHERE numbered.key IS NOT NULL
+            AND json_extract(stage.value, '$.status') = 'waiting'
+            AND json_type(stage.value, '$.question') = 'object'
+    )
+    SELECT
+        'item',
+        'item',
+        json_array(playlist_id, key, occurrence),
+        title,
+        'waiting',
+        json_object(
+            'playlist_id', playlist_id,
+            'key', key,
+            'occurrence', occurrence,
+            'title', title,
+            'action', CASE stage
+                WHEN 'organize' THEN 'organize_again'
+                WHEN 'parse' THEN 'parse_again'
+                WHEN 'quality' THEN 'check_quality_again'
+                ELSE 'run'
+            END
+        ),
+        question,
+        CAST(strftime('%s', 'now') AS INTEGER),
+        CAST(strftime('%s', 'now') AS INTEGER)
+    FROM asked
+    WHERE rank = 1 AND NOT EXISTS (
+        SELECT 1 FROM jobs
+        WHERE jobs.kind = 'item'
+            AND jobs.item_key = json_array(asked.playlist_id, asked.key, asked.occurrence)
+            AND jobs.status IN ('queued', 'running', 'waiting')
+    );
+    UPDATE watchlist_items SET data = json_set(data, '$.stages.download', json_object(
+        'status', 'not_started', 'updated_at', json_extract(data, '$.stages.download.updated_at'),
+        'path', NULL, 'error', NULL))
+    WHERE json_valid(data) AND json_extract(data, '$.stages.download.status') IN ('running', 'waiting');
+    UPDATE watchlist_items SET data = json_set(data, '$.stages.quality', json_object(
+        'status', 'not_started', 'updated_at', json_extract(data, '$.stages.quality.updated_at'),
+        'path', NULL, 'error', NULL))
+    WHERE json_valid(data) AND json_extract(data, '$.stages.quality.status') IN ('running', 'waiting');
+    UPDATE watchlist_items SET data = json_set(data, '$.stages.parse', json_object(
+        'status', 'not_started', 'updated_at', json_extract(data, '$.stages.parse.updated_at'),
+        'path', NULL, 'error', NULL))
+    WHERE json_valid(data) AND json_extract(data, '$.stages.parse.status') IN ('running', 'waiting');
+    UPDATE watchlist_items SET data = json_set(data, '$.stages.split', json_object(
+        'status', 'not_started', 'updated_at', json_extract(data, '$.stages.split.updated_at'),
+        'path', NULL, 'error', NULL))
+    WHERE json_valid(data) AND json_extract(data, '$.stages.split.status') IN ('running', 'waiting');
+    UPDATE watchlist_items SET data = json_set(data, '$.stages.organize', json_object(
+        'status', 'not_started', 'updated_at', json_extract(data, '$.stages.organize.updated_at'),
+        'path', NULL, 'error', NULL))
+    WHERE json_valid(data) AND json_extract(data, '$.stages.organize.status') IN ('running', 'waiting');";
 
 pub(crate) const REKEY_ITEM_JOBS: &str = "
     WITH items AS (
@@ -210,6 +308,15 @@ mod tests {
          ('refresh', 'refresh', 'refresh', 'queued', '{}', 1, 1);"#,
         "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1');",
         "INSERT INTO sync_files (destination, encoding) VALUES ('/device/b.mp3', '{}');",
+        r#"UPDATE watchlist_items
+         SET data = '{"position":2,"title":"B","video_id":"bbbbbbbbbbb","stages":{
+             "download":{"status":"complete","path":"/b.opus"},
+             "organize":{"status":"waiting","updated_at":"2026-09-30T21:03:00+02:00",
+                         "question":{"kind":"import_match","payload":{}}}}}'
+         WHERE playlist_id = 'PL1' AND ordinal = 1;
+         UPDATE watchlist_items
+         SET data = json_set(data, '$.stages', json('{"download":{"status":"running"}}'))
+         WHERE playlist_id = 'spotify:playlist:p';"#,
     ];
 
     const TABLES: &[&str] = &["watchlist_playlists", "jobs", "meta", "sync_files"];
@@ -218,20 +325,18 @@ mod tests {
         connection.query_row(query, [], |row| row.get(0)).unwrap()
     }
 
-    fn upgrade_from(version: usize) {
+    fn upgrade_from(version: usize) -> (tempfile::TempDir, Connection) {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("muzik.db");
         {
             let connection = Connection::open(&path).unwrap();
-            for sql in &MIGRATIONS[..version] {
+            for (sql, seed) in MIGRATIONS[..version].iter().zip(SEEDS) {
                 connection.execute_batch(sql).unwrap();
+                connection.execute_batch(seed).unwrap();
             }
             connection
                 .pragma_update(None, "user_version", integer(version).unwrap())
                 .unwrap();
-            for seed in &SEEDS[..version] {
-                connection.execute_batch(seed).unwrap();
-            }
         }
         let connection = open(&path).unwrap();
         let version_after: i64 = connection
@@ -261,12 +366,18 @@ mod tests {
             [
                 2,
                 4,
-                3,
-                if version > 1 { 4 } else { 0 },
+                if version > 4 { 4 } else { 3 },
+                [0, 0, 4, 4, 4, 5][version],
                 seeded(2),
                 seeded(3)
             ]
         );
+        let held: i64 = count(
+            &connection,
+            "SELECT COUNT(*) FROM watchlist_items, json_each(data, '$.stages') AS stage
+             WHERE json_extract(stage.value, '$.status') IN ('running', 'waiting')",
+        );
+        assert_eq!(held, 0);
         let jobs: Vec<(String, String)> = connection
             .prepare("SELECT item_key, params FROM jobs ORDER BY id")
             .unwrap()
@@ -288,10 +399,20 @@ mod tests {
                 r#"{"playlist_id":"PL1","action":"run","key":"zzzzzzzzzzz","occurrence":0}"#,
             ),
             ("refresh", "{}"),
+            (
+                r#"["PL1","bbbbbbbbbbb",0]"#,
+                r#"{"playlist_id":"PL1","key":"bbbbbbbbbbb","occurrence":0,"title":"B","action":"organize_again"}"#,
+            ),
         ];
         let expected: Vec<(String, String)> = expected
             .iter()
-            .take(if version > 1 { 4 } else { 0 })
+            .take(if version > 4 {
+                5
+            } else if version > 1 {
+                4
+            } else {
+                0
+            })
             .map(|(key, params)| ((*key).to_owned(), (*params).to_owned()))
             .collect();
         assert_eq!(jobs, expected);
@@ -301,6 +422,7 @@ mod tests {
                 [],
             )
             .unwrap();
+        (directory, connection)
     }
 
     #[test]
@@ -321,6 +443,38 @@ mod tests {
     #[test]
     fn a_version_four_database_upgrades_with_its_rows() {
         upgrade_from(4);
+    }
+
+    #[test]
+    fn a_version_five_database_parks_its_stored_questions_as_jobs() {
+        let (_directory, connection) = upgrade_from(5);
+        let (status, question): (String, String) = connection
+            .query_row(
+                r#"SELECT status, question FROM jobs WHERE item_key = '["PL1","bbbbbbbbbbb",0]'"#,
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "waiting");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&question).unwrap(),
+            serde_json::json!({"kind":"import_match","payload":{}})
+        );
+        let stages: String = connection
+            .query_row(
+                "SELECT json_extract(data, '$.stages') FROM watchlist_items
+                 WHERE playlist_id = 'PL1' AND ordinal = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let stages: serde_json::Value = serde_json::from_str(&stages).unwrap();
+        assert_eq!(stages["download"]["path"], "/b.opus");
+        assert_eq!(stages["organize"]["status"], "not_started");
+        assert_eq!(
+            stages["organize"]["updated_at"],
+            "2026-09-30T21:03:00+02:00"
+        );
     }
 
     #[test]
