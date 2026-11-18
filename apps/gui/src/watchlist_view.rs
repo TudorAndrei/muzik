@@ -464,37 +464,34 @@ fn item_sheet(
     let Some(entity) = view.upgrade() else {
         return sheet.title(title).child(body);
     };
-    let item_id = key.to_string();
-    let waiting = entity
-        .read(cx)
-        .activity
-        .waiting()
-        .iter()
-        .find(|job| job.item.as_deref() == Some(item_id.as_str()))
-        .and_then(Decision::queue_job);
-    let waiting_stage = style::stage_states(item)
-        .into_iter()
-        .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
-        .map(|(stage, _)| stage);
-    if let Some(job) = waiting {
-        let view = view.clone();
+    if let Some(hold) = item.hold.as_ref().filter(|hold| hold.is_waiting()) {
+        let job = hold.job_id();
+        let open = view.clone();
+        let cancel = view.clone();
         body = body.child(
-            Button::new("open-item-decision")
-                .primary()
-                .label(waiting_stage.map_or_else(
-                    || "Open waiting choice".to_string(),
-                    |stage| format!("Open {} review", style::stage_label(stage)),
-                ))
-                .on_click(move |_, window, cx| {
-                    window.close_sheet(cx);
-                    let _ = view.update(cx, |view, cx| view.open_waiting(job, window, cx));
-                }),
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    Button::new("open-item-decision")
+                        .primary()
+                        .label(format!("Open {} review", style::stage_label(hold.stage())))
+                        .on_click(move |_, window, cx| {
+                            window.close_sheet(cx);
+                            let _ = open.update(cx, |view, cx| view.open_waiting(job, window, cx));
+                        }),
+                )
+                .child(
+                    Button::new("cancel-item-decision")
+                        .ghost()
+                        .label("Cancel job")
+                        .on_click(move |_, window, cx| {
+                            window.close_sheet(cx);
+                            let _ =
+                                cancel.update(cx, |view, cx| view.cancel_waiting(job, window, cx));
+                        }),
+                ),
         );
-    } else if waiting_stage.is_some() {
-        body = body.child(style::meta(
-            "No choice is open. Select Resume under Commands to continue this item.",
-            cx,
-        ));
     }
     let commands = item_commands(item, key, &title, &entity, view, cx);
     sheet
@@ -511,26 +508,39 @@ fn item_commands(
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Div {
-    let is_waiting = style::stage_states(item)
-        .iter()
-        .any(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting);
+    let open_job = match item.hold.as_ref() {
+        Some(hold) if hold.is_waiting() => Some("Answer or cancel the open choice first."),
+        Some(_) => Some("This item has a job in the queue."),
+        None => entity
+            .read(cx)
+            .activity
+            .queued_items()
+            .contains(key)
+            .then_some("This item has a job in the queue."),
+    };
     let mut commands = div()
         .v_flex()
         .gap_3()
         .pt_4()
         .border_t_1()
         .border_color(cx.theme().border)
-        .child(style::overline("COMMANDS", cx));
+        .child(style::overline("COMMANDS", cx))
+        .when_some(open_job, |commands, reason| {
+            commands.child(style::meta(reason, cx))
+        });
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
         let availability = item.actions.get(&action);
-        let enabled = availability.is_some_and(|availability| availability.enabled);
+        let enabled =
+            open_job.is_none() && availability.is_some_and(|availability| availability.enabled);
         let request = entity.read(cx).item_request(key.clone(), action);
-        let label = if action == ItemAction::Run && is_waiting {
-            "Resume"
-        } else {
-            action_label(action)
-        }
-        .to_string();
+        let label = item
+            .primary_action
+            .as_ref()
+            .filter(|primary| primary.action == action)
+            .map_or_else(
+                || action_label(action).to_string(),
+                |primary| primary.label.clone(),
+            );
         let item_title = title.to_string();
         let view = view.clone();
         let mut row = div().v_flex().gap_1().child(
@@ -561,9 +571,10 @@ fn item_commands(
                     });
                 }),
         );
-        if !enabled
-            && let Some(reason) =
-                availability.and_then(|availability| availability.reason.as_deref())
+        if open_job.is_none()
+            && let Some(reason) = availability
+                .filter(|availability| !availability.enabled)
+                .and_then(|availability| availability.reason.as_deref())
         {
             row = row.child(style::meta(reason.to_string(), cx));
         }
