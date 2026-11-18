@@ -2,6 +2,237 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.15.0 - 2026-11-18
+#### Features
+- (**cli**) add library task commands - (bed1822) - TudorAndrei
+- (**core**) add after-import library task settings - (599d907) - TudorAndrei
+- (**gui**) integrate GPUI search, motion, and table controls - (2734b20) - TudorAndrei
+- (**gui**) enable GPUI Fast - (993b719) - TudorAndrei
+- (**gui**) add library maintenance settings and commands - (c17b373) - TudorAndrei
+- (**gui**) move the header into the Kit title bar - (259de06) - TudorAndrei
+- (**gui**) show item and service status as tags - (62a2b46) - TudorAndrei
+- (**gui**) show a skeleton while the library loads - (57dd32a) - TudorAndrei
+- (**gui**) add keyboard commands, menus, and a command palette - (8f483c9) - TudorAndrei
+- (**gui**) show the beets library on the Library page - (d11236c) - TudorAndrei
+- (**import**) write MusicBrainz IDs without retagging - (582cf92) - TudorAndrei
+- (**media**) measure EBU R128 loudness for ReplayGain - (2a18707) - TudorAndrei
+- (**metadata**) fetch Cover Art Archive front images - (4b7f8c8) - TudorAndrei
+- (**runner**) calculate ReplayGain for library albums - (1e833ca) - TudorAndrei
+- (**runner**) fill missing MusicBrainz IDs - (ae9251d) - TudorAndrei
+- (**runner**) add cover files to library albums - (2099d48) - TudorAndrei
+- (**runner**) add library maintenance jobs and import hook - (6d2a40a) - TudorAndrei
+- (**store**) parse an item id from its text - (2885f70) - TudorAndrei
+- (**store**) read and write typed sync encodings - (f8791ef) - TudorAndrei
+- (**tags**) write album cover files from image data - (3e8fba3) - TudorAndrei
+#### Bug Fixes
+- (**agent**) align release prompt and answer candidates - (dd03be6) - TudorAndrei
+- (**bandcamp**) refuse cookies that a saved login cannot store - (9baf006) - TudorAndrei
+- (**bandcamp**) return download page errors without retrying - (a954ce1) - TudorAndrei
+- (**bandcamp**) validate credentials pages and download recovery - (986a646) - TudorAndrei
+- (**bandcamp**) accept only well-formed content ranges on resume - (af1bcc3) - TudorAndrei
+- (**ci**) replace retired macOS 14 runners - (cfd457b) - TudorAndrei
+- (**cli**) count chapters with the parser the splitter uses - (5865b64) - TudorAndrei
+- (**cli**) reject conflicting Bandcamp purchase folders - (f699fe5) - TudorAndrei
+- (**core**) split repeated credits and keep word boundaries in titles - (f801db8) - TudorAndrei
+- (**core**) move every featured credit out of a title - (48082c6) - TudorAndrei
+- (**core**) match featured credits only at word boundaries - (c93761e) - TudorAndrei
+- (**core**) resolve home paths and preserve version suffixes - (967d53f) - TudorAndrei
+- (**core**) order parsed chapters by start and number them without gaps - (f881415) - TudorAndrei
+- (**deps**) update bundled SQLite for RUSTSEC-2026-0459 - (ab6f9a1) - TudorAndrei
+- (**deps**) update dependencies and fix security advisories (#18) - (ccdca3b) - Tudor Andrei Dumitrascu
+- (**gui**) use the full waiting title in the accessible name - (936285c) - TudorAndrei
+- (**gui**) wrap service details instead of cutting them - (acd5ff5) - TudorAndrei
+- (**gui**) give settings and chapter inputs accessible names - (0e94141) - TudorAndrei
+- (**gui**) make decision choices and waiting items buttons - (e6e611a) - TudorAndrei
+- (**gui**) open table rows with Enter and let Tab leave tables - (947aff3) - TudorAndrei
+- (**import**) match duplicate albums that differ by a full album tag - (66b25bd) - TudorAndrei
+- (**import**) match Python capwords in the %title template function - (e820663) - TudorAndrei
+- (**import**) keep tag locks in library state storage - (92916ce) - TudorAndrei
+- (**import**) retain and restore tag snapshots through failures - (d4770e5) - TudorAndrei
+- (**import**) truncate path components at 200 bytes like beets - (37a3386) - TudorAndrei
+- (**import**) replace path separators inside path field values - (c555b62) - TudorAndrei
+- (**library**) sort mixed value types like the beets SQL order - (5362ed1) - TudorAndrei
+- (**library**) prune items with empty paths - (55907ae) - TudorAndrei
+- (**match**) limit the penalties for a disc count difference - (0f40216) - TudorAndrei
+- (**media**) report the ffmpeg error for each failed split track - (549f711) - TudorAndrei
+- (**media**) keep split folder names to one normal path component - (e6e8321) - TudorAndrei
+- (**runner**) write YouTube chapter titles that read back unchanged - (3b2f3e2) - TudorAndrei
+- (**runner**) preserve Bandcamp purchases during replacement - (c76493b) - TudorAndrei
+- (**runner**) register claims before shutdown can complete - (ac112b3) - TudorAndrei
+- (**runner**) retain queue ownership until workers stop - (cf67efb) - TudorAndrei
+- (**soulseek**) leave a blank search query without a quality term - (f5b4155) - TudorAndrei
+- (**sync**) keep converted destinations inside the device folder - (f724ff4) - TudorAndrei
+- (**tags**) keep non-ASCII MusicBrainz track ids in MP3 files - (9d7f3c5) - TudorAndrei
+- (**tags**) return an error when the audio parser panics on malformed files - (48f17b8) - TudorAndrei
+- (**workflow**) prevent split output path traversal - (8b85be1) - TudorAndrei
+- (**workflow**) prevent yt-dlp option injection - (dbc97f3) - TudorAndrei
+#### Performance Improvements
+- (**cli**) move the selected upgrade candidate into the cache entry - (820592f) - TudorAndrei
+- (**core**) move overlay values into the merged beets config - (cdc87fd) - TudorAndrei
+- (**match**) use dense bits for assignment membership - (5f4acbe) - TudorAndrei
+- (**match**) count plurality values by reference - (942946e) - TudorAndrei
+- (**workflow**) build each one-file upgrade candidate without cloning every file - (0a98fca) - TudorAndrei
+#### Documentation
+- (**library**) describe SQLite row conversion - (e8261fa) - TudorAndrei
+- (**readme**) link the generated feature list - (cb9ff5e) - TudorAndrei
+- (**readme**) describe the Cucumber feature list - (36451db) - TudorAndrei
+- (**readme**) shrink header logo - (cc2b9e2) - TudorAndrei
+- (**refactor**) record Claude review corrections - (2dcf4ef) - TudorAndrei
+- (**refactor**) record PR findings and correction limits - (93ccde3) - TudorAndrei
+- (**refactor**) record decisions and verification - (d51bc86) - TudorAndrei
+#### Tests
+- (**bandcamp**) check cookie round trips with proptest - (03eeb54) - TudorAndrei
+- (**bandcamp**) check that any download name is one safe file name - (b250245) - TudorAndrei
+- (**core**) check featured-artist parsing with proptest - (97a8ede) - TudorAndrei
+- (**fixtures**) add a pinned beets fixture generator - (cea5ecc) - TudorAndrei
+- (**import**) check path and template properties with proptest - (6dfafa8) - TudorAndrei
+- (**import**) cover drive-letter and plain colons in path fields - (585a83c) - TudorAndrei
+- (**import**) check path template functions against beets - (ce7d617) - TudorAndrei
+- (**import**) link bolero into the integration tests for cargo bolero - (b9d6187) - TudorAndrei
+- (**library**) run the path round trip only on Unix - (1c2ef15) - TudorAndrei
+- (**library**) check path round trip with proptest - (06d0a34) - TudorAndrei
+- (**match**) check album distance and ranking invariants - (72b95a8) - TudorAndrei
+- (**match**) add proptest properties for distance and assignment - (9cb52b9) - TudorAndrei
+- (**match**) add assignment workload measurements - (80a1410) - TudorAndrei
+- (**match**) use a full title mismatch in the max_rec track case - (9d78219) - TudorAndrei
+- (**match**) extend the beets distance, ranking, and string fixtures - (79b57dc) - TudorAndrei
+- (**media**) check split file names with proptest - (b0bff69) - TudorAndrei
+- (**metadata**) check MusicBrainz term escaping with proptest - (ee548a6) - TudorAndrei
+- (**metadata**) cover candidate filtering and quality probing - (c5106c9) - TudorAndrei
+- (**perf**) compare data-oriented candidates with Music metadata - (cb976dc) - TudorAndrei
+- (**runner**) check chapter sidecar round trip with proptest - (73795ef) - TudorAndrei
+- (**runner**) check gate admission, wakeups, and cancel with shuttle - (77cf488) - TudorAndrei
+- (**soulseek**) compare ranked scores with total_cmp - (697fd8c) - TudorAndrei
+- (**soulseek**) check search query and ranking with proptest - (70ac3fe) - TudorAndrei
+- (**store**) check watchlist id round trips with proptest - (70c53c3) - TudorAndrei
+- (**store**) validate migrations and upgrade every historical version - (5591a2e) - TudorAndrei
+- (**sync**) check the converted destination of a dotted file name - (9007ede) - TudorAndrei
+- (**sync**) check sync plan invariants with proptest - (e81d003) - TudorAndrei
+- (**tags**) check tag write and read round trip with proptest - (dc17890) - TudorAndrei
+- (**tags**) fuzz tag reads of arbitrary and mutated audio files - (ce9c966) - TudorAndrei
+- move behavior integration tests to Cucumber features - (1c3859d) - TudorAndrei
+#### Build system
+- (**deny**) allow BlueOak-1.0.0 for the synthez crates - (d8a6c5e) - TudorAndrei
+- (**deps**) add proptest to crate dev-dependencies - (c9bbafd) - TudorAndrei
+- (**hk**) upgrade hk to 2.11.1 and remove zizmor - (a120ed6) - TudorAndrei
+- (**mise**) add a task that writes FEATURES.md from the feature files - (beb1217) - TudorAndrei
+#### Continuous Integration
+- (**check**) skip build jobs for docs-only pull requests - (19b9222) - TudorAndrei
+- (**deps**) bump the actions group across 1 directory with 2 updates - (7334f03) - dependabot[bot]
+- (**fuzz**) fuzz import path rendering and tag reading - (6d7272a) - TudorAndrei
+- (**fuzz**) fuzz the new parser and path harnesses each week - (177524c) - TudorAndrei
+- (**lint**) replace actionlint with jactionlint and set job timeouts - (dc9512e) - TudorAndrei
+- (**release**) push version and cask commits with a deploy key - (a4b670d) - TudorAndrei
+- (**release**) update FEATURES.md in the version commit - (d88df60) - TudorAndrei
+- (**release**) bundle third-party licenses - (97b4dbf) - TudorAndrei
+- (**test**) add Nextest to local and CI checks - (a22e508) - TudorAndrei
+- check the beets fixtures for drift every night - (764581b) - TudorAndrei
+#### Refactoring
+- (**agent**) deserialize the model answer into a typed struct - (7858414) - TudorAndrei
+- (**bandcamp**) separate login collection and downloads - (de17e0a) - TudorAndrei
+- (**bandcamp**) look up the account user from the cookies alone - (9f8afdc) - TudorAndrei
+- (**bandcamp**) move the cookie list out of the parsed JSON - (8bcd326) - TudorAndrei
+- (**cleanup**) remove redundant comments and inert test - (89bee1a) - TudorAndrei
+- (**cli**) read Spotify and Soulseek account status into typed structs - (2358eb6) - TudorAndrei
+- (**cli**) return the collected validate files instead of filling an out parameter - (89fad7f) - TudorAndrei
+- (**cli**) parse the import target into one enum - (41fd847) - TudorAndrei
+- (**cli**) handle a download with no audio files on its own path - (4c60e9d) - TudorAndrei
+- (**cli**) report a missing chapter count instead of zero after a download - (dc6815d) - TudorAndrei
+- (**cli**) read the job queue snapshot into typed rows - (6204b84) - TudorAndrei
+- (**cli**) build workflow job params from a typed struct - (d6a7728) - TudorAndrei
+- (**cli**) print and serialize Soulseek search rows from one typed struct - (b24ad78) - TudorAndrei
+- (**cli**) count watchlist item states by Summary - (5d3c6af) - TudorAndrei
+- (**cli**) parse the watchlist item action as a value enum - (c72b8c9) - TudorAndrei
+- (**cli**) name the chapter review choices - (1f93bd9) - TudorAndrei
+- (**cli**) return no split folder when the chapter review is cancelled - (58184b8) - TudorAndrei
+- (**core**) name the candidate source with an enum - (c5c6b29) - TudorAndrei
+- (**core**) type the import match answer - (22cb166) - TudorAndrei
+- (**core**) name the closed set of sidecar suffixes with a Sidecar enum - (8f71a36) - TudorAndrei
+- (**core**) compile the fixed chapter patterns without optional fallbacks - (fabbcdc) - TudorAndrei
+- (**gui**) use jiff for library added dates - (5e58a1a) - TudorAndrei
+- (**gui**) name navigation page fields - (8d6d96a) - TudorAndrei
+- (**gui**) define navigation pages once - (e84ae6b) - TudorAndrei
+- (**gui**) hold queued watchlist items as item ids - (7391047) - TudorAndrei
+- (**gui**) pass the tool PATH to each child process instead of setting it globally - (29bc3c1) - TudorAndrei
+- (**gui**) hold a missing album year and track number as None - (0d83b1c) - TudorAndrei
+- (**gui**) name library table columns with an enum - (be9d06b) - TudorAndrei
+- (**gui**) name watchlist table columns with an enum - (6fdbfc0) - TudorAndrei
+- (**gui**) compare decisions by reply target and borrow open jobs - (bba8da4) - TudorAndrei
+- (**gui**) give decisions typed title, item, and queue job fields - (ad0f59f) - TudorAndrei
+- (**gui**) read the Spotify status into a struct once - (efc2329) - TudorAndrei
+- (**gui**) return typed thumbnail updates - (21a57dd) - TudorAndrei
+- (**gui**) name backend calls with an enum - (abbc933) - TudorAndrei
+- (**gui**) name the settings fields with enums - (b83811a) - TudorAndrei
+- (**gui**) hold the watchlist filter as an optional summary - (dfc7e87) - TudorAndrei
+- (**gui**) choose the source icon from the source kind - (049d1eb) - TudorAndrei
+- (**gui**) pass the beets config as an optional path - (1234c24) - TudorAndrei
+- (**gui**) skip unnamed or finished queue jobs with let-else - (752ae91) - TudorAndrei
+- (**gui**) check the source text before building workflow params - (faa36d0) - TudorAndrei
+- (**import**) use jiff for import timestamps - (3bcab32) - TudorAndrei
+- (**import**) share tag parsing and rollback operations - (a448a47) - TudorAndrei
+- (**import**) choose move, copy, or link with one placement enum - (19b67d5) - TudorAndrei
+- (**import**) keep the prune error as a library error - (ef866c9) - TudorAndrei
+- (**import**) keep typed library, match, and io errors in beets entry points - (745fb1a) - TudorAndrei
+- (**import**) take Option<&str> in the tag number parser - (f786ec8) - TudorAndrei
+- (**import**) borrow title and artist for ftclean - (a9243d8) - TudorAndrei
+- (**import**) resolve the chosen candidate before preparing an album - (a31d6d0) - TudorAndrei
+- (**import**) borrow albums and aunique settings in the template context - (2cda4a2) - TudorAndrei
+- (**library**) share config and native path resolution - (74d7ee6) - TudorAndrei
+- (**match**) use jiff for the current year - (ff85e37) - TudorAndrei
+- (**match**) make the album distance parts Distance methods - (dc23dd3) - TudorAndrei
+- (**media**) use jiff for download timestamps - (3815dbb) - TudorAndrei
+- (**media**) take the child process as a trait object reference - (e169c29) - TudorAndrei
+- (**media**) run background tools with the shared tool PATH - (cba45b3) - TudorAndrei
+- (**media**) treat only a JSON null info artist as missing - (30514ae) - TudorAndrei
+- (**media**) pass split track tags as one typed struct - (378d47b) - TudorAndrei
+- (**metadata**) build release search terms in one filter_map chain - (59d238b) - TudorAndrei
+- (**runner**) name sidecar files with the Sidecar enum - (4ef1e51) - TudorAndrei
+- (**runner**) hold gate state in an instance behind a monitor - (8b6c228) - TudorAndrei
+- (**runner**) make choice details optional - (bb794ba) - TudorAndrei
+- (**runner**) hold the resumed answer in a plain local - (8773485) - TudorAndrei
+- (**runner**) return a typed job failure instead of a flag and text - (712ee0c) - TudorAndrei
+- (**runner**) make job steps methods on the shared runner state - (d89fde5) - TudorAndrei
+- (**runner**) key running jobs by their queue id - (c339185) - TudorAndrei
+- (**runner**) parse item job params with one function - (d996c61) - TudorAndrei
+- (**runner**) derive the enqueue error with thiserror - (e8d3d8a) - TudorAndrei
+- (**runner**) release import questions by the stored source kind - (0396b24) - TudorAndrei
+- (**soulseek**) copy only the kept candidate fields - (2d0957d) - TudorAndrei
+- (**spotify**) hold the playlist reference as a SpotifyReference - (98bccb7) - TudorAndrei
+- (**spotify**) borrow track links and ISRC codes as str - (4e65fc2) - TudorAndrei
+- (**spotify**) move the album name into the title - (88daede) - TudorAndrei
+- (**spotify**) split API paths from next-page links - (fe8d152) - TudorAndrei
+- (**spotify**) hold a missing client ID as None - (e6079e8) - TudorAndrei
+- (**store**) use jiff for timestamps - (2a32f4d) - TudorAndrei
+- (**store**) read and write item job params through one struct - (b59d099) - TudorAndrei
+- (**store**) make watchlist reconcile steps methods - (c46cb9c) - TudorAndrei
+- (**store**) read legacy cache entries into a typed record - (81667ed) - TudorAndrei
+- (**store**) report watchlist serialization errors - (b0d2278) - TudorAndrei
+- (**store**) type the last item action - (780cd1e) - TudorAndrei
+- (**store**) borrow the playlist while its source loads - (d1677d2) - TudorAndrei
+- (**store**) key merged items by an optional source key - (754067e) - TudorAndrei
+- (**store**) serialize the playlist header from a borrowed view - (39f5467) - TudorAndrei
+- (**store**) read legacy job columns as typed values - (ccd5bff) - TudorAndrei
+- (**sync**) read and write sync encodings through the typed store API - (ea18eac) - TudorAndrei
+- (**sync**) name the attempted transfer count total in the sync report - (15eff43) - TudorAndrei
+- (**tags**) key artist lists with a ListField enum - (8855857) - TudorAndrei
+- (**tags**) type cover MIME values with lofty MimeType - (b83efc6) - TudorAndrei
+- (**workflow**) read an unknown quality-check artist or title as None - (4888a43) - TudorAndrei
+- (**workflow**) read a missing YouTube video id as None - (dc9333e) - TudorAndrei
+- (**workflow**) pass the yt-dlp print target as its own argument - (c158742) - TudorAndrei
+- (**workflow**) sum optional durations without a temporary vector - (a43ffaf) - TudorAndrei
+- (**workflow**) type the playlist checkpoint entries, status, and source - (4f4ecfd) - TudorAndrei
+#### Miscellaneous Chores
+- (**deny**) document Linux CLI advisory paths - (3130804) - TudorAndrei
+- (**deny**) ignore the chrono and humantime unmaintained advisories - (43a96bd) - TudorAndrei
+- (**deps**) merge main into dependency update - (36fd128) - TudorAndrei
+- (**deps**) update crates and migrate SQLite and Jiff - (0672639) - TudorAndrei
+- (**deps**) update dependencies and migrate GPUI shortcuts - (7320b7d) - TudorAndrei
+- (**homebrew**) update the cask to v2.14.1 - (fcdf0bf) - github-actions[bot]
+- (**merge**) update data-oriented branch from main - (e746bec) - TudorAndrei
+- (**workflow**) update injection fix from main - (7b92928) - TudorAndrei
+
+- - -
+
 ## v2.14.1 - 2026-10-20
 #### Bug Fixes
 - (**deps**) update gpui-kit, usage-rs, serde-saphyr and html-escape - (cad3e01) - TudorAndrei

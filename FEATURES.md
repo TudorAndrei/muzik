@@ -31,6 +31,7 @@ When an album is already in the library, the user decides to keep both, skip the
 - An album whose files are already in the library is skipped
 - Replace removes the duplicate album the user selected
 - Replace keeps an album from a release the user did not select
+- An album title that differs only by a full album tag is a duplicate
 - Replace can reuse the destination of the old album
 - A failed replace restores the old album and its file
 
