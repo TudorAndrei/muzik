@@ -161,14 +161,14 @@ pub fn stage_headline(states: &[(Stage, StageStatus)]) -> (String, Option<Tone>)
             .find(|(_, status)| *status == wanted)
             .map(|(stage, _)| stage_label(*stage))
     };
-    if let Some(stage) = named(StageStatus::Failed) {
-        return (format!("{stage} failed"), Some(Tone::Danger));
-    }
     if let Some(stage) = named(StageStatus::Running) {
         return (format!("{stage} running"), Some(Tone::Info));
     }
     if let Some(stage) = named(StageStatus::Waiting) {
         return (format!("{stage} waits for you"), Some(Tone::Warning));
+    }
+    if let Some(stage) = named(StageStatus::Failed) {
+        return (format!("{stage} failed"), Some(Tone::Danger));
     }
     if let Some(stage) = named(StageStatus::Stale) {
         return (format!("{stage} stale"), Some(Tone::Warning));
@@ -235,7 +235,7 @@ pub fn stage_track(
 mod tests {
     use super::{AppAssets, Tone, source_icon, stage_headline, stage_states};
     use gpui_kit::AssetSource;
-    use muzik_store::watchlist::{ItemView, SourceKind, Stage, StageStatus};
+    use muzik_store::watchlist::{ItemView, SourceKind, Stage, StageStatus, Summary};
     use serde_json::json;
 
     #[test]
@@ -258,7 +258,7 @@ mod tests {
 
     fn card(stages: &serde_json::Value, hold: &serde_json::Value) -> ItemView {
         serde_json::from_value(
-            json!({"position":1,"title":"Track","stages":stages,"hold":hold,
+            json!({"position":1,"title":"Track","video_id":"abc","stages":stages,"hold":hold,
             "thumbnail_path":null,"summary":"Pending","primary_action":null,"actions":{}}),
         )
         .unwrap()
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn a_stage_held_by_a_job_shows_the_job() {
         let item = card(
-            &json!({"download": {"status": "complete"}}),
+            &json!({"download": {"status": "complete"}, "split": {"status": "failed"}}),
             &json!({"status":"waiting","stage":"organize","job_id":3,"question":{"kind":"import_match"}}),
         );
         let states = stage_states(&item);
@@ -295,6 +295,10 @@ mod tests {
         assert_eq!(
             stage_headline(&states),
             ("Organize waits for you".to_string(), Some(Tone::Warning))
+        );
+        assert_eq!(
+            Summary::of(&item.item, item.hold.as_ref()),
+            Summary::Waiting
         );
     }
 
