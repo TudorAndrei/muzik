@@ -18,7 +18,7 @@ concurrency:
 jobs:
   version:
     name: Version
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       actions: read # read the Check workflow runs for this commit
@@ -181,7 +181,7 @@ jobs:
   publish:
     name: Publish
     needs: [version, build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write # create the GitHub release
@@ -201,7 +201,7 @@ jobs:
   homebrew:
     name: Homebrew
     needs: [version, publish]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: homebrew
     permissions:
