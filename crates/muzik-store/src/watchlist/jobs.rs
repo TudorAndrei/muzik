@@ -453,10 +453,26 @@ pub fn abandon(
     })
 }
 
+/// Imports `watchlist` (watchlist.json) when muzik.db has no watchlist yet, and then the open
+/// jobs of `jobs_db` (jobs.db), so that each old item job finds its item.
+/// # Errors
+/// Returns an error only if muzik.db or jobs.db cannot be read or written.
+pub fn import_legacy_files(
+    store: &mut jobs::Store,
+    watchlist: &Path,
+    jobs_db: &Path,
+) -> Result<usize> {
+    Repository::locked(|| {
+        if let Err(error) = import_legacy(store.connection_mut(), watchlist) {
+            tracing::warn!(path = %watchlist.display(), %error, "watchlist.json was not imported");
+        }
+        store.import_legacy(jobs_db)
+    })
+}
+
 /// Brings the jobs back in line with the items after a stop.
 ///
-/// It first imports `legacy` (watchlist.json) when muzik.db has no watchlist yet. Running
-/// jobs return to the queue, a job that cannot be read or does not name an item and an
+/// Running jobs return to the queue, a job that cannot be read or does not name an item and an
 /// action fails, each item keeps one open job, jobs of missing items end, a waiting job
 /// whose input is gone ends so that its item can run again, and a waiting import question
 /// of a source that keeps its tags goes back to the queue with the current tags.
@@ -467,16 +483,10 @@ pub fn abandon(
 /// Returns an error only if muzik.db cannot be read or written.
 pub fn repair(
     store: &mut jobs::Store,
-    legacy: Option<&Path>,
     output_of: impl Fn(&Value) -> Option<PathBuf>,
 ) -> rusqlite::Result<usize> {
     Repository::locked(|| {
         let connection = store.connection_mut();
-        if let Some(legacy) = legacy
-            && let Err(error) = import_legacy(connection, legacy)
-        {
-            tracing::warn!(path = %legacy.display(), %error, "watchlist.json was not imported");
-        }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let changed = repair_on(&transaction, &output_of)?;
         transaction.commit()?;
@@ -697,7 +707,7 @@ mod tests {
             )
             .unwrap();
         let mut store = Store::from_connection(crate::db::open(&database).unwrap());
-        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 7);
+        assert_eq!(repair(&mut store, |_| None).unwrap(), 7);
         let column = |query: &str| -> Vec<String> {
             connection
                 .prepare(query)
@@ -737,7 +747,51 @@ mod tests {
         );
         let claimed = store.claim(Queue::Item).unwrap().unwrap();
         assert_eq!(claimed.item_key, r#"["PL1","aaaaaaaaaaa"]"#);
-        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 1);
+        assert_eq!(repair(&mut store, |_| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn old_item_jobs_find_their_items_in_the_old_watchlist() {
+        let directory = tempfile::tempdir().unwrap();
+        let watchlist = directory.path().join("watchlist.json");
+        let jobs_db = directory.path().join("jobs.db");
+        std::fs::write(
+            &watchlist,
+            json!({"version":1,"playlists":[{"playlist_id":"PL1","url":"u","items":[
+                {"position":1,"title":"A","video_id":"aaaaaaaaaaa"},
+                {"position":2,"title":"B","video_id":"bbbbbbbbbbb"}
+            ]}]})
+            .to_string(),
+        )
+        .unwrap();
+        rusqlite::Connection::open(&jobs_db)
+            .unwrap()
+            .execute_batch(
+                r#"CREATE TABLE jobs (id INTEGER PRIMARY KEY, queue TEXT NOT NULL, kind TEXT NOT NULL,
+                 item_key TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+                 params TEXT NOT NULL DEFAULT '{}', question TEXT, answer TEXT, error TEXT,
+                 created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                 INSERT INTO jobs (queue, kind, item_key, status, params, question, created_at, updated_at) VALUES
+                 ('item', 'item', 'PL1:1:aaaaaaaaaaa', 'running',
+                  '{"playlist_id":"PL1","position":1,"video_id":"aaaaaaaaaaa","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', 'PL1:2:bbbbbbbbbbb', 'waiting',
+                  '{"playlist_id":"PL1","position":2,"video_id":"bbbbbbbbbbb","action":"organize_again"}',
+                  '{"kind":"import_match"}', 1, 1);"#,
+            )
+            .unwrap();
+        let mut store = Store::from_connection(crate::db::open_in_memory().unwrap());
+        assert_eq!(
+            super::import_legacy_files(&mut store, &watchlist, &jobs_db).unwrap(),
+            2
+        );
+        assert!(store.list(Status::Failed).unwrap().is_empty());
+        let queued = store.list(Status::Queued).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].item_key, r#"["PL1","aaaaaaaaaaa"]"#);
+        let waiting = store.list(Status::Waiting).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].item_key, r#"["PL1","bbbbbbbbbbb"]"#);
+        assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
     }
 
     #[test]
@@ -776,7 +830,7 @@ mod tests {
         let spotify = park("spotify:liked", "import_match");
         let youtube = park("PL1", "import_match");
         let chapters = park("spotify:album:a", "chapter_review");
-        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 1);
+        assert_eq!(repair(&mut store, |_| None).unwrap(), 1);
         let waiting: Vec<i64> = store
             .list(Status::Waiting)
             .unwrap()

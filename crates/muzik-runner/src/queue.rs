@@ -67,9 +67,11 @@ impl Jobs {
         if self.lock_path.is_none() {
             return Ok(0);
         }
-        Ok(self
-            .store()
-            .import_legacy(&self.paths.data.join("jobs.db"))?)
+        Ok(watchlist_jobs::import_legacy_files(
+            &mut self.store(),
+            &self.paths.config.join("watchlist.json"),
+            &self.paths.data.join("jobs.db"),
+        )?)
     }
 
     pub const fn paths(&self) -> &Paths {
@@ -217,11 +219,7 @@ impl Jobs {
 
     pub(crate) fn repair(&self) -> crate::Result<usize> {
         let paths = &self.paths;
-        let legacy = self
-            .lock_path
-            .is_some()
-            .then(|| paths.config.join("watchlist.json"));
-        let repaired = watchlist_jobs::repair(&mut self.store(), legacy.as_deref(), |params| {
+        let repaired = watchlist_jobs::repair(&mut self.store(), |params| {
             Settings::resolve(paths, params)
                 .ok()
                 .map(|settings| settings.request.output)
