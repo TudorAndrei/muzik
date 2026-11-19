@@ -11,7 +11,7 @@ mod item_state {
     };
     use proptest::prelude::*;
     use serde_json::{Value, json};
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -323,7 +323,14 @@ mod item_state {
                     .filter(|job| status.is_none_or(|status| job.status == status))
                     .count()
             };
+            let mut first = HashMap::<&ItemId, &WatchItem>::new();
             for (id, item) in ids.iter().zip(&playlist.items) {
+                let shared = first.entry(id).or_insert(item);
+                assert_eq!(
+                    (&shared.stages, &shared.last_error),
+                    (&item.stages, &item.last_error),
+                    "copies of {id} differ"
+                );
                 let hold = snapshot.holds.get(id);
                 assert!(count(id, None) <= 1, "{id} has more than one open job");
                 assert_eq!(
@@ -388,6 +395,63 @@ mod item_state {
 
     fn pick<T>(values: &[T], index: usize) -> Option<&T> {
         values.get(index.checked_rem(values.len())?)
+    }
+
+    fn open_keys(world: &World) -> Vec<(String, Status)> {
+        let mut open: Vec<_> = [Status::Queued, Status::Running, Status::Waiting]
+            .into_iter()
+            .flat_map(|status| world.jobs(status))
+            .map(|job| (job.item_key, job.status))
+            .collect();
+        open.sort_by(|left, right| left.0.cmp(&right.0));
+        open
+    }
+
+    #[test]
+    fn two_copies_of_a_video_share_their_state_and_one_job() {
+        let mut world = World::new();
+        world.apply(&Step::Sync(vec![0, 1, 0]));
+        let pending = world.repository().snapshot().unwrap();
+        let ids: Vec<ItemId> = pending.document.playlists[0]
+            .pending(&pending.holds)
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ItemId::new("PL1", Some(KEYS[0])),
+                ItemId::new("PL1", Some(KEYS[1]))
+            ]
+        );
+        world.apply(&Step::Enqueue(0));
+        world.apply(&Step::Enqueue(2));
+        let key = ItemId::new("PL1", Some(KEYS[0])).to_string();
+        assert_eq!(open_keys(&world), [(key, Status::Queued)]);
+        world.apply(&Step::Claim);
+        world.apply(&Step::Finish(Outcome::Complete));
+        world.check();
+        let document = world.repository().load().unwrap();
+        let items = &document.playlists[0].items;
+        assert!(items[0].is_done() && items[2].is_done());
+        assert!(!items[1].is_done());
+    }
+
+    #[test]
+    fn removing_one_copy_of_a_video_keeps_its_state_and_its_job() {
+        let mut world = World::new();
+        world.apply(&Step::Sync(vec![0, 0]));
+        world.apply(&Step::Enqueue(1));
+        world.apply(&Step::Claim);
+        world.apply(&Step::Finish(Outcome::Wait(2)));
+        world.apply(&Step::Sync(vec![1, 0]));
+        world.check();
+        let key = ItemId::new("PL1", Some(KEYS[0])).to_string();
+        assert_eq!(open_keys(&world), [(key, Status::Waiting)]);
+        let document = world.repository().load().unwrap();
+        let kept = &document.playlists[0].items[1];
+        assert_eq!(kept.status(Stage::Download), StageStatus::Complete);
+        assert_eq!(kept.status(Stage::Quality), StageStatus::Complete);
     }
 
     proptest! {

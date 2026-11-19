@@ -87,6 +87,7 @@ Feature: Watchlist refresh
     And the saved watchlist has the stages:
       | source | item | stage    | status  |
       | PL123  | 1    | download | running |
+      | PL123  | 2    | download | running |
 
   Scenario: A private video is not queued and shows as unavailable
     Given the watched playlist "PL123" has no videos

@@ -110,22 +110,17 @@ impl From<LastAction> for String {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(
-    from = "(String, Option<String>, u64)",
-    into = "(String, Option<String>, u64)"
-)]
+#[serde(from = "(String, Option<String>)", into = "(String, Option<String>)")]
 pub struct ItemId {
     pub playlist_id: String,
     pub key: Option<String>,
-    pub occurrence: u64,
 }
 
 impl ItemId {
-    pub fn new(playlist_id: &str, key: Option<&str>, occurrence: u64) -> Self {
+    pub fn new(playlist_id: &str, key: Option<&str>) -> Self {
         Self {
             playlist_id: playlist_id.to_owned(),
             key: key.filter(|key| !key.is_empty()).map(str::to_owned),
-            occurrence,
         }
     }
 
@@ -136,11 +131,7 @@ impl ItemId {
         if params.playlist_id.trim().is_empty() {
             return Err("playlist_id must be a non-empty string.".into());
         }
-        Ok(Self::new(
-            &params.playlist_id,
-            params.key.as_deref(),
-            params.occurrence,
-        ))
+        Ok(Self::new(&params.playlist_id, params.key.as_deref()))
     }
 
     /// # Errors
@@ -153,21 +144,20 @@ impl ItemId {
         };
         self.playlist_id.clone_into(&mut fields.playlist_id);
         fields.key.clone_from(&self.key);
-        fields.occurrence = self.occurrence;
         *params = serde_json::to_value(fields)?;
         Ok(())
     }
 }
 
-impl From<(String, Option<String>, u64)> for ItemId {
-    fn from((playlist_id, key, occurrence): (String, Option<String>, u64)) -> Self {
-        Self::new(&playlist_id, key.as_deref(), occurrence)
+impl From<(String, Option<String>)> for ItemId {
+    fn from((playlist_id, key): (String, Option<String>)) -> Self {
+        Self::new(&playlist_id, key.as_deref())
     }
 }
 
-impl From<ItemId> for (String, Option<String>, u64) {
+impl From<ItemId> for (String, Option<String>) {
     fn from(id: ItemId) -> Self {
-        (id.playlist_id, id.key, id.occurrence)
+        (id.playlist_id, id.key)
     }
 }
 
@@ -192,8 +182,6 @@ struct ItemParams {
     playlist_id: String,
     #[serde(default)]
     key: Option<String>,
-    #[serde(default)]
-    occurrence: u64,
     #[serde(flatten)]
     rest: Map<String, Value>,
 }
@@ -204,37 +192,10 @@ impl ItemParams {
     }
 }
 
-pub(super) fn ambiguous_keys<A: AsRef<WatchItem>, B: AsRef<WatchItem>>(
-    before: &[A],
-    after: &[B],
-) -> HashSet<Option<String>> {
-    let mut counts = HashMap::<Option<&str>, (usize, usize)>::new();
-    for item in before {
-        let count = counts.entry(item.as_ref().key()).or_default();
-        count.0 = count.0.saturating_add(1);
-    }
-    for item in after {
-        let count = counts.entry(item.as_ref().key()).or_default();
-        count.1 = count.1.saturating_add(1);
-    }
-    counts
-        .into_iter()
-        .filter(|&(_, (old, new))| old != new && old.max(new) > 1)
-        .map(|(key, _)| key.map(str::to_owned))
-        .collect()
-}
-
 fn item_ids<T: AsRef<WatchItem>>(playlist_id: &str, items: &[T]) -> Vec<ItemId> {
-    let mut counts = HashMap::<Option<&str>, u64>::new();
     items
         .iter()
-        .map(|item| {
-            let key = item.as_ref().key();
-            let occurrence = counts.entry(key).or_default();
-            let id = ItemId::new(playlist_id, key, *occurrence);
-            *occurrence = occurrence.saturating_add(1);
-            id
-        })
+        .map(|item| ItemId::new(playlist_id, item.as_ref().key()))
         .collect()
 }
 
@@ -322,6 +283,15 @@ impl Playlist {
         let mut seen = HashSet::new();
         self.processed_video_ids
             .retain(|id| seen.insert(id.clone()));
+        let mut first = HashMap::<ItemId, WatchItem>::new();
+        for (id, item) in self.item_ids().into_iter().zip(&mut self.items) {
+            match first.get(&id) {
+                Some(shared) => item.record_run(shared),
+                None => {
+                    first.insert(id, item.clone());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -348,6 +318,14 @@ impl Playlist {
         self.item_ids().iter().position(|item| item == id)
     }
 
+    pub(super) fn record_copies(&mut self, id: &ItemId, run: &WatchItem) {
+        for (other, item) in self.item_ids().iter().zip(&mut self.items) {
+            if other == id {
+                item.record_run(run);
+            }
+        }
+    }
+
     #[must_use]
     pub fn pending(&self, holds: &Holds) -> Vec<(ItemId, &WatchItem)> {
         let mut seen = HashSet::new();
@@ -355,28 +333,24 @@ impl Playlist {
             .into_iter()
             .zip(&self.items)
             .filter(|(id, item)| !holds.is_waiting(id) && !item.is_unavailable())
-            .filter(|(_, item)| {
+            .filter(|(id, item)| {
                 item.key()
-                    .is_some_and(|key| !self.is_processed(key) && seen.insert(key.to_owned()))
+                    .is_some_and(|key| !self.is_processed(key) && seen.insert(id.clone()))
             })
             .collect()
     }
 
     pub fn merge_items(&mut self, discovered: Vec<WatchItem>) {
-        let ambiguous = ambiguous_keys(&self.items, &discovered);
-        let mut old: HashMap<ItemId, WatchItem> = self
-            .item_ids()
-            .into_iter()
-            .zip(self.items.drain(..))
-            .collect();
+        let mut old = HashMap::<ItemId, WatchItem>::new();
+        for (id, item) in self.item_ids().into_iter().zip(self.items.drain(..)) {
+            old.entry(id).or_insert(item);
+        }
         self.items = item_ids(&self.playlist_id, &discovered)
             .into_iter()
             .zip(discovered)
             .map(|(id, mut item)| {
-                if let Some(previous) = old.remove(&id).filter(|_| !ambiguous.contains(&id.key)) {
-                    item.stages = previous.stages;
-                    item.last_action = previous.last_action;
-                    item.last_error = previous.last_error;
+                if let Some(previous) = old.get(&id) {
+                    item.record_run(previous);
                 }
                 item
             })
@@ -659,28 +633,25 @@ mod tests {
     #[test]
     fn an_item_id_reads_and_writes_job_params() {
         let id = super::ItemId::from_params(
-            &json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","occurrence":1,"action":"run"}),
+            &json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","action":"run"}),
         )
         .unwrap();
         assert_eq!(
             id.to_string(),
-            r#"["spotify:playlist:p","spotify:track:t#0",1]"#
+            r#"["spotify:playlist:p","spotify:track:t#0"]"#
         );
-        let mut params = json!({"output":"/music","occurrence":9});
+        let mut params = json!({"output":"/music","key":"other"});
         id.write(&mut params).unwrap();
         assert_eq!(
             params,
-            json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","occurrence":1,"output":"/music"})
+            json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","output":"/music"})
         );
         assert_eq!(super::ItemId::from_params(&params).unwrap(), id);
         let bare = super::ItemId::from_params(&json!({"playlist_id":"PL1","key":""})).unwrap();
-        assert_eq!(bare.to_string(), r#"["PL1",null,0]"#);
+        assert_eq!(bare.to_string(), r#"["PL1",null]"#);
         let mut params = serde_json::Value::Null;
         bare.write(&mut params).unwrap();
-        assert_eq!(
-            params,
-            json!({"playlist_id":"PL1","key":null,"occurrence":0})
-        );
+        assert_eq!(params, json!({"playlist_id":"PL1","key":null}));
         assert_eq!(super::ItemId::from_params(&params).unwrap(), bare);
         assert!(super::ItemId::from_params(&json!({"playlist_id":" ","key":"a"})).is_err());
     }
@@ -688,11 +659,11 @@ mod tests {
     #[test]
     fn malformed_item_ids_are_refused() {
         assert!("PL1:1:video".parse::<super::ItemId>().is_err());
-        assert!(r#"["PL1","video","x"]"#.parse::<super::ItemId>().is_err());
+        assert!(r#"["PL1","video",0]"#.parse::<super::ItemId>().is_err());
     }
 
     #[test]
-    fn repeated_items_keep_their_identity_when_the_playlist_moves() {
+    fn copies_of_a_video_are_one_item_that_keeps_its_state_when_the_playlist_moves() {
         let item = |position, video: &str| {
             let mut item = WatchItem::new(position, video, SourceKind::Youtube);
             item.video_id = Some(video.into());
@@ -705,53 +676,39 @@ mod tests {
             item(3, "aaaaaaaaaaa"),
         ]);
         let ids = playlist.item_ids();
-        assert_eq!(ids[0], super::ItemId::new("PL1", Some("aaaaaaaaaaa"), 0));
-        assert_eq!(ids[2], super::ItemId::new("PL1", Some("aaaaaaaaaaa"), 1));
-        playlist.items[2].apply(Stage::Download, StageEvent::Complete(None));
+        assert_eq!(ids[0], super::ItemId::new("PL1", Some("aaaaaaaaaaa")));
+        assert_eq!(ids[2], ids[0]);
+        let mut done = playlist.items[0].clone();
+        done.apply(Stage::Download, StageEvent::Complete(None));
+        playlist.record_copies(&ids[0], &done);
         playlist.merge_items(vec![
             item(1, "ccccccccccc"),
             item(2, "aaaaaaaaaaa"),
             item(3, "bbbbbbbbbbb"),
             item(4, "aaaaaaaaaaa"),
+            item(5, "aaaaaaaaaaa"),
         ]);
-        let index = playlist.find(&ids[2]).unwrap();
-        assert_eq!(playlist.items[index].position, 4);
-        assert_eq!(
-            playlist.items[index].status(Stage::Download),
-            StageStatus::Complete
-        );
-        assert_eq!(
+        let statuses = |playlist: &super::Playlist| {
             playlist
-                .find(&ids[1])
-                .map(|index| playlist.items[index].position),
-            Some(3)
-        );
-    }
-
-    #[test]
-    fn a_repeated_video_whose_count_changes_starts_again() {
-        let item = |position, video: &str| {
-            let mut item = WatchItem::new(position, video, SourceKind::Youtube);
-            item.video_id = Some(video.into());
-            item
+                .items
+                .iter()
+                .map(|item| (item.position, item.status(Stage::Download)))
+                .collect::<Vec<_>>()
         };
-        let mut playlist = super::Playlist::new("PL1", "u", SourceKind::Youtube, None);
-        playlist.merge_items(vec![
-            item(1, "aaaaaaaaaaa"),
-            item(2, "bbbbbbbbbbb"),
-            item(3, "aaaaaaaaaaa"),
-        ]);
-        for index in 0..3 {
-            playlist.items[index].apply(Stage::Download, StageEvent::Complete(None));
-        }
+        assert_eq!(
+            statuses(&playlist),
+            [
+                (1, StageStatus::NotStarted),
+                (2, StageStatus::Complete),
+                (3, StageStatus::NotStarted),
+                (4, StageStatus::Complete),
+                (5, StageStatus::Complete),
+            ]
+        );
         playlist.merge_items(vec![item(1, "bbbbbbbbbbb"), item(2, "aaaaaaaaaaa")]);
         assert_eq!(
-            playlist.items[0].status(Stage::Download),
-            StageStatus::Complete
-        );
-        assert_eq!(
-            playlist.items[1].status(Stage::Download),
-            StageStatus::NotStarted
+            statuses(&playlist),
+            [(1, StageStatus::NotStarted), (2, StageStatus::Complete)]
         );
     }
 

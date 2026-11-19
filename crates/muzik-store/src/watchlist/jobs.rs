@@ -328,14 +328,16 @@ pub fn run_item(
             }
         };
         let source = playlist.clone();
-        let saved = playlist.items.get_mut(index).ok_or(MISSING_VIDEO)?;
-        if let Err(error) = check_available(saved, action, options.output) {
+        let saved = playlist.items.get(index).ok_or(MISSING_VIDEO)?.clone();
+        if let Err(error) = check_available(&saved, action, options.output) {
             let message = error.to_string();
-            saved.fail_before_start(stage, action, &message);
+            let mut failed = saved;
+            failed.fail_before_start(stage, action, &message);
+            playlist.record_copies(id, &failed);
             end_job(connection, options, Ending::Failed(&message))?;
             return Ok(Err(error.into()));
         }
-        Ok(Ok((source, saved.clone())))
+        Ok(Ok((source, saved)))
     })??;
     let result = operations.process(&playlist, &mut run, action, cancelled);
     let result = match result {
@@ -350,24 +352,10 @@ pub fn run_item(
         match &result {
             Ok(()) => {
                 run.record_action(action);
-                let holds = Holds::read(connection)?;
-                let ids = playlist.item_ids();
-                let key = run.key().map(str::to_owned);
-                for (slot, (other_id, other)) in
-                    ids.iter().zip(playlist.items.iter_mut()).enumerate()
-                {
-                    let copy = key.is_some()
-                        && other.key() == key.as_deref()
-                        && holds.get(other_id).is_none();
-                    if slot == index || copy {
-                        other.record_run(&run);
-                    }
-                }
-                if let Some(key) = key {
-                    playlist.mark_processed(&key, run.is_done());
+                if let Some(key) = run.key() {
+                    playlist.mark_processed(key, run.is_done());
                 }
                 end_job(connection, options, Ending::Done)?;
-                return Ok(true);
             }
             Err(JobError::Waiting {
                 stage: waiting,
@@ -391,11 +379,7 @@ pub fn run_item(
                 end_job(connection, options, Ending::Failed(&message))?;
             }
         }
-        playlist
-            .items
-            .get_mut(index)
-            .ok_or(MISSING_VIDEO)?
-            .record_run(&run);
+        playlist.record_copies(id, &run);
         Ok(true)
     })?;
     match result {
@@ -459,9 +443,11 @@ pub fn abandon(
     repository.update_with(|document, connection| {
         if jobs::end_on(connection, job_id, Ending::Failed(message))?
             && let Ok((playlist, index)) = find_item_mut(document, id)
-            && let Some(item) = playlist.items.get_mut(index)
+            && let Some(item) = playlist.items.get(index)
         {
-            item.fail_before_start(action.stage(), action, message);
+            let mut failed = item.clone();
+            failed.fail_before_start(action.stage(), action, message);
+            playlist.record_copies(id, &failed);
         }
         Ok(())
     })
@@ -481,7 +467,7 @@ pub fn repair(
     repository.update_with(|document, connection| {
         let mut changed = jobs::recover_on(connection)?;
         changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
-        changed = changed.saturating_add(cancel_orphans(connection, document, document)?);
+        changed = changed.saturating_add(cancel_orphans(connection, document)?);
         let mut indexes = HashMap::<PathBuf, AudioIndex>::new();
         for job in jobs::open_items_on(connection)? {
             if job.status != Status::Waiting {

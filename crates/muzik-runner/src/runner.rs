@@ -534,7 +534,7 @@ mod tests {
         let jobs = Arc::new(Jobs::open(&paths).unwrap());
         let (runner, _) = runner(&jobs).unwrap();
         jobs.item(&json!({
-            "playlist_id":"PL1","key":"abcdefghijk","occurrence":0,"title":"Song",
+            "playlist_id":"PL1","key":"abcdefghijk","title":"Song",
             "action":"organize_again","output":output,"config":config,"interactive":true
         }))
         .unwrap();
@@ -560,7 +560,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         };
         assert_eq!(waiting["kind"], "import_match");
-        assert_eq!(waiting["item"], r#"["PL1","abcdefghijk",0]"#);
+        assert_eq!(waiting["item"], r#"["PL1","abcdefghijk"]"#);
         let shown = muzik_store::watchlist::view(
             &repository.snapshot().unwrap(),
             &output,
@@ -635,7 +635,7 @@ mod tests {
             })
             .unwrap();
         let jobs = Arc::new(Jobs::open(&paths).unwrap());
-        let key = r#"["spotify:playlist:37i9dQZF1DXcBWIGoYBM5M","spotify:track:1lb3H41lbvAN28N7yqRNL9#0",0]"#;
+        let key = r#"["spotify:playlist:37i9dQZF1DXcBWIGoYBM5M","spotify:track:1lb3H41lbvAN28N7yqRNL9#0"]"#;
         jobs.store()
             .park(
                 &muzik_store::jobs::NewJob {
@@ -644,7 +644,7 @@ mod tests {
                     title: "Gibran Alcocer - Idea 10",
                     params: &json!({
                         "playlist_id":playlist,"key":"spotify:track:1lb3H41lbvAN28N7yqRNL9#0",
-                        "occurrence":0,"action":"organize_again","output":output,"config":config
+                        "action":"organize_again","output":output,"config":config
                     }),
                 },
                 &json!({"kind":"import_match","payload":{"task":{}}}),
@@ -689,9 +689,9 @@ mod tests {
             .park(
                 &muzik_store::jobs::NewJob {
                     kind: muzik_store::jobs::Kind::Item,
-                    item_key: r#"["PL1","abcdefghijk",0]"#,
+                    item_key: r#"["PL1","abcdefghijk"]"#,
                     title: "abcdefghijk",
-                    params: &json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":0,
+                    params: &json!({"playlist_id":"PL1","key":"abcdefghijk",
                         "action":"organize_again","output":output}),
                 },
                 &json!({"kind":"import_match","payload":{"task":{}}}),

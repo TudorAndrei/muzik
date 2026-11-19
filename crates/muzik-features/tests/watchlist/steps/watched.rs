@@ -64,7 +64,7 @@ fn edit_item(
 }
 
 fn item_job(id: &str, video: &str, action: ItemAction) -> anyhow::Result<(String, Value)> {
-    let item = ItemId::new(id, Some(video), 0);
+    let item = ItemId::new(id, Some(video));
     let mut params = json!({"title": video, "action": action});
     item.write(&mut params)?;
     Ok((item.to_string(), params))

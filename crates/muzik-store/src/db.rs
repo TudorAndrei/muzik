@@ -76,40 +76,34 @@ const PARK_STORED_HOLDS: &str = "
         FROM watchlist_items
         WHERE json_valid(data)
     ),
-    numbered AS (
-        SELECT *, row_number() OVER (PARTITION BY playlist_id, key ORDER BY ordinal) - 1 AS occurrence
-        FROM items
-    ),
     asked AS (
         SELECT
-            numbered.playlist_id,
-            numbered.key,
-            numbered.occurrence,
-            numbered.title,
+            items.playlist_id,
+            items.key,
+            items.title,
             stage.key AS stage,
             json_extract(stage.value, '$.question') AS question,
             row_number() OVER (
-                PARTITION BY numbered.playlist_id, numbered.ordinal
+                PARTITION BY items.playlist_id, items.key
                 ORDER BY CASE stage.key
                     WHEN 'download' THEN 0 WHEN 'quality' THEN 1 WHEN 'parse' THEN 2
                     WHEN 'split' THEN 3 ELSE 4
-                END
+                END, items.ordinal
             ) AS rank
-        FROM numbered, json_each(numbered.data, '$.stages') AS stage
-        WHERE numbered.key IS NOT NULL
+        FROM items, json_each(items.data, '$.stages') AS stage
+        WHERE items.key IS NOT NULL
             AND json_extract(stage.value, '$.status') = 'waiting'
             AND json_type(stage.value, '$.question') = 'object'
     )
     SELECT
         'item',
         'item',
-        json_array(playlist_id, key, occurrence),
+        json_array(playlist_id, key),
         title,
         'waiting',
         json_object(
             'playlist_id', playlist_id,
             'key', key,
-            'occurrence', occurrence,
             'title', title,
             'action', CASE stage
                 WHEN 'organize' THEN 'organize_again'
@@ -125,7 +119,7 @@ const PARK_STORED_HOLDS: &str = "
     WHERE rank = 1 AND NOT EXISTS (
         SELECT 1 FROM jobs
         WHERE jobs.kind = 'item'
-            AND jobs.item_key = json_array(asked.playlist_id, asked.key, asked.occurrence)
+            AND jobs.item_key = json_array(asked.playlist_id, asked.key)
             AND jobs.status IN ('queued', 'running', 'waiting')
     );
     UPDATE watchlist_items SET data = json_set(data, '$.stages.download', json_object(
@@ -158,7 +152,7 @@ pub(crate) const REKEY_ITEM_JOBS: &str = "
         AND status IN ('queued', 'running', 'waiting')
         AND json_valid(params)
         AND json_type(params, '$.position') IS NOT NULL
-        AND json_type(params, '$.occurrence') IS NULL
+        AND json_type(params, '$.key') IS NULL
         AND NOT EXISTS (
             SELECT 1 FROM watchlist_items
             WHERE json_valid(watchlist_items.data)
@@ -184,10 +178,6 @@ pub(crate) const REKEY_ITEM_JOBS: &str = "
         FROM watchlist_items
         WHERE json_valid(data)
     ),
-    numbered AS (
-        SELECT *, row_number() OVER (PARTITION BY playlist_id, key ORDER BY ordinal) - 1 AS occurrence
-        FROM items
-    ),
     old AS (
         SELECT id, CASE WHEN json_valid(params) THEN params END AS params
         FROM jobs
@@ -197,25 +187,42 @@ pub(crate) const REKEY_ITEM_JOBS: &str = "
         SELECT
             old.id,
             json_extract(old.params, '$.playlist_id') AS playlist_id,
-            coalesce(numbered.key, nullif(json_extract(old.params, '$.video_id'), '')) AS key,
-            numbered.occurrence AS occurrence
+            coalesce(items.key, nullif(json_extract(old.params, '$.video_id'), '')) AS key
         FROM old
-        JOIN numbered
-            ON numbered.playlist_id = json_extract(old.params, '$.playlist_id')
-            AND numbered.position = json_extract(old.params, '$.position')
-            AND numbered.video_id IS nullif(json_extract(old.params, '$.video_id'), '')
+        JOIN items
+            ON items.playlist_id = json_extract(old.params, '$.playlist_id')
+            AND items.position = json_extract(old.params, '$.position')
+            AND items.video_id IS nullif(json_extract(old.params, '$.video_id'), '')
         WHERE json_type(old.params, '$.position') IS NOT NULL
-            AND json_type(old.params, '$.occurrence') IS NULL
+            AND json_type(old.params, '$.key') IS NULL
     )
     UPDATE jobs
-    SET item_key = json_array(targets.playlist_id, targets.key, targets.occurrence),
+    SET item_key = json_array(targets.playlist_id, targets.key),
         params = json_remove(
-            json_set(jobs.params, '$.key', targets.key, '$.occurrence', targets.occurrence),
+            json_set(jobs.params, '$.key', targets.key),
             '$.position',
             '$.video_id'
         )
     FROM targets
-    WHERE jobs.id = targets.id;";
+    WHERE jobs.id = targets.id;
+    UPDATE jobs
+    SET status = 'cancelled', updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+    WHERE kind = 'item'
+        AND status IN ('queued', 'running', 'waiting')
+        AND EXISTS (
+            SELECT 1 FROM jobs AS other
+            WHERE other.kind = 'item'
+                AND other.item_key = jobs.item_key
+                AND other.id != jobs.id
+                AND other.status IN ('queued', 'running', 'waiting')
+                AND (
+                    CASE other.status WHEN 'running' THEN 2 WHEN 'waiting' THEN 1 ELSE 0 END
+                        > CASE jobs.status WHEN 'running' THEN 2 WHEN 'waiting' THEN 1 ELSE 0 END
+                    OR (
+                        other.status = jobs.status AND other.id < jobs.id
+                    )
+                )
+        );";
 
 /// # Errors
 /// Returns an error if the directory or database cannot be created, opened, or migrated.
@@ -323,7 +330,11 @@ mod tests {
           '{"playlist_id":"spotify:playlist:p","position":1,"video_id":"t","action":"organize_again"}', 1, 1),
          ('item', 'item', 'PL1:9:zzzzzzzzzzz', 'queued',
           '{"playlist_id":"PL1","position":9,"video_id":"zzzzzzzzzzz","action":"run"}', 1, 1),
-         ('refresh', 'refresh', 'refresh', 'queued', '{}', 1, 1);"#,
+         ('refresh', 'refresh', 'refresh', 'queued', '{}', 1, 1);
+         INSERT INTO jobs (queue, kind, item_key, status, params, question, created_at, updated_at)
+         VALUES ('item', 'item', 'PL1:1:aaaaaaaaaaa', 'waiting',
+          '{"playlist_id":"PL1","position":1,"video_id":"aaaaaaaaaaa","action":"organize_again"}',
+          '{"kind":"import_match"}', 1, 1);"#,
         "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1');",
         "INSERT INTO sync_files (destination, encoding) VALUES ('/device/b.mp3', '{}');",
         r#"UPDATE watchlist_items
@@ -385,7 +396,7 @@ mod tests {
                 2,
                 4,
                 if version > 4 { 4 } else { 3 },
-                [0, 0, 4, 4, 4, 5][version],
+                [0, 0, 5, 5, 5, 6][version],
                 seeded(2),
                 seeded(3)
             ]
@@ -405,12 +416,12 @@ mod tests {
             .unwrap();
         let expected = [
             (
-                r#"["PL1","aaaaaaaaaaa",1]"#,
-                r#"{"playlist_id":"PL1","action":"run","key":"aaaaaaaaaaa","occurrence":1}"#,
+                r#"["PL1","aaaaaaaaaaa"]"#,
+                r#"{"playlist_id":"PL1","action":"run","key":"aaaaaaaaaaa"}"#,
             ),
             (
-                r#"["spotify:playlist:p","spotify:track:t#0",0]"#,
-                r#"{"playlist_id":"spotify:playlist:p","action":"organize_again","key":"spotify:track:t#0","occurrence":0}"#,
+                r#"["spotify:playlist:p","spotify:track:t#0"]"#,
+                r#"{"playlist_id":"spotify:playlist:p","action":"organize_again","key":"spotify:track:t#0"}"#,
             ),
             (
                 "PL1:9:zzzzzzzzzzz",
@@ -418,19 +429,17 @@ mod tests {
             ),
             ("refresh", "{}"),
             (
-                r#"["PL1","bbbbbbbbbbb",0]"#,
-                r#"{"playlist_id":"PL1","key":"bbbbbbbbbbb","occurrence":0,"title":"B","action":"organize_again"}"#,
+                r#"["PL1","aaaaaaaaaaa"]"#,
+                r#"{"playlist_id":"PL1","action":"organize_again","key":"aaaaaaaaaaa"}"#,
+            ),
+            (
+                r#"["PL1","bbbbbbbbbbb"]"#,
+                r#"{"playlist_id":"PL1","key":"bbbbbbbbbbb","title":"B","action":"organize_again"}"#,
             ),
         ];
         let expected: Vec<(String, String)> = expected
             .iter()
-            .take(if version > 4 {
-                5
-            } else if version > 1 {
-                4
-            } else {
-                0
-            })
+            .take([0, 0, 5, 5, 5, 6][version])
             .map(|(key, params)| ((*key).to_owned(), (*params).to_owned()))
             .collect();
         assert_eq!(jobs, expected);
@@ -464,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn an_open_legacy_job_whose_item_is_gone_fails_at_upgrade() {
+    fn legacy_jobs_of_one_item_keep_the_most_advanced_and_a_job_whose_item_is_gone_fails() {
         let (_directory, connection) = upgrade_from(4);
         let statuses: Vec<(String, String)> = connection
             .prepare("SELECT item_key, status FROM jobs WHERE kind = 'item' ORDER BY id")
@@ -476,12 +485,16 @@ mod tests {
         assert_eq!(
             statuses,
             [
-                (r#"["PL1","aaaaaaaaaaa",1]"#.to_owned(), "queued".to_owned()),
                 (
-                    r#"["spotify:playlist:p","spotify:track:t#0",0]"#.to_owned(),
+                    r#"["PL1","aaaaaaaaaaa"]"#.to_owned(),
+                    "cancelled".to_owned()
+                ),
+                (
+                    r#"["spotify:playlist:p","spotify:track:t#0"]"#.to_owned(),
                     "waiting".to_owned()
                 ),
                 ("PL1:9:zzzzzzzzzzz".to_owned(), "failed".to_owned()),
+                (r#"["PL1","aaaaaaaaaaa"]"#.to_owned(), "waiting".to_owned()),
             ]
         );
     }
@@ -491,7 +504,7 @@ mod tests {
         let (_directory, connection) = upgrade_from(5);
         let (status, question): (String, String) = connection
             .query_row(
-                r#"SELECT status, question FROM jobs WHERE item_key = '["PL1","bbbbbbbbbbb",0]'"#,
+                r#"SELECT status, question FROM jobs WHERE item_key = '["PL1","bbbbbbbbbbb"]'"#,
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )

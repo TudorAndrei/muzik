@@ -354,12 +354,12 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
 
-    const KEY: &str = r#"["PL1","abcdefghijk",1]"#;
+    const KEY: &str = r#"["PL1","abcdefghijk"]"#;
 
     #[test]
     fn an_item_has_one_open_job_and_a_waiting_one_gives_way() {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
-        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":1,"action":"run"});
+        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","action":"run"});
         let waiting = jobs
             .store()
             .park(
@@ -413,15 +413,15 @@ mod tests {
     fn a_refresh_keeps_open_item_jobs_and_counts_new_ones() {
         let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
         let existing = jobs
-            .item(&json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":0,"action":"run"}))
+            .item(&json!({"playlist_id":"PL1","key":"abcdefghijk","action":"run"}))
             .unwrap();
         let pending = [
             PendingItem {
-                id: ItemId::new("PL1", Some("abcdefghijk"), 0),
+                id: ItemId::new("PL1", Some("abcdefghijk")),
                 title: "Old".into(),
             },
             PendingItem {
-                id: ItemId::new("PL1", Some("bcdefghijkl"), 0),
+                id: ItemId::new("PL1", Some("bcdefghijkl")),
                 title: "New".into(),
             },
         ];
@@ -441,11 +441,11 @@ mod tests {
             [
                 (
                     json!(super::job_id(existing)),
-                    json!(r#"["PL1","abcdefghijk",0]"#)
+                    json!(r#"["PL1","abcdefghijk"]"#)
                 ),
                 (
                     json!(super::job_id(existing + 1)),
-                    json!(r#"["PL1","bcdefghijkl",0]"#)
+                    json!(r#"["PL1","bcdefghijkl"]"#)
                 ),
             ]
         );
@@ -456,7 +456,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let jobs = Jobs::open(&paths).unwrap();
-        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","occurrence":1,"action":"run"});
+        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","action":"run"});
         let question = json!({"kind":"import_match","payload":{}});
         let waiting = jobs
             .store()
@@ -505,9 +505,9 @@ mod tests {
             jobs.store().park(
                 &muzik_store::jobs::NewJob {
                     kind: muzik_store::jobs::Kind::Item,
-                    item_key: &ItemId::new(playlist, Some("x"), 0).to_string(),
+                    item_key: &ItemId::new(playlist, Some("x")).to_string(),
                     title: "Song",
-                    params: &json!({"playlist_id":playlist,"key":"x","occurrence":0,"action":"organize_again"}),
+                    params: &json!({"playlist_id":playlist,"key":"x","action":"organize_again"}),
                 },
                 &json!({"kind":kind,"payload":{}}),
             )

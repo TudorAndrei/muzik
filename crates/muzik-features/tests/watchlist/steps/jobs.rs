@@ -204,7 +204,7 @@ fn job_ends_before_start(
     id: String,
     message: String,
 ) -> StepResult {
-    let item = ItemId::new(&id, Some(&video), 0);
+    let item = ItemId::new(&id, Some(&video));
     let store = world.jobs()?;
     let open = store.find_open(Kind::Item, &item.to_string())?;
     let waiting = open
@@ -224,7 +224,7 @@ fn new_job_ends_before_start(
     id: String,
     message: String,
 ) -> StepResult {
-    let item = ItemId::new(&id, Some(&video), 0);
+    let item = ItemId::new(&id, Some(&video));
     let mut params = json!({"title": video, "action": ItemAction::from_str(&action)?});
     item.write(&mut params)?;
     world.jobs()?.enqueue(&NewJob {
@@ -258,7 +258,7 @@ fn abandon_next(world: &WatchlistWorld, item: &ItemId, message: &str) -> StepRes
 
 #[then(expr = "the video {string} of {string} has no open job")]
 fn no_open_job(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
-    let item = ItemId::new(&id, Some(&video), 0);
+    let item = ItemId::new(&id, Some(&video));
     let open = world.jobs()?.find_open(Kind::Item, &item.to_string())?;
     anyhow::ensure!(open.is_empty(), "the open jobs are {open:?}");
     Ok(())
@@ -306,13 +306,13 @@ fn action_runs(
     video: String,
     id: String,
 ) -> StepResult {
-    let item = ItemId::new(&id, Some(&video), 0);
+    let item = ItemId::new(&id, Some(&video));
     run_on_item(world, &item, ItemAction::from_str(&action)?, false)
 }
 
 #[when(expr = "the item {string} of {string} runs")]
 fn item_runs(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
-    let item = ItemId::new(&id, Some(&video), 0);
+    let item = ItemId::new(&id, Some(&video));
     run_on_item(world, &item, ItemAction::Run, true)
 }
 
@@ -427,7 +427,7 @@ fn pending_videos(world: &mut WatchlistWorld, id: String, videos: String) -> Ste
     let expected = list(&videos)
         .iter()
         .map(|video| PendingItem {
-            id: ItemId::new(&id, Some(video), 0),
+            id: ItemId::new(&id, Some(video)),
             title: video.clone(),
         })
         .collect::<Vec<_>>();

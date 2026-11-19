@@ -471,7 +471,7 @@ pub fn cancel_waiting_on(connection: &Connection, item_key: &str, keep: Option<i
     Ok(())
 }
 
-/// Keeps one open job for each item: a running job, else the oldest one.
+/// Keeps one open job for each item: a running job, else a waiting one, else the oldest one.
 /// # Errors
 /// Returns an error if the database query fails.
 pub fn cancel_duplicates_on(connection: &Connection) -> Result<usize> {
@@ -480,8 +480,10 @@ pub fn cancel_duplicates_on(connection: &Connection) -> Result<usize> {
          WHERE kind = 'item' AND status IN ('queued', 'waiting') AND EXISTS (
              SELECT 1 FROM jobs AS other
              WHERE other.kind = 'item' AND other.item_key = jobs.item_key AND other.id != jobs.id
-                 AND (other.status = 'running'
-                      OR (other.status IN ('queued', 'waiting') AND other.id < jobs.id))
+                 AND other.status IN ('queued', 'running', 'waiting')
+                 AND (CASE other.status WHEN 'running' THEN 2 WHEN 'waiting' THEN 1 ELSE 0 END
+                          > CASE jobs.status WHEN 'waiting' THEN 1 ELSE 0 END
+                      OR (other.status = jobs.status AND other.id < jobs.id))
          )",
         params![now()],
     )?)
@@ -746,8 +748,16 @@ mod tests {
             Some(&question),
         )
         .unwrap();
-        assert_eq!(super::cancel_duplicates_on(&store.connection).unwrap(), 2);
-        let statuses = [waiting, queued, running, behind]
+        let older = store.enqueue(&job(Kind::Item, "c", &params)).unwrap().id();
+        let asking = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "c", &params),
+            Status::Waiting,
+            Some(&question),
+        )
+        .unwrap();
+        assert_eq!(super::cancel_duplicates_on(&store.connection).unwrap(), 3);
+        let statuses = [waiting, queued, running, behind, older, asking]
             .map(|id| store.get(id).unwrap().map(|job| job.status));
         assert_eq!(
             statuses,
@@ -755,7 +765,9 @@ mod tests {
                 Some(Status::Waiting),
                 Some(Status::Cancelled),
                 Some(Status::Running),
-                Some(Status::Cancelled)
+                Some(Status::Cancelled),
+                Some(Status::Cancelled),
+                Some(Status::Waiting)
             ]
         );
     }
@@ -983,10 +995,10 @@ mod tests {
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
         let queued = &store.list(Status::Queued).unwrap()[0];
-        assert_eq!(queued.item_key, r#"["PL1","b",0]"#);
+        assert_eq!(queued.item_key, r#"["PL1","b"]"#);
         assert_eq!(
             queued.params,
-            json!({"playlist_id":"PL1","key":"b","occurrence":0,"action":"run"})
+            json!({"playlist_id":"PL1","action":"run","key":"b"})
         );
         std::fs::copy(directory.path().join("jobs.db.migrated"), &legacy).unwrap();
         assert_eq!(store.import_legacy(&legacy).unwrap(), 0);

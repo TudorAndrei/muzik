@@ -285,11 +285,13 @@ impl Muzik {
                         .tooltip("Copy source link"),
                 );
         }
+        let mut seen = std::collections::HashSet::new();
         let retries: Vec<ItemRequest> = playlist
             .item_ids()
             .into_iter()
             .zip(items)
             .filter(|(key, item)| retryable(item) && !self.activity.queued_items().contains(key))
+            .filter(|(key, _)| seen.insert(key.clone()))
             .map(|(key, _)| self.item_request(key, ItemAction::Retry))
             .collect();
         if !retries.is_empty() {
@@ -663,10 +665,8 @@ mod tests {
                         {"position":2,"title":"Missing ID","video_id":null,"summary":"Unavailable","actions":{}}
                     ]
                 }]})).unwrap();
-                for (occurrence, title) in [(0,"Empty ID"),(1,"Missing ID")] {
-                    let key = super::ItemId::new("PL1", None, occurrence);
-                    assert_eq!(view.find_item(&key).unwrap().item.title, title);
-                }
+                let key = super::ItemId::new("PL1", None);
+                assert_eq!(view.find_item(&key).unwrap().item.title, "Empty ID");
             });
         }).unwrap();
     }

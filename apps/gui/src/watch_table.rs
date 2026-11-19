@@ -229,7 +229,7 @@ impl TableDelegate for WatchTable {
                 .child(row.title().to_string())
                 .into_any_element(),
             WatchColumn::Stages => style::stage_track(
-                SharedString::from(format!("watch-stages-{}", row.key)),
+                SharedString::from(format!("watch-stages-{}", row.position())),
                 &row.item,
                 cx,
             ),
@@ -251,12 +251,15 @@ impl TableDelegate for WatchTable {
                 Some((action, label, enabled)) => {
                     let key = row.key.clone();
                     let view = self.view.clone();
-                    Button::new(SharedString::from(format!("watch-action-{key}")))
-                        .xsmall()
-                        .label(label)
-                        .disabled(!enabled)
-                        .on_click(move |_, _, cx| run_item(&view, &key, action, cx))
-                        .into_any_element()
+                    Button::new(SharedString::from(format!(
+                        "watch-action-{}",
+                        row.position()
+                    )))
+                    .xsmall()
+                    .label(label)
+                    .disabled(!enabled)
+                    .on_click(move |_, _, cx| run_item(&view, &key, action, cx))
+                    .into_any_element()
                 }
                 None => div().into_any_element(),
             },
@@ -360,10 +363,7 @@ mod tests {
             window.render_frame(cx);
             window.within("pages").click(1usize, cx);
             window.render_frame(cx);
-            let id = format!(
-                "watch-action-{}",
-                muzik_store::watchlist::ItemId::new("PL1", Some("abc"), 0)
-            );
+            let id = "watch-action-1".to_owned();
             let before = window.find(id.clone());
             assert!(before.visible());
             let table = main.read(cx).watch_table.clone();
@@ -387,7 +387,6 @@ mod tests {
         let queued = HashSet::from([muzik_store::watchlist::ItemId::new(
             "PL1",
             Some("ccccccccccc"),
-            0,
         )]);
         let list = rows(&playlist, Some(Summary::Failed), &queued);
         assert_eq!(
