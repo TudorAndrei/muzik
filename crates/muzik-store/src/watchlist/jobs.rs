@@ -2,15 +2,15 @@
 
 use super::source::availability;
 use super::{
-    AudioIndex, Holds, ItemAction, ItemId, Playlist, ReconcileOptions, Repository, Snapshot, Stage,
-    WatchItem, Watchlist, cancel_orphans, now, view,
+    AudioIndex, Holds, ItemAction, ItemId, Playlist, Readable, ReconcileOptions, Repository,
+    Snapshot, Stage, WatchItem, Watchlist, import_legacy, now, read_readable, view,
 };
 use crate::Result;
 use crate::jobs::{self, Ending, Kind, NewJob, Status};
-use muzik_core::{JobEvent, Severity, Task};
-use rusqlite::Connection;
+use muzik_core::{DecisionKind, JobEvent, MatchAnswer, Severity, Task};
+use rusqlite::{Connection, TransactionBehavior};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -455,47 +455,122 @@ pub fn abandon(
 
 /// Brings the jobs back in line with the items after a stop.
 ///
-/// Running jobs return to the queue, each item keeps one open job, jobs of missing items
-/// end, and a waiting job whose input is gone ends so that its item can run again.
-/// `output_of` gives the download folder for the parameters of a job.
+/// It first imports `legacy` (watchlist.json) when muzik.db has no watchlist yet. Running
+/// jobs return to the queue, a job that cannot be read or does not name an item and an
+/// action fails, each item keeps one open job, jobs of missing items end, a waiting job
+/// whose input is gone ends so that its item can run again, and a waiting import question
+/// of a source that keeps its tags goes back to the queue with the current tags.
+/// Items of missing playlists are removed. Rows that cannot be read stay as they are,
+/// with the jobs of their playlist. `output_of` gives the download folder for the
+/// parameters of a job.
 /// # Errors
-/// Returns an error if the watchlist or the jobs cannot be read or saved.
+/// Returns an error only if muzik.db cannot be read or written.
 pub fn repair(
-    repository: &Repository,
+    store: &mut jobs::Store,
+    legacy: Option<&Path>,
     output_of: impl Fn(&Value) -> Option<PathBuf>,
-) -> Result<usize> {
-    repository.update_with(|document, connection| {
-        let mut changed = jobs::recover_on(connection)?;
-        changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
-        changed = changed.saturating_add(cancel_orphans(connection, document)?);
-        let mut indexes = HashMap::<PathBuf, AudioIndex>::new();
-        for job in jobs::open_items_on(connection)? {
-            if job.status != Status::Waiting {
-                continue;
-            }
-            let Ok(id) = job.item_key.parse::<ItemId>() else {
-                continue;
-            };
-            let Some(output) = output_of(&job.params) else {
-                continue;
-            };
-            let action = job
-                .params
-                .get("action")
-                .and_then(Value::as_str)
-                .and_then(|action| action.parse::<ItemAction>().ok())
-                .unwrap_or(ItemAction::Run);
-            let index = indexes
-                .entry(output)
-                .or_insert_with_key(|output| AudioIndex::scan(output));
-            let answerable = find_item(document, &id)
-                .is_ok_and(|item| check_available_in(item, action, index).is_ok());
-            if !answerable && jobs::cancel_open_on(connection, job.id)? {
-                changed = changed.saturating_add(1);
-            }
+) -> rusqlite::Result<usize> {
+    Repository::locked(|| {
+        let connection = store.connection_mut();
+        if let Some(legacy) = legacy
+            && let Err(error) = import_legacy(connection, legacy)
+        {
+            tracing::warn!(path = %legacy.display(), %error, "watchlist.json was not imported");
         }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = repair_on(&transaction, &output_of)?;
+        transaction.commit()?;
         Ok(changed)
     })
+}
+
+fn repair_on(
+    connection: &Connection,
+    output_of: &impl Fn(&Value) -> Option<PathBuf>,
+) -> rusqlite::Result<usize> {
+    let mut changed = jobs::fail_unreadable_on(connection)?.len();
+    changed = changed.saturating_add(jobs::recover_on(connection)?);
+    let removed = connection.execute(
+        "DELETE FROM watchlist_items WHERE NOT EXISTS (
+             SELECT 1 FROM watchlist_playlists
+             WHERE watchlist_playlists.playlist_id = watchlist_items.playlist_id
+         )",
+        [],
+    )?;
+    if removed > 0 {
+        tracing::warn!(removed, "watchlist items of missing playlists were removed");
+    }
+    let Readable { document, unread } = read_readable(connection)?;
+    for job in jobs::open_items_on(connection)? {
+        if item_request(&job).is_none() && jobs::fail_open_on(connection, job.id, NOT_AN_ITEM)? {
+            changed = changed.saturating_add(1);
+        }
+    }
+    changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
+    let ids: HashSet<ItemId> = document
+        .playlists
+        .iter()
+        .flat_map(Playlist::item_ids)
+        .collect();
+    let mut indexes = HashMap::<PathBuf, AudioIndex>::new();
+    for job in jobs::open_items_on(connection)? {
+        let Some((id, action)) = item_request(&job) else {
+            continue;
+        };
+        if unread.contains(&id.playlist_id) {
+            continue;
+        }
+        let keep = ids.contains(&id)
+            && (job.status != Status::Waiting
+                || output_of(&job.params).is_none_or(|output| {
+                    let index = indexes
+                        .entry(output)
+                        .or_insert_with_key(|output| AudioIndex::scan(output));
+                    find_item(&document, &id)
+                        .is_ok_and(|item| check_available_in(item, action, index).is_ok())
+                }));
+        if !keep && jobs::cancel_open_on(connection, job.id)? {
+            changed = changed.saturating_add(1);
+        }
+    }
+    Ok(changed.saturating_add(release_import_questions(connection, &document)?))
+}
+
+const NOT_AN_ITEM: &str =
+    "This job does not name a watchlist item and an action. Run the item again.";
+
+fn item_request(job: &jobs::Job) -> Option<(ItemId, ItemAction)> {
+    let id = job.item_key.parse::<ItemId>().ok()?;
+    let action = job.params.get("action")?.as_str()?.parse().ok()?;
+    (ItemId::from_params(&job.params).ok()? == id).then_some((id, action))
+}
+
+fn release_import_questions(
+    connection: &Connection,
+    document: &Watchlist,
+) -> rusqlite::Result<usize> {
+    let mut released: usize = 0;
+    for job in jobs::open_items_on(connection)? {
+        let keeps_tags = item_request(&job)
+            .and_then(|(id, _)| document.playlist(&id.playlist_id))
+            .is_some_and(|playlist| playlist.kind.keeps_current_tags());
+        let kind = job
+            .question
+            .as_ref()
+            .and_then(|question| question.get("kind")?.as_str()?.parse::<DecisionKind>().ok());
+        if job.status == Status::Waiting
+            && keeps_tags
+            && let Some(kind @ (DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)) = kind
+            && jobs::answer_on(
+                connection,
+                job.id,
+                &json!({"kind":kind,"value":MatchAnswer::KeepCurrentTags}),
+            )?
+        {
+            released = released.saturating_add(1);
+        }
+    }
+    Ok(released)
 }
 
 fn find_item<'a>(document: &'a Watchlist, id: &ItemId) -> Result<&'a WatchItem> {
@@ -561,5 +636,157 @@ fn check_cancelled(cancelled: &AtomicBool) -> Result<(), JobError> {
         Err(JobError::Cancelled)
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::repair;
+    use crate::jobs::{Kind, NewJob, Queue, Status, Store};
+    use crate::watchlist::{ItemId, Playlist, Repository, SourceKind, WatchItem};
+    use serde_json::json;
+
+    fn item(kind: SourceKind, key: &str) -> WatchItem {
+        let mut item = WatchItem::new(1, key, kind);
+        item.video_id = Some(key.into());
+        item.entry_id = Some(key.into());
+        item
+    }
+
+    #[test]
+    fn repair_keeps_unreadable_rows_and_repairs_the_rest() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("muzik.db");
+        Repository::new(database.clone())
+            .update(|document| {
+                let mut youtube = Playlist::new("PL1", "u", SourceKind::Youtube, None);
+                youtube.merge_items(vec![item(SourceKind::Youtube, "aaaaaaaaaaa")]);
+                let mut spotify = Playlist::new("spotify:liked", "u", SourceKind::Spotify, None);
+                spotify.merge_items(vec![item(SourceKind::Spotify, "x")]);
+                let broken = Playlist::new("PL2", "u", SourceKind::Youtube, None);
+                document.playlists = vec![youtube, spotify, broken];
+                Ok(())
+            })
+            .unwrap();
+        let connection = rusqlite::Connection::open(&database).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        connection
+            .execute_batch(
+                r#"INSERT INTO watchlist_items (playlist_id, ordinal, data) VALUES
+                 ('PL2', 0, 'not json'),
+                 ('gone', 0, '{"position":1,"title":"A","video_id":"aaaaaaaaaaa"}');
+                 INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL3', 3, 'broken');
+                 INSERT INTO jobs (queue, kind, item_key, status, params, question, created_at, updated_at) VALUES
+                 ('item', 'item', '["PL1","aaaaaaaaaaa"]', 'running',
+                  '{"playlist_id":"PL1","key":"aaaaaaaaaaa","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', '["PL1","aaaaaaaaaaa"]', 'queued',
+                  '{"playlist_id":"PL1","key":"aaaaaaaaaaa","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', '["PL1","aaaaaaaaaaa"]', 'queued', '{oops', NULL, 1, 1),
+                 ('item', 'item', 'PL1:1:aaaaaaaaaaa', 'queued', '{"playlist_id":"PL1","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', '["PL1","bbbbbbbbbbb"]', 'queued',
+                  '{"playlist_id":"PL1","key":"bbbbbbbbbbb","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', '["PL2","ccccccccccc"]', 'queued',
+                  '{"playlist_id":"PL2","key":"ccccccccccc","action":"run"}', NULL, 1, 1),
+                 ('item', 'item', '["spotify:liked","x"]', 'waiting',
+                  '{"playlist_id":"spotify:liked","key":"x","action":"organize_again"}',
+                  '{"kind":"import_match","payload":{}}', 1, 1),
+                 ('sync', 'refresh', 'refresh', 'queued', '{}', NULL, 1, 1),
+                 ('nowhere', 'refresh', 'refresh:x', 'queued', '{}', NULL, 1, 1);"#,
+            )
+            .unwrap();
+        let mut store = Store::from_connection(crate::db::open(&database).unwrap());
+        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 7);
+        let column = |query: &str| -> Vec<String> {
+            connection
+                .prepare(query)
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            column("SELECT status FROM jobs ORDER BY id"),
+            [
+                "queued",
+                "cancelled",
+                "failed",
+                "failed",
+                "cancelled",
+                "queued",
+                "queued",
+                "queued",
+                "failed"
+            ]
+        );
+        assert_eq!(
+            column(
+                "SELECT playlist_id || ':' || ordinal FROM watchlist_items ORDER BY playlist_id"
+            ),
+            ["PL1:0", "PL2:0", "spotify:liked:0"]
+        );
+        assert_eq!(
+            column("SELECT data FROM watchlist_items WHERE playlist_id = 'PL2'"),
+            ["not json"]
+        );
+        assert_eq!(
+            column("SELECT data FROM watchlist_playlists WHERE playlist_id = 'PL3'"),
+            ["broken"]
+        );
+        let claimed = store.claim(Queue::Item).unwrap().unwrap();
+        assert_eq!(claimed.item_key, r#"["PL1","aaaaaaaaaaa"]"#);
+        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn waiting_spotify_import_questions_go_back_to_the_queue() {
+        let mut store = Store::from_connection(crate::db::open_in_memory().unwrap());
+        let sources = [
+            ("spotify:liked", SourceKind::Spotify),
+            ("PL1", SourceKind::Youtube),
+            ("spotify:album:a", SourceKind::Spotify),
+        ];
+        let mut document = crate::watchlist::Watchlist::default();
+        for (id, kind) in sources {
+            let mut playlist = Playlist::new(id, "u", kind, None);
+            playlist.merge_items(vec![item(kind, "xxxxxxxxxxx")]);
+            document.playlists.push(playlist);
+        }
+        super::super::write_changes(
+            store.connection_mut(),
+            &crate::watchlist::Watchlist::default(),
+            &document,
+        )
+        .unwrap();
+        let park = |playlist: &str, kind: &str| {
+            store
+                .park(
+                    &NewJob {
+                        kind: Kind::Item,
+                        item_key: &ItemId::new(playlist, Some("xxxxxxxxxxx")).to_string(),
+                        title: "Song",
+                        params: &json!({"playlist_id":playlist,"key":"xxxxxxxxxxx","action":"organize_again"}),
+                    },
+                    &json!({"kind":kind,"payload":{}}),
+                )
+                .unwrap()
+        };
+        let spotify = park("spotify:liked", "import_match");
+        let youtube = park("PL1", "import_match");
+        let chapters = park("spotify:album:a", "chapter_review");
+        assert_eq!(repair(&mut store, None, |_| None).unwrap(), 1);
+        let waiting: Vec<i64> = store
+            .list(Status::Waiting)
+            .unwrap()
+            .into_iter()
+            .map(|job| job.id)
+            .collect();
+        assert_eq!(waiting, [youtube, chapters]);
+        assert_eq!(
+            store.get(spotify).unwrap().unwrap().answer,
+            Some(json!({"kind":"import_match","value":"as_is"}))
+        );
     }
 }

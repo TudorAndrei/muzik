@@ -269,7 +269,7 @@ impl Playlist {
         }
     }
 
-    fn normalize(&mut self) -> Result<()> {
+    pub(super) fn normalize(&mut self) -> Result<()> {
         if self.playlist_id.trim().is_empty() {
             return Err("playlist_id must be a non-empty string".into());
         }
@@ -391,7 +391,7 @@ impl WatchItem {
         }
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.position == 0 {
             return Err("position must be a positive integer".into());
         }

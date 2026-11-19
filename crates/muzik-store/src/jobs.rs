@@ -239,7 +239,7 @@ impl Store {
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn recover(&self) -> Result<usize> {
-        recover_on(&self.connection)
+        Ok(recover_on(&self.connection)?)
     }
 
     /// # Errors
@@ -332,18 +332,17 @@ impl Store {
     }
 
     fn cancel_open(&self, id: i64) -> Result<bool> {
-        cancel_open_on(&self.connection, id)
+        Ok(cancel_open_on(&self.connection, id)?)
     }
 
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn answer(&self, id: i64, answer: &Value) -> Result<bool> {
-        let changed = self.connection.execute(
-            "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
-                 WHERE id = ?3 AND status = 'waiting'",
-            params![answer, now(), id],
-        )?;
-        Ok(changed == 1)
+        Ok(answer_on(&self.connection, id, answer)?)
+    }
+
+    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
     }
 
     /// Ends a running job. A cancelled job that has a question waits for a new answer.
@@ -420,11 +419,59 @@ pub fn end_on(connection: &Connection, id: i64, ending: Ending<'_>) -> Result<bo
 
 /// # Errors
 /// Returns an error if the database query fails.
-pub fn recover_on(connection: &Connection) -> Result<usize> {
-    Ok(connection.execute(
+pub fn recover_on(connection: &Connection) -> rusqlite::Result<usize> {
+    connection.execute(
         "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
         params![now()],
-    )?)
+    )
+}
+
+/// Fails each open job whose stored row cannot be read as a job, and returns their ids.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn fail_unreadable_on(connection: &Connection) -> rusqlite::Result<Vec<i64>> {
+    let ids = connection
+        .prepare(
+            "SELECT id FROM jobs WHERE status IN ('queued', 'running', 'waiting') ORDER BY id",
+        )?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut failed = Vec::new();
+    for id in ids {
+        let read = connection.query_row(
+            &format!("SELECT {COLUMNS} FROM jobs WHERE id = ?1"),
+            [id],
+            job,
+        );
+        match read {
+            Ok(_) => {}
+            Err(
+                rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::InvalidColumnType(..)
+                | rusqlite::Error::IntegralValueOutOfRange(..),
+            ) => {
+                if fail_open_on(connection, id, UNREADABLE_JOB)? {
+                    failed.push(id);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(failed)
+}
+
+const UNREADABLE_JOB: &str = "Muzik could not read this job. Add it to the queue again.";
+
+/// Fails a job that waits in the queue or for an answer, or that runs.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn fail_open_on(connection: &Connection, id: i64, error: &str) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'failed', error = ?1, updated_at = ?2
+             WHERE id = ?3 AND status IN ('queued', 'running', 'waiting')",
+        params![error, now(), id],
+    )?;
+    Ok(changed == 1)
 }
 
 /// # Errors
@@ -439,22 +486,34 @@ pub fn held_on(connection: &Connection) -> Result<Vec<Job>> {
 
 /// # Errors
 /// Returns an error if the database query fails.
-pub fn open_items_on(connection: &Connection) -> Result<Vec<Job>> {
+pub fn open_items_on(connection: &Connection) -> rusqlite::Result<Vec<Job>> {
     let mut statement = connection.prepare(&format!(
         "SELECT {COLUMNS} FROM jobs WHERE kind = 'item' AND status IN ('queued', 'waiting') ORDER BY id"
     ))?;
     let rows = statement.query_map([], job)?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    rows.collect()
 }
 
 /// Cancels jobs that wait in the queue or for an answer. A running job keeps its status.
 /// # Errors
 /// Returns an error if the database query fails.
-pub fn cancel_open_on(connection: &Connection, id: i64) -> Result<bool> {
+pub fn cancel_open_on(connection: &Connection, id: i64) -> rusqlite::Result<bool> {
     let changed = connection.execute(
         "UPDATE jobs SET status = 'cancelled', updated_at = ?1
              WHERE id = ?2 AND status IN ('queued', 'waiting')",
         params![now(), id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// Queues a waiting job again with `answer`.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn answer_on(connection: &Connection, id: i64, answer: &Value) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
+             WHERE id = ?3 AND status = 'waiting'",
+        params![answer, now(), id],
     )?;
     Ok(changed == 1)
 }
@@ -474,8 +533,8 @@ pub fn cancel_waiting_on(connection: &Connection, item_key: &str, keep: Option<i
 /// Keeps one open job for each item: a running job, else a waiting one, else the oldest one.
 /// # Errors
 /// Returns an error if the database query fails.
-pub fn cancel_duplicates_on(connection: &Connection) -> Result<usize> {
-    Ok(connection.execute(
+pub fn cancel_duplicates_on(connection: &Connection) -> rusqlite::Result<usize> {
+    connection.execute(
         "UPDATE jobs SET status = 'cancelled', updated_at = ?1
          WHERE kind = 'item' AND status IN ('queued', 'waiting') AND EXISTS (
              SELECT 1 FROM jobs AS other
@@ -486,7 +545,7 @@ pub fn cancel_duplicates_on(connection: &Connection) -> Result<usize> {
                       OR (other.status = jobs.status AND other.id < jobs.id))
          )",
         params![now()],
-    )?)
+    )
 }
 
 /// # Errors

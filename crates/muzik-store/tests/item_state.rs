@@ -210,7 +210,7 @@ mod item_state {
                 Step::Crash => {
                     self.running.clear();
                     let output = self.output.clone();
-                    jobs::repair(&self.repository(), |_| Some(output.clone())).unwrap();
+                    jobs::repair(&mut self.store(), None, |_| Some(output.clone())).unwrap();
                 }
             }
         }

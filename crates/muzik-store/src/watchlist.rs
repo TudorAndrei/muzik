@@ -524,6 +524,78 @@ fn read_document(connection: &Connection) -> Result<Watchlist> {
     .normalized()
 }
 
+struct Readable {
+    document: Watchlist,
+    unread: HashSet<String>,
+}
+
+fn read_readable(connection: &Connection) -> rusqlite::Result<Readable> {
+    let mut readable = Readable {
+        document: Watchlist::default(),
+        unread: HashSet::new(),
+    };
+    let mut statement = connection.prepare(
+        "SELECT coalesce(CAST(playlist_id AS TEXT), ''), data
+         FROM watchlist_playlists ORDER BY ordinal",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        match parse::<Playlist>(row.get_ref(1)?) {
+            Ok(mut playlist) => {
+                playlist.items.clear();
+                readable.document.playlists.push(playlist);
+            }
+            Err(error) => {
+                tracing::warn!(playlist = %id, %error, "a watchlist playlist cannot be read");
+                readable.unread.insert(id);
+            }
+        }
+    }
+    let mut statement = connection.prepare(
+        "SELECT coalesce(CAST(playlist_id AS TEXT), ''), ordinal, data
+         FROM watchlist_items ORDER BY playlist_id, ordinal",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let item = parse::<WatchItem>(row.get_ref(2)?).and_then(|item| {
+            item.validate()
+                .map(|()| item)
+                .map_err(|error| error.to_string())
+        });
+        match (item, readable.document.playlist_mut(&id)) {
+            (Ok(item), Some(playlist)) => playlist.items.push(item),
+            (Err(error), _) => {
+                let ordinal = row.get_ref(1)?;
+                tracing::warn!(playlist = %id, ?ordinal, %error, "a watchlist item cannot be read");
+                readable.unread.insert(id);
+            }
+            (Ok(_), None) => {}
+        }
+    }
+    let Readable { document, unread } = &mut readable;
+    document.playlists.retain_mut(|playlist| {
+        if unread.contains(&playlist.playlist_id) {
+            return false;
+        }
+        let normalized = playlist.normalize();
+        if let Err(error) = &normalized {
+            tracing::warn!(playlist = %playlist.playlist_id, %error, "a watchlist playlist is not valid");
+            unread.insert(playlist.playlist_id.clone());
+        }
+        normalized.is_ok()
+    });
+    Ok(readable)
+}
+
+fn parse<T: serde::de::DeserializeOwned>(
+    data: rusqlite::types::ValueRef<'_>,
+) -> std::result::Result<T, String> {
+    let text = data.as_str().map_err(|error| error.to_string())?;
+    serde_json::from_str(text).map_err(|error| error.to_string())
+}
+
 #[derive(Serialize)]
 struct PlaylistHeader<'a> {
     playlist_id: &'a str,

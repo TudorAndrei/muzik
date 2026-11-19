@@ -1,14 +1,12 @@
 use crate::library_tasks::LibraryRequest;
 use crate::settings::Settings;
 use muzik_core::paths::Paths;
-use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::jobs::{self as watchlist_jobs, PendingItem};
-use muzik_store::watchlist::{ItemAction, ItemId, Repository};
+use muzik_store::watchlist::{ItemAction, ItemId};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::{Value, json};
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -217,57 +215,19 @@ impl Jobs {
         Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
-    pub(crate) fn recover(&self) -> crate::Result<usize> {
-        Ok(self.store().recover()?)
-    }
-
-    pub(crate) fn repair_watchlist(&self) -> crate::Result<usize> {
+    pub(crate) fn repair(&self) -> crate::Result<usize> {
         let paths = &self.paths;
-        Ok(watchlist_jobs::repair(
-            &Repository::open(paths),
-            |params| {
-                Settings::resolve(paths, params)
-                    .ok()
-                    .map(|settings| settings.request.output)
-            },
-        )?)
-    }
-
-    pub(crate) fn release_import_questions(&self) -> crate::Result<usize> {
-        let keeping: HashSet<String> = Repository::open(&self.paths)
-            .load()?
-            .playlists
-            .into_iter()
-            .filter(|playlist| playlist.kind.keeps_current_tags())
-            .map(|playlist| playlist.playlist_id)
-            .collect();
-        let store = self.store();
-        let mut released = 0_usize;
-        for job in store.list(Status::Waiting)? {
-            let keeps_tags = job
-                .params
-                .get("playlist_id")
-                .and_then(Value::as_str)
-                .is_some_and(|id| keeping.contains(id));
-            let kind = job
-                .question
-                .as_ref()
-                .and_then(|question| question["kind"].as_str())
-                .and_then(|kind| kind.parse::<DecisionKind>().ok());
-            if keeps_tags
-                && matches!(
-                    kind,
-                    Some(DecisionKind::ImportMatch | DecisionKind::ImportDuplicate)
-                )
-                && store.answer(
-                    job.id,
-                    &json!({"kind":kind,"value":MatchAnswer::KeepCurrentTags}),
-                )?
-            {
-                released = released.saturating_add(1);
-            }
-        }
-        Ok(released)
+        let legacy = self
+            .lock_path
+            .is_some()
+            .then(|| paths.config.join("watchlist.json"));
+        let repaired = watchlist_jobs::repair(&mut self.store(), legacy.as_deref(), |params| {
+            Settings::resolve(paths, params)
+                .ok()
+                .map(|settings| settings.request.output)
+        })
+        .map_err(muzik_store::Error::from)?;
+        Ok(repaired)
     }
 
     /// # Errors
@@ -349,8 +309,8 @@ mod tests {
     use crate::library_tasks::{LibraryRequest, LibraryTask};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
+    use muzik_store::watchlist::ItemId;
     use muzik_store::watchlist::jobs::PendingItem;
-    use muzik_store::watchlist::{ItemId, Playlist, Repository, SourceKind};
     use serde_json::json;
     use std::path::Path;
 
@@ -483,50 +443,6 @@ mod tests {
         assert_eq!(
             (kept.status, kept.question),
             (Status::Waiting, Some(question))
-        );
-    }
-
-    #[test]
-    fn waiting_spotify_import_questions_go_back_to_the_queue() {
-        let dir = tempfile::tempdir().unwrap();
-        let paths = Paths::under(dir.path());
-        Repository::open(&paths)
-            .update(|document| {
-                document.playlists = vec![
-                    Playlist::new("spotify:liked", "u", SourceKind::Spotify, None),
-                    Playlist::new("PL1", "u", SourceKind::Youtube, None),
-                    Playlist::new("spotify:album:a", "u", SourceKind::Spotify, None),
-                ];
-                Ok(())
-            })
-            .unwrap();
-        let jobs = Jobs::in_memory(&paths).unwrap();
-        let park = |playlist: &str, kind: &str| {
-            jobs.store().park(
-                &muzik_store::jobs::NewJob {
-                    kind: muzik_store::jobs::Kind::Item,
-                    item_key: &ItemId::new(playlist, Some("x")).to_string(),
-                    title: "Song",
-                    params: &json!({"playlist_id":playlist,"key":"x","action":"organize_again"}),
-                },
-                &json!({"kind":kind,"payload":{}}),
-            )
-        };
-        let spotify = park("spotify:liked", "import_match").unwrap();
-        let youtube = park("PL1", "import_match").unwrap();
-        let chapters = park("spotify:album:a", "chapter_review").unwrap();
-        assert_eq!(jobs.release_import_questions().unwrap(), 1);
-        let waiting: Vec<i64> = jobs.snapshot()["waiting"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|job| job["id"].as_i64())
-            .collect();
-        assert_eq!(waiting, [youtube, chapters]);
-        let released = jobs.get(spotify).unwrap().unwrap();
-        assert_eq!(
-            released.answer,
-            Some(json!({"kind":"import_match","value":"as_is"}))
         );
     }
 }

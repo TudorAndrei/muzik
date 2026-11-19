@@ -110,13 +110,7 @@ impl Runner {
             RunnerClaim::Locked(lock) => Some(lock),
         };
         jobs.import_legacy()?;
-        jobs.recover()?;
-        if let Err(error) = jobs
-            .repair_watchlist()
-            .and_then(|_| jobs.release_import_questions())
-        {
-            (options.sink)(AppEvent::WatchlistError(error.to_string()));
-        }
+        jobs.repair()?;
         let shared = Arc::new(Shared {
             jobs,
             running: Arc::new(Mutex::new(HashMap::new())),
@@ -745,35 +739,48 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_watchlist_is_reported_and_the_queues_still_run() {
+    fn corrupted_rows_do_not_stop_the_startup_repair_or_the_queues() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
         let audio = dir.path().join("track.flac");
         std::fs::write(&audio, b"audio").unwrap();
         Repository::open(&paths).load().unwrap();
-        rusqlite::Connection::open(paths.database())
-            .unwrap()
-            .execute(
-                "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('p', 0, 'broken')",
-                [],
+        let connection = rusqlite::Connection::open(paths.database()).unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", false)
+            .unwrap();
+        connection
+            .execute_batch(
+                r#"INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('p', 0, 'broken');
+                 INSERT INTO watchlist_items (playlist_id, ordinal, data) VALUES ('gone', 0, 'broken');
+                 INSERT INTO jobs (queue, kind, item_key, status, params, created_at, updated_at) VALUES
+                 ('item', 'item', 'garbage', 'queued', '{oops', 1, 1),
+                 ('item', 'item', 'garbage', 'running', '{"action":"run"}', 1, 1);"#,
             )
             .unwrap();
-        let jobs = Arc::new(Jobs::in_memory(&paths).unwrap());
+        let jobs = Arc::new(Jobs::open(&paths).unwrap());
         let (runner, receiver) = runner(&jobs).unwrap();
         let id = jobs
             .workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
             .unwrap();
         runner.wake();
         let job_id = super::job_id(id);
-        let mut reported = false;
         loop {
-            match receiver.recv_timeout(Duration::from_secs(20)).unwrap() {
-                AppEvent::WatchlistError(_) => reported = true,
-                AppEvent::JobCompleted { job_id: done, .. } if done == job_id => break,
-                _ => {}
+            if let AppEvent::JobCompleted { job_id: done, .. } =
+                receiver.recv_timeout(Duration::from_secs(20)).unwrap()
+                && done == job_id
+            {
+                break;
             }
         }
-        assert!(reported);
+        let statuses: Vec<String> = connection
+            .prepare("SELECT status FROM jobs WHERE item_key = 'garbage' ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(statuses, ["failed", "failed"]);
         drop(runner);
     }
 
