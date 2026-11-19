@@ -87,7 +87,7 @@ impl Source for Youtube {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                keep_progress(item, &progress);
+                keep_progress(item, action, progress.audio(), progress.split());
                 return Err(at(progress.stage.get(), workflow_error(error)));
             }
         };
@@ -102,11 +102,23 @@ impl Source for Youtube {
     }
 }
 
-fn keep_progress(item: &mut WatchItem, progress: &Progress) {
-    if let Some(audio) = progress.audio() {
+fn keep_progress(
+    item: &mut WatchItem,
+    action: ItemAction,
+    audio: Option<PathBuf>,
+    split: Option<PathBuf>,
+) {
+    if let Some(audio) = audio {
+        let replaced = matches!(action, ItemAction::DownloadAgain | ItemAction::RunAllAgain)
+            || item
+                .path(Stage::Download)
+                .is_some_and(|previous| previous != audio);
         item.apply(Stage::Download, StageEvent::Complete(Some(audio)));
+        if replaced {
+            item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
+        }
     }
-    if let Some(split) = progress.split() {
+    if let Some(split) = split {
         item.apply(Stage::Split, StageEvent::Complete(Some(split)));
     }
 }
@@ -532,6 +544,37 @@ mod tests {
         );
         assert_eq!(fs::read(marker).unwrap(), b"keep this file");
         assert_eq!(fs::read(audio).unwrap(), b"audio");
+    }
+
+    #[test]
+    fn a_failed_download_again_keeps_the_new_audio_and_marks_later_stages_stale() {
+        let audio = std::path::PathBuf::from("/music/Song [abcdefghijk].flac");
+        let split = std::path::PathBuf::from("/music/Song");
+        let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
+        item.apply(Stage::Download, StageEvent::Complete(Some(audio.clone())));
+        item.apply(Stage::Parse, StageEvent::Complete(None));
+        item.apply(Stage::Split, StageEvent::Complete(Some(split.clone())));
+        item.apply(Stage::Organize, StageEvent::Complete(None));
+        let mut run = item.clone();
+        super::keep_progress(&mut run, ItemAction::Run, Some(audio.clone()), None);
+        assert_eq!(run.stage(Stage::Organize).status(), StageStatus::Complete);
+        super::keep_progress(
+            &mut item,
+            ItemAction::DownloadAgain,
+            Some(audio.clone()),
+            None,
+        );
+        assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
+        for stage in [Stage::Parse, Stage::Split, Stage::Organize] {
+            assert_eq!(item.stage(stage).status(), StageStatus::Stale);
+        }
+        super::keep_progress(
+            &mut item,
+            ItemAction::RunAllAgain,
+            None,
+            Some(split.clone()),
+        );
+        assert_eq!(item.path(Stage::Split), Some(split.as_path()));
     }
 
     #[test]
