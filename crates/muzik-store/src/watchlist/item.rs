@@ -204,6 +204,26 @@ impl ItemParams {
     }
 }
 
+pub(super) fn ambiguous_keys<A: AsRef<WatchItem>, B: AsRef<WatchItem>>(
+    before: &[A],
+    after: &[B],
+) -> HashSet<Option<String>> {
+    let mut counts = HashMap::<Option<&str>, (usize, usize)>::new();
+    for item in before {
+        let count = counts.entry(item.as_ref().key()).or_default();
+        count.0 = count.0.saturating_add(1);
+    }
+    for item in after {
+        let count = counts.entry(item.as_ref().key()).or_default();
+        count.1 = count.1.saturating_add(1);
+    }
+    counts
+        .into_iter()
+        .filter(|&(_, (old, new))| old != new && old.max(new) > 1)
+        .map(|(key, _)| key.map(str::to_owned))
+        .collect()
+}
+
 fn item_ids<T: AsRef<WatchItem>>(playlist_id: &str, items: &[T]) -> Vec<ItemId> {
     let mut counts = HashMap::<Option<&str>, u64>::new();
     items
@@ -343,6 +363,7 @@ impl Playlist {
     }
 
     pub fn merge_items(&mut self, discovered: Vec<WatchItem>) {
+        let ambiguous = ambiguous_keys(&self.items, &discovered);
         let mut old: HashMap<ItemId, WatchItem> = self
             .item_ids()
             .into_iter()
@@ -352,7 +373,7 @@ impl Playlist {
             .into_iter()
             .zip(discovered)
             .map(|(id, mut item)| {
-                if let Some(previous) = old.remove(&id) {
+                if let Some(previous) = old.remove(&id).filter(|_| !ambiguous.contains(&id.key)) {
                     item.stages = previous.stages;
                     item.last_action = previous.last_action;
                     item.last_error = previous.last_error;
@@ -704,6 +725,33 @@ mod tests {
                 .find(&ids[1])
                 .map(|index| playlist.items[index].position),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn a_repeated_video_whose_count_changes_starts_again() {
+        let item = |position, video: &str| {
+            let mut item = WatchItem::new(position, video, SourceKind::Youtube);
+            item.video_id = Some(video.into());
+            item
+        };
+        let mut playlist = super::Playlist::new("PL1", "u", SourceKind::Youtube, None);
+        playlist.merge_items(vec![
+            item(1, "aaaaaaaaaaa"),
+            item(2, "bbbbbbbbbbb"),
+            item(3, "aaaaaaaaaaa"),
+        ]);
+        for index in 0..3 {
+            playlist.items[index].apply(Stage::Download, StageEvent::Complete(None));
+        }
+        playlist.merge_items(vec![item(1, "bbbbbbbbbbb"), item(2, "aaaaaaaaaaa")]);
+        assert_eq!(
+            playlist.items[0].status(Stage::Download),
+            StageStatus::Complete
+        );
+        assert_eq!(
+            playlist.items[1].status(Stage::Download),
+            StageStatus::NotStarted
         );
     }
 

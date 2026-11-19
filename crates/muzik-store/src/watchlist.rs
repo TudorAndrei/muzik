@@ -612,23 +612,37 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
             "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
             [],
         )?;
-        cancel_orphans(connection, after)?;
+        cancel_orphans(connection, before, after)?;
     }
     Ok(())
 }
 
-fn cancel_orphans(connection: &Connection, document: &Watchlist) -> Result<usize> {
-    let ids: HashSet<ItemId> = document
+fn cancel_orphans(connection: &Connection, before: &Watchlist, after: &Watchlist) -> Result<usize> {
+    let ids: HashSet<ItemId> = after
         .playlists
         .iter()
         .flat_map(Playlist::item_ids)
+        .collect();
+    let ambiguous: HashSet<(String, Option<String>)> = after
+        .playlists
+        .iter()
+        .flat_map(|playlist| {
+            let old = before
+                .playlists
+                .iter()
+                .find(|old| old.playlist_id == playlist.playlist_id)
+                .map_or(&[][..], |old| old.items.as_slice());
+            item::ambiguous_keys(old, &playlist.items)
+                .into_iter()
+                .map(|key| (playlist.playlist_id.clone(), key))
+        })
         .collect();
     let mut cancelled: usize = 0;
     for job in crate::jobs::open_items_on(connection)? {
         let orphan = job
             .item_key
             .parse::<ItemId>()
-            .is_ok_and(|id| !ids.contains(&id));
+            .is_ok_and(|id| !ids.contains(&id) || ambiguous.contains(&(id.playlist_id, id.key)));
         if orphan && crate::jobs::cancel_open_on(connection, job.id)? {
             cancelled = cancelled.saturating_add(1);
         }
@@ -704,6 +718,55 @@ mod tests {
         assert_eq!(waiting[0].item_key, r#"["PL1","aaaaaaaaaaa",1]"#);
         assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
         assert_eq!(waiting[0].params["action"], "organize_again");
+    }
+
+    #[test]
+    fn jobs_of_a_repeated_video_end_when_its_count_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("muzik.db");
+        let repository = Repository::new(database.clone());
+        let item = |position, video: &str| {
+            let mut item = WatchItem::new(position, video, SourceKind::Youtube);
+            item.video_id = Some(video.into());
+            item
+        };
+        repository
+            .update(|document| {
+                let mut playlist = Playlist::new("PL1", "u", SourceKind::Youtube, None);
+                playlist.merge_items(vec![
+                    item(1, "aaaaaaaaaaa"),
+                    item(2, "bbbbbbbbbbb"),
+                    item(3, "aaaaaaaaaaa"),
+                ]);
+                document.playlists.push(playlist);
+                Ok(())
+            })
+            .unwrap();
+        let mut store = Store::from_connection(crate::db::open(&database).unwrap());
+        for key in [r#"["PL1","aaaaaaaaaaa",0]"#, r#"["PL1","bbbbbbbbbbb",0]"#] {
+            store
+                .enqueue(&crate::jobs::NewJob {
+                    kind: crate::jobs::Kind::Item,
+                    item_key: key,
+                    title: "item",
+                    params: &json!({}),
+                })
+                .unwrap();
+        }
+        repository
+            .update(|document| {
+                document.playlists[0]
+                    .merge_items(vec![item(1, "bbbbbbbbbbb"), item(2, "aaaaaaaaaaa")]);
+                Ok(())
+            })
+            .unwrap();
+        let queued: Vec<String> = store
+            .list(Status::Queued)
+            .unwrap()
+            .into_iter()
+            .map(|job| job.item_key)
+            .collect();
+        assert_eq!(queued, [r#"["PL1","bbbbbbbbbbb",0]"#]);
     }
 
     #[test]

@@ -481,7 +481,7 @@ pub fn repair(
     repository.update_with(|document, connection| {
         let mut changed = jobs::recover_on(connection)?;
         changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
-        changed = changed.saturating_add(cancel_orphans(connection, document)?);
+        changed = changed.saturating_add(cancel_orphans(connection, document, document)?);
         let mut indexes = HashMap::<PathBuf, AudioIndex>::new();
         for job in jobs::open_items_on(connection)? {
             if job.status != Status::Waiting {
