@@ -110,8 +110,13 @@ impl Runner {
             RunnerClaim::Locked(lock) => Some(lock),
         };
         jobs.import_legacy()?;
-        jobs.repair()?;
-        jobs.release_import_questions()?;
+        jobs.recover()?;
+        if let Err(error) = jobs
+            .repair_watchlist()
+            .and_then(|_| jobs.release_import_questions())
+        {
+            (options.sink)(AppEvent::WatchlistError(error.to_string()));
+        }
         let shared = Arc::new(Shared {
             jobs,
             running: Arc::new(Mutex::new(HashMap::new())),
@@ -737,6 +742,39 @@ mod tests {
         }
         runner.wait_until_idle(&std::sync::atomic::AtomicBool::new(false));
         assert!(runner.is_idle());
+    }
+
+    #[test]
+    fn an_unreadable_watchlist_is_reported_and_the_queues_still_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::under(dir.path());
+        let audio = dir.path().join("track.flac");
+        std::fs::write(&audio, b"audio").unwrap();
+        Repository::open(&paths).load().unwrap();
+        rusqlite::Connection::open(paths.database())
+            .unwrap()
+            .execute(
+                "INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('p', 0, 'broken')",
+                [],
+            )
+            .unwrap();
+        let jobs = Arc::new(Jobs::in_memory(&paths).unwrap());
+        let (runner, receiver) = runner(&jobs).unwrap();
+        let id = jobs
+            .workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
+            .unwrap();
+        runner.wake();
+        let job_id = super::job_id(id);
+        let mut reported = false;
+        loop {
+            match receiver.recv_timeout(Duration::from_secs(20)).unwrap() {
+                AppEvent::WatchlistError(_) => reported = true,
+                AppEvent::JobCompleted { job_id: done, .. } if done == job_id => break,
+                _ => {}
+            }
+        }
+        assert!(reported);
+        drop(runner);
     }
 
     #[test]

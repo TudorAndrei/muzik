@@ -217,15 +217,20 @@ impl Jobs {
         Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
-    pub(crate) fn repair(&self) -> crate::Result<usize> {
-        let recovered = self.store().recover()?;
+    pub(crate) fn recover(&self) -> crate::Result<usize> {
+        Ok(self.store().recover()?)
+    }
+
+    pub(crate) fn repair_watchlist(&self) -> crate::Result<usize> {
         let paths = &self.paths;
-        let repaired = watchlist_jobs::repair(&Repository::open(paths), |params| {
-            Settings::resolve(paths, params)
-                .ok()
-                .map(|settings| settings.request.output)
-        })?;
-        Ok(recovered.saturating_add(repaired))
+        Ok(watchlist_jobs::repair(
+            &Repository::open(paths),
+            |params| {
+                Settings::resolve(paths, params)
+                    .ok()
+                    .map(|settings| settings.request.output)
+            },
+        )?)
     }
 
     pub(crate) fn release_import_questions(&self) -> crate::Result<usize> {
