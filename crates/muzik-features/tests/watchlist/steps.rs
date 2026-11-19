@@ -3,6 +3,7 @@ mod jobs;
 mod legacy;
 mod local_checks;
 mod local_files;
+mod playlist_files;
 mod sources;
 mod state;
 mod watched;

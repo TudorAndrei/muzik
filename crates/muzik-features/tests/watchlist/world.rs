@@ -5,7 +5,7 @@ use muzik_store::jobs::Store;
 use muzik_store::watchlist::jobs::{JobError, JobOptions, PendingItem};
 use muzik_store::watchlist::{
     CheckedWrite, LocalCheck, LocalChecks, Playlist, ReconcileOptions, Repository, Stage,
-    Watchlist, view,
+    Watchlist, playlist_files, view,
 };
 use serde_json::Value;
 use std::fmt;
@@ -58,6 +58,7 @@ pub struct WatchlistWorld {
     pub outside_edits: u32,
     pub legacy_content: Option<Vec<u8>>,
     pub decision: Option<Stage>,
+    pub playlist_report: Option<playlist_files::Report>,
 }
 
 impl WatchlistWorld {
@@ -97,6 +98,7 @@ impl WatchlistWorld {
             outside_edits: 0,
             legacy_content: None,
             decision: None,
+            playlist_report: None,
         })
     }
 
