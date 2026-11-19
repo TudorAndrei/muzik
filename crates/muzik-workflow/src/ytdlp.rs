@@ -116,6 +116,7 @@ impl YtDlp {
         if request.chapters {
             args.extend([
                 "--write-info-json".to_owned(),
+                "--no-write-playlist-metafiles".to_owned(),
                 "--embed-chapters".to_owned(),
             ]);
         }
@@ -385,6 +386,7 @@ mod tests {
         for flag in [
             "--extract-audio",
             "--write-info-json",
+            "--no-write-playlist-metafiles",
             "--embed-chapters",
             "--download-archive",
             "--force-overwrites",
