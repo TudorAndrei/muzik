@@ -87,7 +87,13 @@ impl Source for Youtube {
         let result = match result {
             Ok(result) => result,
             Err(error) => {
-                keep_progress(item, action, progress.audio(), progress.split());
+                keep_progress(
+                    item,
+                    action,
+                    progress.audio(),
+                    progress.quality(),
+                    progress.split(),
+                );
                 return Err(at(progress.stage.get(), workflow_error(error)));
             }
         };
@@ -106,6 +112,7 @@ fn keep_progress(
     item: &mut WatchItem,
     action: ItemAction,
     audio: Option<PathBuf>,
+    quality: Option<PathBuf>,
     split: Option<PathBuf>,
 ) {
     if let Some(audio) = audio {
@@ -114,6 +121,9 @@ fn keep_progress(
                 .path(Stage::Download)
                 .is_some_and(|previous| previous != audio);
         item.apply(Stage::Download, StageEvent::Complete(Some(audio)));
+        if let Some(quality) = quality {
+            item.apply(Stage::Quality, StageEvent::Complete(Some(quality)));
+        }
         if replaced {
             item.invalidate(&[Stage::Parse, Stage::Split, Stage::Organize]);
         }
@@ -556,12 +566,25 @@ mod tests {
         item.apply(Stage::Split, StageEvent::Complete(Some(split.clone())));
         item.apply(Stage::Organize, StageEvent::Complete(None));
         let mut run = item.clone();
-        super::keep_progress(&mut run, ItemAction::Run, Some(audio.clone()), None);
+        super::keep_progress(&mut run, ItemAction::Run, Some(audio.clone()), None, None);
         assert_eq!(run.stage(Stage::Organize).status(), StageStatus::Complete);
+        let mut parked = run.clone();
+        let replacement = std::path::PathBuf::from("/music/Song [abcdefghijk] (flac).flac");
+        super::keep_progress(
+            &mut parked,
+            ItemAction::Run,
+            Some(replacement.clone()),
+            Some(replacement.clone()),
+            None,
+        );
+        assert_eq!(parked.path(Stage::Download), Some(replacement.as_path()));
+        assert_eq!(parked.path(Stage::Quality), Some(replacement.as_path()));
+        assert_eq!(parked.stage(Stage::Split).status(), StageStatus::Stale);
         super::keep_progress(
             &mut item,
             ItemAction::DownloadAgain,
             Some(audio.clone()),
+            None,
             None,
         );
         assert_eq!(item.path(Stage::Download), Some(audio.as_path()));
@@ -571,6 +594,7 @@ mod tests {
         super::keep_progress(
             &mut item,
             ItemAction::RunAllAgain,
+            None,
             None,
             Some(split.clone()),
         );

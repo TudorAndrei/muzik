@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub struct Progress {
     pub stage: Cell<Stage>,
     audio: RefCell<Option<PathBuf>>,
+    quality: RefCell<Option<PathBuf>>,
     split: RefCell<Option<PathBuf>>,
     singles: Cell<usize>,
 }
@@ -35,6 +36,7 @@ impl Default for Progress {
         Self {
             stage: Cell::new(Stage::Download),
             audio: RefCell::new(None),
+            quality: RefCell::new(None),
             split: RefCell::new(None),
             singles: Cell::new(0),
         }
@@ -43,7 +45,20 @@ impl Default for Progress {
 
 impl Progress {
     pub fn audio(&self) -> Option<PathBuf> {
+        if self.quality.borrow().is_some() {
+            return self.quality();
+        }
         self.audio.borrow().clone().filter(|path| path.is_file())
+    }
+
+    pub fn quality(&self) -> Option<PathBuf> {
+        self.quality.borrow().clone().filter(|path| path.is_file())
+    }
+
+    fn replace_audio(&self, original: &[PathBuf], checked: &[PathBuf]) {
+        if let Some(replacement) = checked.iter().find(|path| !original.contains(path)) {
+            self.quality.replace(Some(replacement.clone()));
+        }
     }
 
     pub fn split(&self) -> Option<PathBuf> {
@@ -55,6 +70,7 @@ impl Progress {
             WorkflowEvent::AcquisitionCompleted { files } => {
                 self.audio
                     .replace(files.iter().find(|path| path.is_file()).cloned());
+                self.quality.replace(None);
             }
             WorkflowEvent::PlanReady { singles, .. } => self.singles.set(*singles),
             WorkflowEvent::SplitCompleted { output } => {
@@ -97,6 +113,7 @@ pub fn run(
         fallback: settings.options.fallback,
         output: settings.request.output.clone(),
         acquired_from: None,
+        progress,
     };
     let mut report = |event: WorkflowEvent| {
         progress.observe(&event);
@@ -168,6 +185,7 @@ struct RemoteOperations<'a> {
     fallback: AudioFallback,
     output: PathBuf,
     acquired_from: Option<AcquisitionSource>,
+    progress: &'a Progress,
 }
 
 impl WorkflowOperations for RemoteOperations<'_> {
@@ -283,6 +301,8 @@ impl WorkflowOperations for RemoteOperations<'_> {
             self.local.on_import_event,
             self.local.decide,
         )?;
+        self.progress
+            .replace_audio(audio_files, &result.audio_files);
         Ok(QualityCheckedAudio {
             audio_files: result.audio_files,
             pre_split_dirs: result.pre_split_dirs,
@@ -511,6 +531,20 @@ mod tests {
             target: ready.clone(),
         });
         assert_eq!(progress.split(), Some(ready));
+        let replacement = directory.path().join("Song [abcdefghijk] (flac).flac");
+        std::fs::write(&replacement, b"better").unwrap();
+        progress.replace_audio(std::slice::from_ref(&audio), std::slice::from_ref(&audio));
+        assert_eq!(progress.quality(), None);
+        progress.replace_audio(
+            std::slice::from_ref(&audio),
+            std::slice::from_ref(&replacement),
+        );
+        assert_eq!(progress.audio(), Some(replacement.clone()));
+        assert_eq!(progress.quality(), Some(replacement));
+        progress.observe(&WorkflowEvent::AcquisitionCompleted {
+            files: vec![audio.clone()],
+        });
+        assert_eq!(progress.audio(), Some(audio.clone()));
         std::fs::remove_file(&audio).unwrap();
         assert_eq!(progress.audio(), None);
     }
