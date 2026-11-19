@@ -14,10 +14,12 @@ use std::path::{Component, Path, PathBuf};
 use strum_macros::EnumString;
 
 mod error;
+mod playlists;
 mod run;
 
 pub use error::{Error, Result};
 pub use muzik_media::ffmpeg::Encoding;
+pub use playlists::DevicePlaylist;
 pub use run::{Done, Options, Prepared, Report, Selection, Shortfall, apply, prepare, select};
 
 const SECTION: &str = "sync";
@@ -98,6 +100,7 @@ pub struct Plan {
     pub unreadable: Vec<PathBuf>,
     pub duplicates: Vec<PathBuf>,
     pub planned: BTreeSet<PathBuf>,
+    pub destinations: BTreeMap<PathBuf, PathBuf>,
 }
 
 enum Step {
@@ -298,10 +301,14 @@ pub fn plan(
         match step {
             Step::Fresh(destination) if claim(&destination) => {
                 plan.fresh = plan.fresh.saturating_add(1);
+                plan.destinations
+                    .insert(source.clone(), destination.clone());
                 plan.planned.insert(destination);
             }
             Step::Pending(transfer) if claim(&transfer.destination) => {
                 plan.planned.insert(transfer.destination.clone());
+                plan.destinations
+                    .insert(source.clone(), transfer.destination.clone());
                 plan.pending.push(transfer);
             }
             Step::Fresh(_) | Step::Pending(_) => plan.duplicates.push(source.clone()),
@@ -559,7 +566,8 @@ pub fn stale_files(root: &Path, planned: &BTreeSet<PathBuf>) -> io::Result<Vec<P
             }
             let leftover = name.starts_with("._")
                 || (name.starts_with('.') && name.contains(&format!(".{PARTIAL}.")));
-            let media = !name.starts_with('.') && DeviceFile::from_path(&path).is_some();
+            let media = !name.starts_with('.')
+                && (DeviceFile::from_path(&path).is_some() || playlists::is_written(&path));
             if leftover || (media && !planned.contains(&path)) {
                 stale.push(path);
             }

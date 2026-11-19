@@ -89,7 +89,10 @@ pub fn run(args: &Sync) -> anyhow::Result<()> {
             report.total
         );
     }
-    println!("Sync complete: {} files written", report.total);
+    println!(
+        "Sync complete: {} files and {} playlists written",
+        report.total, report.playlists
+    );
     Ok(())
 }
 
@@ -119,6 +122,15 @@ fn print_plan(prepared: &Prepared) {
         converts,
         ByteSize(prepared.needed())
     );
+    for playlist in prepared.playlists() {
+        if playlist.dropped > 0 {
+            eprintln!(
+                "playlist {}: {} entries are not on the device",
+                playlist.source.display(),
+                playlist.dropped
+            );
+        }
+    }
     if prepared.delete_blocked() {
         eprintln!(
             "not deleting old files: {} tracks could not be read, so muzik cannot tell which device files are old",
@@ -144,6 +156,13 @@ fn print_dry_run(prepared: &Prepared) {
             label(&transfer.action),
             transfer.destination.display()
         );
+    }
+    for playlist in prepared
+        .playlists()
+        .iter()
+        .filter(|playlist| !playlist.is_current())
+    {
+        println!("playlist\t{}", playlist.destination.display());
     }
 }
 

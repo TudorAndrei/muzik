@@ -1,3 +1,4 @@
+use crate::playlists::{self, DevicePlaylist};
 use crate::{
     Error, Plan, Result, Target, Transfer, available_bytes, encodings, plan, record,
     remove_empty_folders, run as transfer_all, stale_files,
@@ -14,6 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub struct Selection {
     pub tracks: Vec<PathBuf>,
     pub covers: Vec<PathBuf>,
+    pub playlists: Vec<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -24,6 +26,7 @@ pub struct Options {
 
 pub struct Prepared {
     plan: Plan,
+    playlists: Vec<DevicePlaylist>,
     target: Target,
     options: Options,
     delete_blocked: bool,
@@ -51,12 +54,18 @@ pub struct Report {
     pub total: usize,
     pub failed: usize,
     pub unrecorded: usize,
+    pub playlists: usize,
 }
 
 impl Prepared {
     #[must_use]
     pub const fn plan(&self) -> &Plan {
         &self.plan
+    }
+
+    #[must_use]
+    pub fn playlists(&self) -> &[DevicePlaylist] {
+        &self.playlists
     }
 
     #[must_use]
@@ -138,6 +147,7 @@ pub fn select(library: &Library, directory: &Path, query: &str, covers: bool) ->
     Ok(Selection {
         tracks,
         covers: cover_files,
+        playlists: playlists::find(directory)?,
     })
 }
 
@@ -152,7 +162,7 @@ pub fn prepare(
     probe: &(dyn Fn(&Path) -> Result<Option<MeasuredQuality>, String> + Sync),
 ) -> Result<Prepared> {
     let known = encodings(connection, &target.path)?;
-    let plan = plan(
+    let mut plan = plan(
         target,
         directory,
         &selection.tracks,
@@ -161,6 +171,14 @@ pub fn prepare(
         options.jobs,
         probe,
     );
+    let playlists: Vec<DevicePlaylist> = selection
+        .playlists
+        .iter()
+        .filter_map(|source| {
+            playlists::rewrite(source, directory, &target.path, &plan.destinations)
+        })
+        .filter(|playlist| plan.planned.insert(playlist.destination.clone()))
+        .collect();
     let delete = options.delete && plan.unreadable.is_empty();
     let stale = if delete {
         stale_files(&target.path, &plan.planned)?
@@ -171,6 +189,7 @@ pub fn prepare(
     let needed = plan.bytes_needed();
     Ok(Prepared {
         plan,
+        playlists,
         target: target.clone(),
         options: Options {
             delete,
@@ -193,6 +212,7 @@ pub fn apply(
 ) -> Result<Report> {
     let Prepared {
         plan,
+        playlists,
         target,
         options,
         stale,
@@ -241,10 +261,18 @@ pub fn apply(
         });
     };
     let failed = transfer_all(&plan.pending, options.jobs, &finished);
+    let mut written = 0_usize;
+    for playlist in &playlists {
+        if !playlist.is_current() {
+            playlists::write(playlist)?;
+            written = written.saturating_add(1);
+        }
+    }
     Ok(Report {
         total,
         failed,
         unrecorded: unrecorded.load(Ordering::Relaxed),
+        playlists: written,
     })
 }
 

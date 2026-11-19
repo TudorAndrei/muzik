@@ -3,6 +3,7 @@ mod device;
 mod formats;
 mod library;
 mod planning;
+mod playlists;
 mod runs;
 mod selection;
 mod targets;
