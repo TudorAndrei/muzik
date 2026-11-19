@@ -27,6 +27,7 @@ pub struct Progress {
     pub stage: Cell<Stage>,
     audio: RefCell<Option<PathBuf>>,
     split: RefCell<Option<PathBuf>>,
+    singles: Cell<usize>,
 }
 
 impl Default for Progress {
@@ -35,6 +36,7 @@ impl Default for Progress {
             stage: Cell::new(Stage::Download),
             audio: RefCell::new(None),
             split: RefCell::new(None),
+            singles: Cell::new(0),
         }
     }
 }
@@ -54,10 +56,13 @@ impl Progress {
                 self.audio
                     .replace(files.iter().find(|path| path.is_file()).cloned());
             }
+            WorkflowEvent::PlanReady { singles, .. } => self.singles.set(*singles),
             WorkflowEvent::SplitCompleted { output } => {
                 self.split.replace(Some(output.clone()));
             }
-            WorkflowEvent::OrganizeStarted { target } if target.is_dir() => {
+            WorkflowEvent::OrganizeStarted { target }
+                if target.is_dir() && self.singles.get() == 0 =>
+            {
                 self.split.replace(Some(target.clone()));
             }
             _ => {}
@@ -487,7 +492,25 @@ mod tests {
         progress.observe(&WorkflowEvent::SplitCompleted {
             output: split.clone(),
         });
+        assert_eq!(progress.split(), Some(split.clone()));
+        let ready = directory.path().join("Ready");
+        std::fs::create_dir(&ready).unwrap();
+        progress.observe(&WorkflowEvent::PlanReady {
+            albums: 0,
+            singles: 2,
+        });
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: directory.path().to_path_buf(),
+        });
         assert_eq!(progress.split(), Some(split));
+        progress.observe(&WorkflowEvent::PlanReady {
+            albums: 0,
+            singles: 0,
+        });
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: ready.clone(),
+        });
+        assert_eq!(progress.split(), Some(ready));
         std::fs::remove_file(&audio).unwrap();
         assert_eq!(progress.audio(), None);
     }
