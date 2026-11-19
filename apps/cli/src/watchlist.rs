@@ -1,9 +1,10 @@
 use crate::jobs;
 use anyhow::{Context, bail};
 use muzik_core::paths::Paths;
+use muzik_core::{PlaylistFormat, app_config};
 use muzik_runner::{Settings, job_id};
-use muzik_store::watchlist::{self, ItemAction, Repository, Summary};
-use serde_json::json;
+use muzik_store::watchlist::{self, ItemAction, Repository, Summary, playlist_files};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 fn repository() -> Repository {
@@ -75,6 +76,65 @@ pub fn remove(playlist_id: &str) -> anyhow::Result<()> {
         Ok(())
     } else {
         bail!("{playlist_id} is not in the watchlist.")
+    }
+}
+
+pub fn playlists(on: Option<bool>, format: Option<PlaylistFormat>) -> anyhow::Result<()> {
+    let paths = Paths::user();
+    let mut changes = serde_json::Map::new();
+    if let Some(on) = on {
+        changes.insert("playlists".into(), json!(on));
+    }
+    if let Some(format) = format {
+        changes.insert("playlist_format".into(), json!(format));
+    }
+    if !changes.is_empty() {
+        app_config::save_gui_defaults(&paths, &Value::Object(changes))?;
+    }
+    let settings = settings()?;
+    let report = muzik_runner::watchlist::write_playlists(&settings)?;
+    if settings.playlists.is_none() {
+        println!(
+            "Playlist files are off. Removed {} file(s). Turn them on with `muzik watchlist playlists --on`.",
+            report.removed.len()
+        );
+        return Ok(());
+    }
+    print_report(&report);
+    Ok(())
+}
+
+pub fn playlist(playlist_id: &str, on: bool) -> anyhow::Result<()> {
+    if !repository().set_playlist_file(playlist_id, on)? {
+        bail!("{playlist_id} is not in the watchlist.");
+    }
+    println!(
+        "The playlist file of {playlist_id} is {}.",
+        if on { "on" } else { "off" }
+    );
+    let settings = settings()?;
+    if settings.playlists.is_some() {
+        print_report(&muzik_runner::watchlist::write_playlists(&settings)?);
+    }
+    Ok(())
+}
+
+fn print_report(report: &playlist_files::Report) {
+    for written in &report.written {
+        println!(
+            "{} · {} song(s){}{}",
+            written.path.display(),
+            written.tracks,
+            if written.missing > 0 {
+                format!(" · {} item(s) not in the library", written.missing)
+            } else {
+                String::new()
+            },
+            if written.changed { "" } else { " · unchanged" },
+        );
+    }
+    for removed in &report.removed {
+        println!("Removed {}", removed.display());
     }
 }
 

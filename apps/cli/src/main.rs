@@ -378,6 +378,44 @@ enum WatchlistCommand {
     Refresh(WatchlistRefresh),
     /// Queue a command for one item.
     Item(WatchlistItem),
+    /// Write a playlist file for each watched source.
+    Playlists(WatchlistPlaylists),
+    /// Turn the playlist file of one source on or off.
+    Playlist(WatchlistPlaylist),
+}
+
+#[derive(Args)]
+struct WatchlistPlaylists {
+    /// Keep the playlist files up to date after each watchlist job.
+    #[usage(long)]
+    on: bool,
+    /// Stop the updates and remove the playlist files that muzik wrote.
+    #[usage(long)]
+    off: bool,
+    /// File format of the playlists.
+    #[usage(long, short = 'f', value_enum)]
+    format: Option<muzik_core::PlaylistFormat>,
+}
+
+#[derive(Args)]
+struct WatchlistPlaylist {
+    /// Playlist ID shown by `muzik watchlist list`.
+    playlist_id: String,
+    /// Write a playlist file for this source.
+    #[usage(long)]
+    on: bool,
+    /// Do not write a playlist file for this source.
+    #[usage(long)]
+    off: bool,
+}
+
+fn switch(on: bool, off: bool) -> anyhow::Result<Option<bool>> {
+    match (on, off) {
+        (true, true) => anyhow::bail!("Use --on or --off, not both."),
+        (true, false) => Ok(Some(true)),
+        (false, true) => Ok(Some(false)),
+        (false, false) => Ok(None),
+    }
 }
 
 #[derive(Args)]
@@ -813,6 +851,13 @@ fn run(command: Command) -> anyhow::Result<()> {
                 args.action.into(),
                 args.queue_only,
             ),
+            WatchlistCommand::Playlists(args) => {
+                switch(args.on, args.off).and_then(|on| watchlist::playlists(on, args.format))
+            }
+            WatchlistCommand::Playlist(args) => switch(args.on, args.off).and_then(|on| {
+                let on = on.ok_or_else(|| anyhow::anyhow!("Use --on or --off."))?;
+                watchlist::playlist(&args.playlist_id, on)
+            }),
         },
         Command::Workflow(args) => workflow::run(&args),
     }
