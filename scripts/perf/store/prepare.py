@@ -42,7 +42,7 @@ impl FromIterator<(ItemAction,Availability)> for ActionAvailability {
 }
 impl Serialize for ActionAvailability {
     fn serialize<S: serde::Serializer>(&self, serializer:S)->Result<S::Ok,S::Error> {
-        use serde::set::SerializeMap;
+        use serde::ser::SerializeMap;
         let mut map=serializer.serialize_map(None)?;
         for action in ItemAction::ALL {
             if let Some(value)=self.get(action) { map.serialize_entry(action,value)?; }

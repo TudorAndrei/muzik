@@ -5,20 +5,34 @@ Feature: Local check of the watchlist
 
   Background:
     Given the watched playlist "PL1" has the video "abcdefghijk" titled "Song"
-    And the download of the video "abcdefghijk" in "PL1" is running
+    And the downloaded file "Song [abcdefghijk].flac" exists
 
   Scenario: A local check shows the saved state first and then the checked state
     When a local check is prepared
     Then the prepared watchlist has the stages:
-      | source | item | stage    | status  |
-      | PL1    | 1    | download | running |
+      | source | item | stage    | status      |
+      | PL1    | 1    | download | not_started |
     When the local check runs
     Then the published watchlist has the stages:
-      | source | item | stage    | status      |
-      | PL1    | 1    | download | not_started |
+      | source | item | stage    | status   |
+      | PL1    | 1    | download | complete |
     And the saved watchlist has the stages:
-      | source | item | stage    | status      |
-      | PL1    | 1    | download | not_started |
+      | source | item | stage    | status   |
+      | PL1    | 1    | download | complete |
+
+  Scenario: A local check keeps the stage of a running job
+    Given the watched playlist "PL1" has the video "bcdefghijkl" titled "Other"
+    And the downloaded file "Other [bcdefghijkl].flac" exists
+    And the download of the video "bcdefghijkl" in "PL1" is running
+    When a local check is prepared
+    And the local check runs
+    Then the published watchlist has the stages:
+      | source | item | stage    | status   |
+      | PL1    | 1    | download | complete |
+      | PL1    | 2    | download | running  |
+    And the saved watchlist has the stages:
+      | source | item | stage    | status  |
+      | PL1    | 2    | download | running |
 
   Scenario: A local check does nothing while a job runs
     Given a local check is prepared
@@ -52,8 +66,8 @@ Feature: Local check of the watchlist
     Then the published source "PL1" has the title "Edited by another process"
     And the saved source "PL1" has the title "Edited by another process"
     And the saved watchlist has the stages:
-      | source | item | stage    | status      |
-      | PL1    | 1    | download | not_started |
+      | source | item | stage    | status   |
+      | PL1    | 1    | download | complete |
 
   Scenario: Repeated revision conflicts report an error and keep the outside edit
     Given a local check is prepared
@@ -61,5 +75,5 @@ Feature: Local check of the watchlist
     Then the local check reports "changed during the local check"
     And the saved source "PL1" has the title of the last outside edit
     And the saved watchlist has the stages:
-      | source | item | stage    | status  |
-      | PL1    | 1    | download | running |
+      | source | item | stage    | status      |
+      | PL1    | 1    | download | not_started |

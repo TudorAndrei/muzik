@@ -5,10 +5,9 @@ proptest! {
     #[test]
     fn an_item_id_parses_back_from_its_text(
         playlist_id in ".{0,10}",
-        position in any::<u64>(),
-        video_id in proptest::option::of("[^:]{1,11}"),
+        key in proptest::option::of(".{1,20}"),
     ) {
-        let id = ItemId::new(&playlist_id, position, video_id.as_deref());
+        let id = ItemId::new(&playlist_id, key.as_deref());
         prop_assert_eq!(id.to_string().parse::<ItemId>()?, id);
     }
 

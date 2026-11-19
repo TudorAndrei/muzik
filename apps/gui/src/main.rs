@@ -397,7 +397,7 @@ impl Muzik {
         for event in events {
             self.app_event(event, window, cx);
         }
-        if std::mem::take(&mut self.reload_watchlist) {
+        if std::mem::take(&mut self.reload_watchlist) | self.activity.take_holds_changed() {
             self.load_watchlist(cx);
         }
         cx.notify();
@@ -593,6 +593,15 @@ impl Muzik {
     fn open_waiting(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         self.activity.open_waiting(id);
         self.prepare_decision(window, cx);
+        cx.notify();
+    }
+
+    fn cancel_waiting(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.activity.decision().and_then(Decision::queue_job) == Some(id) {
+            self.activity.defer();
+            self.prepare_decision(window, cx);
+        }
+        self.cancel_job(muzik_runner::job_id(id), cx);
         cx.notify();
     }
 
@@ -1004,19 +1013,31 @@ impl Muzik {
                             ),
                     );
         }
-        if decision.queue_job().is_some() {
+        if let Some(job) = decision.queue_job() {
             review = review.child(
-                div().flex().child(
-                    Button::new("decision-later")
-                        .ghost()
-                        .small()
-                        .label("Later")
-                        .on_click(cx.listener(|view, _, window, cx| {
-                            view.activity.defer();
-                            view.prepare_decision(window, cx);
-                            cx.notify();
-                        })),
-                ),
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("decision-later")
+                            .ghost()
+                            .small()
+                            .label("Later")
+                            .on_click(cx.listener(|view, _, window, cx| {
+                                view.activity.defer();
+                                view.prepare_decision(window, cx);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("decision-cancel")
+                            .ghost()
+                            .small()
+                            .label("Cancel job")
+                            .on_click(cx.listener(move |view, _, window, cx| {
+                                view.cancel_waiting(job, window, cx);
+                            })),
+                    ),
             );
         }
         review

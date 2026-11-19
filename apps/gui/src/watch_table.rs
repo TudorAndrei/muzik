@@ -21,6 +21,9 @@ pub struct WatchRow {
 }
 
 impl WatchRow {
+    const fn position(&self) -> u64 {
+        self.item.item.position
+    }
     fn title(&self) -> &str {
         &self.item.item.title
     }
@@ -144,13 +147,13 @@ impl WatchTable {
             WatchColumn::Status => self.rows.sort_by(|left, right| {
                 left.summary()
                     .cmp(right.summary())
-                    .then(left.key.position.cmp(&right.key.position))
+                    .then(left.position().cmp(&right.position()))
             }),
             WatchColumn::Position
             | WatchColumn::Stages
             | WatchColumn::Action
             | WatchColumn::Error => {
-                self.rows.sort_by_key(|row| row.key.position);
+                self.rows.sort_by_key(WatchRow::position);
             }
         }
         if order == ColumnSort::Descending {
@@ -219,15 +222,15 @@ impl TableDelegate for WatchTable {
             return div().into_any_element();
         };
         match column {
-            WatchColumn::Position => div().child(row.key.position.to_string()).into_any_element(),
+            WatchColumn::Position => div().child(row.position().to_string()).into_any_element(),
             WatchColumn::Title => div()
                 .min_w_0()
                 .truncate()
                 .child(row.title().to_string())
                 .into_any_element(),
             WatchColumn::Stages => style::stage_track(
-                SharedString::from(format!("watch-stages-{}", row.key)),
-                &row.item.item,
+                SharedString::from(format!("watch-stages-{}", row.position())),
+                &row.item,
                 cx,
             ),
             WatchColumn::Status => {
@@ -248,12 +251,15 @@ impl TableDelegate for WatchTable {
                 Some((action, label, enabled)) => {
                     let key = row.key.clone();
                     let view = self.view.clone();
-                    Button::new(SharedString::from(format!("watch-action-{key}")))
-                        .xsmall()
-                        .label(label)
-                        .disabled(!enabled)
-                        .on_click(move |_, _, cx| run_item(&view, &key, action, cx))
-                        .into_any_element()
+                    Button::new(SharedString::from(format!(
+                        "watch-action-{}",
+                        row.position()
+                    )))
+                    .xsmall()
+                    .label(label)
+                    .disabled(!enabled)
+                    .on_click(move |_, _, cx| run_item(&view, &key, action, cx))
+                    .into_any_element()
                 }
                 None => div().into_any_element(),
             },
@@ -293,7 +299,7 @@ impl TableDelegate for WatchTable {
             return String::new();
         };
         match column {
-            WatchColumn::Position => row.key.position.to_string(),
+            WatchColumn::Position => row.position().to_string(),
             WatchColumn::Title => row.title().to_string(),
             WatchColumn::Status => row.summary().to_string(),
             WatchColumn::Error => row.error().to_string(),
@@ -308,11 +314,11 @@ pub fn rows(
     queued: &HashSet<ItemId>,
 ) -> Vec<WatchRow> {
     playlist
-        .items
-        .iter()
-        .filter(|item| watchlist_view::matches_filter(item, filter))
-        .map(|item| {
-            let key = ItemId::of(&playlist.playlist_id, &item.item);
+        .item_ids()
+        .into_iter()
+        .zip(&playlist.items)
+        .filter(|(_, item)| watchlist_view::matches_filter(item, filter))
+        .map(|(key, item)| {
             let queued = queued.contains(&key);
             WatchRow {
                 key,
@@ -357,10 +363,7 @@ mod tests {
             window.render_frame(cx);
             window.within("pages").click(1usize, cx);
             window.render_frame(cx);
-            let id = format!(
-                "watch-action-{}",
-                muzik_store::watchlist::ItemId::new("PL1", 1, Some("abc"))
-            );
+            let id = "watch-action-1".to_owned();
             let before = window.find(id.clone());
             assert!(before.visible());
             let table = main.read(cx).watch_table.clone();
@@ -383,24 +386,29 @@ mod tests {
         ]})).unwrap();
         let queued = HashSet::from([muzik_store::watchlist::ItemId::new(
             "PL1",
-            3,
             Some("ccccccccccc"),
         )]);
         let list = rows(&playlist, Some(Summary::Failed), &queued);
         assert_eq!(
-            list.iter().map(|row| row.key.position).collect::<Vec<_>>(),
+            list.iter()
+                .map(super::WatchRow::position)
+                .collect::<Vec<_>>(),
             [1, 3]
         );
         assert!(!list[0].queued);
         assert!(list[1].queued);
         let all = rows(&playlist, None, &queued);
         assert_eq!(
-            all.iter().map(|row| row.key.position).collect::<Vec<_>>(),
+            all.iter()
+                .map(super::WatchRow::position)
+                .collect::<Vec<_>>(),
             [1, 2, 3]
         );
         let gone = rows(&playlist, Some(Summary::Unavailable), &queued);
         assert_eq!(
-            gone.iter().map(|row| row.key.position).collect::<Vec<_>>(),
+            gone.iter()
+                .map(super::WatchRow::position)
+                .collect::<Vec<_>>(),
             [4]
         );
     }
@@ -430,7 +438,7 @@ mod tests {
             table
                 .rows
                 .iter()
-                .map(|row| row.key.position)
+                .map(super::WatchRow::position)
                 .collect::<Vec<_>>(),
             [1, 3, 2]
         );
@@ -440,7 +448,7 @@ mod tests {
             table
                 .rows
                 .iter()
-                .map(|row| row.key.position)
+                .map(super::WatchRow::position)
                 .collect::<Vec<_>>(),
             [1, 2, 3]
         );

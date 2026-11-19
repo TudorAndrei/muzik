@@ -55,6 +55,8 @@ pub struct Activity {
     runs: Vec<Run>,
     finished_runs: HashSet<String>,
     queued_items: HashSet<ItemId>,
+    held_items: HashSet<(String, String, Option<String>)>,
+    holds_changed: bool,
     sections: Vec<ActivitySection>,
     logs: Vec<String>,
     decision: Option<Decision>,
@@ -187,6 +189,9 @@ impl Activity {
     }
     pub const fn queued_items(&self) -> &HashSet<ItemId> {
         &self.queued_items
+    }
+    pub const fn take_holds_changed(&mut self) -> bool {
+        std::mem::replace(&mut self.holds_changed, false)
     }
     pub fn sections(&self) -> &[ActivitySection] {
         &self.sections
@@ -374,6 +379,40 @@ impl Activity {
             .iter()
             .filter_map(|job| job["item"].as_str()?.parse().ok())
             .collect();
+        let held: HashSet<(String, String, Option<String>)> = open
+            .iter()
+            .filter(|job| {
+                job["status"]
+                    .as_str()
+                    .and_then(|status| status.parse::<JobStatus>().ok())
+                    == Some(JobStatus::Running)
+            })
+            .filter_map(|job| {
+                Some((
+                    job["item"].as_str()?.to_owned(),
+                    job["job_id"].as_str().unwrap_or_default().to_owned(),
+                    None,
+                ))
+            })
+            .chain(self.waiting.iter().filter_map(|choice| {
+                Some((
+                    choice.item.clone()?,
+                    choice.job_id.clone(),
+                    Some(
+                        choice
+                            .question
+                            .get("kind")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                ))
+            }))
+            .collect();
+        if held != self.held_items {
+            self.held_items = held;
+            self.holds_changed = true;
+        }
         let listed: HashSet<&str> = open
             .iter()
             .filter_map(|job| job["job_id"].as_str())
@@ -597,15 +636,38 @@ mod tests {
     }
 
     #[test]
+    fn the_watchlist_reloads_only_when_an_item_starts_or_stops_running_or_waiting() {
+        let mut activity = Activity::default();
+        let open = |status: &str| json!({"open":[{"job_id":"queue-1","kind":"item","title":"Track","status":status,"item":"a"}],"waiting":[]});
+        activity.apply_jobs(&open("queued"));
+        assert!(!activity.take_holds_changed());
+        activity.apply_jobs(&open("running"));
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(&open("running"));
+        assert!(!activity.take_holds_changed());
+        activity
+            .apply_jobs(&json!({"open":[],"waiting":[{"id":1,"item":"a","kind":"import_match"}]}));
+        assert!(activity.take_holds_changed());
+        activity
+            .apply_jobs(&json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"import_match"}]}));
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(
+            &json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"chapter_review"}]}),
+        );
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(&json!({"open":[],"waiting":[]}));
+        assert!(activity.take_holds_changed());
+    }
+
+    #[test]
     fn snapshots_and_live_progress_describe_one_run_until_it_finishes() {
         let mut activity = Activity::default();
-        let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":"PL1:1:video"}], "waiting":[]});
+        let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":r#"["spotify:playlist:p","spotify:track:t#1"]"#}], "waiting":[]});
         activity.apply_jobs(&snapshot);
-        assert!(
-            activity
-                .queued_items()
-                .contains(&ItemId::new("PL1", 1, Some("video")))
-        );
+        assert!(activity.queued_items().contains(&ItemId::new(
+            "spotify:playlist:p",
+            Some("spotify:track:t#1")
+        )));
         activity.apply(&job_event(JobEvent::ProgressStarted {
             task: JobTask::LocalSplit,
             description: "Split tracks".into(),

@@ -242,6 +242,9 @@ impl Muzik {
                     view.prepare_decision(window, cx);
                 }
                 view.sync_watch_table(cx);
+                if view.activity.take_holds_changed() {
+                    view.load_watchlist(cx);
+                }
                 view.gates = jobs.get("gates").cloned().unwrap_or_default();
             },
         );
@@ -500,7 +503,18 @@ impl Muzik {
             Call::JobsAnswer,
             cx,
             move |backend| backend.answer(id, &value),
-            |view, _, _, _| view.status = "Answer saved; the item is queued".into(),
+            |view, saved, _, cx| {
+                if saved {
+                    view.status = "Answer saved; the item is queued".into();
+                } else {
+                    view.failed(
+                        Call::JobsAnswer,
+                        "The answer was not saved: this choice is no longer open.".into(),
+                    );
+                    view.load_jobs(cx);
+                    view.load_watchlist(cx);
+                }
+            },
         );
     }
 

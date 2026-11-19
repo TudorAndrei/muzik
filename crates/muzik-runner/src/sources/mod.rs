@@ -6,11 +6,11 @@ use muzik_core::paths::Paths;
 use muzik_core::{AudioSource, QualityPolicy};
 use muzik_store::watchlist::jobs::{JobError, LoadedSource};
 use muzik_store::watchlist::{
-    ItemAction, Playlist, Repository, SourceKind, Stage, StageStatus, WatchItem,
+    ItemAction, Playlist, Repository, SourceKind, Stage, StageEvent, WatchItem,
 };
 use muzik_workflow::{WorkflowOperations, WorkflowOptions};
 use std::cell::Cell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 mod bandcamp;
@@ -27,10 +27,10 @@ pub trait Source {
     fn process(
         &self,
         adapter: &mut Adapter<'_, '_>,
-        item: &WatchItem,
+        item: &mut WatchItem,
         action: ItemAction,
         cancelled: &AtomicBool,
-    ) -> Result<WatchItem, JobError>;
+    ) -> Result<(), JobError>;
 }
 
 pub fn of(kind: SourceKind) -> &'static dyn Source {
@@ -72,8 +72,19 @@ fn at(stage: Stage, error: JobError) -> JobError {
     }
 }
 
-fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, split: bool) {
+struct Outputs {
+    audio: Option<PathBuf>,
+    split: Option<PathBuf>,
+    was_split: bool,
+}
+
+fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, outputs: Outputs) {
     let single_file = item.kind.single_file();
+    let Outputs {
+        mut audio,
+        mut split,
+        was_split,
+    } = outputs;
     for stage in Stage::ALL.iter().copied() {
         let skipped = match stage {
             Stage::Download => false,
@@ -82,17 +93,20 @@ fn mark_full(item: &mut WatchItem, options: &WorkflowOptions, split: bool) {
                     || options.quality_policy == QualityPolicy::Off
                     || options.audio_source == AudioSource::Soulseek
             }
-            Stage::Parse | Stage::Split => single_file || !split,
+            Stage::Parse | Stage::Split => single_file || !was_split,
             Stage::Organize => options.no_organize,
         };
-        item.set(
-            stage,
-            if skipped {
-                StageStatus::Skipped
-            } else {
-                StageStatus::Complete
-            },
-        );
+        let event = if skipped {
+            StageEvent::Skip
+        } else {
+            let path = match stage {
+                Stage::Download => audio.take(),
+                Stage::Split => split.take(),
+                Stage::Quality | Stage::Parse | Stage::Organize => item.kept_path(stage),
+            };
+            StageEvent::Complete(path)
+        };
+        item.apply(stage, event);
     }
 }
 
@@ -102,16 +116,10 @@ fn required<'a>(value: Option<&'a str>, key: &str) -> Result<&'a str, JobError> 
         .ok_or_else(|| JobError::Operation(format!("{key} must be a non-empty string")))
 }
 
-fn safe_name(id: &str) -> String {
-    id.chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
+fn download_folder(adapter: &Adapter<'_, '_>, item: &WatchItem) -> Result<PathBuf, JobError> {
+    required(item.entry_id.as_deref(), "entry_id")?;
+    item.download_folder(&adapter.prepared.settings.request.output)
+        .ok_or_else(|| JobError::Operation("This item has no download folder.".into()))
 }
 
 fn workflow_error(error: muzik_workflow::Error) -> JobError {
@@ -187,7 +195,6 @@ pub mod testing {
         let parked = RefCell::new(None);
         let mut adapter = Adapter {
             prepared: &prepared,
-            params: &Value::Null,
             events: &events,
             on_import_event: &mut imported,
             decide: &mut decide,

@@ -2,9 +2,37 @@
 
 use super::{ItemAction, SourceKind, Stage, WatchItem};
 use muzik_core::chapters;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub type Availability = (bool, Option<&'static str>);
+
+impl WatchItem {
+    #[must_use]
+    pub fn download_folder(&self, output: &Path) -> Option<PathBuf> {
+        let root = match self.kind {
+            SourceKind::Youtube => return None,
+            SourceKind::Spotify => "spotify-watchlist",
+            SourceKind::Bandcamp => "bandcamp-watchlist",
+        };
+        let entry_id = self
+            .entry_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())?;
+        Some(output.join(root).join(safe_name(entry_id)))
+    }
+}
+
+fn safe_name(id: &str) -> String {
+    id.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
 
 impl SourceKind {
     #[must_use]
@@ -118,7 +146,7 @@ fn split_exists(item: &WatchItem) -> bool {
 #[cfg(test)]
 mod tests {
     use super::availability;
-    use crate::watchlist::{ItemAction, SourceKind, Stage, WatchItem};
+    use crate::watchlist::{ItemAction, SourceKind, Stage, StageEvent, WatchItem};
     use serde_json::json;
 
     fn item(kind: SourceKind) -> WatchItem {
@@ -144,7 +172,10 @@ mod tests {
         assert!(!availability(&spotify, ItemAction::SplitAgain, Some(&audio)).0);
         let mut bandcamp = item(SourceKind::Bandcamp);
         assert!(!availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
-        bandcamp.set_path(Stage::Download, Some(directory.path().to_path_buf()));
+        bandcamp.apply(
+            Stage::Download,
+            StageEvent::Complete(Some(directory.path().to_path_buf())),
+        );
         assert!(availability(&bandcamp, ItemAction::OrganizeAgain, None).0);
         assert!(!availability(&bandcamp, ItemAction::ParseAgain, None).0);
     }

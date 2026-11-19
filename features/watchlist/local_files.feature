@@ -17,6 +17,15 @@ Feature: Watchlist state from local files
     And in the checked watchlist item 1 of "PL1" waits at the organize stage for an "import_match" question
     And the checked watchlist has no processed videos for "PL1"
 
+  Scenario: A waiting item keeps its error and last action when the cache left its import open
+    Given the watched playlist "PL1" has the video "abcdefghijk" titled "Song"
+    And the video "abcdefghijk" in "PL1" waits at the organize stage for an "import_match" question
+    And the downloaded file "Song [abcdefghijk].flac" exists
+    And the cache records the video "abcdefghijk" of "PL1" as "organized" from the file "Song [abcdefghijk].flac"
+    When the cache is imported and the watchlist is checked
+    Then in the checked watchlist item 1 of "PL1" waits at the organize stage for an "import_match" question
+    And item 1 of "PL1" in the checked watchlist has no error and no last action
+
   Scenario: An import that the cache left open fails once
     Given the watched playlist "PL1" has the video "abcdefghijk" titled "Song"
     And the video "abcdefghijk" in "PL1" was processed

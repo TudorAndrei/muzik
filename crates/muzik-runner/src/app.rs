@@ -346,11 +346,11 @@ mod tests {
     fn an_item_has_one_open_job_and_a_cancel_removes_it() {
         let dir = tempfile::tempdir().unwrap();
         let (app, _) = app(dir.path(), false).unwrap();
-        let id = ItemId::new("PL1", 2, Some("abcdefghijk"));
+        let id = ItemId::new("PL1", Some("abcdefghijk"));
         let job = app.run_item(&id, "Song", ItemAction::Run).unwrap();
         assert!(app.run_item(&id, "Song", ItemAction::Run).is_err());
         assert_eq!(app.jobs()["open"][0]["job_id"], job);
-        assert_eq!(app.jobs()["open"][0]["item"], "PL1:2:abcdefghijk");
+        assert_eq!(app.jobs()["open"][0]["item"], r#"["PL1","abcdefghijk"]"#);
         assert_eq!(app.jobs()["runner"], false);
         assert!(app.cancel(&job).unwrap());
         assert_eq!(app.jobs()["open"], json!([]));

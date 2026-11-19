@@ -3,8 +3,11 @@ use crate::operations::card;
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::given;
-use muzik_store::watchlist::{ItemAction, SourceKind, Stage, StageStatus, WatchItem, Watchlist};
-use serde_json::json;
+use muzik_store::jobs::{Kind, NewJob, Queue};
+use muzik_store::watchlist::{
+    ItemAction, ItemId, SourceKind, Stage, StageEvent, WatchItem, Watchlist,
+};
+use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -58,6 +61,13 @@ fn edit_item(
         Ok(())
     })?;
     Ok(())
+}
+
+fn item_job(id: &str, video: &str, action: ItemAction) -> anyhow::Result<(String, Value)> {
+    let item = ItemId::new(id, Some(video));
+    let mut params = json!({"title": video, "action": action});
+    item.write(&mut params)?;
+    Ok((item.to_string(), params))
 }
 
 #[given(expr = "the watched playlist {string} has the video {string} titled {string}")]
@@ -114,11 +124,17 @@ fn video_waits(
     kind: String,
 ) -> StepResult {
     let stage = Stage::from_str(&stage)?;
-    edit_item(world, &id, &video, |item| {
-        let record = item.stage_mut(stage);
-        record.status = StageStatus::Waiting;
-        record.question = Some(json!({"kind": kind, "payload": {"task": {}}}));
-    })
+    let (key, params) = item_job(&id, &video, stage.resume_action())?;
+    world.jobs()?.park(
+        &NewJob {
+            kind: Kind::Item,
+            item_key: &key,
+            title: &video,
+            params: &params,
+        },
+        &json!({"kind": kind, "payload": {"task": {}}}),
+    )?;
+    Ok(())
 }
 
 #[given(expr = "the video {string} in {string} was processed")]
@@ -135,9 +151,16 @@ fn video_was_processed(world: &mut WatchlistWorld, video: String, id: String) ->
 
 #[given(expr = "the download of the video {string} in {string} is running")]
 fn download_is_running(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
-    edit_item(world, &id, &video, |item| {
-        item.set(Stage::Download, StageStatus::Running);
-    })
+    let (key, params) = item_job(&id, &video, ItemAction::Run)?;
+    let mut jobs = world.jobs()?;
+    jobs.enqueue(&NewJob {
+        kind: Kind::Item,
+        item_key: &key,
+        title: &video,
+        params: &params,
+    })?;
+    anyhow::ensure!(jobs.claim(Queue::Item)?.is_some(), "the job did not start");
+    Ok(())
 }
 
 #[given(expr = "the download of the video {string} in {string} failed with the error {string}")]
@@ -149,9 +172,7 @@ fn download_failed(
 ) -> StepResult {
     edit_item(world, &id, &video, |item| {
         item.last_error = Some(error.clone());
-        let record = item.stage_mut(Stage::Download);
-        record.status = StageStatus::Failed;
-        record.error = Some(error);
+        item.apply(Stage::Download, StageEvent::Fail(error));
     })
 }
 
@@ -171,7 +192,10 @@ fn video_was_downloaded(
 ) -> StepResult {
     add_items(world, &id, &[(video.clone(), "Song".to_owned())])?;
     edit_item(world, &id, &video, |item| {
-        item.complete(Stage::Download, Some(PathBuf::from(path)));
+        item.apply(
+            Stage::Download,
+            StageEvent::Complete(Some(PathBuf::from(path))),
+        );
     })
 }
 

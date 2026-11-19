@@ -3,3 +3,4 @@
 [default.extend-words]
 # Aphex Twin, "Selected Ambient Works ... Tha" — used in test fixtures.
 Tha = "Tha"
+ser = "ser"

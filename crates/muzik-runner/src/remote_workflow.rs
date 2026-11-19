@@ -19,15 +19,78 @@ use muzik_workflow::{
     run_workflow_with_events,
 };
 use serde_json::{Value, json};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+
+pub struct Progress {
+    pub stage: Cell<Stage>,
+    audio: RefCell<Option<PathBuf>>,
+    quality: RefCell<Option<PathBuf>>,
+    split: RefCell<Option<PathBuf>>,
+    singles: Cell<usize>,
+}
+
+impl Default for Progress {
+    fn default() -> Self {
+        Self {
+            stage: Cell::new(Stage::Download),
+            audio: RefCell::new(None),
+            quality: RefCell::new(None),
+            split: RefCell::new(None),
+            singles: Cell::new(0),
+        }
+    }
+}
+
+impl Progress {
+    pub fn audio(&self) -> Option<PathBuf> {
+        if self.quality.borrow().is_some() {
+            return self.quality();
+        }
+        self.audio.borrow().clone().filter(|path| path.is_file())
+    }
+
+    pub fn quality(&self) -> Option<PathBuf> {
+        self.quality.borrow().clone().filter(|path| path.is_file())
+    }
+
+    fn replace_audio(&self, original: &[PathBuf], checked: &[PathBuf]) {
+        if let Some(replacement) = checked.iter().find(|path| !original.contains(path)) {
+            self.quality.replace(Some(replacement.clone()));
+        }
+    }
+
+    pub fn split(&self) -> Option<PathBuf> {
+        self.split.borrow().clone().filter(|path| path.is_dir())
+    }
+
+    fn observe(&self, event: &WorkflowEvent) {
+        match event {
+            WorkflowEvent::AcquisitionCompleted { files } => {
+                self.audio
+                    .replace(files.iter().find(|path| path.is_file()).cloned());
+                self.quality.replace(None);
+            }
+            WorkflowEvent::PlanReady { singles, .. } => self.singles.set(*singles),
+            WorkflowEvent::SplitCompleted { output } => {
+                self.split.replace(Some(output.clone()));
+            }
+            WorkflowEvent::OrganizeStarted { target }
+                if target.is_dir() && self.singles.get() == 0 =>
+            {
+                self.split.replace(Some(target.clone()));
+            }
+            _ => {}
+        }
+    }
+}
 
 pub fn run(
     input: WorkflowInput,
     settings: &Settings,
     cancelled: &AtomicBool,
-    stage: &Cell<Stage>,
+    progress: &Progress,
     on_event: &mut dyn FnMut(JobEvent),
     on_import_event: &mut dyn FnMut(JobEvent),
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
@@ -40,7 +103,7 @@ pub fn run(
             decide,
             on_import_event,
             cancelled,
-            stage,
+            stage: &progress.stage,
             after_import: settings.after_import,
         },
         paths: settings.paths.clone(),
@@ -50,8 +113,12 @@ pub fn run(
         fallback: settings.options.fallback,
         output: settings.request.output.clone(),
         acquired_from: None,
+        progress,
     };
-    let mut report = |event| on_event(event_record(event));
+    let mut report = |event: WorkflowEvent| {
+        progress.observe(&event);
+        on_event(event_record(event));
+    };
     if let WorkflowInput::SpotifyExport(ref path) = input {
         let result = playlist::run_spotify_export(
             &settings.request,
@@ -118,6 +185,7 @@ struct RemoteOperations<'a> {
     fallback: AudioFallback,
     output: PathBuf,
     acquired_from: Option<AcquisitionSource>,
+    progress: &'a Progress,
 }
 
 impl WorkflowOperations for RemoteOperations<'_> {
@@ -233,6 +301,8 @@ impl WorkflowOperations for RemoteOperations<'_> {
             self.local.on_import_event,
             self.local.decide,
         )?;
+        self.progress
+            .replace_audio(audio_files, &result.audio_files);
         Ok(QualityCheckedAudio {
             audio_files: result.audio_files,
             pre_split_dirs: result.pre_split_dirs,
@@ -420,6 +490,64 @@ mod tests {
     use super::{acquire_spotify_audio, candidate_row};
     use muzik_core::{AudioFallback, AudioSource};
     use muzik_soulseek::types::{Candidate, FileEntry};
+    use muzik_workflow::WorkflowEvent;
+
+    #[test]
+    fn progress_keeps_the_outputs_of_finished_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("Song [abcdefghijk].flac");
+        std::fs::write(&audio, b"audio").unwrap();
+        let split = directory.path().join("Song");
+        std::fs::create_dir(&split).unwrap();
+        let progress = super::Progress::default();
+        progress.observe(&WorkflowEvent::AcquisitionCompleted {
+            files: vec![directory.path().join("missing.flac"), audio.clone()],
+        });
+        assert_eq!(progress.audio(), Some(audio.clone()));
+        assert_eq!(progress.split(), None);
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: audio.clone(),
+        });
+        assert_eq!(progress.split(), None);
+        progress.observe(&WorkflowEvent::SplitCompleted {
+            output: split.clone(),
+        });
+        assert_eq!(progress.split(), Some(split.clone()));
+        let ready = directory.path().join("Ready");
+        std::fs::create_dir(&ready).unwrap();
+        progress.observe(&WorkflowEvent::PlanReady {
+            albums: 0,
+            singles: 2,
+        });
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: directory.path().to_path_buf(),
+        });
+        assert_eq!(progress.split(), Some(split));
+        progress.observe(&WorkflowEvent::PlanReady {
+            albums: 0,
+            singles: 0,
+        });
+        progress.observe(&WorkflowEvent::OrganizeStarted {
+            target: ready.clone(),
+        });
+        assert_eq!(progress.split(), Some(ready));
+        let replacement = directory.path().join("Song [abcdefghijk] (flac).flac");
+        std::fs::write(&replacement, b"better").unwrap();
+        progress.replace_audio(std::slice::from_ref(&audio), std::slice::from_ref(&audio));
+        assert_eq!(progress.quality(), None);
+        progress.replace_audio(
+            std::slice::from_ref(&audio),
+            std::slice::from_ref(&replacement),
+        );
+        assert_eq!(progress.audio(), Some(replacement.clone()));
+        assert_eq!(progress.quality(), Some(replacement));
+        progress.observe(&WorkflowEvent::AcquisitionCompleted {
+            files: vec![audio.clone()],
+        });
+        assert_eq!(progress.audio(), Some(audio.clone()));
+        std::fs::remove_file(&audio).unwrap();
+        assert_eq!(progress.audio(), None);
+    }
 
     #[test]
     fn spotify_youtube_source_does_not_call_soulseek() {

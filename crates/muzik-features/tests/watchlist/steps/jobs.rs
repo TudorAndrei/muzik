@@ -1,9 +1,10 @@
 use crate::documents::{field, list};
-use crate::operations::{FakeOperations, Processing, Question, card};
+use crate::operations::{DuringRun, FakeOperations, Processing, Question, Sync, card};
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
 use muzik_core::{DecisionKind, JobEvent};
+use muzik_store::jobs::{Kind, NewJob, Queue};
 use muzik_store::watchlist::jobs::{self, JobError, PendingItem};
 use muzik_store::watchlist::{ItemAction, ItemId, Stage};
 use serde_json::{Value, json};
@@ -166,6 +167,103 @@ fn cancelled_at_second_video(world: &mut WatchlistWorld) {
     world.operations.processing = Processing::StopAtSecond;
 }
 
+#[given("the job is cancelled while the video is processed")]
+fn cancelled_while_processed(world: &mut WatchlistWorld) {
+    world.operations.processing = Processing::CancelAfterStart;
+}
+
+#[given("processing saves the download before the later stages")]
+const fn processing_downloads_first(world: &mut WatchlistWorld) {
+    world.operations.downloads_first = true;
+}
+
+#[given(expr = "a sync renames the video {string} to {string} while it is processed")]
+fn sync_renames_during_run(world: &mut WatchlistWorld, video: String, title: String) {
+    world.operations.during_run = Some(DuringRun {
+        database: world.database(),
+        video,
+        sync: Sync::Retitle(title),
+    });
+}
+
+#[given(expr = "a sync removes the video {string} while it is processed")]
+fn sync_removes_during_run(world: &mut WatchlistWorld, video: String) {
+    world.operations.during_run = Some(DuringRun {
+        database: world.database(),
+        video,
+        sync: Sync::Remove,
+    });
+}
+
+#[when(
+    expr = "the job of the video {string} of {string} ends before it starts with the error {string}"
+)]
+fn job_ends_before_start(
+    world: &mut WatchlistWorld,
+    video: String,
+    id: String,
+    message: String,
+) -> StepResult {
+    let item = ItemId::new(&id, Some(&video));
+    let store = world.jobs()?;
+    let open = store.find_open(Kind::Item, &item.to_string())?;
+    let waiting = open
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("the video has no open job"))?;
+    anyhow::ensure!(store.answer(waiting.id, &json!("as_is"))?, "no answer");
+    abandon_next(world, &item, &message)
+}
+
+#[when(
+    expr = "a {string} job of the video {string} of {string} ends before it starts with the error {string}"
+)]
+fn new_job_ends_before_start(
+    world: &mut WatchlistWorld,
+    action: String,
+    video: String,
+    id: String,
+    message: String,
+) -> StepResult {
+    let item = ItemId::new(&id, Some(&video));
+    let mut params = json!({"title": video, "action": ItemAction::from_str(&action)?});
+    item.write(&mut params)?;
+    world.jobs()?.enqueue(&NewJob {
+        kind: Kind::Item,
+        item_key: &item.to_string(),
+        title: &video,
+        params: &params,
+    })?;
+    abandon_next(world, &item, &message)
+}
+
+fn abandon_next(world: &WatchlistWorld, item: &ItemId, message: &str) -> StepResult {
+    let job = world
+        .jobs()?
+        .claim(Queue::Item)?
+        .ok_or_else(|| anyhow::anyhow!("the job did not start"))?;
+    let action = job
+        .params
+        .get("action")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("the job has no action"))?;
+    jobs::abandon(
+        &world.repository(),
+        job.id,
+        item,
+        ItemAction::from_str(action)?,
+        message,
+    )?;
+    Ok(())
+}
+
+#[then(expr = "the video {string} of {string} has no open job")]
+fn no_open_job(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
+    let item = ItemId::new(&id, Some(&video));
+    let open = world.jobs()?.find_open(Kind::Item, &item.to_string())?;
+    anyhow::ensure!(open.is_empty(), "the open jobs are {open:?}");
+    Ok(())
+}
+
 #[given("jobs are dry runs")]
 const fn jobs_are_dry_runs(world: &mut WatchlistWorld) {
     world.dry_run = true;
@@ -201,21 +299,20 @@ fn watchlist_is_synced(world: &mut WatchlistWorld) -> StepResult {
     Ok(())
 }
 
-#[when(expr = "the action {string} runs on the video {string} at position {int} of {string}")]
+#[when(expr = "the action {string} runs on the video {string} of {string}")]
 fn action_runs(
     world: &mut WatchlistWorld,
     action: String,
     video: String,
-    position: u64,
     id: String,
 ) -> StepResult {
-    let item = ItemId::new(&id, position, Some(&video));
+    let item = ItemId::new(&id, Some(&video));
     run_on_item(world, &item, ItemAction::from_str(&action)?, false)
 }
 
-#[when(expr = "the item {string} at position {int} of {string} runs")]
-fn item_runs(world: &mut WatchlistWorld, video: String, position: u64, id: String) -> StepResult {
-    let item = ItemId::new(&id, position, Some(&video));
+#[when(expr = "the item {string} of {string} runs")]
+fn item_runs(world: &mut WatchlistWorld, video: String, id: String) -> StepResult {
+    let item = ItemId::new(&id, Some(&video));
     run_on_item(world, &item, ItemAction::Run, true)
 }
 
@@ -329,16 +426,11 @@ fn action_waits(world: &mut WatchlistWorld, stage: String) -> StepResult {
 fn pending_videos(world: &mut WatchlistWorld, id: String, videos: String) -> StepResult {
     let expected = list(&videos)
         .iter()
-        .map(|entry| {
-            let (video, position) = entry
-                .split_once(" at ")
-                .ok_or_else(|| anyhow::anyhow!("{entry} has no position"))?;
-            Ok(PendingItem {
-                id: ItemId::new(&id, position.parse()?, Some(video)),
-                title: video.to_owned(),
-            })
+        .map(|video| PendingItem {
+            id: ItemId::new(&id, Some(video)),
+            title: video.clone(),
         })
-        .collect::<anyhow::Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
     let actual = world
         .pending
         .as_ref()

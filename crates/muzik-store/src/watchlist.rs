@@ -12,20 +12,22 @@ use std::path::{Path, PathBuf};
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr, VariantArray};
 
 mod check;
+mod hold;
 mod item;
 pub mod jobs;
 mod legacy;
 mod library_lookup;
 mod reconcile;
 pub mod source;
+mod stage;
 mod view;
 
 pub use check::{LocalCheck, LocalCheckOptions, LocalChecks};
-pub use item::{
-    AudioIndex, ItemId, LastAction, Playlist, StageRecord, Stages, WatchItem, Watchlist, now,
-};
+pub use hold::{Hold, Holds, Snapshot, status};
+pub use item::{AudioIndex, ItemId, LastAction, Playlist, WatchItem, Watchlist, now};
 pub use legacy::import_cache;
 pub use reconcile::ReconcileOptions;
+pub use stage::{StageEvent, StageRecord, StageState, Stages};
 pub use view::{Availability, ItemView, PlaylistView, PrimaryAction, Summary, WatchlistView, view};
 
 #[derive(
@@ -302,13 +304,19 @@ impl Repository {
 
     /// # Errors
     /// Returns an error if the database cannot be opened or holds an invalid watchlist.
-    pub fn load_revision(&self) -> Result<(Watchlist, i64)> {
+    pub fn snapshot(&self) -> Result<Snapshot> {
+        Ok(self.snapshot_revision()?.0)
+    }
+
+    /// # Errors
+    /// Returns an error if the database cannot be opened or holds an invalid watchlist.
+    pub fn snapshot_revision(&self) -> Result<(Snapshot, i64)> {
         let mut connection = self.connect()?;
         let transaction = connection.transaction()?;
         let revision = read_revision(&transaction)?;
-        let document = read_document(&transaction)?;
+        let snapshot = Snapshot::new(read_document(&transaction)?, Holds::read(&transaction)?);
         transaction.commit()?;
-        Ok((document, revision))
+        Ok((snapshot, revision))
     }
 
     /// # Errors
@@ -407,12 +415,66 @@ fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<()> {
         .map_err(|error| format!("cannot read {}: {error}", legacy.display()))?;
     let value: Value = serde_json::from_str(&source)
         .map_err(|error| format!("invalid watchlist {}: {error}", legacy.display()))?;
-    let value = Watchlist::from_value(value)?;
-    write_changes(&transaction, &Watchlist::default(), &value)?;
+    let watchlist = Watchlist::from_value(value.clone())?;
+    write_changes(&transaction, &Watchlist::default(), &watchlist)?;
+    park_legacy_questions(&transaction, &value, &watchlist)?;
     transaction.commit()?;
     let mut backup = legacy.as_os_str().to_owned();
     backup.push(".migrated");
     Ok(fs::rename(legacy, backup)?)
+}
+
+fn park_legacy_questions(
+    connection: &Connection,
+    raw: &Value,
+    watchlist: &Watchlist,
+) -> Result<()> {
+    let listed = |value: &Value, field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    for (playlist, raw_playlist) in watchlist.playlists.iter().zip(listed(raw, "playlists")) {
+        let raw_items = listed(&raw_playlist, "items");
+        for ((id, item), raw_item) in playlist
+            .item_ids()
+            .into_iter()
+            .zip(&playlist.items)
+            .zip(&raw_items)
+        {
+            let Some((stage, question)) = Stage::ALL.iter().find_map(|stage| {
+                let record = raw_item.get("stages")?.get(stage.as_ref())?;
+                (record.get("status")?.as_str()? == "waiting").then_some(())?;
+                Some((
+                    *stage,
+                    record.get("question").filter(|value| value.is_object())?,
+                ))
+            }) else {
+                continue;
+            };
+            if id.key.is_none() {
+                continue;
+            }
+            let mut params = serde_json::json!({"title": item.title});
+            id.write(&mut params)?;
+            if let Some(fields) = params.as_object_mut() {
+                fields.insert("action".into(), serde_json::json!(stage.resume_action()));
+            }
+            crate::jobs::park_on(
+                connection,
+                &crate::jobs::NewJob {
+                    kind: crate::jobs::Kind::Item,
+                    item_key: &id.to_string(),
+                    title: &item.title,
+                    params: &params,
+                },
+                question,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn read_revision(connection: &Connection) -> Result<i64> {
@@ -460,6 +522,78 @@ fn read_document(connection: &Connection) -> Result<Watchlist> {
         ..Watchlist::default()
     }
     .normalized()
+}
+
+struct Readable {
+    document: Watchlist,
+    unread: HashSet<String>,
+}
+
+fn read_readable(connection: &Connection) -> rusqlite::Result<Readable> {
+    let mut readable = Readable {
+        document: Watchlist::default(),
+        unread: HashSet::new(),
+    };
+    let mut statement = connection.prepare(
+        "SELECT coalesce(CAST(playlist_id AS TEXT), ''), data
+         FROM watchlist_playlists ORDER BY ordinal",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        match parse::<Playlist>(row.get_ref(1)?) {
+            Ok(mut playlist) => {
+                playlist.items.clear();
+                readable.document.playlists.push(playlist);
+            }
+            Err(error) => {
+                tracing::warn!(playlist = %id, %error, "a watchlist playlist cannot be read");
+                readable.unread.insert(id);
+            }
+        }
+    }
+    let mut statement = connection.prepare(
+        "SELECT coalesce(CAST(playlist_id AS TEXT), ''), ordinal, data
+         FROM watchlist_items ORDER BY playlist_id, ordinal",
+    )?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let id: String = row.get(0)?;
+        let item = parse::<WatchItem>(row.get_ref(2)?).and_then(|item| {
+            item.validate()
+                .map(|()| item)
+                .map_err(|error| error.to_string())
+        });
+        match (item, readable.document.playlist_mut(&id)) {
+            (Ok(item), Some(playlist)) => playlist.items.push(item),
+            (Err(error), _) => {
+                let ordinal = row.get_ref(1)?;
+                tracing::warn!(playlist = %id, ?ordinal, %error, "a watchlist item cannot be read");
+                readable.unread.insert(id);
+            }
+            (Ok(_), None) => {}
+        }
+    }
+    let Readable { document, unread } = &mut readable;
+    document.playlists.retain_mut(|playlist| {
+        if unread.contains(&playlist.playlist_id) {
+            return false;
+        }
+        let normalized = playlist.normalize();
+        if let Err(error) = &normalized {
+            tracing::warn!(playlist = %playlist.playlist_id, %error, "a watchlist playlist is not valid");
+            unread.insert(playlist.playlist_id.clone());
+        }
+        normalized.is_ok()
+    });
+    Ok(readable)
+}
+
+fn parse<T: serde::de::DeserializeOwned>(
+    data: rusqlite::types::ValueRef<'_>,
+) -> std::result::Result<T, String> {
+    let text = data.as_str().map_err(|error| error.to_string())?;
+    serde_json::from_str(text).map_err(|error| error.to_string())
 }
 
 #[derive(Serialize)]
@@ -550,8 +684,28 @@ fn write_changes(connection: &Connection, before: &Watchlist, after: &Watchlist)
             "UPDATE watchlist_revision SET revision = revision + 1 WHERE id = 1",
             [],
         )?;
+        cancel_orphans(connection, after)?;
     }
     Ok(())
+}
+
+fn cancel_orphans(connection: &Connection, document: &Watchlist) -> Result<usize> {
+    let ids: HashSet<ItemId> = document
+        .playlists
+        .iter()
+        .flat_map(Playlist::item_ids)
+        .collect();
+    let mut cancelled: usize = 0;
+    for job in crate::jobs::open_items_on(connection)? {
+        let orphan = job
+            .item_key
+            .parse::<ItemId>()
+            .is_ok_and(|id| !ids.contains(&id));
+        if orphan && crate::jobs::cancel_open_on(connection, job.id)? {
+            cancelled = cancelled.saturating_add(1);
+        }
+    }
+    Ok(cancelled)
 }
 
 /// # Errors
@@ -589,8 +743,88 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Playlist, SourceKind, WatchItem, header};
+    use super::{Playlist, Repository, SourceKind, WatchItem, header};
+    use crate::jobs::{Status, Store};
     use serde_json::json;
+
+    #[test]
+    fn a_waiting_question_in_watchlist_json_becomes_a_waiting_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = directory.path().join("watchlist.json");
+        let database = directory.path().join("muzik.db");
+        std::fs::write(
+            &legacy,
+            json!({"version":1,"playlists":[{"playlist_id":"PL1","url":"u","items":[
+                {"position":1,"title":"A","video_id":"aaaaaaaaaaa"},
+                {"position":2,"title":"A","video_id":"aaaaaaaaaaa","stages":{
+                    "download":{"status":"complete","path":"/a.opus"},
+                    "organize":{"status":"waiting","question":{"kind":"import_match"}}}}
+            ]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let watchlist = Repository::new(database.clone())
+            .with_legacy(legacy.clone())
+            .load()
+            .unwrap();
+        assert!(!legacy.exists());
+        assert_eq!(watchlist.playlists[0].items.len(), 2);
+        let waiting = Store::from_connection(crate::db::open(&database).unwrap())
+            .list(Status::Waiting)
+            .unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].item_key, r#"["PL1","aaaaaaaaaaa"]"#);
+        assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
+        assert_eq!(waiting[0].params["action"], "organize_again");
+    }
+
+    #[test]
+    fn the_job_of_a_repeated_video_stays_when_one_copy_leaves() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("muzik.db");
+        let repository = Repository::new(database.clone());
+        let item = |position, video: &str| {
+            let mut item = WatchItem::new(position, video, SourceKind::Youtube);
+            item.video_id = Some(video.into());
+            item
+        };
+        repository
+            .update(|document| {
+                let mut playlist = Playlist::new("PL1", "u", SourceKind::Youtube, None);
+                playlist.merge_items(vec![
+                    item(1, "aaaaaaaaaaa"),
+                    item(2, "bbbbbbbbbbb"),
+                    item(3, "aaaaaaaaaaa"),
+                ]);
+                document.playlists.push(playlist);
+                Ok(())
+            })
+            .unwrap();
+        let mut store = Store::from_connection(crate::db::open(&database).unwrap());
+        for key in [r#"["PL1","aaaaaaaaaaa"]"#, r#"["PL1","bbbbbbbbbbb"]"#] {
+            store
+                .enqueue(&crate::jobs::NewJob {
+                    kind: crate::jobs::Kind::Item,
+                    item_key: key,
+                    title: "item",
+                    params: &json!({}),
+                })
+                .unwrap();
+        }
+        repository
+            .update(|document| {
+                document.playlists[0].merge_items(vec![item(1, "aaaaaaaaaaa")]);
+                Ok(())
+            })
+            .unwrap();
+        let queued: Vec<String> = store
+            .list(Status::Queued)
+            .unwrap()
+            .into_iter()
+            .map(|job| job.item_key)
+            .collect();
+        assert_eq!(queued, [r#"["PL1","aaaaaaaaaaa"]"#]);
+    }
 
     #[test]
     fn a_playlist_header_keeps_the_stored_field_order_without_items() {

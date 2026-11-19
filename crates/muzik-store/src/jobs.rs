@@ -146,10 +146,23 @@ impl Store {
 
     /// # Errors
     /// Returns an error if the old jobs database cannot be read, copied, or renamed.
-    pub fn import_legacy(&self, path: &Path) -> Result<usize> {
+    pub fn import_legacy(&mut self, path: &Path) -> Result<usize> {
         if !path.is_file() {
             return Ok(0);
         }
+        let imported = self.connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM meta WHERE key = 'legacy_jobs_imported')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        let copied = if imported { 0 } else { self.copy_legacy(path)? };
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".migrated");
+        std::fs::rename(path, backup)?;
+        Ok(copied)
+    }
+
+    fn copy_legacy(&mut self, path: &Path) -> Result<usize> {
         let jobs = {
             let legacy = Connection::open(path)?;
             let mut statement = legacy.prepare(
@@ -172,21 +185,26 @@ impl Store {
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let time = now();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (queue, kind, item_key, title, status, params, question, answer, created) in &jobs {
             let status = match status {
                 Status::Running => Status::Queued,
                 status => *status,
             };
-            self.connection
-                .execute(
-                    "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    params![queue, kind, item_key, title, status, params, question, answer, created, time],
-                )?;
+            transaction.execute(
+                "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![queue, kind, item_key, title, status, params, question, answer, created, time],
+            )?;
         }
-        let mut backup = path.as_os_str().to_owned();
-        backup.push(".migrated");
-        std::fs::rename(path, backup)?;
+        transaction.execute_batch(crate::db::REKEY_ITEM_JOBS)?;
+        transaction.execute(
+            "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1')",
+            [],
+        )?;
+        transaction.commit()?;
         Ok(jobs.len())
     }
 
@@ -221,10 +239,7 @@ impl Store {
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn recover(&self) -> Result<usize> {
-        Ok(self.connection.execute(
-            "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
-            params![now()],
-        )?)
+        Ok(recover_on(&self.connection)?)
     }
 
     /// # Errors
@@ -317,52 +332,24 @@ impl Store {
     }
 
     fn cancel_open(&self, id: i64) -> Result<bool> {
-        let changed = self.connection.execute(
-            "UPDATE jobs SET status = 'cancelled', updated_at = ?1
-                 WHERE id = ?2 AND status IN ('queued', 'waiting')",
-            params![now(), id],
-        )?;
-        Ok(changed == 1)
+        Ok(cancel_open_on(&self.connection, id)?)
     }
 
     /// # Errors
     /// Returns an error if the database query fails.
     pub fn answer(&self, id: i64, answer: &Value) -> Result<bool> {
-        let changed = self.connection.execute(
-            "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
-                 WHERE id = ?3 AND status = 'waiting'",
-            params![answer, now(), id],
-        )?;
-        Ok(changed == 1)
+        Ok(answer_on(&self.connection, id, answer)?)
     }
 
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn reopen(&self, id: i64) -> Result<()> {
-        self.connection.execute(
-            "UPDATE jobs SET status = 'waiting', answer = NULL, updated_at = ?1
-                 WHERE id = ?2 AND question IS NOT NULL",
-            params![now(), id],
-        )?;
-        Ok(())
+    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
     }
 
+    /// Ends a running job. A cancelled job that has a question waits for a new answer.
     /// # Errors
     /// Returns an error if the database query fails.
-    pub fn finish(&self, id: i64) -> Result<()> {
-        self.set_status(id, Status::Done, None)
-    }
-
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn fail(&self, id: i64, error: &str) -> Result<()> {
-        self.set_status(id, Status::Failed, Some(error))
-    }
-
-    /// # Errors
-    /// Returns an error if the database query fails.
-    pub fn cancel(&self, id: i64) -> Result<()> {
-        self.set_status(id, Status::Cancelled, None)
+    pub fn end(&self, id: i64, ending: Ending<'_>) -> Result<bool> {
+        end_on(&self.connection, id, ending)
     }
 
     /// # Errors
@@ -398,14 +385,167 @@ impl Store {
         let rows = statement.query_map(params![kind, item_key], job)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
+}
 
-    fn set_status(&self, id: i64, status: Status, error: Option<&str>) -> Result<()> {
-        self.connection.execute(
-            "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ending<'a> {
+    Done,
+    Failed(&'a str),
+    Cancelled,
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn end_on(connection: &Connection, id: i64, ending: Ending<'_>) -> Result<bool> {
+    let close = |status: Status, error: Option<&str>| {
+        connection.execute(
+            "UPDATE jobs SET status = ?1, error = ?2, updated_at = ?3
+             WHERE id = ?4 AND status = 'running'",
             params![status, error, now(), id],
-        )?;
-        Ok(())
+        )
+    };
+    let changed = match ending {
+        Ending::Done => close(Status::Done, None)?,
+        Ending::Failed(error) => close(Status::Failed, Some(error))?,
+        Ending::Cancelled => connection.execute(
+            "UPDATE jobs SET status = CASE WHEN question IS NULL THEN 'cancelled' ELSE 'waiting' END,
+                 answer = NULL, updated_at = ?1
+             WHERE id = ?2 AND status = 'running'",
+            params![now(), id],
+        )?,
+    };
+    Ok(changed == 1)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn recover_on(connection: &Connection) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE jobs SET status = 'queued', updated_at = ?1 WHERE status = 'running'",
+        params![now()],
+    )
+}
+
+/// Fails each open job whose stored row cannot be read as a job, and returns their ids.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn fail_unreadable_on(connection: &Connection) -> rusqlite::Result<Vec<i64>> {
+    let ids = connection
+        .prepare(
+            "SELECT id FROM jobs WHERE status IN ('queued', 'running', 'waiting') ORDER BY id",
+        )?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut failed = Vec::new();
+    for id in ids {
+        let read = connection.query_row(
+            &format!("SELECT {COLUMNS} FROM jobs WHERE id = ?1"),
+            [id],
+            job,
+        );
+        match read {
+            Ok(_) => {}
+            Err(
+                rusqlite::Error::FromSqlConversionFailure(..)
+                | rusqlite::Error::InvalidColumnType(..)
+                | rusqlite::Error::IntegralValueOutOfRange(..),
+            ) => {
+                if fail_open_on(connection, id, UNREADABLE_JOB)? {
+                    failed.push(id);
+                }
+            }
+            Err(error) => return Err(error),
+        }
     }
+    Ok(failed)
+}
+
+const UNREADABLE_JOB: &str = "Muzik could not read this job. Add it to the queue again.";
+
+/// Fails a job that waits in the queue or for an answer, or that runs.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn fail_open_on(connection: &Connection, id: i64, error: &str) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'failed', error = ?1, updated_at = ?2
+             WHERE id = ?3 AND status IN ('queued', 'running', 'waiting')",
+        params![error, now(), id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn held_on(connection: &Connection) -> Result<Vec<Job>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM jobs WHERE kind = 'item' AND status IN ('running', 'waiting') ORDER BY id"
+    ))?;
+    let rows = statement.query_map([], job)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn open_items_on(connection: &Connection) -> rusqlite::Result<Vec<Job>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT {COLUMNS} FROM jobs WHERE kind = 'item' AND status IN ('queued', 'waiting') ORDER BY id"
+    ))?;
+    let rows = statement.query_map([], job)?;
+    rows.collect()
+}
+
+/// Cancels jobs that wait in the queue or for an answer. A running job keeps its status.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_open_on(connection: &Connection, id: i64) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+             WHERE id = ?2 AND status IN ('queued', 'waiting')",
+        params![now(), id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// Queues a waiting job again with `answer`.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn answer_on(connection: &Connection, id: i64, answer: &Value) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
+             WHERE id = ?3 AND status = 'waiting'",
+        params![answer, now(), id],
+    )?;
+    Ok(changed == 1)
+}
+
+/// Cancels the waiting job of an item, except the job `keep`.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_waiting_on(connection: &Connection, item_key: &str, keep: Option<i64>) -> Result<()> {
+    connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+         WHERE kind = 'item' AND item_key = ?2 AND status = 'waiting' AND id IS NOT ?3",
+        params![now(), item_key, keep],
+    )?;
+    Ok(())
+}
+
+/// Keeps one open job for each item: a running job, else a waiting one, else the oldest one.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn cancel_duplicates_on(connection: &Connection) -> rusqlite::Result<usize> {
+    connection.execute(
+        "UPDATE jobs SET status = 'cancelled', updated_at = ?1
+         WHERE kind = 'item' AND status IN ('queued', 'waiting') AND EXISTS (
+             SELECT 1 FROM jobs AS other
+             WHERE other.kind = 'item' AND other.item_key = jobs.item_key AND other.id != jobs.id
+                 AND other.status IN ('queued', 'running', 'waiting')
+                 AND (CASE other.status WHEN 'running' THEN 2 WHEN 'waiting' THEN 1 ELSE 0 END
+                          > CASE jobs.status WHEN 'waiting' THEN 1 ELSE 0 END
+                      OR (other.status = jobs.status AND other.id < jobs.id))
+         )",
+        params![now()],
+    )
 }
 
 /// # Errors
@@ -477,7 +617,7 @@ fn now() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Admission, CancelRequest, Kind, NewJob, Queue, RunnerLock, Status, Store};
+    use super::{Admission, CancelRequest, Ending, Kind, NewJob, Queue, RunnerLock, Status, Store};
     use serde_json::json;
 
     fn memory() -> Store {
@@ -628,16 +768,66 @@ mod tests {
         assert_eq!(claimed.answer, Some(json!("as_is")));
         assert_eq!(claimed.question, Some(json!({"kind": "chapter_review"})));
         assert_eq!(claimed.params, params);
-        store.reopen(claimed.id).unwrap();
+        assert!(store.end(claimed.id, Ending::Cancelled).unwrap());
         let reopened = store.get(id).unwrap().unwrap();
         assert_eq!(reopened.status, Status::Waiting);
         assert_eq!(reopened.answer, None);
+        assert!(!store.end(id, Ending::Done).unwrap());
         assert!(store.answer(id, &json!("as_is")).unwrap());
         store.claim(Queue::Item).unwrap();
-        store.finish(id).unwrap();
+        assert!(store.end(id, Ending::Done).unwrap());
+        assert!(!store.end(id, Ending::Failed("late")).unwrap());
         assert_eq!(
-            store.get(id).unwrap().map(|job| job.status),
-            Some(Status::Done)
+            store.get(id).unwrap().map(|job| (job.status, job.error)),
+            Some((Status::Done, None))
+        );
+    }
+
+    #[test]
+    fn one_open_job_stays_for_each_item() {
+        let mut store = memory();
+        let params = json!({});
+        let question = json!({"kind":"import_match"});
+        let waiting = store
+            .park(&job(Kind::Item, "a", &params), &question)
+            .unwrap();
+        let running = store.enqueue(&job(Kind::Item, "b", &params)).unwrap().id();
+        store.claim(Queue::Item).unwrap();
+        let queued = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "a", &params),
+            Status::Queued,
+            None,
+        )
+        .unwrap();
+        let behind = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "b", &params),
+            Status::Waiting,
+            Some(&question),
+        )
+        .unwrap();
+        let older = store.enqueue(&job(Kind::Item, "c", &params)).unwrap().id();
+        let asking = super::insert_on(
+            &store.connection,
+            &job(Kind::Item, "c", &params),
+            Status::Waiting,
+            Some(&question),
+        )
+        .unwrap();
+        assert_eq!(super::cancel_duplicates_on(&store.connection).unwrap(), 3);
+        let statuses = [waiting, queued, running, behind, older, asking]
+            .map(|id| store.get(id).unwrap().map(|job| job.status));
+        assert_eq!(
+            statuses,
+            [
+                Some(Status::Waiting),
+                Some(Status::Cancelled),
+                Some(Status::Running),
+                Some(Status::Cancelled),
+                Some(Status::Cancelled),
+                Some(Status::Waiting)
+            ]
         );
     }
 
@@ -660,7 +850,7 @@ mod tests {
             CancelRequest::Requested
         );
         assert_eq!(store.cancel_requests().unwrap(), [running]);
-        store.cancel(running).unwrap();
+        assert!(store.end(running, Ending::Cancelled).unwrap());
         assert_eq!(
             store.request_cancel(running).unwrap(),
             CancelRequest::NotOpen
@@ -841,12 +1031,21 @@ mod tests {
                  created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
                  INSERT INTO jobs (queue, kind, item_key, title, status, params, question, created_at, updated_at) VALUES
                  ('item', 'item', 'PL1:1:a', 'Waiting', 'waiting', '{}', '{\"kind\":\"import_match\"}', 1, 1),
-                 ('item', 'item', 'PL1:2:b', 'Running', 'running', '{}', NULL, 1, 1),
+                 ('item', 'item', 'PL1:2:b', 'Running', 'running',
+                  '{\"playlist_id\":\"PL1\",\"position\":2,\"video_id\":\"b\",\"action\":\"run\"}', NULL, 1, 1),
                  ('item', 'item', 'PL1:3:c', 'Done', 'done', '{}', NULL, 1, 1);",
             )
             .unwrap();
         }
-        let store = memory();
+        let mut store = memory();
+        store
+            .connection
+            .execute_batch(
+                r#"INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
+                 INSERT INTO watchlist_items (playlist_id, ordinal, data)
+                 VALUES ('PL1', 0, '{"position":2,"title":"B","video_id":"b"}');"#,
+            )
+            .unwrap();
         assert_eq!(store.import_legacy(&legacy).unwrap(), 2);
         assert!(!legacy.exists());
         assert!(directory.path().join("jobs.db.migrated").is_file());
@@ -854,6 +1053,16 @@ mod tests {
         let waiting = store.list(Status::Waiting).unwrap();
         assert_eq!(waiting.len(), 1);
         assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
-        assert_eq!(store.list(Status::Queued).unwrap()[0].item_key, "PL1:2:b");
+        let queued = &store.list(Status::Queued).unwrap()[0];
+        assert_eq!(queued.item_key, r#"["PL1","b"]"#);
+        assert_eq!(
+            queued.params,
+            json!({"playlist_id":"PL1","action":"run","key":"b"})
+        );
+        std::fs::copy(directory.path().join("jobs.db.migrated"), &legacy).unwrap();
+        assert_eq!(store.import_legacy(&legacy).unwrap(), 0);
+        assert!(!legacy.exists());
+        assert_eq!(store.list(Status::Queued).unwrap().len(), 1);
+        assert_eq!(store.list(Status::Waiting).unwrap().len(), 1);
     }
 }

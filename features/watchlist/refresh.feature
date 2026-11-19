@@ -72,7 +72,7 @@ Feature: Watchlist refresh
     Then the refresh summary counts 2 pending videos
     And the refresh summary counts 0 completed videos
     And the saved watchlist did not change
-    When the action "download_again" runs on the video "video_a" at position 1 of "PL123"
+    When the action "download_again" runs on the video "video_a" of "PL123"
     Then the action reports a dry run
     And the saved watchlist did not change
     And no video was processed
@@ -83,17 +83,18 @@ Feature: Watchlist refresh
     And the source now lists the videos "video_a, video_a, video_b" with the title "Current title"
     When the watchlist is synced
     Then no video was processed
-    And the pending videos of "PL123" are "video_a at 1, video_b at 3"
+    And the pending videos of "PL123" are "video_a, video_b"
     And the saved watchlist has the stages:
       | source | item | stage    | status  |
       | PL123  | 1    | download | running |
+      | PL123  | 2    | download | running |
 
   Scenario: A private video is not queued and shows as unavailable
     Given the watched playlist "PL123" has no videos
     And the source now lists the videos "video_a, video_b"
     And the listed video "video_b" is private
     When the watchlist is synced
-    Then the pending videos of "PL123" are "video_a at 1"
+    Then the pending videos of "PL123" are "video_a"
     When the cards are shown
     Then the shown card of item 2 in "PL123" reads "Unavailable"
     And the shown card of item 2 in "PL123" has no main action

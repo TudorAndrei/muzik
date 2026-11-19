@@ -1,12 +1,13 @@
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
-use muzik_store::watchlist::{CheckedWrite, SourceKind, Stage, WatchItem, Watchlist};
+use muzik_store::watchlist::{CheckedWrite, SourceKind, Stage, StageEvent, WatchItem, Watchlist};
 use std::sync::Arc;
 
 fn read(world: &mut WatchlistWorld) -> StepResult {
     let repository = world.repository();
-    let (document, revision) = repository.load_revision()?;
+    let (snapshot, revision) = repository.snapshot_revision()?;
+    let document = snapshot.document;
     let current = repository.revision()?;
     anyhow::ensure!(
         revision == current,
@@ -72,7 +73,7 @@ fn runner_completes_download(world: &mut WatchlistWorld, ordinal: usize, id: Str
             .playlist_mut(&id)
             .and_then(|playlist| playlist.items.get_mut(ordinal.checked_sub(1)?))
             .ok_or("the item is not watched")?
-            .complete(Stage::Download, None);
+            .apply(Stage::Download, StageEvent::Complete(None));
         Ok(())
     })?;
     Ok(())

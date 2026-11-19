@@ -2,7 +2,6 @@ use crate::documents::{field, item, playlist};
 use crate::support::StepResult;
 use crate::world::WatchlistWorld;
 use cucumber::{then, when};
-use muzik_store::watchlist::view;
 use serde_json::{Value, json};
 
 fn card(world: &WatchlistWorld, which: &str, ordinal: usize, id: &str) -> anyhow::Result<Value> {
@@ -13,12 +12,7 @@ fn card(world: &WatchlistWorld, which: &str, ordinal: usize, id: &str) -> anyhow
 #[when("the cards are shown")]
 fn cards_are_shown(world: &mut WatchlistWorld) -> StepResult {
     world.snapshot()?;
-    let document = world.repository().load()?;
-    world.shown = Some(serde_json::to_value(view(
-        &document,
-        &world.downloads(),
-        &world.cache(),
-    ))?);
+    world.shown = Some(world.saved_view()?);
     Ok(())
 }
 

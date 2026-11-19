@@ -35,10 +35,7 @@ fn watchlist_has_stages(world: &mut WatchlistWorld, which: String, step: &Step) 
         let [id, ordinal, stage, status] = row.as_slice() else {
             anyhow::bail!("the row {row:?} does not have 4 cells");
         };
-        let actual = field(
-            item(&document, id, ordinal.parse()?)?,
-            &format!("/stages/{stage}/status"),
-        );
+        let actual = stage_status(item(&document, id, ordinal.parse()?)?, stage);
         anyhow::ensure!(
             actual.as_str() == Some(status.as_str()),
             "the {stage} stage of item {ordinal} of {id} is {actual}"
@@ -58,13 +55,22 @@ fn item_waits_for_question(
     stage: String,
     kind: String,
 ) -> StepResult {
-    let record = item_field(world, &which, &id, ordinal, &format!("/stages/{stage}"))?;
+    let hold = item_field(world, &which, &id, ordinal, "/hold")?;
     anyhow::ensure!(
-        field(&record, "/status") == "waiting"
-            && field(&record, "/question") == &json!({"kind": kind, "payload": {"task": {}}}),
-        "the {stage} stage is {record}"
+        field(&hold, "/status") == "waiting"
+            && field(&hold, "/stage") == stage.as_str()
+            && field(&hold, "/question") == &json!({"kind": kind, "payload": {"task": {}}}),
+        "the item is held by {hold}"
     );
     Ok(())
+}
+
+fn stage_status<'a>(item: &'a Value, stage: &str) -> &'a Value {
+    if field(item, "/hold/stage") == stage {
+        field(item, "/hold/status")
+    } else {
+        field(item, &format!("/stages/{stage}/status"))
+    }
 }
 
 #[then(expr = "the {word} watchlist has no processed videos for {string}")]
@@ -112,6 +118,22 @@ fn item_has(
     };
     let actual = item_field(world, &which, &id, ordinal, pointer)?;
     anyhow::ensure!(actual == expected.as_str(), "the {name} is {actual}");
+    Ok(())
+}
+
+#[then(expr = "item {int} of {string} in the {word} watchlist has no error and no last action")]
+fn item_has_no_error(
+    world: &mut WatchlistWorld,
+    ordinal: usize,
+    id: String,
+    which: String,
+) -> StepResult {
+    let error = item_field(world, &which, &id, ordinal, "/last_error")?;
+    let action = item_field(world, &which, &id, ordinal, "/last_action")?;
+    anyhow::ensure!(
+        error.is_null() && action.is_null(),
+        "the error is {error} and the last action is {action}"
+    );
     Ok(())
 }
 

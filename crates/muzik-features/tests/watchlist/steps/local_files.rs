@@ -1,7 +1,7 @@
 use crate::support::{StepResult, fixture};
 use crate::world::WatchlistWorld;
 use cucumber::{given, then, when};
-use muzik_store::watchlist::import_cache;
+use muzik_store::watchlist::{import_cache, view};
 use serde_json::{Value, json};
 use std::fs;
 
@@ -28,9 +28,13 @@ fn import(world: &mut WatchlistWorld) -> anyhow::Result<bool> {
 }
 
 fn check(world: &mut WatchlistWorld) -> StepResult {
-    let mut document = world.repository().load()?;
-    world.with_options(|options| document.reconcile(options))?;
-    world.checked = Some(document.to_value()?);
+    let mut snapshot = world.repository().snapshot()?;
+    world.with_options(|options| snapshot.document.reconcile(options, &snapshot.holds))?;
+    world.checked = Some(serde_json::to_value(view(
+        &snapshot,
+        &world.downloads(),
+        &world.cache(),
+    ))?);
     Ok(())
 }
 
@@ -159,9 +163,9 @@ fn checked_and_saved(world: &mut WatchlistWorld, times: usize) -> StepResult {
     world.snapshot()?;
     let repository = world.repository();
     for _ in 0..times {
-        let mut document = repository.load()?;
-        world.with_options(|options| document.reconcile(options))?;
-        repository.save(&document)?;
+        let mut snapshot = repository.snapshot()?;
+        world.with_options(|options| snapshot.document.reconcile(options, &snapshot.holds))?;
+        repository.save(&snapshot.document)?;
     }
     Ok(())
 }

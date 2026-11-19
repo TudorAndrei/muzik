@@ -1,4 +1,4 @@
-use super::{ItemAction, SourceKind, Stage, StageStatus};
+use super::{Holds, ItemAction, SourceKind, Stage, StageEvent, StageRecord, StageStatus, Stages};
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -109,70 +109,29 @@ impl From<LastAction> for String {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Stages {
-    #[serde(default)]
-    pub download: StageRecord,
-    #[serde(default)]
-    pub quality: StageRecord,
-    #[serde(default)]
-    pub parse: StageRecord,
-    #[serde(default)]
-    pub split: StageRecord,
-    #[serde(default)]
-    pub organize: StageRecord,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StageRecord {
-    #[serde(default)]
-    pub status: StageStatus,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub path: Option<PathBuf>,
-    #[serde(default)]
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<Value>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "(String, Option<String>)", into = "(String, Option<String>)")]
 pub struct ItemId {
     pub playlist_id: String,
-    pub position: u64,
-    pub video_id: Option<String>,
+    pub key: Option<String>,
 }
 
 impl ItemId {
-    pub fn new(playlist_id: &str, position: u64, video_id: Option<&str>) -> Self {
+    pub fn new(playlist_id: &str, key: Option<&str>) -> Self {
         Self {
             playlist_id: playlist_id.to_owned(),
-            position,
-            video_id: video_id.filter(|id| !id.is_empty()).map(str::to_owned),
+            key: key.filter(|key| !key.is_empty()).map(str::to_owned),
         }
     }
 
-    #[must_use]
-    pub fn of(playlist_id: &str, item: &WatchItem) -> Self {
-        Self::new(playlist_id, item.position, item.video_id.as_deref())
-    }
-
     /// # Errors
-    /// Returns an error if `playlist_id` is missing or blank, or `position` is not a positive integer.
+    /// Returns an error if `playlist_id` is missing or blank, or the item fields have the wrong type.
     pub fn from_params(params: &Value) -> Result<Self> {
         let params = ItemParams::read(params)?;
         if params.playlist_id.trim().is_empty() {
             return Err("playlist_id must be a non-empty string.".into());
         }
-        if params.position == 0 {
-            return Err("position must be a positive integer.".into());
-        }
-        Ok(Self::new(
-            &params.playlist_id,
-            params.position,
-            params.video_id.as_deref(),
-        ))
+        Ok(Self::new(&params.playlist_id, params.key.as_deref()))
     }
 
     /// # Errors
@@ -184,10 +143,21 @@ impl ItemId {
             ItemParams::read(params)?
         };
         self.playlist_id.clone_into(&mut fields.playlist_id);
-        fields.position = self.position;
-        fields.video_id.clone_from(&self.video_id);
+        fields.key.clone_from(&self.key);
         *params = serde_json::to_value(fields)?;
         Ok(())
+    }
+}
+
+impl From<(String, Option<String>)> for ItemId {
+    fn from((playlist_id, key): (String, Option<String>)) -> Self {
+        Self::new(&playlist_id, key.as_deref())
+    }
+}
+
+impl From<ItemId> for (String, Option<String>) {
+    fn from(id: ItemId) -> Self {
+        (id.playlist_id, id.key)
     }
 }
 
@@ -195,16 +165,14 @@ impl std::str::FromStr for ItemId {
     type Err = Error;
 
     fn from_str(text: &str) -> Result<Self> {
-        let mut parts = text.rsplitn(3, ':');
-        let (Some(video_id), Some(position), Some(playlist_id)) =
-            (parts.next(), parts.next(), parts.next())
-        else {
-            return Err(format!("invalid item id: {text}").into());
-        };
-        let position = position
-            .parse()
-            .map_err(|_| Error::from(format!("invalid item id: {text}")))?;
-        Ok(Self::new(playlist_id, position, Some(video_id)))
+        serde_json::from_str(text).map_err(|_| format!("invalid item id: {text}").into())
+    }
+}
+
+impl std::fmt::Display for ItemId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        formatter.write_str(&text)
     }
 }
 
@@ -213,9 +181,7 @@ struct ItemParams {
     #[serde(default)]
     playlist_id: String,
     #[serde(default)]
-    position: u64,
-    #[serde(default)]
-    video_id: Option<String>,
+    key: Option<String>,
     #[serde(flatten)]
     rest: Map<String, Value>,
 }
@@ -226,16 +192,11 @@ impl ItemParams {
     }
 }
 
-impl std::fmt::Display for ItemId {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{}:{}:{}",
-            self.playlist_id,
-            self.position,
-            self.video_id.as_deref().unwrap_or("")
-        )
-    }
+fn item_ids<T: AsRef<WatchItem>>(playlist_id: &str, items: &[T]) -> Vec<ItemId> {
+    items
+        .iter()
+        .map(|item| ItemId::new(playlist_id, item.as_ref().key()))
+        .collect()
 }
 
 #[must_use]
@@ -308,7 +269,7 @@ impl Playlist {
         }
     }
 
-    fn normalize(&mut self) -> Result<()> {
+    pub(super) fn normalize(&mut self) -> Result<()> {
         if self.playlist_id.trim().is_empty() {
             return Err("playlist_id must be a non-empty string".into());
         }
@@ -322,6 +283,15 @@ impl Playlist {
         let mut seen = HashSet::new();
         self.processed_video_ids
             .retain(|id| seen.insert(id.clone()));
+        let mut first = HashMap::<ItemId, WatchItem>::new();
+        for (id, item) in self.item_ids().into_iter().zip(&mut self.items) {
+            match first.get(&id) {
+                Some(shared) => item.record_run(shared),
+                None => {
+                    first.insert(id, item.clone());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -345,48 +315,59 @@ impl Playlist {
         if id.playlist_id != self.playlist_id {
             return None;
         }
-        self.items
-            .iter()
-            .position(|item| ItemId::of(&self.playlist_id, item) == *id)
+        self.item_ids().iter().position(|item| item == id)
+    }
+
+    pub(super) fn record_copies(&mut self, id: &ItemId, run: &WatchItem) {
+        for (other, item) in self.item_ids().iter().zip(&mut self.items) {
+            if other == id {
+                item.record_run(run);
+            }
+        }
     }
 
     #[must_use]
-    pub fn pending(&self) -> Vec<&WatchItem> {
+    pub fn pending(&self, holds: &Holds) -> Vec<(ItemId, &WatchItem)> {
         let mut seen = HashSet::new();
-        self.items
-            .iter()
-            .filter(|item| !item.is_waiting() && !item.is_unavailable())
-            .filter(|item| {
+        self.item_ids()
+            .into_iter()
+            .zip(&self.items)
+            .filter(|(id, item)| !holds.is_waiting(id) && !item.is_unavailable())
+            .filter(|(id, item)| {
                 item.key()
-                    .is_some_and(|key| !self.is_processed(key) && seen.insert(key.to_owned()))
+                    .is_some_and(|key| !self.is_processed(key) && seen.insert(id.clone()))
             })
             .collect()
     }
 
     pub fn merge_items(&mut self, discovered: Vec<WatchItem>) {
-        let mut old = HashMap::<(Option<String>, usize), WatchItem>::new();
-        let mut counts = HashMap::<Option<String>, usize>::new();
-        for item in self.items.drain(..) {
-            let key = item.key().map(str::to_owned);
-            let occurrence = counts.entry(key.clone()).or_default();
-            old.insert((key, *occurrence), item);
-            *occurrence = occurrence.saturating_add(1);
+        let mut old = HashMap::<ItemId, WatchItem>::new();
+        for (id, item) in self.item_ids().into_iter().zip(self.items.drain(..)) {
+            old.entry(id).or_insert(item);
         }
-        counts.clear();
-        self.items = discovered
+        self.items = item_ids(&self.playlist_id, &discovered)
             .into_iter()
-            .map(|mut item| {
-                let key = item.key().map(str::to_owned);
-                let occurrence = counts.entry(key.clone()).or_default();
-                if let Some(previous) = old.remove(&(key, *occurrence)) {
-                    item.stages = previous.stages;
-                    item.last_action = previous.last_action;
-                    item.last_error = previous.last_error;
+            .zip(discovered)
+            .map(|(id, mut item)| {
+                if let Some(previous) = old.get(&id) {
+                    item.record_run(previous);
                 }
-                *occurrence = occurrence.saturating_add(1);
                 item
             })
             .collect();
+    }
+}
+
+impl<T: AsRef<WatchItem>> Playlist<T> {
+    #[must_use]
+    pub fn item_ids(&self) -> Vec<ItemId> {
+        item_ids(&self.playlist_id, &self.items)
+    }
+}
+
+impl AsRef<Self> for WatchItem {
+    fn as_ref(&self) -> &Self {
+        self
     }
 }
 
@@ -410,7 +391,7 @@ impl WatchItem {
         }
     }
 
-    fn validate(&self) -> Result<()> {
+    pub(super) fn validate(&self) -> Result<()> {
         if self.position == 0 {
             return Err("position must be a positive integer".into());
         }
@@ -441,7 +422,7 @@ impl WatchItem {
         }
     }
 
-    pub const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
+    pub(super) const fn stage_mut(&mut self, stage: Stage) -> &mut StageRecord {
         match stage {
             Stage::Download => &mut self.stages.download,
             Stage::Quality => &mut self.stages.quality,
@@ -453,7 +434,7 @@ impl WatchItem {
 
     #[must_use]
     pub const fn status(&self, stage: Stage) -> StageStatus {
-        self.stage(stage).status
+        self.stage(stage).status()
     }
 
     pub fn statuses(&self) -> impl Iterator<Item = StageStatus> + '_ {
@@ -462,70 +443,46 @@ impl WatchItem {
 
     #[must_use]
     pub fn path(&self, stage: Stage) -> Option<&Path> {
-        self.stage(stage).path.as_deref()
+        self.stage(stage).path()
     }
 
-    pub fn set(&mut self, stage: Stage, status: StageStatus) {
-        let record = self.stage_mut(stage);
-        record.status = status;
-        record.updated_at = Some(now());
+    #[must_use]
+    pub fn kept_path(&self, stage: Stage) -> Option<PathBuf> {
+        self.path(stage).map(Path::to_path_buf)
     }
 
-    pub fn set_path(&mut self, stage: Stage, path: Option<PathBuf>) {
-        self.stage_mut(stage).path = path;
-    }
-
-    pub fn complete(&mut self, stage: Stage, path: Option<PathBuf>) {
-        self.set(stage, StageStatus::Complete);
-        self.set_path(stage, path);
+    pub fn apply(&mut self, stage: Stage, event: StageEvent) {
+        self.stage_mut(stage).apply(event);
     }
 
     pub fn invalidate(&mut self, stages: &[Stage]) {
         for stage in stages {
-            self.set(*stage, StageStatus::Stale);
+            self.apply(*stage, StageEvent::Invalidate);
         }
     }
 
-    pub fn start(&mut self, action: ItemAction) {
+    pub fn record_action(&mut self, action: ItemAction) {
         self.last_action = Some(action.into());
         self.last_error = None;
-        *self.stage_mut(action.stage()) = StageRecord {
-            status: StageStatus::Running,
-            updated_at: Some(now()),
-            ..StageRecord::default()
-        };
-    }
-
-    pub fn finish(&mut self, stage: Stage, action: ItemAction) {
-        self.last_action = Some(action.into());
-        self.last_error = None;
-        if self.status(stage) == StageStatus::Running {
-            *self.stage_mut(stage) = StageRecord {
-                status: StageStatus::Complete,
-                updated_at: Some(now()),
-                ..StageRecord::default()
-            };
-        }
-    }
-
-    pub fn wait(&mut self, stage: Stage, action: ItemAction, question: Value) {
-        self.last_action = Some(action.into());
-        self.last_error = None;
-        let record = self.stage_mut(stage);
-        record.status = StageStatus::Waiting;
-        record.updated_at = Some(now());
-        record.question = Some(question);
     }
 
     pub fn fail(&mut self, stage: Stage, action: ItemAction, message: &str) {
         self.last_action = Some(action.into());
         self.last_error = Some(message.to_owned());
-        *self.stage_mut(stage) = StageRecord {
-            status: StageStatus::Failed,
-            updated_at: Some(now()),
-            error: Some(message.to_owned()),
-            ..StageRecord::default()
-        };
+        self.apply(stage, StageEvent::Fail(message.to_owned()));
+    }
+
+    /// Fails `stage` for a job that ended before it started, unless the stage is done.
+    pub fn fail_before_start(&mut self, stage: Stage, action: ItemAction, message: &str) {
+        if !self.status(stage).is_done() {
+            self.fail(stage, action, message);
+        }
+    }
+
+    pub(super) fn record_run(&mut self, run: &Self) {
+        self.stages.clone_from(&run.stages);
+        self.last_action.clone_from(&run.last_action);
+        self.last_error.clone_from(&run.last_error);
     }
 
     pub fn is_done(&self) -> bool {
@@ -533,26 +490,17 @@ impl WatchItem {
     }
 
     #[must_use]
-    pub fn is_waiting(&self) -> bool {
-        self.statuses().any(|status| status == StageStatus::Waiting)
-    }
-
-    #[must_use]
     pub fn is_gone(&self) -> bool {
         self.unavailable == Some(true)
             || self.status(Stage::Download) == StageStatus::Failed
-                && self
-                    .stage(Stage::Download)
-                    .error
-                    .as_deref()
-                    .is_some_and(|error| {
-                        error.lines().any(|line| {
-                            line.contains("ERROR:")
-                                && [": Video unavailable", ": Private video"]
-                                    .iter()
-                                    .any(|end| line.trim_end().ends_with(end))
-                        })
+                && self.stage(Stage::Download).error().is_some_and(|error| {
+                    error.lines().any(|line| {
+                        line.contains("ERROR:")
+                            && [": Video unavailable", ": Private video"]
+                                .iter()
+                                .any(|end| line.trim_end().ends_with(end))
                     })
+                })
     }
 
     pub fn is_unavailable(&self) -> bool {
@@ -563,47 +511,70 @@ impl WatchItem {
         self.path(Stage::Download)
             .filter(|path| path.is_file())
             .map(Path::to_path_buf)
+            .or_else(|| {
+                self.download_folder(&index.output)
+                    .and_then(|folder| first_audio(&folder))
+            })
             .or_else(|| index.find(self.video_id.as_deref()?))
     }
 }
 
-#[derive(Default)]
 pub struct AudioIndex {
+    output: PathBuf,
     by_id: HashMap<String, PathBuf>,
 }
 
 impl AudioIndex {
+    #[must_use]
     pub fn scan(output: &Path) -> Self {
-        let mut index = Self::default();
-        let mut pending = vec![output.to_path_buf()];
-        while let Some(directory) = pending.pop() {
-            let Ok(entries) = fs::read_dir(&directory) else {
-                continue;
-            };
-            for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
-                if path.is_dir() {
-                    pending.push(path);
-                } else if muzik_core::audio::is_audio(&path)
-                    && let Some(id) = bracketed_id(&path)
-                {
-                    index
-                        .by_id
-                        .entry(id)
-                        .and_modify(|current| {
-                            if path < *current {
-                                current.clone_from(&path);
-                            }
-                        })
-                        .or_insert(path);
-                }
+        let mut by_id = HashMap::<String, PathBuf>::new();
+        walk_audio(output, |path| {
+            if let Some(id) = bracketed_id(&path) {
+                by_id
+                    .entry(id)
+                    .and_modify(|current| {
+                        if path < *current {
+                            current.clone_from(&path);
+                        }
+                    })
+                    .or_insert(path);
             }
+        });
+        Self {
+            output: output.to_path_buf(),
+            by_id,
         }
-        index
     }
 
     #[must_use]
     pub fn find(&self, id: &str) -> Option<PathBuf> {
         self.by_id.get(id).cloned()
+    }
+}
+
+fn first_audio(folder: &Path) -> Option<PathBuf> {
+    let mut first: Option<PathBuf> = None;
+    walk_audio(folder, |path| {
+        if first.as_ref().is_none_or(|current| path < *current) {
+            first = Some(path);
+        }
+    });
+    first
+}
+
+fn walk_audio(root: &Path, mut found: impl FnMut(PathBuf)) {
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+            if path.is_dir() {
+                pending.push(path);
+            } else if muzik_core::audio::is_audio(&path) {
+                found(path);
+            }
+        }
     }
 }
 
@@ -616,7 +587,7 @@ fn bracketed_id(path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{AudioIndex, LastAction, WatchItem, Watchlist};
-    use crate::watchlist::{ItemAction, SourceKind, Stage, StageStatus};
+    use crate::watchlist::{ItemAction, SourceKind, Stage, StageEvent, StageStatus};
     use serde_json::json;
     use std::fs;
 
@@ -629,8 +600,8 @@ mod tests {
             "items":[{"position":1,"title":"Song","video_id":"abcdefghijk","video_url":"u",
                 "thumbnail_url":null,"entry_id":null,"kind":"youtube","last_action":null,
                 "last_error":null,"track":null,"note":1,
-                "stages":{"download":{"status":"waiting","updated_at":null,"path":"/a.flac",
-                    "error":null,"question":{"kind":"import_match"}}}}]}]});
+                "stages":{"download":{"status":"complete","updated_at":null,"path":"/a.flac",
+                    "error":null}}}]}]});
         let watchlist = Watchlist::from_value(stored).unwrap();
         let value = watchlist.to_value().unwrap();
         assert_eq!(value["version"], 3);
@@ -638,10 +609,7 @@ mod tests {
         assert_eq!(value["playlists"][0]["processed_video_ids"], json!(["a"]));
         let item = &value["playlists"][0]["items"][0];
         assert_eq!(item["note"], 1);
-        assert_eq!(
-            item["stages"]["download"]["question"]["kind"],
-            "import_match"
-        );
+        assert_eq!(item["stages"]["download"]["path"], "/a.flac");
         assert_eq!(item["stages"]["quality"]["status"], "not_started");
         assert!(item.get("unavailable").is_none());
         assert_eq!(Watchlist::from_value(value).unwrap(), watchlist);
@@ -665,37 +633,83 @@ mod tests {
     #[test]
     fn an_item_id_reads_and_writes_job_params() {
         let id = super::ItemId::from_params(
-            &json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","action":"run"}),
+            &json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","action":"run"}),
         )
         .unwrap();
-        assert_eq!(id.to_string(), "PL1:3:abcdefghijk");
-        let mut params = json!({"output":"/music","position":9});
+        assert_eq!(
+            id.to_string(),
+            r#"["spotify:playlist:p","spotify:track:t#0"]"#
+        );
+        let mut params = json!({"output":"/music","key":"other"});
         id.write(&mut params).unwrap();
         assert_eq!(
             params,
-            json!({"playlist_id":"PL1","position":3,"video_id":"abcdefghijk","output":"/music"})
+            json!({"playlist_id":"spotify:playlist:p","key":"spotify:track:t#0","output":"/music"})
         );
         assert_eq!(super::ItemId::from_params(&params).unwrap(), id);
-        let bare =
-            super::ItemId::from_params(&json!({"playlist_id":"PL1","position":2,"video_id":""}))
-                .unwrap();
-        assert_eq!(bare.to_string(), "PL1:2:");
-        assert_eq!(bare.video_id, None);
+        let bare = super::ItemId::from_params(&json!({"playlist_id":"PL1","key":""})).unwrap();
+        assert_eq!(bare.to_string(), r#"["PL1",null]"#);
         let mut params = serde_json::Value::Null;
         bare.write(&mut params).unwrap();
-        assert_eq!(
-            params,
-            json!({"playlist_id":"PL1","position":2,"video_id":null})
-        );
+        assert_eq!(params, json!({"playlist_id":"PL1","key":null}));
         assert_eq!(super::ItemId::from_params(&params).unwrap(), bare);
-        assert!(super::ItemId::from_params(&json!({"playlist_id":"PL1","position":0})).is_err());
-        assert!(super::ItemId::from_params(&json!({"playlist_id":" ","position":1})).is_err());
+        assert!(super::ItemId::from_params(&json!({"playlist_id":" ","key":"a"})).is_err());
     }
 
     #[test]
     fn malformed_item_ids_are_refused() {
-        assert!("PL1:x:video".parse::<super::ItemId>().is_err());
-        assert!("video".parse::<super::ItemId>().is_err());
+        assert!("PL1:1:video".parse::<super::ItemId>().is_err());
+        assert!(r#"["PL1","video",0]"#.parse::<super::ItemId>().is_err());
+    }
+
+    #[test]
+    fn copies_of_a_video_are_one_item_that_keeps_its_state_when_the_playlist_moves() {
+        let item = |position, video: &str| {
+            let mut item = WatchItem::new(position, video, SourceKind::Youtube);
+            item.video_id = Some(video.into());
+            item
+        };
+        let mut playlist = super::Playlist::new("PL1", "u", SourceKind::Youtube, None);
+        playlist.merge_items(vec![
+            item(1, "aaaaaaaaaaa"),
+            item(2, "bbbbbbbbbbb"),
+            item(3, "aaaaaaaaaaa"),
+        ]);
+        let ids = playlist.item_ids();
+        assert_eq!(ids[0], super::ItemId::new("PL1", Some("aaaaaaaaaaa")));
+        assert_eq!(ids[2], ids[0]);
+        let mut done = playlist.items[0].clone();
+        done.apply(Stage::Download, StageEvent::Complete(None));
+        playlist.record_copies(&ids[0], &done);
+        playlist.merge_items(vec![
+            item(1, "ccccccccccc"),
+            item(2, "aaaaaaaaaaa"),
+            item(3, "bbbbbbbbbbb"),
+            item(4, "aaaaaaaaaaa"),
+            item(5, "aaaaaaaaaaa"),
+        ]);
+        let statuses = |playlist: &super::Playlist| {
+            playlist
+                .items
+                .iter()
+                .map(|item| (item.position, item.status(Stage::Download)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            statuses(&playlist),
+            [
+                (1, StageStatus::NotStarted),
+                (2, StageStatus::Complete),
+                (3, StageStatus::NotStarted),
+                (4, StageStatus::Complete),
+                (5, StageStatus::Complete),
+            ]
+        );
+        playlist.merge_items(vec![item(1, "bbbbbbbbbbb"), item(2, "aaaaaaaaaaa")]);
+        assert_eq!(
+            statuses(&playlist),
+            [(1, StageStatus::NotStarted), (2, StageStatus::Complete)]
+        );
     }
 
     #[test]
@@ -714,28 +728,23 @@ mod tests {
     #[test]
     fn transitions_keep_one_record_rule() {
         let mut item = WatchItem::new(1, "Song", SourceKind::Youtube);
-        item.complete(Stage::Download, Some("/a.flac".into()));
-        item.start(ItemAction::ParseAgain);
-        assert_eq!(item.status(Stage::Parse), StageStatus::Running);
-        item.wait(
-            Stage::Parse,
-            ItemAction::ParseAgain,
-            json!({"kind":"chapter_review"}),
+        item.apply(
+            Stage::Download,
+            StageEvent::Complete(Some("/a.flac".into())),
         );
-        assert!(item.is_waiting());
         item.fail(Stage::Split, ItemAction::SplitAgain, "split failed");
         assert_eq!(item.last_error.as_deref(), Some("split failed"));
-        assert_eq!(
-            item.stage(Stage::Split).error.as_deref(),
-            Some("split failed")
-        );
+        assert_eq!(item.stage(Stage::Split).error(), Some("split failed"));
         assert_eq!(
             item.path(Stage::Download),
             Some(std::path::Path::new("/a.flac"))
         );
+        item.record_action(ItemAction::ParseAgain);
+        assert_eq!(item.last_error, None);
+        assert_eq!(item.stage(Stage::Split).error(), Some("split failed"));
         item.invalidate(&[Stage::Organize]);
         assert_eq!(item.status(Stage::Organize), StageStatus::Stale);
-        assert!(item.stage(Stage::Organize).updated_at.is_some());
+        assert!(item.stage(Stage::Organize).updated_at().is_some());
     }
 
     #[test]
@@ -753,6 +762,25 @@ mod tests {
             Some(nested.join("Song [abcdefghijk].opus"))
         );
         item.video_id = Some("missing".into());
+        assert_eq!(item.downloaded_audio(&index), None);
+    }
+
+    #[test]
+    fn spotify_audio_is_found_in_the_download_folder_of_its_track() {
+        let directory = tempfile::tempdir().unwrap();
+        let folder = directory
+            .path()
+            .join("spotify-watchlist/spotify_track_1lb3H41lbvAN28N7yqRNL9_0");
+        fs::create_dir_all(folder.join("youtube-x")).unwrap();
+        let audio = folder.join("youtube-x/Gibran Alcocer - Idea 10 [5OIeIaAhQOg].opus");
+        fs::write(&audio, b"").unwrap();
+        fs::write(folder.join("cover.jpg"), b"").unwrap();
+        let mut item = WatchItem::new(1, "Gibran Alcocer - Idea 10", SourceKind::Spotify);
+        item.video_id = Some("1lb3H41lbvAN28N7yqRNL9".into());
+        item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#0".into());
+        let index = AudioIndex::scan(directory.path());
+        assert_eq!(item.downloaded_audio(&index), Some(audio));
+        item.entry_id = Some("spotify:track:1lb3H41lbvAN28N7yqRNL9#1".into());
         assert_eq!(item.downloaded_audio(&index), None);
     }
 }

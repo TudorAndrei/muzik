@@ -285,12 +285,14 @@ impl Muzik {
                         .tooltip("Copy source link"),
                 );
         }
-        let retries: Vec<ItemRequest> = items
-            .iter()
-            .filter(|item| {
-                retryable(item) && !self.is_queued(&id, item_position(item), &item_video_id(item))
-            })
-            .map(|item| self.item_request(ItemId::of(&id, &item.item), ItemAction::Retry))
+        let mut seen = std::collections::HashSet::new();
+        let retries: Vec<ItemRequest> = playlist
+            .item_ids()
+            .into_iter()
+            .zip(items)
+            .filter(|(key, item)| retryable(item) && !self.activity.queued_items().contains(key))
+            .filter(|(key, _)| seen.insert(key.clone()))
+            .map(|(key, _)| self.item_request(key, ItemAction::Retry))
             .collect();
         if !retries.is_empty() {
             tools = tools.child(
@@ -367,29 +369,22 @@ impl Muzik {
         });
     }
 
-    fn is_queued(&self, playlist_id: &str, position: u64, video_id: &str) -> bool {
-        self.activity
-            .queued_items()
-            .contains(&ItemId::new(playlist_id, position, Some(video_id)))
-    }
-
     pub(crate) fn item_request(&self, id: ItemId, action: ItemAction) -> ItemRequest {
         let title = self.find_item(&id).map_or_else(
-            || id.video_id.clone().unwrap_or_default(),
+            || id.key.clone().unwrap_or_default(),
             |item| item.item.title,
         );
         ItemRequest { id, title, action }
     }
 
     fn find_item(&self, key: &ItemId) -> Option<ItemView> {
-        self.watchlist
+        let playlist = self
+            .watchlist
             .playlists
             .iter()
-            .find(|playlist| playlist.playlist_id == key.playlist_id)?
-            .items
-            .iter()
-            .find(|item| ItemId::of(&key.playlist_id, &item.item) == *key)
-            .cloned()
+            .find(|playlist| playlist.playlist_id == key.playlist_id)?;
+        let index = playlist.item_ids().iter().position(|id| id == key)?;
+        playlist.items.get(index).cloned()
     }
 
     pub(crate) fn open_item_sheet(
@@ -398,7 +393,7 @@ impl Muzik {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.sheet_item.clone_from(&key.video_id);
+        self.sheet_item = self.find_item(&key).and_then(|item| item.item.video_id);
         self.cache_visible_thumbnails(cx);
         let view = cx.entity().downgrade();
         window.open_sheet(cx, move |sheet, _, cx| {
@@ -436,26 +431,25 @@ fn item_sheet(
                 .object_fit(ObjectFit::Cover),
         );
     }
-    let mut state =
-        div()
-            .v_flex()
-            .gap_1()
-            .child(style::stage_track("sheet-stages", &item.item, cx));
+    let mut state = div()
+        .v_flex()
+        .gap_1()
+        .child(style::stage_track("sheet-stages", item, cx));
     if let Some(error) = item.item.last_error.as_deref() {
         state = state.child(div().text_sm().child(error.to_string()));
     }
     body = body.child(state);
-    let states = style::stage_states(&item.item);
+    let states = style::stage_states(item);
     let mut facts = DescriptionList::horizontal()
         .columns(1)
         .label_width(px(110.))
-        .item(id_label, key.video_id.clone().unwrap_or_default(), 1);
+        .item(id_label, item.item.video_id.clone().unwrap_or_default(), 1);
     for (stage, state) in states {
         facts = facts.item(style::stage_label(stage), style::status_word(state), 1);
     }
     let mut links = div().flex().items_center().gap_2().child(
         Clipboard::new("copy-item-id")
-            .value(key.video_id.clone().unwrap_or_default())
+            .value(item.item.video_id.clone().unwrap_or_default())
             .tooltip("Copy ID"),
     );
     if let Some(url) = item.item.video_url.as_deref() {
@@ -472,37 +466,34 @@ fn item_sheet(
     let Some(entity) = view.upgrade() else {
         return sheet.title(title).child(body);
     };
-    let item_id = key.to_string();
-    let waiting = entity
-        .read(cx)
-        .activity
-        .waiting()
-        .iter()
-        .find(|job| job.item.as_deref() == Some(item_id.as_str()))
-        .and_then(Decision::queue_job);
-    let waiting_stage = style::stage_states(&item.item)
-        .into_iter()
-        .find(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting)
-        .map(|(stage, _)| stage);
-    if let Some(job) = waiting {
-        let view = view.clone();
+    if let Some(hold) = item.hold.as_ref().filter(|hold| hold.is_waiting()) {
+        let job = hold.job_id();
+        let open = view.clone();
+        let cancel = view.clone();
         body = body.child(
-            Button::new("open-item-decision")
-                .primary()
-                .label(waiting_stage.map_or_else(
-                    || "Open waiting choice".to_string(),
-                    |stage| format!("Open {} review", style::stage_label(stage)),
-                ))
-                .on_click(move |_, window, cx| {
-                    window.close_sheet(cx);
-                    let _ = view.update(cx, |view, cx| view.open_waiting(job, window, cx));
-                }),
+            div()
+                .flex()
+                .gap_2()
+                .child(
+                    Button::new("open-item-decision")
+                        .primary()
+                        .label(format!("Open {} review", style::stage_label(hold.stage())))
+                        .on_click(move |_, window, cx| {
+                            window.close_sheet(cx);
+                            let _ = open.update(cx, |view, cx| view.open_waiting(job, window, cx));
+                        }),
+                )
+                .child(
+                    Button::new("cancel-item-decision")
+                        .ghost()
+                        .label("Cancel job")
+                        .on_click(move |_, window, cx| {
+                            window.close_sheet(cx);
+                            let _ =
+                                cancel.update(cx, |view, cx| view.cancel_waiting(job, window, cx));
+                        }),
+                ),
         );
-    } else if waiting_stage.is_some() {
-        body = body.child(style::meta(
-            "No choice is open. Select Resume under Commands to continue this item.",
-            cx,
-        ));
     }
     let commands = item_commands(item, key, &title, &entity, view, cx);
     sheet
@@ -519,26 +510,39 @@ fn item_commands(
     view: &WeakEntity<Muzik>,
     cx: &App,
 ) -> Div {
-    let is_waiting = style::stage_states(&item.item)
-        .iter()
-        .any(|(_, status)| *status == muzik_store::watchlist::StageStatus::Waiting);
+    let open_job = match item.hold.as_ref() {
+        Some(hold) if hold.is_waiting() => Some("Answer or cancel the open choice first."),
+        Some(_) => Some("This item has a job in the queue."),
+        None => entity
+            .read(cx)
+            .activity
+            .queued_items()
+            .contains(key)
+            .then_some("This item has a job in the queue."),
+    };
     let mut commands = div()
         .v_flex()
         .gap_3()
         .pt_4()
         .border_t_1()
         .border_color(cx.theme().border)
-        .child(style::overline("COMMANDS", cx));
+        .child(style::overline("COMMANDS", cx))
+        .when_some(open_job, |commands, reason| {
+            commands.child(style::meta(reason, cx))
+        });
     for (index, action) in ItemAction::ALL.iter().copied().enumerate() {
         let availability = item.actions.get(&action);
-        let enabled = availability.is_some_and(|availability| availability.enabled);
+        let enabled =
+            open_job.is_none() && availability.is_some_and(|availability| availability.enabled);
         let request = entity.read(cx).item_request(key.clone(), action);
-        let label = if action == ItemAction::Run && is_waiting {
-            "Resume"
-        } else {
-            action_label(action)
-        }
-        .to_string();
+        let label = item
+            .primary_action
+            .as_ref()
+            .filter(|primary| primary.action == action)
+            .map_or_else(
+                || action_label(action).to_string(),
+                |primary| primary.label.clone(),
+            );
         let item_title = title.to_string();
         let view = view.clone();
         let mut row = div().v_flex().gap_1().child(
@@ -569,9 +573,10 @@ fn item_commands(
                     });
                 }),
         );
-        if !enabled
-            && let Some(reason) =
-                availability.and_then(|availability| availability.reason.as_deref())
+        if open_job.is_none()
+            && let Some(reason) = availability
+                .filter(|availability| !availability.enabled)
+                .and_then(|availability| availability.reason.as_deref())
         {
             row = row.child(style::meta(reason.to_string(), cx));
         }
@@ -606,10 +611,6 @@ fn playlist_title(playlist: &PlaylistView) -> &str {
     playlist.title.as_deref().unwrap_or(&playlist.playlist_id)
 }
 
-const fn item_position(item: &ItemView) -> u64 {
-    item.item.position
-}
-
 fn retryable(item: &ItemView) -> bool {
     item.summary == Summary::Failed
         && item
@@ -620,10 +621,6 @@ fn retryable(item: &ItemView) -> bool {
             .actions
             .get(&ItemAction::Retry)
             .is_some_and(|retry| retry.enabled)
-}
-
-fn item_video_id(item: &ItemView) -> String {
-    item.item.video_id.clone().unwrap_or_default()
 }
 
 fn filter_tab(filter: Option<Summary>) -> usize {
@@ -668,10 +665,8 @@ mod tests {
                         {"position":2,"title":"Missing ID","video_id":null,"summary":"Unavailable","actions":{}}
                     ]
                 }]})).unwrap();
-                for (position, title) in [(1,"Empty ID"),(2,"Missing ID")] {
-                    let key = super::ItemId::new("PL1", position, None);
-                    assert_eq!(view.find_item(&key).unwrap().item.title, title);
-                }
+                let key = super::ItemId::new("PL1", None);
+                assert_eq!(view.find_item(&key).unwrap().item.title, "Empty ID");
             });
         }).unwrap();
     }
