@@ -2,6 +2,20 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.16.0 - 2026-11-19
+#### Features
+- (**cli**) add watchlist playlist commands - (975e5b9) - TudorAndrei
+- (**gui**) move the Spotify page into Settings > Accounts - (93abac9) - TudorAndrei
+- (**gui**) add playlist settings and a playlist switch to each source - (0a5fab8) - TudorAndrei
+- (**sync**) copy library playlists to the device - (f633837) - TudorAndrei
+- (**watchlist**) write a playlist file for each watched source - (9d38577) - TudorAndrei
+#### Tests
+- (**watchlist**) add scenarios for watchlist playlist files - (3044b9e) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.15.3 - (e439e74) - github-actions[bot]
+
+- - -
+
 ## v2.15.3 - 2026-11-19
 #### Bug Fixes
 - (**media**) count 7.1 side channels in loudness - (e33a11c) - TudorAndrei

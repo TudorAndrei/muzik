@@ -165,6 +165,13 @@ Before muzik writes to the device, it plans where each library file goes, which 
 - Files that are already on the device are not copied again
 - Only one track goes to each file name on the device
 
+### Playlists on the device
+
+A sync copies the playlist files of the library to the device. Each entry points to the device file of its track. An entry for a track that is not on the device leaves the playlist. With delete on, a playlist that muzik wrote and that the library does not have now leaves the device. Other playlists on the device stay.
+
+- A device playlist points to the device files of its tracks
+- An old muzik playlist leaves the device and other playlists stay
+
 ### Selecting library tracks to sync
 
 A library query selects the tracks to sync. With covers on, the album cover files go to the device with the tracks.
@@ -244,6 +251,15 @@ Earlier versions of muzik kept the watchlist in a JSON file. muzik moves that fi
 - An old watchlist file moves into the database with its item state
 - Saving the moved watchlist again changes nothing
 - An old watchlist file that muzik cannot read stays in place
+
+### Watchlist playlist files
+
+With playlist files on, muzik writes one file for each watchlist source to the Playlists folder of the music library. The file lists the library songs of the source in source order. Each source has its own switch. A file that muzik wrote leaves the folder when its source is off or when playlist files are off. Other files in the folder stay.
+
+- A playlist lists the library songs in source order
+- The m3u format changes the file extension
+- A source with its playlist off loses its file and other files stay
+- With playlist files off, muzik removes only its own files
 
 ### Watchlist refresh
 
