@@ -55,7 +55,7 @@ pub struct Activity {
     runs: Vec<Run>,
     finished_runs: HashSet<String>,
     queued_items: HashSet<ItemId>,
-    held_items: HashSet<(String, bool)>,
+    held_items: HashSet<(String, String, Option<String>)>,
     holds_changed: bool,
     sections: Vec<ActivitySection>,
     logs: Vec<String>,
@@ -379,7 +379,7 @@ impl Activity {
             .iter()
             .filter_map(|job| job["item"].as_str()?.parse().ok())
             .collect();
-        let held: HashSet<(String, bool)> = open
+        let held: HashSet<(String, String, Option<String>)> = open
             .iter()
             .filter(|job| {
                 job["status"]
@@ -387,12 +387,27 @@ impl Activity {
                     .and_then(|status| status.parse::<JobStatus>().ok())
                     == Some(JobStatus::Running)
             })
-            .filter_map(|job| Some((job["item"].as_str()?.to_owned(), false)))
-            .chain(
-                self.waiting
-                    .iter()
-                    .filter_map(|choice| Some((choice.item.clone()?, true))),
-            )
+            .filter_map(|job| {
+                Some((
+                    job["item"].as_str()?.to_owned(),
+                    job["job_id"].as_str().unwrap_or_default().to_owned(),
+                    None,
+                ))
+            })
+            .chain(self.waiting.iter().filter_map(|choice| {
+                Some((
+                    choice.item.clone()?,
+                    choice.job_id.clone(),
+                    Some(
+                        choice
+                            .question
+                            .get("kind")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                    ),
+                ))
+            }))
             .collect();
         if held != self.held_items {
             self.held_items = held;
@@ -632,6 +647,13 @@ mod tests {
         assert!(!activity.take_holds_changed());
         activity
             .apply_jobs(&json!({"open":[],"waiting":[{"id":1,"item":"a","kind":"import_match"}]}));
+        assert!(activity.take_holds_changed());
+        activity
+            .apply_jobs(&json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"import_match"}]}));
+        assert!(activity.take_holds_changed());
+        activity.apply_jobs(
+            &json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"chapter_review"}]}),
+        );
         assert!(activity.take_holds_changed());
         activity.apply_jobs(&json!({"open":[],"waiting":[]}));
         assert!(activity.take_holds_changed());
