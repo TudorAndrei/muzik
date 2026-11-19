@@ -415,12 +415,66 @@ fn import_legacy(connection: &mut Connection, legacy: &Path) -> Result<()> {
         .map_err(|error| format!("cannot read {}: {error}", legacy.display()))?;
     let value: Value = serde_json::from_str(&source)
         .map_err(|error| format!("invalid watchlist {}: {error}", legacy.display()))?;
-    let value = Watchlist::from_value(value)?;
-    write_changes(&transaction, &Watchlist::default(), &value)?;
+    let watchlist = Watchlist::from_value(value.clone())?;
+    write_changes(&transaction, &Watchlist::default(), &watchlist)?;
+    park_legacy_questions(&transaction, &value, &watchlist)?;
     transaction.commit()?;
     let mut backup = legacy.as_os_str().to_owned();
     backup.push(".migrated");
     Ok(fs::rename(legacy, backup)?)
+}
+
+fn park_legacy_questions(
+    connection: &Connection,
+    raw: &Value,
+    watchlist: &Watchlist,
+) -> Result<()> {
+    let listed = |value: &Value, field: &str| {
+        value
+            .get(field)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    for (playlist, raw_playlist) in watchlist.playlists.iter().zip(listed(raw, "playlists")) {
+        let raw_items = listed(&raw_playlist, "items");
+        for ((id, item), raw_item) in playlist
+            .item_ids()
+            .into_iter()
+            .zip(&playlist.items)
+            .zip(&raw_items)
+        {
+            let Some((stage, question)) = Stage::ALL.iter().find_map(|stage| {
+                let record = raw_item.get("stages")?.get(stage.as_ref())?;
+                (record.get("status")?.as_str()? == "waiting").then_some(())?;
+                Some((
+                    *stage,
+                    record.get("question").filter(|value| value.is_object())?,
+                ))
+            }) else {
+                continue;
+            };
+            if id.key.is_none() {
+                continue;
+            }
+            let mut params = serde_json::json!({"title": item.title});
+            id.write(&mut params)?;
+            if let Some(fields) = params.as_object_mut() {
+                fields.insert("action".into(), serde_json::json!(stage.resume_action()));
+            }
+            crate::jobs::park_on(
+                connection,
+                &crate::jobs::NewJob {
+                    kind: crate::jobs::Kind::Item,
+                    item_key: &id.to_string(),
+                    title: &item.title,
+                    params: &params,
+                },
+                question,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn read_revision(connection: &Connection) -> Result<i64> {
@@ -617,8 +671,40 @@ pub fn parse_source(input: &str) -> Result<Playlist> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Playlist, SourceKind, WatchItem, header};
+    use super::{Playlist, Repository, SourceKind, WatchItem, header};
+    use crate::jobs::{Status, Store};
     use serde_json::json;
+
+    #[test]
+    fn a_waiting_question_in_watchlist_json_becomes_a_waiting_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let legacy = directory.path().join("watchlist.json");
+        let database = directory.path().join("muzik.db");
+        std::fs::write(
+            &legacy,
+            json!({"version":1,"playlists":[{"playlist_id":"PL1","url":"u","items":[
+                {"position":1,"title":"A","video_id":"aaaaaaaaaaa"},
+                {"position":2,"title":"A","video_id":"aaaaaaaaaaa","stages":{
+                    "download":{"status":"complete","path":"/a.opus"},
+                    "organize":{"status":"waiting","question":{"kind":"import_match"}}}}
+            ]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let watchlist = Repository::new(database.clone())
+            .with_legacy(legacy.clone())
+            .load()
+            .unwrap();
+        assert!(!legacy.exists());
+        assert_eq!(watchlist.playlists[0].items.len(), 2);
+        let waiting = Store::from_connection(crate::db::open(&database).unwrap())
+            .list(Status::Waiting)
+            .unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].item_key, r#"["PL1","aaaaaaaaaaa",1]"#);
+        assert_eq!(waiting[0].question, Some(json!({"kind":"import_match"})));
+        assert_eq!(waiting[0].params["action"], "organize_again");
+    }
 
     #[test]
     fn a_playlist_header_keeps_the_stored_field_order_without_items() {
