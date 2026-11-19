@@ -1,10 +1,13 @@
 //! EBU R128 loudness and `ReplayGain` 2.0 values for audio files.
 
+use crate::process::background_command;
 use ebur128::{EbuR128, Mode};
 use rayon::prelude::*;
 use std::fs::File;
+use std::io::{Read, Seek};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::codecs::audio::AudioDecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
@@ -15,6 +18,8 @@ use symphonia::core::meta::MetadataOptions;
 use thiserror::Error;
 
 pub const REFERENCE_LUFS: f64 = -18.0;
+
+const FFMPEG_RATE: u32 = 48_000;
 
 #[derive(Debug, Error)]
 pub enum LoudnessError {
@@ -32,6 +37,8 @@ pub enum LoudnessError {
     Silent,
     #[error("the decoder stopped on malformed data")]
     Malformed,
+    #[error("ffmpeg cannot decode the audio: {0}")]
+    Ffmpeg(String),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -81,7 +88,10 @@ impl Measurement {
 /// # Errors
 /// Returns an error when the file cannot be decoded or holds no measurable audio.
 pub fn measure(path: &Path) -> Result<Measurement, LoudnessError> {
-    catch_unwind(AssertUnwindSafe(|| decode(path))).map_err(|_| LoudnessError::Malformed)?
+    match catch_unwind(AssertUnwindSafe(|| decode(path))).map_err(|_| LoudnessError::Malformed)? {
+        Err(LoudnessError::Decode(SymphoniaError::Unsupported(_))) => decode_with_ffmpeg(path),
+        outcome => outcome,
+    }
 }
 
 #[must_use]
@@ -125,7 +135,7 @@ fn decode(path: &Path) -> Result<Measurement, LoudnessError> {
     };
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())?;
-    let mut meter: Option<(EbuR128, u32, usize)> = None;
+    let mut meter = Meter::default();
     let mut samples: Vec<f32> = Vec::new();
     while let Some(packet) = format.next_packet()? {
         if packet.track_id != track_id {
@@ -136,23 +146,120 @@ fn decode(path: &Path) -> Result<Measurement, LoudnessError> {
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(error) => return Err(error.into()),
         };
-        let rate = buffer.spec().rate();
-        let channels = buffer.spec().channels().count();
-        if meter.is_none() {
+        buffer.copy_to_vec_interleaved(&mut samples);
+        meter.add(
+            buffer.spec().rate(),
+            buffer.spec().channels().count(),
+            &samples,
+        )?;
+    }
+    meter.finish()
+}
+
+fn decode_with_ffmpeg(path: &Path) -> Result<Measurement, LoudnessError> {
+    let channels = muzik_tags::probe(path)
+        .ok()
+        .and_then(|properties| properties.channels)
+        .filter(|channels| *channels > 0)
+        .ok_or(LoudnessError::NoTrack)?;
+    let mut errors = tempfile::tempfile()?;
+    let mut command = background_command("ffmpeg");
+    command
+        .args(["-nostdin", "-v", "error", "-i"])
+        .arg(path)
+        .args(["-map", "0:a:0", "-ac"])
+        .arg(channels.to_string())
+        .args(["-ar"])
+        .arg(FFMPEG_RATE.to_string())
+        .args(["-f", "f32le", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(errors.try_clone()?);
+    let mut child = command
+        .spawn()
+        .map_err(|error| LoudnessError::Ffmpeg(error.to_string()))?;
+    let streamed = child
+        .stdout
+        .take()
+        .ok_or(LoudnessError::NoTrack)
+        .and_then(|stdout| meter_stream(stdout, usize::from(channels)));
+    let status = child.wait()?;
+    if !status.success() {
+        let mut text = String::new();
+        errors.rewind()?;
+        errors.read_to_string(&mut text)?;
+        let text = text.trim();
+        return Err(LoudnessError::Ffmpeg(if text.is_empty() {
+            status.to_string()
+        } else {
+            text.to_owned()
+        }));
+    }
+    streamed?.finish()
+}
+
+fn meter_stream(mut stdout: impl Read, channels: usize) -> Result<Meter, LoudnessError> {
+    let mut meter = Meter::default();
+    let frame = channels.saturating_mul(4);
+    let mut bytes = vec![0_u8; frame.saturating_mul(4096)];
+    let mut filled = 0;
+    let mut samples = Vec::new();
+    loop {
+        let Some(free) = bytes.get_mut(filled..) else {
+            return Err(LoudnessError::Malformed);
+        };
+        let read = stdout.read(free)?;
+        if read == 0 {
+            return Ok(meter);
+        }
+        filled = filled.saturating_add(read);
+        let whole = filled.saturating_sub(filled.checked_rem(frame).unwrap_or(filled));
+        let Some(ready) = bytes.get(..whole) else {
+            return Err(LoudnessError::Malformed);
+        };
+        samples.clear();
+        samples.extend(
+            ready
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|sample| f32::from_le_bytes(*sample)),
+        );
+        meter.add(FFMPEG_RATE, channels, &samples)?;
+        bytes.copy_within(whole..filled, 0);
+        filled = filled.saturating_sub(whole);
+    }
+}
+
+#[derive(Default)]
+struct Meter {
+    state: Option<(EbuR128, u32, usize)>,
+}
+
+impl Meter {
+    fn add(&mut self, rate: u32, channels: usize, samples: &[f32]) -> Result<(), LoudnessError> {
+        if self.state.is_none() {
             let count = u32::try_from(channels).map_err(|_| LoudnessError::FormatChange)?;
             let mode = Mode::I | Mode::TRUE_PEAK | Mode::HISTOGRAM;
-            meter = Some((EbuR128::new(count, rate, mode)?, rate, channels));
+            self.state = Some((EbuR128::new(count, rate, mode)?, rate, channels));
         }
-        let Some(state) = &mut meter else {
+        let Some(state) = &mut self.state else {
             return Err(LoudnessError::Silent);
         };
         if state.1 != rate || state.2 != channels {
             return Err(LoudnessError::FormatChange);
         }
-        buffer.copy_to_vec_interleaved(&mut samples);
-        state.0.add_frames_f32(&samples)?;
+        state.0.add_frames_f32(samples)?;
+        Ok(())
     }
-    let (meter, _, _) = meter.ok_or(LoudnessError::Silent)?;
+
+    fn finish(self) -> Result<Measurement, LoudnessError> {
+        let (meter, _, _) = self.state.ok_or(LoudnessError::Silent)?;
+        measurement(meter)
+    }
+}
+
+fn measurement(meter: EbuR128) -> Result<Measurement, LoudnessError> {
     let mut peak = 0.0_f64;
     for channel in 0..meter.channels() {
         peak = peak.max(meter.true_peak(channel)?);
@@ -207,9 +314,15 @@ mod tests {
     }
 
     #[test]
-    fn flac_mp3_m4a_and_vorbis_decode_but_opus_does_not() {
+    fn flac_mp3_m4a_vorbis_and_opus_decode() {
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../muzik-tags/tests/fixtures");
-        for name in ["blank.flac", "blank.mp3", "blank.m4a", "blank.ogg"] {
+        for name in [
+            "blank.flac",
+            "blank.mp3",
+            "blank.m4a",
+            "blank.ogg",
+            "blank.opus",
+        ] {
             let outcome = measure(&fixtures.join(name));
             assert!(
                 matches!(outcome, Ok(_) | Err(LoudnessError::Silent)),
@@ -217,10 +330,26 @@ mod tests {
                 outcome.err()
             );
         }
-        assert!(matches!(
-            measure(&fixtures.join("blank.opus")),
-            Err(LoudnessError::Decode(_))
-        ));
+    }
+
+    #[test]
+    fn opus_measures_like_the_wav_it_was_encoded_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav = dir.path().join("sine.wav");
+        let opus = dir.path().join("sine.opus");
+        sine_wav(&wav, 0.5, 2, 2);
+        let encoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-i"])
+            .arg(&wav)
+            .args(["-c:a", "libopus", "-b:a", "192k", "-y"])
+            .arg(&opus)
+            .output()
+            .unwrap();
+        assert!(encoded.status.success());
+        let source = measure(&wav).unwrap().track();
+        let measured = measure(&opus).unwrap().track();
+        close(measured.loudness, source.loudness, 0.2);
+        close(measured.peak, source.peak, 0.05);
     }
 
     fn close(actual: f64, expected: f64, tolerance: f64) {
