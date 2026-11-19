@@ -277,6 +277,9 @@ impl Shared {
             cancel,
             &mut |event| self.event(job_id, Source::Workflow, event),
         )?;
+        watchlist::update_playlists(&settings, &mut |event| {
+            self.event(job_id, Source::Workflow, event);
+        });
         let queued = self.jobs.queue_pending(&job.params, &pending)?;
         self.event(
             job_id,
@@ -323,7 +326,7 @@ impl Shared {
             parked.replace(Some(watchlist::Parked { kind, payload }));
             Err("waiting for a choice".to_owned())
         };
-        watchlist::action(
+        let result = watchlist::action(
             &settings,
             &item,
             cancel,
@@ -332,7 +335,11 @@ impl Shared {
             &mut decide,
             &parked,
         )
-        .map_err(JobFailure::from)
+        .map_err(JobFailure::from)?;
+        watchlist::update_playlists(&settings, &mut |event| {
+            self.event(job_id, Source::Workflow, event);
+        });
+        Ok(result)
     }
 
     fn run_workflow(&self, job: &Job, job_id: &str, cancel: &AtomicBool) -> Outcome {

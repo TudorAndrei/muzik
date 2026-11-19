@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::library_tasks::AfterImport;
 use muzik_core::paths::{Paths, expand_home};
-use muzik_core::{ChoiceError, app_config};
+use muzik_core::{ChoiceError, PlaylistFormat, app_config};
 use muzik_store::watchlist::ReconcileOptions;
 use muzik_workflow::{WorkflowOptions, WorkflowRequest};
 use serde_json::Value;
@@ -14,6 +14,7 @@ pub struct Settings {
     pub options: WorkflowOptions,
     pub agent_model: Option<String>,
     pub after_import: AfterImport,
+    pub playlists: Option<PlaylistFormat>,
 }
 
 impl Settings {
@@ -99,6 +100,14 @@ impl Settings {
             output: path(values, "output")?.unwrap_or_else(|| paths.downloads()),
             splits: path(values, "splits")?.unwrap_or_else(|| paths.splits()),
         };
+        let playlists_on = match values.get("playlists") {
+            None => false,
+            Some(value) => value.as_bool().ok_or("playlists must be a boolean")?,
+        };
+        let playlist_format = match values.get("playlist_format") {
+            None => PlaylistFormat::default(),
+            Some(value) => choice(value, "playlist_format")?,
+        };
         let agent_model = (values.get("auto_decide") == Some(&Value::Bool(true))).then(|| {
             values["agent_model"]
                 .as_str()
@@ -113,6 +122,7 @@ impl Settings {
             options,
             agent_model,
             after_import,
+            playlists: playlists_on.then_some(playlist_format),
         })
     }
 
@@ -150,6 +160,7 @@ fn path(values: &Value, key: &str) -> Result<Option<PathBuf>> {
 mod tests {
     use super::Settings;
     use crate::library_tasks::AfterImport;
+    use muzik_core::PlaylistFormat;
     use muzik_core::paths::Paths;
     use serde_json::json;
     use std::fs;
@@ -215,5 +226,26 @@ mod tests {
         assert!(Settings::parse(&paths, &json!({"force":"yes"})).is_err());
         assert!(Settings::parse(&paths, &json!({"covers_after_import":"yes"})).is_err());
         assert_eq!(settings.after_import, AfterImport::default());
+        assert_eq!(settings.playlists, None);
+    }
+
+    #[test]
+    fn playlists_have_a_format_only_when_they_are_on() {
+        let paths = Paths::under(std::path::Path::new("/state"));
+        let parse = |values| Settings::parse(&paths, &values).map(|settings| settings.playlists);
+        assert_eq!(
+            parse(json!({"playlists":false,"playlist_format":"m3u"})).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse(json!({"playlists":true})).unwrap(),
+            Some(PlaylistFormat::M3u8)
+        );
+        assert_eq!(
+            parse(json!({"playlists":true,"playlist_format":"m3u"})).unwrap(),
+            Some(PlaylistFormat::M3u)
+        );
+        assert!(parse(json!({"playlists":true,"playlist_format":"pls"})).is_err());
+        assert!(parse(json!({"playlists":"yes"})).is_err());
     }
 }

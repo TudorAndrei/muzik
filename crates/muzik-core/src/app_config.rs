@@ -2,7 +2,8 @@
 
 use crate::Result;
 use crate::config_choices::{
-    AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PreferredAudio, QualityPolicy,
+    AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PlaylistFormat, PreferredAudio,
+    QualityPolicy,
 };
 use crate::paths::{self, Paths};
 use serde::{Deserialize, Serialize};
@@ -71,6 +72,8 @@ pub struct GuiDefaults {
     pub agent_model: String,
     pub replaygain_after_import: bool,
     pub covers_after_import: bool,
+    pub playlists: bool,
+    pub playlist_format: PlaylistFormat,
 }
 
 impl Default for GuiDefaults {
@@ -101,6 +104,8 @@ impl Default for GuiDefaults {
             agent_model: "gpt-6-luna".into(),
             replaygain_after_import: true,
             covers_after_import: true,
+            playlists: false,
+            playlist_format: PlaylistFormat::default(),
         }
     }
 }

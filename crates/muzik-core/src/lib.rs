@@ -18,8 +18,8 @@ mod types;
 
 pub use config::{BeetsConfig, Error as ConfigError, default_config_path};
 pub use config_choices::{
-    AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, PreferredAudio,
-    QualityPolicy, SyncPreset,
+    AudioFallback, AudioSource, ChoiceError, DuplicatePolicy, MetadataSource, PlaylistFormat,
+    PreferredAudio, QualityPolicy, SyncPreset,
 };
 pub use decision::{ChapterAnswer, DecisionKind, DuplicateAnswer, MatchAnswer};
 pub use error::{Error, Result};
