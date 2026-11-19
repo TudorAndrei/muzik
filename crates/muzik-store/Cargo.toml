@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 muzik-core = { path = "../muzik-core" }
 muzik-library = { path = "../muzik-library" }
+deunicode = "1.6"
 jiff = "1.0"
 parking_lot = "0.13"
 regex = "1"

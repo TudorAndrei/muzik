@@ -5586,6 +5586,7 @@ dependencies = [
 name = "muzik-store"
 version = "2.15.3"
 dependencies = [
+ "deunicode",
  "jiff",
  "muzik-core",
  "muzik-library",

@@ -92,7 +92,7 @@ fn sql_text(value: &SqlValue) -> Option<&str> {
     }
 }
 
-fn parse_title(title: &str) -> Option<(String, String)> {
+pub(super) fn parse_title(title: &str) -> Option<(String, String)> {
     static YEAR: OnceLock<Option<Regex>> = OnceLock::new();
     static NOISE: OnceLock<Option<Regex>> = OnceLock::new();
     let year = YEAR

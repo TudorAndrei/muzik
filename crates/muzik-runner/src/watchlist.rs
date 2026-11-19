@@ -8,7 +8,7 @@ use muzik_store::watchlist::jobs::{
     self, JobError, JobOptions, LoadedSource, Operations, PendingItem, RunningJob,
 };
 use muzik_store::watchlist::{
-    AudioIndex, ItemAction, Playlist, Repository, Stage, WatchItem, import_cache,
+    AudioIndex, ItemAction, Playlist, Repository, Stage, WatchItem, import_cache, playlist_files,
 };
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -50,6 +50,47 @@ pub(crate) fn sync(
         success: synced.errors == 0,
     });
     Ok(synced.pending)
+}
+
+/// # Errors
+/// Returns an error when the watchlist, the music library, or a playlist file cannot be read or written.
+pub fn write_playlists(settings: &Settings) -> crate::Result<playlist_files::Report> {
+    let watchlist = Repository::open(&settings.paths).load()?;
+    let config = settings
+        .options
+        .config
+        .as_deref()
+        .unwrap_or(&settings.paths.beets);
+    Ok(playlist_files::write(
+        &watchlist,
+        config,
+        settings.playlists,
+    )?)
+}
+
+pub(crate) fn update_playlists(settings: &Settings, on_event: &mut dyn FnMut(JobEvent)) {
+    if settings.playlists.is_none() || settings.options.dry_run {
+        return;
+    }
+    match write_playlists(settings) {
+        Ok(report) => {
+            let changed = report
+                .written
+                .iter()
+                .filter(|written| written.changed)
+                .count();
+            if changed > 0 || !report.removed.is_empty() {
+                on_event(JobEvent::message(format!(
+                    "Updated {changed} playlist file(s) and removed {}.",
+                    report.removed.len()
+                )));
+            }
+        }
+        Err(error) => on_event(JobEvent::Message {
+            message: format!("The playlist files were not updated: {error}"),
+            severity: muzik_core::Severity::Warning,
+        }),
+    }
 }
 
 /// # Errors

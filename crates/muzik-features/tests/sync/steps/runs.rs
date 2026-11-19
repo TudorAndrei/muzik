@@ -15,6 +15,7 @@ fn prepares_sync(world: &mut SyncWorld, delete: String) -> StepResult {
     let selection = Selection {
         tracks: world.tracks.clone(),
         covers: world.covers.clone(),
+        playlists: world.playlists.clone(),
     };
     let unreadable = &world.unreadable;
     let prepared = muzik_sync::prepare(

@@ -9,7 +9,9 @@ use crate::settings::Settings;
 use crate::{gates, watchlist};
 use muzik_core::paths::Paths;
 use muzik_store::jobs::CancelRequest;
-use muzik_store::watchlist::{ItemAction, ItemId, LocalCheck, LocalChecks, Playlist, Repository};
+use muzik_store::watchlist::{
+    ItemAction, ItemId, LocalCheck, LocalChecks, Playlist, Repository, playlist_files,
+};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -192,13 +194,44 @@ impl App {
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
     pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
-        self.edit(|repository| Ok(repository.rename(playlist_id, title)?))
+        let renamed = self.edit(|repository| Ok(repository.rename(playlist_id, title)?))?;
+        self.follow_playlists();
+        Ok(renamed)
     }
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
     pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
-        self.edit(|repository| Ok(repository.remove(playlist_id)?))
+        let removed = self.edit(|repository| Ok(repository.remove(playlist_id)?))?;
+        self.follow_playlists();
+        Ok(removed)
+    }
+
+    /// # Errors
+    /// Returns an error when the watchlist cannot be saved.
+    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> crate::Result<bool> {
+        let changed = self.edit(|repository| Ok(repository.set_playlist_file(playlist_id, on)?))?;
+        self.follow_playlists();
+        Ok(changed)
+    }
+
+    /// # Errors
+    /// Returns an error when the settings, the watchlist, the music library, or a playlist file cannot be read or written.
+    pub fn write_playlists(&self) -> crate::Result<playlist_files::Report> {
+        watchlist::write_playlists(&Settings::resolve(&self.paths, &json!({}))?)
+    }
+
+    fn follow_playlists(&self) {
+        let enabled = Settings::resolve(&self.paths, &json!({}))
+            .is_ok_and(|settings| settings.playlists.is_some());
+        if !enabled {
+            return;
+        }
+        if let Err(error) = self.write_playlists() {
+            (self.sink)(AppEvent::WatchlistError(format!(
+                "The playlist files were not updated: {error}"
+            )));
+        }
     }
 
     /// # Errors

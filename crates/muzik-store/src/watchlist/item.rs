@@ -43,8 +43,14 @@ pub struct Playlist<T = WatchItem> {
     pub last_checked_at: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
+    #[serde(default = "playlist_file_on")]
+    pub playlist_file: bool,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+const fn playlist_file_on() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -265,6 +271,7 @@ impl Playlist {
             processed_video_ids: Vec::new(),
             last_checked_at: None,
             last_error: None,
+            playlist_file: true,
             extra: Map::new(),
         }
     }

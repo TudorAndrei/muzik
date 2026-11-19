@@ -17,6 +17,7 @@ mod item;
 pub mod jobs;
 mod legacy;
 mod library_lookup;
+pub mod playlist_files;
 mod reconcile;
 pub mod source;
 mod stage;
@@ -380,6 +381,18 @@ impl Repository {
 
     /// # Errors
     /// Returns an error if the watchlist cannot be read or written.
+    pub fn set_playlist_file(&self, playlist_id: &str, on: bool) -> Result<bool> {
+        self.update(|document| {
+            let Some(playlist) = document.playlist_mut(playlist_id) else {
+                return Ok(false);
+            };
+            playlist.playlist_file = on;
+            Ok(true)
+        })
+    }
+
+    /// # Errors
+    /// Returns an error if the watchlist cannot be read or written.
     pub fn remove(&self, playlist_id: &str) -> Result<bool> {
         self.update(|document| {
             let before = document.playlists.len();
@@ -605,6 +618,8 @@ struct PlaylistHeader<'a> {
     processed_video_ids: &'a [String],
     last_checked_at: Option<&'a str>,
     last_error: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    playlist_file: Option<bool>,
     #[serde(flatten)]
     extra: &'a serde_json::Map<String, Value>,
 }
@@ -618,6 +633,7 @@ fn header(playlist: &Playlist) -> Result<String> {
         processed_video_ids: &playlist.processed_video_ids,
         last_checked_at: playlist.last_checked_at.as_deref(),
         last_error: playlist.last_error.as_deref(),
+        playlist_file: (!playlist.playlist_file).then_some(false),
         extra: &playlist.extra,
     })?)
 }

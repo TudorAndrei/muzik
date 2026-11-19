@@ -326,6 +326,48 @@ pub enum SyncPreset {
 
 config_choice!(SyncPreset, "sync preset", sync_preset_error);
 
+/// File format of the playlist that muzik writes for each watchlist source.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    usage_rs::ValueEnum,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+    VariantNames,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(
+    serialize_all = "lowercase",
+    parse_err_ty = ChoiceError,
+    parse_err_fn = playlist_format_error
+)]
+pub enum PlaylistFormat {
+    #[default]
+    M3u8,
+    M3u,
+}
+
+config_choice!(PlaylistFormat, "playlist format", playlist_format_error);
+
+impl PlaylistFormat {
+    #[must_use]
+    pub const fn extension(self) -> &'static str {
+        match self {
+            Self::M3u8 => "m3u8",
+            Self::M3u => "m3u",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

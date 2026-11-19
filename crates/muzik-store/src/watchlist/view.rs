@@ -122,6 +122,7 @@ pub fn view(snapshot: &Snapshot, output: &Path, cache: &Path) -> WatchlistView {
                 processed_video_ids: playlist.processed_video_ids.clone(),
                 last_checked_at: playlist.last_checked_at.clone(),
                 last_error: playlist.last_error.clone(),
+                playlist_file: playlist.playlist_file,
                 extra: playlist.extra.clone(),
             })
             .collect(),
