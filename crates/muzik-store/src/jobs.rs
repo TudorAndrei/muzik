@@ -146,10 +146,23 @@ impl Store {
 
     /// # Errors
     /// Returns an error if the old jobs database cannot be read, copied, or renamed.
-    pub fn import_legacy(&self, path: &Path) -> Result<usize> {
+    pub fn import_legacy(&mut self, path: &Path) -> Result<usize> {
         if !path.is_file() {
             return Ok(0);
         }
+        let imported = self.connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM meta WHERE key = 'legacy_jobs_imported')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        let copied = if imported { 0 } else { self.copy_legacy(path)? };
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".migrated");
+        std::fs::rename(path, backup)?;
+        Ok(copied)
+    }
+
+    fn copy_legacy(&mut self, path: &Path) -> Result<usize> {
         let jobs = {
             let legacy = Connection::open(path)?;
             let mut statement = legacy.prepare(
@@ -172,22 +185,26 @@ impl Store {
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let time = now();
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         for (queue, kind, item_key, title, status, params, question, answer, created) in &jobs {
             let status = match status {
                 Status::Running => Status::Queued,
                 status => *status,
             };
-            self.connection
-                .execute(
-                    "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                    params![queue, kind, item_key, title, status, params, question, answer, created, time],
-                )?;
+            transaction.execute(
+                "INSERT INTO jobs (queue, kind, item_key, title, status, params, question, answer, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![queue, kind, item_key, title, status, params, question, answer, created, time],
+            )?;
         }
-        self.connection.execute_batch(crate::db::REKEY_ITEM_JOBS)?;
-        let mut backup = path.as_os_str().to_owned();
-        backup.push(".migrated");
-        std::fs::rename(path, backup)?;
+        transaction.execute_batch(crate::db::REKEY_ITEM_JOBS)?;
+        transaction.execute(
+            "INSERT INTO meta (key, value) VALUES ('legacy_jobs_imported', '1')",
+            [],
+        )?;
+        transaction.commit()?;
         Ok(jobs.len())
     }
 
@@ -949,7 +966,7 @@ mod tests {
             )
             .unwrap();
         }
-        let store = memory();
+        let mut store = memory();
         assert_eq!(store.import_legacy(&legacy).unwrap(), 2);
         assert!(!legacy.exists());
         assert!(directory.path().join("jobs.db.migrated").is_file());
@@ -963,5 +980,10 @@ mod tests {
             queued.params,
             json!({"playlist_id":"PL1","key":"b","occurrence":0,"action":"run"})
         );
+        std::fs::copy(directory.path().join("jobs.db.migrated"), &legacy).unwrap();
+        assert_eq!(store.import_legacy(&legacy).unwrap(), 0);
+        assert!(!legacy.exists());
+        assert_eq!(store.list(Status::Queued).unwrap().len(), 1);
+        assert_eq!(store.list(Status::Waiting).unwrap().len(), 1);
     }
 }
