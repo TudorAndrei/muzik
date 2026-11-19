@@ -314,13 +314,14 @@ pub fn run_item(
     let stage = action.stage();
     let key = id.to_string();
     let job_id = options.job.map(|job| job.id);
+    let index = AudioIndex::scan(options.output);
     let (playlist, mut run) = repository.update_with(|document, connection| {
         if cancelled.load(Ordering::SeqCst) {
             end_job(connection, options, Ending::Cancelled)?;
             return Ok(Err(JobError::Cancelled));
         }
         jobs::cancel_waiting_on(connection, &key, job_id)?;
-        let (playlist, index) = match find_item_mut(document, id) {
+        let (playlist, position) = match find_item_mut(document, id) {
             Ok(found) => found,
             Err(error) => {
                 end_job(connection, options, Ending::Failed(&error.to_string()))?;
@@ -328,8 +329,8 @@ pub fn run_item(
             }
         };
         let source = playlist.clone();
-        let saved = playlist.items.get(index).ok_or(MISSING_VIDEO)?.clone();
-        if let Err(error) = check_available(&saved, action, options.output) {
+        let saved = playlist.items.get(position).ok_or(MISSING_VIDEO)?.clone();
+        if let Err(error) = check_available_in(&saved, action, &index) {
             let message = error.to_string();
             let mut failed = saved;
             failed.fail_before_start(stage, action, &message);
