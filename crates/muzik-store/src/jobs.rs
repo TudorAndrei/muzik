@@ -967,6 +967,14 @@ mod tests {
             .unwrap();
         }
         let mut store = memory();
+        store
+            .connection
+            .execute_batch(
+                r#"INSERT INTO watchlist_playlists (playlist_id, ordinal, data) VALUES ('PL1', 0, '{}');
+                 INSERT INTO watchlist_items (playlist_id, ordinal, data)
+                 VALUES ('PL1', 0, '{"position":2,"title":"B","video_id":"b"}');"#,
+            )
+            .unwrap();
         assert_eq!(store.import_legacy(&legacy).unwrap(), 2);
         assert!(!legacy.exists());
         assert!(directory.path().join("jobs.db.migrated").is_file());

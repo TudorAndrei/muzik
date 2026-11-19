@@ -150,6 +150,24 @@ const PARK_STORED_HOLDS: &str = "
     WHERE json_valid(data) AND json_extract(data, '$.stages.organize.status') IN ('running', 'waiting');";
 
 pub(crate) const REKEY_ITEM_JOBS: &str = "
+    UPDATE jobs
+    SET status = 'failed',
+        error = 'The selected video is no longer available.',
+        updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+    WHERE kind = 'item'
+        AND status IN ('queued', 'running', 'waiting')
+        AND json_valid(params)
+        AND json_type(params, '$.position') IS NOT NULL
+        AND json_type(params, '$.occurrence') IS NULL
+        AND NOT EXISTS (
+            SELECT 1 FROM watchlist_items
+            WHERE json_valid(watchlist_items.data)
+                AND watchlist_items.playlist_id = json_extract(jobs.params, '$.playlist_id')
+                AND json_extract(watchlist_items.data, '$.position')
+                    = json_extract(jobs.params, '$.position')
+                AND nullif(json_extract(watchlist_items.data, '$.video_id'), '')
+                    IS nullif(json_extract(jobs.params, '$.video_id'), '')
+        );
     WITH items AS (
         SELECT
             playlist_id,
@@ -180,9 +198,9 @@ pub(crate) const REKEY_ITEM_JOBS: &str = "
             old.id,
             json_extract(old.params, '$.playlist_id') AS playlist_id,
             coalesce(numbered.key, nullif(json_extract(old.params, '$.video_id'), '')) AS key,
-            coalesce(numbered.occurrence, 0) AS occurrence
+            numbered.occurrence AS occurrence
         FROM old
-        LEFT JOIN numbered
+        JOIN numbered
             ON numbered.playlist_id = json_extract(old.params, '$.playlist_id')
             AND numbered.position = json_extract(old.params, '$.position')
             AND numbered.video_id IS nullif(json_extract(old.params, '$.video_id'), '')
@@ -395,8 +413,8 @@ mod tests {
                 r#"{"playlist_id":"spotify:playlist:p","action":"organize_again","key":"spotify:track:t#0","occurrence":0}"#,
             ),
             (
-                r#"["PL1","zzzzzzzzzzz",0]"#,
-                r#"{"playlist_id":"PL1","action":"run","key":"zzzzzzzzzzz","occurrence":0}"#,
+                "PL1:9:zzzzzzzzzzz",
+                r#"{"playlist_id":"PL1","position":9,"video_id":"zzzzzzzzzzz","action":"run"}"#,
             ),
             ("refresh", "{}"),
             (
@@ -443,6 +461,29 @@ mod tests {
     #[test]
     fn a_version_four_database_upgrades_with_its_rows() {
         upgrade_from(4);
+    }
+
+    #[test]
+    fn an_open_legacy_job_whose_item_is_gone_fails_at_upgrade() {
+        let (_directory, connection) = upgrade_from(4);
+        let statuses: Vec<(String, String)> = connection
+            .prepare("SELECT item_key, status FROM jobs WHERE kind = 'item' ORDER BY id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            statuses,
+            [
+                (r#"["PL1","aaaaaaaaaaa",1]"#.to_owned(), "queued".to_owned()),
+                (
+                    r#"["spotify:playlist:p","spotify:track:t#0",0]"#.to_owned(),
+                    "waiting".to_owned()
+                ),
+                ("PL1:9:zzzzzzzzzzz".to_owned(), "failed".to_owned()),
+            ]
+        );
     }
 
     #[test]
