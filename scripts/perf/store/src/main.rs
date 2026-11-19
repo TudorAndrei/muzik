@@ -187,37 +187,26 @@ fn check(rows: &[Value], scratch: &Path) -> Result<()> {
         serde_json::from_value(raw["playlists"][0]["items"][0].clone())?;
     let mut ci: muzik_store_dod::watchlist::WatchItem =
         serde_json::from_value(raw["playlists"][0]["items"][0].clone())?;
-    let statuses = [
-        "not_started",
-        "running",
-        "waiting",
-        "complete",
-        "failed",
-        "skipped",
-        "stale",
-    ];
-    for mut code in 0..7usize.pow(5) {
+    let statuses = ["not_started", "complete", "failed", "skipped", "stale"];
+    for mut code in 0..statuses.len().pow(5) {
         let mut stages = serde_json::Map::new();
-        for (bs, cs) in muzik_store::watchlist::Stage::ALL
-            .iter()
-            .zip(muzik_store_dod::watchlist::Stage::ALL)
-        {
-            let status = statuses[code % 7];
-            code /= 7;
-            stages.insert(bs.to_string(), serde_json::json!({ "status": status }));
-            ci.stage_mut(*cs).status = status.parse()?;
+        for stage in muzik_store::watchlist::Stage::ALL {
+            let status = statuses[code % statuses.len()];
+            code /= statuses.len();
+            stages.insert(stage.to_string(), serde_json::json!({ "status": status }));
         }
-        bi.stages = serde_json::from_value(serde_json::Value::Object(stages))?;
+        bi.stages = serde_json::from_value(serde_json::Value::Object(stages.clone()))?;
+        ci.stages = serde_json::from_value(serde_json::Value::Object(stages))?;
         assert_eq!(
             serde_json::to_value(muzik_store::watchlist::Summary::of(&bi, None))?,
-            serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci))?
+            serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci, None))?
         );
     }
     bi.unavailable = Some(true);
     ci.unavailable = Some(true);
     assert_eq!(
         serde_json::to_value(muzik_store::watchlist::Summary::of(&bi, None))?,
-        serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci))?
+        serde_json::to_value(muzik_store_dod::watchlist::Summary::of(&ci, None))?
     );
     // Generated peers use sampled text and duration. Additional controls check exact boundaries and equal winners.
     for row in rows.iter().take(80) {
@@ -299,6 +288,10 @@ fn check(rows: &[Value], scratch: &Path) -> Result<()> {
         let b: muzik_store::watchlist::Watchlist = serde_json::from_value(raw.clone())?;
         let c: muzik_store_dod::watchlist::Watchlist = serde_json::from_value(raw)?;
         let b = muzik_store::watchlist::Snapshot::new(b, muzik_store::watchlist::Holds::default());
+        let c = muzik_store_dod::watchlist::Snapshot::new(
+            c,
+            muzik_store_dod::watchlist::Holds::default(),
+        );
         let bv = serde_json::to_value(muzik_store::watchlist::view(&b, scratch, scratch))?;
         let cv = serde_json::to_value(muzik_store_dod::watchlist::view(&c, scratch, scratch))?;
         assert_eq!(bv, cv, "watchlist {n}");
@@ -438,6 +431,10 @@ fn benchmarks(rows: &[Value], scratch: &Path) -> Result<()> {
         let b: muzik_store::watchlist::Watchlist = serde_json::from_value(raw.clone())?;
         let b = muzik_store::watchlist::Snapshot::new(b, muzik_store::watchlist::Holds::default());
         let c: muzik_store_dod::watchlist::Watchlist = serde_json::from_value(raw)?;
+        let c = muzik_store_dod::watchlist::Snapshot::new(
+            c,
+            muzik_store_dod::watchlist::Holds::default(),
+        );
         bench(
             "watchlist_fixed_actions_summary",
             &format!("items-{n}"),
