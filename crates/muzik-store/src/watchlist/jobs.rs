@@ -10,6 +10,7 @@ use crate::jobs::{self, Ending, Kind, NewJob, Status};
 use muzik_core::{JobEvent, Severity, Task};
 use rusqlite::Connection;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -481,6 +482,7 @@ pub fn repair(
         let mut changed = jobs::recover_on(connection)?;
         changed = changed.saturating_add(jobs::cancel_duplicates_on(connection)?);
         changed = changed.saturating_add(cancel_orphans(connection, document)?);
+        let mut indexes = HashMap::<PathBuf, AudioIndex>::new();
         for job in jobs::open_items_on(connection)? {
             if job.status != Status::Waiting {
                 continue;
@@ -497,8 +499,11 @@ pub fn repair(
                 .and_then(Value::as_str)
                 .and_then(|action| action.parse::<ItemAction>().ok())
                 .unwrap_or(ItemAction::Run);
+            let index = indexes
+                .entry(output)
+                .or_insert_with_key(|output| AudioIndex::scan(output));
             let answerable = find_item(document, &id)
-                .is_ok_and(|item| check_available(item, action, &output).is_ok());
+                .is_ok_and(|item| check_available_in(item, action, index).is_ok());
             if !answerable && jobs::cancel_open_on(connection, job.id)? {
                 changed = changed.saturating_add(1);
             }
@@ -534,7 +539,11 @@ fn find_item_mut<'a>(
 }
 
 fn check_available(item: &WatchItem, action: ItemAction, output: &Path) -> Result<()> {
-    let audio = item.downloaded_audio(&AudioIndex::scan(output));
+    check_available_in(item, action, &AudioIndex::scan(output))
+}
+
+fn check_available_in(item: &WatchItem, action: ItemAction, index: &AudioIndex) -> Result<()> {
+    let audio = item.downloaded_audio(index);
     let (enabled, reason) = availability(item, action, audio.as_deref());
     if enabled {
         Ok(())
