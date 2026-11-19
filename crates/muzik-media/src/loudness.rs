@@ -1,7 +1,7 @@
 //! EBU R128 loudness and `ReplayGain` 2.0 values for audio files.
 
 use crate::process::background_command;
-use ebur128::{EbuR128, Mode};
+use ebur128::{Channel, EbuR128, Mode};
 use rayon::prelude::*;
 use std::fs::File;
 use std::io::{Read, Seek};
@@ -20,6 +20,17 @@ use thiserror::Error;
 pub const REFERENCE_LUFS: f64 = -18.0;
 
 const FFMPEG_RATE: u32 = 48_000;
+
+const SURROUND_7_1: [Channel; 8] = [
+    Channel::Left,
+    Channel::Right,
+    Channel::Center,
+    Channel::Unused,
+    Channel::Mp135,
+    Channel::Mm135,
+    Channel::Mp090,
+    Channel::Mm090,
+];
 
 #[derive(Debug, Error)]
 pub enum LoudnessError {
@@ -241,7 +252,11 @@ impl Meter {
         if self.state.is_none() {
             let count = u32::try_from(channels).map_err(|_| LoudnessError::FormatChange)?;
             let mode = Mode::I | Mode::TRUE_PEAK | Mode::HISTOGRAM;
-            self.state = Some((EbuR128::new(count, rate, mode)?, rate, channels));
+            let mut meter = EbuR128::new(count, rate, mode)?;
+            if channels == SURROUND_7_1.len() {
+                meter.set_channel_map(&SURROUND_7_1)?;
+            }
+            self.state = Some((meter, rate, channels));
         }
         let Some(state) = &mut self.state else {
             return Err(LoudnessError::Silent);
@@ -330,6 +345,39 @@ mod tests {
                 outcome.err()
             );
         }
+    }
+
+    fn panned_sine_opus(path: &Path, pan: &str) {
+        let encoded = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-f", "lavfi", "-i"])
+            .arg(format!(
+                "sine=frequency=1000:duration=2,volume=0.25,pan={pan}"
+            ))
+            .args(["-c:a", "libopus", "-b:a", "256k", "-y"])
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            encoded.status.success(),
+            "{}",
+            String::from_utf8_lossy(&encoded.stderr)
+        );
+    }
+
+    #[test]
+    fn surround_7_1_side_channels_count_with_the_side_weight() {
+        let dir = tempfile::tempdir().unwrap();
+        let front = dir.path().join("front.opus");
+        let side = dir.path().join("side.opus");
+        let back = dir.path().join("back.opus");
+        panned_sine_opus(&front, "7.1|FL=c0|FR=c0");
+        panned_sine_opus(&side, "7.1|SL=c0|SR=c0");
+        panned_sine_opus(&back, "7.1|BL=c0|BR=c0");
+        let front = measure(&front).unwrap().track().loudness;
+        let side = measure(&side).unwrap().track().loudness;
+        let back = measure(&back).unwrap().track().loudness;
+        close(side, 10.0_f64.mul_add(f64::log10(1.41), front), 0.3);
+        close(back, front, 0.3);
     }
 
     #[test]
