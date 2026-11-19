@@ -2,6 +2,45 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.15.2 - 2026-11-19
+#### Bug Fixes
+- (**gui**) reload the watchlist when a hold moves to another job or question - (25facf4) - TudorAndrei
+- (**gui**) gate item commands on the open job and let a waiting choice be cancelled - (fea11b6) - TudorAndrei
+- (**gui**) report an answer that was not saved and reload the choices - (e437388) - TudorAndrei
+- (**gui**) reload the watchlist when an item starts or stops running or waiting - (2913f17) - TudorAndrei
+- (**gui**) rank running and waiting stages above failed ones in the item headline - (4785a80) - TudorAndrei
+- (**perf**) import the serde map trait in the store lab - (c8d704d) - TudorAndrei
+- (**perf**) compare the same stored stage outcomes and build the store lab again - (9ad57d1) - TudorAndrei
+- (**runner**) keep the quality replacement as the resumable audio when a run parks - (c5e77d5) - TudorAndrei
+- (**runner**) keep only real split output as split progress - (77fb61e) - TudorAndrei
+- (**runner**) mark later stages stale when a failed run keeps new audio - (0b69539) - TudorAndrei
+- (**runner**) start the queues when the watchlist cannot be repaired - (56c7015) - TudorAndrei
+- (**runner**) give a Spotify track without an id a stable entry id - (50ba2d8) - TudorAndrei
+- (**store**) import watchlist.json before the old item jobs - (fa603e9) - TudorAndrei
+- (**store**) repair item jobs at startup without failing on stored data - (bee1632) - TudorAndrei
+- (**store**) identify a watchlist item by its playlist and key - (eb62d8a) - TudorAndrei
+- (**store**) start a repeated video again and end its jobs when its count changes - (e8b81dd) - TudorAndrei
+- (**store**) keep the error and last action of a waiting item in the cache import - (bfa4a4f) - TudorAndrei
+- (**store**) park waiting questions from watchlist.json when it is imported - (1375e0f) - TudorAndrei
+- (**store**) fail legacy item jobs whose item is gone instead of moving them to another copy - (dee3bf8) - TudorAndrei
+- (**store**) import legacy jobs, rekey and mark them in one transaction - (8e41e8e) - TudorAndrei
+- (**store**) keep a done stage when its job ends before it starts - (5c59290) - TudorAndrei
+- (**store**) derive running and waiting stages from item jobs - (4213c34) - TudorAndrei
+- (**store**) park stored stage questions as waiting jobs when muzik.db upgrades - (da366d6) - TudorAndrei
+- (**store**) keep run progress and never lose a waiting item - (594c53a) - TudorAndrei
+- (**store**) find Spotify audio in the download folder of its track - (f7bf13f) - TudorAndrei
+- (**store**) identify watchlist items by key and occurrence - (6c44ccf) - TudorAndrei
+- (**store**) model watchlist stages as states with one transition function - (b0cc14a) - TudorAndrei
+#### Performance Improvements
+- (**store**) scan the output folder before an item run takes the write lock - (34a24ec) - TudorAndrei
+- (**store**) scan each download folder once when repairing waiting jobs - (385a816) - TudorAndrei
+#### Tests
+- (**store**) check that items and jobs agree after any sequence of steps - (928eda8) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.15.1 - (8f2de0e) - TudorAndrei
+
+- - -
+
 ## v2.15.1 - 2026-11-18
 #### Bug Fixes
 - (**core**) stop adding "best" to Soulseek searches - (cc5df16) - TudorAndrei

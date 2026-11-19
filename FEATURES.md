@@ -192,8 +192,18 @@ The user runs an action on one watchlist item, for example run, retry, or downlo
 - An action that needs a choice parks the item
 - A failed action saves the stage of the action
 - An action checks the identity of the saved item
+- An action finds its item after a sync moved it
 - A failure marks the stage that failed
 - Downloading again keeps later stages stale after a check of the cache
+- A question after the download keeps the download
+- A failure after the download keeps the download
+- A cancel after the download keeps the download
+- A result keeps the title that a sync saved during the run
+- A video that leaves its playlist during the run fails the job
+- A choice that cannot resume does not keep the item waiting
+- A command that cannot run keeps a complete stage
+- A job that ends before it starts keeps a complete stage
+- A job that ends before it starts does not keep the item waiting
 
 ### Watchlist cards
 
@@ -208,6 +218,7 @@ Each watchlist item shows as a card with a summary, a main action, the actions t
 When the watchlist page opens, muzik shows the saved state at once and then checks the local files in the background. The result of the check is saved and shown only while no job runs and no newer edit or check started.
 
 - A local check shows the saved state first and then the checked state
+- A local check keeps the stage of a running job
 - A local check does nothing while a job runs
 - A local check is outdated when another check starts while it reads the settings
 - A local check that is outdated changes nothing
@@ -219,6 +230,7 @@ When the watchlist page opens, muzik shows the saved state at once and then chec
 muzik checks the saved watchlist against the downloaded files, the split folders, the cache of earlier versions, and the music library. A finished stage is marked complete. A video that is not finished leaves the processed list.
 
 - Finished stages are filled in and a waiting stage keeps its question
+- A waiting item keeps its error and last action when the cache left its import open
 - An import that the cache left open fails once
 - A second check changes no rows
 - A kept source file with an empty split folder stays processed
