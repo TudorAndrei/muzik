@@ -35,6 +35,7 @@ pub enum Call {
     WatchlistAdd,
     WatchlistRename,
     WatchlistRemove,
+    WatchlistPlaylist,
     WorkflowStart,
     WatchlistRefresh,
     WatchlistAction,
@@ -63,6 +64,7 @@ impl Call {
             Self::WatchlistAdd => "watchlist.add",
             Self::WatchlistRename => "watchlist.rename",
             Self::WatchlistRemove => "watchlist.remove",
+            Self::WatchlistPlaylist => "watchlist.playlist",
             Self::WorkflowStart => "workflow.start",
             Self::WatchlistRefresh => "watchlist.refresh",
             Self::WatchlistAction => "watchlist.action",
@@ -92,6 +94,7 @@ impl Call {
             | Self::WatchlistAdd
             | Self::WatchlistRename
             | Self::WatchlistRemove
+            | Self::WatchlistPlaylist
             | Self::WorkflowStart
             | Self::WatchlistRefresh
             | Self::WatchlistAction
@@ -413,6 +416,20 @@ impl Muzik {
             Call::WatchlistRename,
             cx,
             move |backend| backend.rename_source(&playlist_id, &title),
+            |view, _, _, cx| view.load_watchlist(cx),
+        );
+    }
+
+    pub(crate) fn set_source_playlist(
+        &mut self,
+        playlist_id: String,
+        on: bool,
+        cx: &Context<Self>,
+    ) {
+        self.call(
+            Call::WatchlistPlaylist,
+            cx,
+            move |backend| backend.set_source_playlist(&playlist_id, on),
             |view, _, _, cx| view.load_watchlist(cx),
         );
     }

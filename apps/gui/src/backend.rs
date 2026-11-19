@@ -141,7 +141,18 @@ impl Backend {
     pub fn save_defaults(&self, defaults: &GuiDefaults) -> anyhow::Result<GuiDefaults> {
         let params = serde_json::to_value(defaults)?;
         let _write = self.writes.lock();
-        Ok(app_config::save_gui_defaults(self.paths(), &params)?)
+        let before = app_config::load_gui_defaults(self.paths());
+        let saved = app_config::save_gui_defaults(self.paths(), &params)?;
+        if (before.playlists, before.playlist_format) != (saved.playlists, saved.playlist_format) {
+            self.app.write_playlists()?;
+        }
+        Ok(saved)
+    }
+
+    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> anyhow::Result<bool> {
+        Ok(self
+            .app
+            .set_source_playlist(required("playlist_id", playlist_id)?, on)?)
     }
 
     pub fn jobs(&self) -> Value {
@@ -609,6 +620,31 @@ mod tests {
         assert!(backend.rename_source("PL123", "  New name  ").unwrap());
         assert!(backend.rename_source("PL123", "").is_err());
         assert!(backend.remove_source("PL123").unwrap());
+    }
+
+    #[test]
+    fn playlist_files_follow_the_setting_and_the_source_switch() {
+        let (_state, backend, _) = started(false).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        backend.rename_source("PL123", "Mix").unwrap();
+        assert!(!file.exists());
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
+        assert!(backend.set_source_playlist("PL123", false).unwrap());
+        assert!(!file.exists());
+        assert!(backend.set_source_playlist("PL123", true).unwrap());
+        assert!(file.is_file());
+        defaults.playlists = false;
+        backend.save_defaults(&defaults).unwrap();
+        assert!(!file.exists());
     }
 
     #[test]

@@ -54,9 +54,12 @@ enum ChoiceField {
     Fallback,
     QualityPolicy,
     Duplicates,
+    PlaylistFormat,
 }
 
 impl ChoiceField {
+    const PLAYLISTS: [Self; 1] = [Self::PlaylistFormat];
+
     const ALL: [Self; 6] = [
         Self::AudioSource,
         Self::Metadata,
@@ -74,6 +77,7 @@ impl ChoiceField {
             Self::Fallback => "Fallback",
             Self::QualityPolicy => "Quality policy",
             Self::Duplicates => "Album already in library",
+            Self::PlaylistFormat => "Playlist format",
         }
     }
 
@@ -85,6 +89,7 @@ impl ChoiceField {
             Self::Fallback => AudioFallback::CHOICES,
             Self::QualityPolicy => QualityPolicy::CHOICES,
             Self::Duplicates => DuplicatePolicy::CHOICES,
+            Self::PlaylistFormat => muzik_core::PlaylistFormat::CHOICES,
         }
     }
 
@@ -96,6 +101,7 @@ impl ChoiceField {
             Self::Fallback => defaults.fallback.to_string(),
             Self::QualityPolicy => defaults.quality_policy.to_string(),
             Self::Duplicates => defaults.duplicates.to_string(),
+            Self::PlaylistFormat => defaults.playlist_format.to_string(),
         }
     }
 
@@ -116,6 +122,10 @@ impl ChoiceField {
                 .map(|value| defaults.quality_policy = value)
                 .ok(),
             Self::Duplicates => value.parse().map(|value| defaults.duplicates = value).ok(),
+            Self::PlaylistFormat => value
+                .parse()
+                .map(|value| defaults.playlist_format = value)
+                .ok(),
         };
     }
 }
@@ -175,10 +185,13 @@ enum Flag {
     Interactive,
     ReplayGainAfterImport,
     CoversAfterImport,
+    Playlists,
 }
 
 impl Flag {
     const AFTER_IMPORT: [Self; 2] = [Self::ReplayGainAfterImport, Self::CoversAfterImport];
+
+    const PLAYLISTS: [Self; 1] = [Self::Playlists];
 
     const WORKFLOW: [Self; 9] = [
         Self::Review,
@@ -205,6 +218,7 @@ impl Flag {
             Self::Interactive => "Interactive",
             Self::ReplayGainAfterImport => "Calculate ReplayGain",
             Self::CoversAfterImport => "Add cover files",
+            Self::Playlists => "Write playlist files",
         }
     }
 
@@ -221,6 +235,7 @@ impl Flag {
             Self::Interactive => &mut defaults.interactive,
             Self::ReplayGainAfterImport => &mut defaults.replaygain_after_import,
             Self::CoversAfterImport => &mut defaults.covers_after_import,
+            Self::Playlists => &mut defaults.playlists,
         }
     }
 }
@@ -487,6 +502,15 @@ impl ConfigView {
             )
             .group(
                 SettingGroup::new()
+                    .title("Playlists")
+                    .description(
+                        "Muzik writes a playlist file for each watchlist source to the Playlists folder of the library and updates it after each watchlist job. Each source on the Watchlist page has its own switch. Most players read m3u8. Use m3u for a player or device that does not accept m3u8.",
+                    )
+                    .items(self.switch_items(&view, &Flag::PLAYLISTS))
+                    .items(self.choice_items(&view, &ChoiceField::PLAYLISTS)),
+            )
+            .group(
+                SettingGroup::new()
                     .title("Library maintenance")
                     .description(
                         "Each task runs over the full library. Activity shows its progress.",
@@ -556,7 +580,14 @@ impl ConfigView {
     fn quality_group(&self, view: &WeakEntity<Self>) -> SettingGroup {
         SettingGroup::new()
             .title("Sources and quality")
-            .items(ChoiceField::ALL.into_iter().map(|field| {
+            .items(self.choice_items(view, &ChoiceField::ALL))
+    }
+
+    fn choice_items(&self, view: &WeakEntity<Self>, fields: &[ChoiceField]) -> Vec<SettingItem> {
+        fields
+            .iter()
+            .copied()
+            .map(|field| {
                 let view = view.clone();
                 let current = field.current(&self.defaults);
                 SettingItem::new(
@@ -573,7 +604,8 @@ impl ConfigView {
                         },
                     ),
                 )
-            }))
+            })
+            .collect()
     }
 
     fn number_items(&self, view: &WeakEntity<Self>) -> Vec<SettingItem> {
@@ -859,7 +891,7 @@ mod tests {
     #[test]
     fn every_dropdown_value_becomes_the_current_choice() {
         let mut defaults = GuiDefaults::default();
-        for field in ChoiceField::ALL {
+        for field in ChoiceField::ALL.into_iter().chain(ChoiceField::PLAYLISTS) {
             for value in field.values() {
                 field.set(&mut defaults, value);
                 assert_eq!(field.current(&defaults), *value, "{}", field.label());

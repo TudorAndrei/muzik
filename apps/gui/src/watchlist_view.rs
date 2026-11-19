@@ -7,6 +7,7 @@ use gpui_kit::component::sidebar::{
     Sidebar, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuItem,
 };
 use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::switch::Switch;
 use gpui_kit::component::table::DataTable;
 
 impl Muzik {
@@ -309,9 +310,20 @@ impl Muzik {
             );
         }
         let rename_id = id.clone();
+        let playlist_source = id.clone();
         let remove_id = id;
         let remove_title = title.to_string();
         tools
+            .child(
+                Switch::new("playlist-file")
+                    .small()
+                    .checked(playlist.playlist_file)
+                    .label("Playlist file")
+                    .tooltip("Write a playlist file for this source. Turn on playlist files in Settings > Library.")
+                    .on_click(cx.listener(move |view, checked: &bool, _, cx| {
+                        view.set_source_playlist(playlist_source.clone(), *checked, cx);
+                    })),
+            )
             .child(
                 Button::new("rename-playlist")
                     .ghost()
