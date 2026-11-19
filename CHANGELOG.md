@@ -2,6 +2,16 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.15.3 - 2026-11-19
+#### Bug Fixes
+- (**media**) count 7.1 side channels in loudness - (e33a11c) - TudorAndrei
+- (**media**) measure Opus loudness through ffmpeg - (4c178b9) - TudorAndrei
+- (**workflow**) stop yt-dlp from writing playlist metadata files - (1d87c05) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.15.2 - (1dcd91f) - github-actions[bot]
+
+- - -
+
 ## v2.15.2 - 2026-11-19
 #### Bug Fixes
 - (**gui**) reload the watchlist when a hold moves to another job or question - (25facf4) - TudorAndrei
