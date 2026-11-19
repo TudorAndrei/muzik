@@ -115,8 +115,12 @@ impl Watchlist {
                 match holds.get(id) {
                     Some(hold) if hold.is_waiting() => {
                         let kept = item.stage(hold.stage()).clone();
+                        let action = item.last_action.clone();
+                        let error = item.last_error.clone();
                         apply_item(item, &videos, &mut processed, options);
                         *item.stage_mut(hold.stage()) = kept;
+                        item.last_action = action;
+                        item.last_error = error;
                         for key in [item.video_id.as_deref(), item.entry_id.as_deref()]
                             .into_iter()
                             .flatten()

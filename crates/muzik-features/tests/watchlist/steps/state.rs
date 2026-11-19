@@ -121,6 +121,22 @@ fn item_has(
     Ok(())
 }
 
+#[then(expr = "item {int} of {string} in the {word} watchlist has no error and no last action")]
+fn item_has_no_error(
+    world: &mut WatchlistWorld,
+    ordinal: usize,
+    id: String,
+    which: String,
+) -> StepResult {
+    let error = item_field(world, &which, &id, ordinal, "/last_error")?;
+    let action = item_field(world, &which, &id, ordinal, "/last_action")?;
+    anyhow::ensure!(
+        error.is_null() && action.is_null(),
+        "the error is {error} and the last action is {action}"
+    );
+    Ok(())
+}
+
 #[then(expr = "item {int} of {string} in the {word} watchlist has the download path {string}")]
 fn item_has_download_path(
     world: &mut WatchlistWorld,
