@@ -24,8 +24,6 @@ actions!(
         #[derive(Eq)]
         ShowSettings,
         #[derive(Eq)]
-        ShowSpotify,
-        #[derive(Eq)]
         OpenCommands,
         #[derive(Eq)]
         Refresh,
@@ -96,7 +94,6 @@ pub fn page_action(page: Page) -> Box<dyn Action> {
         Page::Watchlist => Box::new(ShowWatchlist),
         Page::Library => Box::new(ShowLibrary),
         Page::Settings => Box::new(ShowSettings),
-        Page::Spotify => Box::new(ShowSpotify),
     }
 }
 
@@ -119,7 +116,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new(primary("cmd-3", "ctrl-3"), ShowLibrary, None),
         KeyBinding::new(primary("cmd-4", "ctrl-4"), ShowSettings, None),
         KeyBinding::new(primary("cmd-,", "ctrl-,"), ShowSettings, None),
-        KeyBinding::new(primary("cmd-5", "ctrl-5"), ShowSpotify, None),
         KeyBinding::new(primary("cmd-k", "ctrl-k"), OpenCommands, None),
         KeyBinding::new(primary("cmd-shift-p", "ctrl-shift-p"), OpenCommands, None),
         KeyBinding::new(primary("cmd-r", "ctrl-r"), Refresh, None),
@@ -147,7 +143,6 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Workflow", ShowWorkflow),
             MenuItem::action("Watchlist", ShowWatchlist),
             MenuItem::action("Library", ShowLibrary),
-            MenuItem::action("Spotify", ShowSpotify),
             MenuItem::separator(),
             MenuItem::action("Command Palette…", OpenCommands),
             MenuItem::action("Refresh", Refresh),

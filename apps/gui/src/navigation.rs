@@ -6,7 +6,6 @@ pub enum Page {
     Watchlist,
     Library,
     Settings,
-    Spotify,
 }
 
 pub struct PageInfo {
@@ -16,7 +15,7 @@ pub struct PageInfo {
     pub keywords: &'static [&'static str],
 }
 
-pub const PAGES: [PageInfo; 5] = [
+pub const PAGES: [PageInfo; 4] = [
     PageInfo {
         page: Page::Workflow,
         label: "Workflow",
@@ -39,12 +38,6 @@ pub const PAGES: [PageInfo; 5] = [
         page: Page::Settings,
         label: "Settings",
         icon: IconName::Settings,
-        keywords: &["config", "preferences"],
-    },
-    PageInfo {
-        page: Page::Spotify,
-        label: "Spotify",
-        icon: IconName::Globe,
-        keywords: &["login", "import"],
+        keywords: &["config", "preferences", "accounts", "spotify", "login"],
     },
 ];

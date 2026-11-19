@@ -356,7 +356,7 @@ item count, and the link of each source. Open, Copy, Rename, and Remove source
 apply to the selected source.
 
 You can also add a Spotify playlist, a Spotify album, or your Liked Songs.
-Connect your Spotify account first on the **Spotify** page, or run
+Connect your Spotify account first in **Settings > Accounts > Spotify**, or run
 `muzik spotify login`. Each refresh reads the current tracks through the
 Spotify Web API. Watchlist Spotify items get audio from Soulseek only. muzik
 reads Spotify metadata only; it never downloads Spotify media.

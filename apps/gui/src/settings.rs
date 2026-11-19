@@ -742,11 +742,21 @@ impl ConfigView {
                         .child(style::meta("Logged in", cx))
                     })
             }));
+        let main = self.main.clone();
+        let spotify = SettingGroup::new()
+            .title("Spotify")
+            .description(
+                "Your Spotify account. Muzik reads your playlists and Liked Songs with it.",
+            )
+            .item(SettingItem::render(move |_, _, cx| {
+                Muzik::spotify_section(&main, cx)
+            }));
         SettingPage::new("Accounts")
             .description("The accounts that muzik uses to find and download audio.")
             .resettable(false)
             .group(soulseek)
             .group(bandcamp)
+            .group(spotify)
     }
 
     fn services_page(&self) -> SettingPage {

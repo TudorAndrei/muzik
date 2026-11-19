@@ -256,8 +256,8 @@ impl Muzik {
             Page::Workflow => self.load_jobs(cx),
             Page::Watchlist => self.load_watchlist(cx),
             Page::Library => self.load_library(cx),
-            Page::Settings => self.check_services(cx),
-            Page::Spotify => {
+            Page::Settings => {
+                self.check_services(cx);
                 self.load_watchlist(cx);
                 self.spotify_status(cx);
             }
@@ -324,6 +324,8 @@ impl Muzik {
         self.page = Page::Settings;
         self.error = None;
         self.check_services(cx);
+        self.load_watchlist(cx);
+        self.spotify_status(cx);
         cx.notify();
     }
 
@@ -338,10 +340,6 @@ impl Muzik {
         match page {
             Page::Watchlist => self.load_watchlist(cx),
             Page::Library => self.load_library(cx),
-            Page::Spotify => {
-                self.load_watchlist(cx);
-                self.spotify_status(cx);
-            }
             Page::Workflow | Page::Settings => {}
         }
         cx.notify();
@@ -1257,7 +1255,6 @@ impl Render for Muzik {
                 .into_any_element(),
             Page::Watchlist => self.watchlist(cx),
             Page::Library => self.library(cx),
-            Page::Spotify => self.spotify(cx),
         };
         let body = div()
             .flex()
@@ -1286,9 +1283,6 @@ impl Render for Muzik {
             }))
             .on_action(cx.listener(|view, _: &commands::ShowSettings, window, cx| {
                 view.set_page(Page::Settings, window, cx);
-            }))
-            .on_action(cx.listener(|view, _: &commands::ShowSpotify, window, cx| {
-                view.set_page(Page::Spotify, window, cx);
             }))
             .on_action(cx.listener(|view, _: &commands::Refresh, _, cx| {
                 view.refresh_page(cx);
