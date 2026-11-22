@@ -147,6 +147,32 @@ pub struct Service {
     playlist_write_pending: AtomicBool,
 }
 
+struct PendingThumbnails<'a> {
+    pending: &'a Mutex<HashSet<String>>,
+    ids: Vec<String>,
+}
+
+impl<'a> PendingThumbnails<'a> {
+    fn claim(pending: &'a Mutex<HashSet<String>>, ids: Vec<String>) -> Self {
+        let ids = {
+            let mut held = pending.lock();
+            ids.into_iter()
+                .filter(|id| held.insert(id.clone()))
+                .collect()
+        };
+        Self { pending, ids }
+    }
+}
+
+impl Drop for PendingThumbnails<'_> {
+    fn drop(&mut self) {
+        let mut held = self.pending.lock();
+        for id in &self.ids {
+            held.remove(id);
+        }
+    }
+}
+
 fn required<'a>(field: &'static str, value: &'a str) -> Result<&'a str> {
     Some(value.trim())
         .filter(|value| !value.is_empty())
@@ -337,23 +363,15 @@ impl Service {
     }
 
     pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Vec<ThumbnailUpdate>> {
-        let fresh = {
-            let mut pending = self.thumbnails.lock();
-            ids.into_iter()
-                .filter(|id| pending.insert(id.clone()))
-                .collect::<Vec<_>>()
-        };
-        if fresh.is_empty() {
+        let claim = PendingThumbnails::claim(&self.thumbnails, ids);
+        if claim.ids.is_empty() {
             return None;
         }
-        let data = thumbnails::cache_requested(&fresh, &self.app.repository(), &self.paths().cache);
-        {
-            let mut pending = self.thumbnails.lock();
-            for id in &fresh {
-                pending.remove(id);
-            }
-        }
-        Some(data)
+        Some(thumbnails::cache_requested(
+            &claim.ids,
+            &self.app.repository(),
+            &self.paths().cache,
+        ))
     }
 
     /// # Errors
@@ -477,7 +495,9 @@ impl Service {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActiveLogin, ItemRequest, Service, ServiceOptions, SoulseekForm};
+    use super::{
+        ActiveLogin, ItemRequest, PendingThumbnails, Service, ServiceOptions, SoulseekForm,
+    };
     use crate::{AppEvent, Error, PlaylistFile, RunnerMode, Storage};
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
@@ -723,6 +743,19 @@ mod tests {
                 .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
                 .is_none()
         );
+    }
+
+    #[test]
+    fn claimed_thumbnail_ids_are_released_when_the_work_panics() {
+        let pending = parking_lot::Mutex::new(HashSet::from(["taken".to_owned()]));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let claim = PendingThumbnails::claim(&pending, vec!["fresh".into(), "taken".into()]);
+            assert_eq!(claim.ids, ["fresh"]);
+            assert!(pending.lock().contains("fresh"));
+            panic!("the fetch failed");
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(*pending.lock(), HashSet::from(["taken".to_owned()]));
     }
 
     #[test]
