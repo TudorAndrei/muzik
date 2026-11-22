@@ -18,7 +18,7 @@ const TOKEN: &str = "a-long-enough-secret";
 struct App {
     router: Router,
     bus: Bus,
-    _home: TempDir,
+    home: TempDir,
 }
 
 fn app(token: Option<&str>) -> App {
@@ -38,7 +38,7 @@ fn app(token: Option<&str>) -> App {
     App {
         router: server.router,
         bus: server.bus,
-        _home: home,
+        home,
     }
 }
 
@@ -286,4 +286,163 @@ async fn the_event_stream_sends_each_event_as_json() {
         event,
         serde_json::json!({"type": "job_cancelled", "data": {"job_id": "queue-9"}})
     );
+}
+
+const PLAYLIST_FORM: &str = "url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLabcdefgh12345";
+
+async fn page_text(app: &App, path: &str, cookie: &str) -> String {
+    let response = app.router.handle(get(path, Some(cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK, "{path}");
+    text(response).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn each_page_renders_after_sign_in() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    for (path, heading) in [("/watchlist", "Watchlist"), ("/", "Activity")] {
+        let page = page_text(&app, path, &cookie).await;
+        assert!(page.contains(&format!("<h1>{heading}</h1>")), "{path}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_source_is_added_renamed_and_removed() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let empty = page_text(&app, "/watchlist", &cookie).await;
+    assert!(empty.contains("No playlists yet."));
+
+    let response = app
+        .router
+        .handle(post("/watchlist/add", PLAYLIST_FORM, Some(&cookie)))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let target = location(&response).to_owned();
+    assert!(target.starts_with("/watchlist?"), "{target}");
+    assert!(target.contains("source=PLabcdefgh12345"), "{target}");
+    assert!(target.contains("notice="), "{target}");
+
+    let listed = page_text(&app, "/watchlist?source=PLabcdefgh12345", &cookie).await;
+    assert!(listed.contains("id=\"source-PLabcdefgh12345\""));
+    assert!(listed.contains("not checked"));
+
+    let response = app
+        .router
+        .handle(post(
+            "/watchlist/rename?source=PLabcdefgh12345",
+            "playlist_id=PLabcdefgh12345&title=Road+trip",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(location(&response).contains("notice="));
+    let renamed = page_text(&app, "/watchlist?source=PLabcdefgh12345", &cookie).await;
+    assert!(renamed.contains("Road trip"));
+
+    let response = app
+        .router
+        .handle(post(
+            "/watchlist/remove?source=PLabcdefgh12345",
+            "playlist_id=PLabcdefgh12345",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(!location(&response).contains("source=PL"));
+    let removed = page_text(&app, "/watchlist", &cookie).await;
+    assert!(removed.contains("No playlists yet."));
+    assert!(!removed.contains("Road trip"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_source_that_is_not_a_playlist_link_is_refused() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    for form in ["url=+++", "url=not+a+playlist"] {
+        let response = app
+            .router
+            .handle(post("/watchlist/add", form, Some(&cookie)))
+            .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER, "{form}");
+        assert!(location(&response).contains("error="), "{form}");
+    }
+    let page = page_text(&app, "/watchlist", &cookie).await;
+    assert!(page.contains("No playlists yet."));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thumbnail_is_served_only_from_the_cache_by_a_valid_id() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let cache = app.home.path().join("cache");
+    std::fs::write(
+        cache.join("yt_thumbnail_abcdefghijk.jpg"),
+        b"\xff\xd8\xffdata",
+    )
+    .unwrap();
+    std::fs::write(app.home.path().join("secret.txt"), b"secret").unwrap();
+
+    let response = app
+        .router
+        .handle(get("/watchlist/thumbnail/abcdefghijk", Some(&cookie)))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/jpeg")
+    );
+
+    for id in [
+        "abcdefghijl",
+        "short",
+        "..%2Fsecret.txt",
+        "..%2F..%2Fsecret",
+        "%2E%2E%2Fsecret",
+        "abcdefghijk.jpg",
+        "abcdefghijk%2F..%2F..%2Fsecret.txt",
+    ] {
+        let response = app
+            .router
+            .handle(get(&format!("/watchlist/thumbnail/{id}"), Some(&cookie)))
+            .await;
+        assert!(response.status().is_client_error(), "{id}");
+    }
+
+    let response = app
+        .router
+        .handle(get("/watchlist/thumbnail/abcdefghijk", None))
+        .await;
+    assert!(response.status().is_redirection());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_command_for_an_item_that_is_not_saved_is_refused_without_queueing_a_job() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let response = app
+        .router
+        .handle(post(
+            "/watchlist/item",
+            "playlist_id=PLmissing&key=abcdefghijk&action=run",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(location(&response).contains("error="));
+    let response = app
+        .router
+        .handle(post(
+            "/watchlist/item",
+            "playlist_id=PLmissing&key=abcdefghijk&action=explode",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = app.router.handle(get("/api/jobs", Some(&cookie))).await;
+    let jobs: Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(jobs["open"], serde_json::json!([]));
 }

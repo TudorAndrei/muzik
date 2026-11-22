@@ -6,6 +6,7 @@ pub mod hub;
 pub mod pages;
 pub mod state;
 pub mod ui;
+pub mod watchlist;
 
 use std::sync::Arc;
 
@@ -77,7 +78,16 @@ pub fn build(paths: Paths, config: Config) -> muzik_runner::Result<Server> {
         .page(pages::login)
         .route(pages::login_submit)
         .route(pages::logout)
-        .page(pages::watchlist)
+        .page(watchlist::page)
+        .route(watchlist::add)
+        .route(watchlist::rename)
+        .route(watchlist::remove)
+        .route(watchlist::playlist_file)
+        .route(watchlist::refresh)
+        .route(watchlist::run_item)
+        .route(watchlist::retry_failed)
+        .route(watchlist::thumbnail)
+        .route(watchlist::live_board)
         .page(pages::library)
         .page(pages::settings)
         .page(activity::page)

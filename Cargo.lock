@@ -5642,6 +5642,7 @@ dependencies = [
  "futures-util",
  "muzik-core",
  "muzik-runner",
+ "muzik-store",
  "parking_lot 0.13.0",
  "serde",
  "serde_json",

@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use muzik_core::{DecisionKind, JobEvent, Task};
 use muzik_runner::AppEvent;
+use muzik_store::watchlist::WatchlistView;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -51,6 +53,10 @@ struct State {
     log: VecDeque<String>,
     finished: VecDeque<String>,
     finished_set: HashSet<String>,
+    watchlist: Option<Arc<WatchlistView>>,
+    watchlist_error: Option<String>,
+    watchlist_stale: bool,
+    thumbnails: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -65,7 +71,42 @@ impl Hub {
     }
 
     pub fn apply(&self, event: &AppEvent) {
-        self.state.lock().apply(event);
+        let mut state = self.state.lock();
+        state.watch(event);
+        state.apply(event);
+    }
+
+    #[must_use]
+    pub fn watchlist(&self) -> Option<Arc<WatchlistView>> {
+        self.state.lock().watchlist.clone()
+    }
+
+    #[must_use]
+    pub fn watchlist_error(&self) -> Option<String> {
+        self.state.lock().watchlist_error.clone()
+    }
+
+    pub fn store_watchlist(&self, view: WatchlistView) {
+        let mut state = self.state.lock();
+        state.watchlist = Some(Arc::new(view));
+        state.watchlist_error = None;
+    }
+
+    pub fn fail_watchlist(&self, message: String) {
+        self.state.lock().watchlist_error = Some(message);
+    }
+
+    #[must_use]
+    pub fn try_thumbnail(&self, id: &str) -> bool {
+        self.state.lock().thumbnails.insert(id.to_owned())
+    }
+
+    #[must_use]
+    pub fn take_watchlist_stale(&self) -> bool {
+        let mut guard = self.state.lock();
+        let stale = guard.watchlist.is_none() || guard.watchlist_stale;
+        guard.watchlist_stale = false;
+        stale
     }
 
     #[must_use]
@@ -97,6 +138,22 @@ impl Hub {
 }
 
 impl State {
+    fn watch(&mut self, event: &AppEvent) {
+        match event {
+            AppEvent::WatchlistUpdated(view) => {
+                self.watchlist = Some(Arc::new(view.clone()));
+                self.watchlist_error = None;
+            }
+            AppEvent::WatchlistError(message) => self.watchlist_error = Some(message.clone()),
+            AppEvent::WatchlistSaved
+            | AppEvent::JobsUpdated(_)
+            | AppEvent::JobCompleted { .. }
+            | AppEvent::JobFailed { .. }
+            | AppEvent::JobCancelled { .. } => self.watchlist_stale = true,
+            _ => {}
+        }
+    }
+
     fn apply(&mut self, event: &AppEvent) {
         if let AppEvent::JobStarted { job_id, .. } = event {
             self.finished_set.remove(job_id);

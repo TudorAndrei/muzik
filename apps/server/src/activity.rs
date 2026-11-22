@@ -88,7 +88,8 @@ pub const fn kind_label(kind: &str) -> &'static str {
     }
 }
 
-fn truncate(text: &str, limit: usize) -> String {
+#[must_use]
+pub fn truncate(text: &str, limit: usize) -> String {
     let mut chars = text.chars();
     let head: String = chars.by_ref().take(limit).collect();
     if chars.next().is_some() {
@@ -338,7 +339,7 @@ pub async fn panel(cx: &Cx) -> Result<impl View> {
             if !auth::authenticated(cx).await? {
                 break emit! { <p class="empty">"The session has ended. Reload the page to sign in again."</p> };
             }
-            if !settle(&mut changes).await {
+            if !settle(&mut changes, relevant).await {
                 break if let Some(token) = token {
                     Ok(token)
                 } else {
@@ -354,7 +355,7 @@ fn relevant(event: &AppEvent) -> bool {
         || matches!(event, AppEvent::JobsUpdated(_) | AppEvent::QueuesUpdated(_))
 }
 
-async fn settle(changes: &mut Receiver<AppEvent>) -> bool {
+pub async fn settle(changes: &mut Receiver<AppEvent>, relevant: fn(&AppEvent) -> bool) -> bool {
     let wait = async {
         loop {
             match changes.recv().await {
