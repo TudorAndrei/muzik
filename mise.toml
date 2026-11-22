@@ -35,6 +35,18 @@ scripts/dev-profile.sh init
 cargo run --locked -p muzik-gpui
 """
 
+[tasks.server]
+description = "Run the web server"
+run = "cargo run --locked -p muzik-server"
+
+[tasks.server-dev]
+description = "Run the web server with the isolated .dev profile"
+env = { MUZIK_HOME = "{{config_root}}/.dev" }
+run = """
+scripts/dev-profile.sh init
+cargo run --locked -p muzik-server
+"""
+
 [tasks.cli-dev]
 description = "Run the CLI with the isolated .dev profile"
 env = { MUZIK_HOME = "{{config_root}}/.dev" }
