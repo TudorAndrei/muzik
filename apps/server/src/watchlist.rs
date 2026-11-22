@@ -2,7 +2,7 @@ use std::{collections::HashSet, path::Path, str::FromStr, sync::Arc};
 
 use muzik_core::thumbnails;
 use muzik_runner::{
-    AppEvent, JobsSnapshot,
+    AppEvent, JobsSnapshot, PlaylistFile,
     service::{ItemRequest, Service},
 };
 use muzik_store::watchlist::{
@@ -1155,7 +1155,7 @@ pub async fn playlist_file(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeO
     let place = place_of(cx)?;
     let on = form.on == "true";
     let outcome = backend(cx)
-        .run(move |service| service.set_source_playlist(&form.playlist_id, on))
+        .run(move |service| service.set_source_playlist(&form.playlist_id, PlaylistFile::from(on)))
         .await?;
     Ok(match outcome {
         Ok(edit) if edit.changed => {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::backend::{Backend, ItemRequest, SoulseekForm};
 use muzik_runner::setup::SoulseekProfile;
-use muzik_runner::{Answered, BandcampStatus, QUESTION_CHANGED, QuestionVersion};
+use muzik_runner::{Answered, BandcampStatus, PlaylistFile, QUESTION_CHANGED, QuestionVersion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Read {
@@ -441,7 +441,7 @@ impl Muzik {
         self.call(
             Call::WatchlistPlaylist,
             cx,
-            move |backend| backend.set_source_playlist(&playlist_id, on),
+            move |backend| backend.set_source_playlist(&playlist_id, PlaylistFile::from(on)),
             |view, _, _, cx| view.load_watchlist(cx),
         );
     }

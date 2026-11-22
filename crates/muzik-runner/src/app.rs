@@ -23,10 +23,28 @@ use std::time::Duration;
 type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunnerMode {
+    Run,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaylistFile {
+    On,
+    Off,
+}
+
+impl From<bool> for PlaylistFile {
+    fn from(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
+}
+
 pub struct AppOptions {
     pub paths: Paths,
     pub workers: usize,
-    pub run: bool,
+    pub runner: RunnerMode,
     pub in_memory: bool,
     pub chooser: Option<Arc<dyn Chooser>>,
     pub sink: Sink,
@@ -58,7 +76,8 @@ impl App {
         });
         let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
         let generation = Arc::new(AtomicU64::new(0));
-        let runner = if options.run {
+        let wants_runner = options.runner == RunnerMode::Run;
+        let runner = if wants_runner {
             let sink = Arc::clone(&options.sink);
             let pending = Arc::clone(&decisions);
             let asked = AtomicU64::new(0);
@@ -78,7 +97,7 @@ impl App {
         } else {
             None
         };
-        if options.run && runner.is_none() {
+        if wants_runner && runner.is_none() {
             (options.sink)(AppEvent::RemoteRunner {
                 message: "Another muzik process runs the queue. New jobs go into its queue.".into(),
             });
@@ -217,7 +236,12 @@ impl App {
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> crate::Result<SourceEdit> {
+    pub fn set_source_playlist(
+        &self,
+        playlist_id: &str,
+        file: PlaylistFile,
+    ) -> crate::Result<SourceEdit> {
+        let on = file == PlaylistFile::On;
         let changed = self.edit(|repository| Ok(repository.set_playlist_file(playlist_id, on)?))?;
         Ok(self.followed(changed))
     }
@@ -351,7 +375,7 @@ fn ask(
 
 #[cfg(test)]
 mod tests {
-    use super::{App, AppOptions};
+    use super::{App, AppOptions, RunnerMode};
     use crate::events::AppEvent;
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
@@ -360,12 +384,12 @@ mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::time::Duration;
 
-    fn app(root: &std::path::Path, run: bool) -> Result<(App, Receiver<AppEvent>), String> {
+    fn app(root: &std::path::Path) -> Result<(App, Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
         let app = App::start(AppOptions {
             paths: Paths::under(root),
             workers: 2,
-            run,
+            runner: RunnerMode::Off,
             in_memory: true,
             chooser: None,
             sink: Arc::new(move |event| {
@@ -378,7 +402,7 @@ mod tests {
     #[test]
     fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, events) = app(dir.path(), false).unwrap();
+        let (app, events) = app(dir.path()).unwrap();
         app.add_source("https://www.youtube.com/playlist?list=PLnative123")
             .unwrap();
         let (saved, check) = app.load_watchlist(Arc::new(|| false)).unwrap();
@@ -397,7 +421,7 @@ mod tests {
     #[test]
     fn an_item_has_one_open_job_and_a_cancel_removes_it() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, _) = app(dir.path(), false).unwrap();
+        let (app, _) = app(dir.path()).unwrap();
         let id = ItemId::new("PL1", Some("abcdefghijk"));
         let job = app.run_item(&id, "Song", ItemAction::Run).unwrap();
         assert!(app.run_item(&id, "Song", ItemAction::Run).is_err());

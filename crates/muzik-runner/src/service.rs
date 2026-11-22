@@ -4,7 +4,10 @@ use crate::library_info::{self, LibraryInfo};
 use crate::library_tasks::LibraryTask;
 use crate::setup::{ServiceStatus, SoulseekProfile};
 use crate::thumbnails::{self, ThumbnailUpdate};
-use crate::{App, AppEvent, AppOptions, Error, JobsSnapshot, QuestionVersion, Result, Sink, setup};
+use crate::{
+    App, AppEvent, AppOptions, Error, JobsSnapshot, PlaylistFile, QuestionVersion, Result,
+    RunnerMode, Sink, setup,
+};
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config::{self, GuiDefaults};
 use muzik_core::paths::Paths;
@@ -115,14 +118,14 @@ impl Service {
     /// # Errors
     /// Returns an error when the job queue cannot be opened or the runner cannot start.
     pub fn start(paths: Paths, sink: Sink) -> Result<Self> {
-        Self::with(paths, true, sink)
+        Self::with(paths, RunnerMode::Run, sink)
     }
 
-    pub(crate) fn with(paths: Paths, run: bool, sink: Sink) -> Result<Self> {
+    pub(crate) fn with(paths: Paths, runner: RunnerMode, sink: Sink) -> Result<Self> {
         let app = App::start(AppOptions {
             paths,
             workers: WORKERS,
-            run,
+            runner,
             in_memory: cfg!(test),
             chooser: (!cfg!(test)).then(|| -> Arc<dyn Chooser> { Arc::new(Codex) }),
             sink,
@@ -174,10 +177,10 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the playlist ID is empty or the source cannot be saved.
-    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> Result<SourceEdit> {
+    pub fn set_source_playlist(&self, playlist_id: &str, file: PlaylistFile) -> Result<SourceEdit> {
         let edit = self
             .app
-            .set_source_playlist(required("playlist_id", playlist_id)?, on)?;
+            .set_source_playlist(required("playlist_id", playlist_id)?, file)?;
         Ok(self.track_playlist_files(edit))
     }
 
@@ -431,7 +434,7 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::{ActiveLogin, ItemRequest, Service};
-    use crate::{AppEvent, Error};
+    use crate::{AppEvent, Error, PlaylistFile, RunnerMode};
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
@@ -494,7 +497,11 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let service = Service::with(
             Paths::under(state.path()),
-            run,
+            if run {
+                RunnerMode::Run
+            } else {
+                RunnerMode::Off
+            },
             Arc::new(move |event| {
                 let _ = sender.send(event);
             }),
@@ -742,11 +749,18 @@ mod tests {
         defaults.playlists = true;
         backend.save_defaults(&defaults).unwrap();
         assert!(file.is_file());
-        let off = backend.set_source_playlist("PL123", false).unwrap();
+        let off = backend
+            .set_source_playlist("PL123", PlaylistFile::Off)
+            .unwrap();
         assert!(off.changed);
         assert_eq!(off.files_error, None);
         assert!(!file.exists());
-        assert!(backend.set_source_playlist("PL123", true).unwrap().changed);
+        assert!(
+            backend
+                .set_source_playlist("PL123", PlaylistFile::On)
+                .unwrap()
+                .changed
+        );
         assert!(file.is_file());
         defaults.playlists = false;
         backend.save_defaults(&defaults).unwrap();
@@ -786,7 +800,9 @@ mod tests {
         defaults.playlists = true;
         backend.save_defaults(&defaults).unwrap();
         fs::write(&beets, "directory: [\n").unwrap();
-        let edit = backend.set_source_playlist("PL123", false).unwrap();
+        let edit = backend
+            .set_source_playlist("PL123", PlaylistFile::Off)
+            .unwrap();
         assert!(edit.changed);
         assert!(
             edit.files_error
