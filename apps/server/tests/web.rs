@@ -736,10 +736,17 @@ async fn the_library_page_lists_filters_and_opens_albums_without_any_command() {
     let newer = sorted.find("Down To Earth").unwrap();
     assert!(older < newer);
 
-    let opened = page_text(&app, "/library?album=0", &cookie).await;
+    assert!(all.contains("album=1"));
+    assert!(all.contains("album=2"));
+    let opened = page_text(&app, "/library?album=1", &cookie).await;
     assert!(opened.contains("First"));
     assert!(opened.contains("Second"));
     assert!(opened.contains("Folder"));
+    let other = page_text(&app, "/library?album=2", &cookie).await;
+    assert!(other.contains("Alpha"));
+    assert!(!other.contains("First"));
+    let gone = page_text(&app, "/library?album=99", &cookie).await;
+    assert!(gone.contains("Select an album"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

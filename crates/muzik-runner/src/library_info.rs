@@ -16,6 +16,7 @@ pub struct Track {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AlbumRow {
+    pub id: i64,
     pub artist: String,
     pub title: String,
     pub year: Option<i64>,
@@ -106,6 +107,7 @@ fn track(item: &Item) -> Track {
 
 fn album_row(album: &Album, tracks: Vec<Track>) -> AlbumRow {
     AlbumRow {
+        id: album.id,
         artist: text(album.field("albumartist")),
         title: text(album.field("album")),
         year: positive(album.field("year")),

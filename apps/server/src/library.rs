@@ -124,12 +124,12 @@ struct Lib {
     #[serde(skip_serializing_if = "Option::is_none")]
     page: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    album: Option<usize>,
+    album: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AlbumLine {
-    index: usize,
+    id: i64,
     artist: String,
     title: String,
     year: String,
@@ -236,7 +236,7 @@ fn album_lines(
     library: &LibraryInfo,
     chosen: &[usize],
     current: usize,
-    selected: Option<usize>,
+    selected: Option<i64>,
 ) -> Vec<AlbumLine> {
     chosen
         .iter()
@@ -245,7 +245,7 @@ fn album_lines(
         .filter_map(|index| {
             let album = library.albums.get(*index)?;
             Some(AlbumLine {
-                index: *index,
+                id: album.id,
                 artist: truncate(&album.artist, TEXT_LIMIT),
                 title: truncate(&album.title, TEXT_LIMIT),
                 year: year_text(album.year),
@@ -253,7 +253,7 @@ fn album_lines(
                 length: duration(album.length()),
                 format: album.format(),
                 added: date(album.added),
-                selected: selected == Some(*index),
+                selected: selected == Some(album.id),
             })
         })
         .collect()
@@ -265,7 +265,7 @@ struct LibraryQuery {
     sort: Option<String>,
     dir: Option<String>,
     page: Option<usize>,
-    album: Option<usize>,
+    album: Option<i64>,
     reload: Option<String>,
 }
 
@@ -331,7 +331,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
     let rows = album_lines(&library, &chosen, current, query.album);
     let opened = query
         .album
-        .and_then(|index| library.albums.get(index))
+        .and_then(|id| library.albums.iter().find(|album| album.id == id))
         .map(|album| detail(album));
     let empty = library.albums.is_empty() && library.singletons == 0;
     let facts = summary(&library, chosen.len());
@@ -430,7 +430,7 @@ async fn album_table(
         .into_iter()
         .map(|line| {
             let mut next = here.clone();
-            next.album = Some(line.index);
+            next.album = Some(line.id);
             let link = href!(page).query(&next).resolve(cx);
             (line, link)
         })
@@ -458,7 +458,7 @@ async fn album_table(
                     <div class="empty">"No albums match."</div>
                 }
                 for (entry, target) in lines {
-                    <div class=(if entry.selected { "lrow current" } else { "lrow" }) id=(format!("album-{}", entry.index))>
+                    <div class=(if entry.selected { "lrow current" } else { "lrow" }) id=(format!("album-{}", entry.id))>
                         <span class="cell">(entry.artist.clone())</span>
                         <a class="cell title" href=(target)>(entry.title.clone())</a>
                         <span class="cell num">(entry.year.clone())</span>
