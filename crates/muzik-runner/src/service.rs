@@ -92,7 +92,7 @@ pub struct Service {
     login: LoginSlot,
     thumbnails: Mutex<HashSet<String>>,
     logins: AtomicU64,
-    writes: Mutex<()>,
+    writes: Mutex<bool>,
 }
 
 fn required<'a>(key: &str, value: &'a str) -> Result<&'a str> {
@@ -130,7 +130,7 @@ impl Service {
             login: Arc::new(Mutex::new(None)),
             thumbnails: Mutex::new(HashSet::new()),
             logins: AtomicU64::new(0),
-            writes: Mutex::new(()),
+            writes: Mutex::new(false),
         })
     }
 
@@ -148,12 +148,17 @@ impl Service {
     /// Returns an error when the defaults cannot be saved or the playlist files cannot be written.
     pub fn save_defaults(&self, defaults: &GuiDefaults) -> Result<GuiDefaults> {
         let params = serde_json::to_value(defaults)?;
-        let _write = self.writes.lock();
+        let mut pending = self.writes.lock();
         let before = app_config::load_gui_defaults(self.paths());
         let saved = app_config::save_gui_defaults(self.paths(), &params)?;
         if (before.playlists, before.playlist_format) != (saved.playlists, saved.playlist_format) {
-            self.app.write_playlists()?;
+            *pending = true;
         }
+        if *pending {
+            self.app.write_playlists()?;
+            *pending = false;
+        }
+        drop(pending);
         Ok(saved)
     }
 
@@ -708,6 +713,26 @@ mod tests {
         defaults.playlists = false;
         backend.save_defaults(&defaults).unwrap();
         assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_failed_playlist_write_is_retried_by_the_next_save() {
+        let (_state, backend, _) = started(false).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        backend.rename_source("PL123", "Mix").unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        assert!(backend.save_defaults(&defaults).is_err());
+        assert!(!file.exists());
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
     }
 
     #[test]
