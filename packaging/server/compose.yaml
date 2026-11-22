@@ -1,6 +1,7 @@
 services:
   muzik:
     image: muzik-server
+    platform: linux/amd64
     build:
       context: ../..
       dockerfile: packaging/server/Dockerfile

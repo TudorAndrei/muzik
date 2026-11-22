@@ -40,11 +40,21 @@ Build the image from the repository root.
 mise run server-image
 ```
 
-The image has the server, `ffmpeg`, `yt-dlp`, and `quickjs`. It runs as a user without
-root rights. It uses two volumes:
+The image has the server, `ffmpeg`, `ffprobe`, `yt-dlp`, and `quickjs`. It runs
+as a user without root rights. It uses two volumes:
 
 - `/data` holds the state.
 - `/music` holds the music library.
+
+The build copies `yt-dlp` from the `h3nc4/yt-dlp-slim` image. It copies
+`ffmpeg` and `ffprobe` from the `mwader/static-ffmpeg` image. The Dockerfile
+pins each image by digest. `quickjs` comes from Debian.
+
+The `yt-dlp-slim` image exists for `linux/amd64` only. For this reason the
+muzik image is `linux/amd64` only. The `mise run server-image` task and the
+Compose file set this platform. If you run `docker build` yourself, add
+`--platform linux/amd64`. On Apple Silicon or another Arm host, Docker uses emulation. The build is
+slow, because it compiles the server in the emulator.
 
 Start the server with Compose.
 
@@ -185,5 +195,6 @@ Make sure the file is owned by the user with ID 10001.
 ## External tools
 
 The server checks for `ffmpeg` and `yt-dlp` at run time. The image has both.
+Both are in `/usr/local/bin`.
 The agent chooser uses the `codex` CLI. The image does not have `codex`. This
 tool is optional.

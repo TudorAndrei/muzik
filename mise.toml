@@ -159,4 +159,4 @@ run = "cargo auditable build --workspace --release --locked"
 
 [tasks.server-image]
 description = "Build the muzik-server container image"
-run = "docker build -f packaging/server/Dockerfile -t muzik-server ."
+run = "docker build --platform linux/amd64 -f packaging/server/Dockerfile -t muzik-server ."
