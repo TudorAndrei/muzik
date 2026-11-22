@@ -76,11 +76,6 @@ impl LibraryTask {
             Self::Mbids => Gate::Import,
         }
     }
-
-    #[must_use]
-    pub fn item_key(self) -> String {
-        format!("library:{}", self.as_str())
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +94,16 @@ impl LibraryRequest {
             task,
             dry_run: false,
             config: None,
+        }
+    }
+
+    #[must_use]
+    pub fn item_key(&self) -> String {
+        let task = self.task.as_str();
+        if self.dry_run {
+            format!("library:{task}:dry-run")
+        } else {
+            format!("library:{task}")
         }
     }
 
