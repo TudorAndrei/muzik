@@ -33,7 +33,7 @@ pub async fn jobs(cx: &Cx) -> Result<Json<JobsSnapshot>> {
 pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use<>>> {
     auth::require(cx).await?;
     let watch = auth::watch(cx).await?;
-    let receiver = events(cx).0.subscribe();
+    let receiver = events(cx).subscribe();
     let mut check = tokio::time::interval(SESSION_CHECK);
     check.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let stream = stream::unfold(

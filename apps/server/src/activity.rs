@@ -313,7 +313,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
 pub async fn panel(cx: &Cx) -> Result<impl View> {
     auth::require(cx).await?;
     Ok(live! {
-        let mut changes = events(cx).0.subscribe();
+        let mut changes = events(cx).subscribe();
         let mut shown: Option<Board> = None;
         loop {
             let current = load(cx).await?;

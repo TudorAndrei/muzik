@@ -527,13 +527,18 @@ pub async fn reload(cx: &Cx) -> Result<()> {
     let sequence = shared.begin_reload();
     match backend(cx).run(Service::load_watchlist).await? {
         Ok((view, check)) => {
+            let shown = view.clone();
             if shared.store_watchlist(sequence, view) {
                 drop(tokio::task::spawn_blocking(move || check.run()));
+                events(cx).publish(AppEvent::WatchlistUpdated(shown));
             }
         }
-        Err(error) => shared.fail_watchlist(sequence, error.to_string()),
+        Err(error) => {
+            let message = error.to_string();
+            shared.fail_watchlist(sequence, message.clone());
+            events(cx).publish(AppEvent::WatchlistError { message });
+        }
     }
-    let _ = events(cx).0.send(AppEvent::WatchlistSaved);
     Ok(())
 }
 
@@ -566,7 +571,7 @@ async fn load(cx: &Cx, place: &Place) -> Result<Board> {
         place,
     );
     if let Some(id) = board.wanted.clone().filter(|id| hub(cx).try_thumbnail(id)) {
-        let sender = events(cx).0.clone();
+        let bus = events(cx).clone();
         let service = Arc::clone(&backend(cx).0);
         let shared = shared_hub(cx);
         drop(tokio::task::spawn_blocking(move || {
@@ -574,7 +579,7 @@ async fn load(cx: &Cx, place: &Place) -> Result<Board> {
             let cached = thumbnails::cached_path(&id, &service.paths().cache).is_some();
             shared.finish_thumbnail(&id, cached);
             if fetched {
-                let _ = sender.send(AppEvent::WatchlistSaved);
+                bus.publish(AppEvent::WatchlistSaved);
             }
         }));
     }
@@ -701,7 +706,7 @@ pub async fn live_board(
         page: at(number),
     };
     Ok(live! {
-        let mut changes = events(cx).0.subscribe();
+        let mut changes = events(cx).subscribe();
         let mut shown: Option<Board> = None;
         loop {
             if !auth::authenticated(cx).await? {

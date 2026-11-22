@@ -22,6 +22,14 @@ struct App {
 }
 
 fn app(token: Option<&str>) -> App {
+    app_with(Config {
+        token: token.map(str::to_owned),
+        secure_cookie: false,
+        ..Config::default()
+    })
+}
+
+fn app_with(config: Config) -> App {
     let home = tempfile::tempdir().unwrap();
     let paths = Paths::under(home.path());
     for dir in [&paths.data, &paths.config, &paths.cache] {
@@ -34,10 +42,7 @@ fn app(token: Option<&str>) -> App {
             chooser: None,
             ..ServiceOptions::default()
         },
-        Config {
-            token: token.map(str::to_owned),
-            secure_cookie: false,
-        },
+        config,
     )
     .unwrap();
     App {
@@ -325,11 +330,16 @@ fn seed(app: &App, titles: &[(usize, &str)]) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_slow_event_stream_is_told_to_reload_the_jobs() {
-    let app = app(Some(TOKEN));
+    const BUFFER: usize = 4;
+    let app = app_with(Config {
+        token: Some(TOKEN.to_owned()),
+        secure_cookie: false,
+        event_buffer: BUFFER,
+    });
     let cookie = sign_in(&app).await;
     let response = app.router.handle(get("/api/events", Some(&cookie))).await;
     let mut stream = response.into_body().into_data_stream();
-    for number in 0..2048 {
+    for number in 0..BUFFER * 2 {
         app.bus.publish(AppEvent::JobCancelled {
             job_id: format!("queue-{number}"),
         });

@@ -36,6 +36,17 @@ use crate::{
 pub struct Config {
     pub token: Option<String>,
     pub secure_cookie: bool,
+    pub event_buffer: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            token: None,
+            secure_cookie: true,
+            event_buffer: EVENT_BUFFER,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -50,6 +61,11 @@ impl Bus {
         let _order = self.order.lock();
         self.hub.apply(&event);
         let _ = self.sender.send(event);
+    }
+
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
+        self.sender.subscribe()
     }
 }
 
@@ -73,7 +89,7 @@ pub fn build_with(
 ) -> muzik_runner::Result<Server> {
     let bus = Bus {
         hub: Arc::new(Hub::new()),
-        sender: broadcast::channel::<AppEvent>(EVENT_BUFFER).0,
+        sender: broadcast::channel::<AppEvent>(config.event_buffer).0,
         order: Arc::default(),
     };
     let service = Service::start_with(paths, options, {
@@ -84,7 +100,7 @@ pub fn build_with(
     let tokens = SessionTokenStore::new(auth.token_store());
     let router = Router::builder()
         .with(Backend(Arc::new(service)))
-        .with(Events(bus.sender.clone()))
+        .with(Events::new(bus.clone()))
         .with(Shared(Arc::clone(&bus.hub)))
         .with(auth)
         .with(tokens)

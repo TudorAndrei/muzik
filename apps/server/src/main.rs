@@ -19,11 +19,12 @@ struct Server {
 }
 
 fn setup(options: &Server) -> Result<(SocketAddr, Config), String> {
+    let from_environment = std::env::var("MUZIK_SERVER_BIND").ok();
     let bind = options
         .bind
-        .clone()
-        .or_else(|| std::env::var("MUZIK_SERVER_BIND").ok())
-        .unwrap_or_else(|| DEFAULT_BIND.to_owned());
+        .as_deref()
+        .or(from_environment.as_deref())
+        .unwrap_or(DEFAULT_BIND);
     let address: SocketAddr = bind
         .parse()
         .map_err(|error| format!("The bind address {bind} is not valid: {error}"))?;
@@ -39,6 +40,7 @@ fn setup(options: &Server) -> Result<(SocketAddr, Config), String> {
         Config {
             token,
             secure_cookie: !options.insecure_cookie,
+            ..Config::default()
         },
     ))
 }

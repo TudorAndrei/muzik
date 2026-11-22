@@ -7,7 +7,7 @@ use topcoat::{
     context::{Cx, context},
 };
 
-use crate::hub::Hub;
+use crate::{Bus, hub::Hub};
 
 pub const EVENT_BUFFER: usize = 1024;
 
@@ -27,7 +27,23 @@ impl Backend {
 }
 
 #[derive(Clone)]
-pub struct Events(pub broadcast::Sender<AppEvent>);
+pub struct Events(Bus);
+
+impl Events {
+    #[must_use]
+    pub const fn new(bus: Bus) -> Self {
+        Self(bus)
+    }
+
+    pub fn publish(&self, event: AppEvent) {
+        self.0.publish(event);
+    }
+
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
+        self.0.subscribe()
+    }
+}
 
 #[derive(Clone)]
 pub struct Shared(pub Arc<Hub>);
