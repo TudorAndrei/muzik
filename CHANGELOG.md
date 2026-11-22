@@ -2,6 +2,24 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.17.1 - 2026-11-22
+#### Bug Fixes
+- (**import**) keep every release duplicate until a match is selected - (1823eaf) - TudorAndrei
+- (**import**) check the selected titles, comp tag, and folder cover - (020c09e) - TudorAndrei
+- (**import**) keep the album setup when a song joins an album - (4439909) - TudorAndrei
+- (**import**) skip only albums that already have the songs - (6810620) - TudorAndrei
+#### Documentation
+- (**nix**) add the desktop app only on Linux in the module example - (ad1bc84) - TudorAndrei, *Claude Opus 5.5*
+- (**spotify**) separate the setup steps with blank lines - (1405a39) - TudorAndrei, *Claude Opus 5.5*
+#### Build system
+- (**nix**) add a flake for all Musik programs - (11054ee) - TudorAndrei
+#### Continuous Integration
+- run the checks once per pull request - (e230b10) - TudorAndrei, *Claude Opus 5.5*
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.17.0 - (fab0fb7) - github-actions[bot]
+
+- - -
+
 ## v2.17.0 - 2026-11-22
 #### Features
 - (**runner**) serialize app events - (2e76719) - TudorAndrei

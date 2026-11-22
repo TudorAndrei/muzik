@@ -31,6 +31,11 @@ When an album is already in the library, the user decides to keep both, skip the
 - An album whose files are already in the library is skipped
 - Replace removes the duplicate album the user selected
 - Replace keeps an album from a release the user did not select
+- A song joins the album of the same name when that album does not have it
+- A song that joins a compilation album is filed as a compilation
+- A song that joins an album uses the cover file that is already in its folder
+- An album of the same name that has the song is a duplicate
+- An album from a release that the user did not select is not a duplicate
 - An album title that differs only by a full album tag is a duplicate
 - Replace can reuse the destination of the old album
 - A failed replace restores the old album and its file
@@ -55,6 +60,8 @@ muzik finds the MusicBrainz release of a library album that has no MusicBrainz i
 Before muzik imports anything, it groups the files into albums and looks for matching releases on MusicBrainz. The plan shows what the import will do.
 
 - Songs in an album folder become one album matched to a release
+- The selected release can make an album with its song a duplicate
+- The song of a selected release is a duplicate when another release has the album id
 - An album is planned as it is when MusicBrainz fails
 - With autotag off, muzik plans the import without MusicBrainz
 - Cancelling during the MusicBrainz search stops the plan
