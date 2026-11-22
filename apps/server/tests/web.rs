@@ -227,6 +227,7 @@ async fn a_pending_decision_appears_on_the_activity_page_with_its_choices() {
     assert!(page.contains("Keep both"));
     assert!(page.contains("Replace the old files"));
     assert!(page.contains("value=\"live:decision-1\""));
+    assert!(page.contains("formnovalidate"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

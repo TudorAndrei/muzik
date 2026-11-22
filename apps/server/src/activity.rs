@@ -495,12 +495,13 @@ async fn decision_form(cx: &Cx, card: DecisionCard) -> Result<impl View> {
                 </div>
             }
             <div class="choices">
-                <button class="small" type="submit" formaction=(href!(cancel)) name="job_id" value=(card.job_id)>
+                <button class="small" type="submit" formnovalidate="true" formaction=(href!(cancel)) name="job_id" value=(card.job_id)>
                     "Cancel the job"
                 </button>
                 for choice in card.choices {
                     <button
                         type="submit"
+                        formnovalidate="true"
                         name="choice"
                         value=(choice.index)
                         class=(if choice.suggested { "primary" } else { "" })
