@@ -11,9 +11,10 @@ Run the complete gate:
 mise run check-release
 ```
 
-This checks format, Clippy, Rust tests, and Cargo licenses, then builds the
-release binaries. CI runs `mise run check` on each push. The `Release` workflow
-starts only after that check passed on the same commit.
+This runs the hk lints, the Rust tests, and `cargo deny`, then builds the
+release binaries. CI runs these checks on each pull request. The `main`
+ruleset lets a commit in only after they passed on an up-to-date branch, so the
+`Release` workflow does not run them again.
 The CLI and app read existing Beets config files and SQLite libraries. Check
 both programs against copies of real Beets data before a public release.
 
@@ -50,3 +51,17 @@ published. It sets `version` and the `sha256` of the `Muzik-…zip` file (from i
 `main`, and copies it to the `TudorAndrei/homebrew-muzik` tap. The tap push uses
 the `HOMEBREW_TAP_DEPLOY_KEY` secret, a deploy key with write access to the tap.
 mise needs no change: it reads the `muzik-cli` archive of the latest release.
+
+## Nix flake
+
+`flake.nix` builds `muzik`, `muzik-server`, and, on Linux, `muzik-gpui` from
+source with `nix/package.nix`. The version comes from `Cargo.toml`, so a release
+needs no change to the flake. Cargo dependencies come from `Cargo.lock`.
+
+A Git dependency, such as the `bolero-generator-derive` patch in `Cargo.toml`,
+also needs a hash in `cargoLock.outputHashes` in `nix/package.nix`. When you add
+or change one, set its hash to `lib.fakeHash`, run `nix build`, and copy the hash
+from the error.
+
+Run `nix flake update` to move the flake to a newer `nixpkgs`. Its Rust must be at
+least the `rust-version` in `Cargo.toml`.

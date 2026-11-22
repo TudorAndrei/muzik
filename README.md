@@ -123,6 +123,61 @@ mise installs only the `muzik` command-line program:
 Each [GitHub release](https://github.com/TudorAndrei/muzik/releases/latest) also
 has `muzik-cli-<version>-<target>.tar.gz`, and a `muzik-gpui` archive for Linux.
 
+### Nix
+
+The repository is a Nix flake. It builds each program from source and adds
+`ffmpeg` and `yt-dlp` to its `PATH`. A `yt-dlp` that is already on your `PATH`
+comes first, so you can keep a newer one.
+
+| Package | Program | Systems |
+| --- | --- | --- |
+| `muzik` (default) | `muzik`, the command-line program | Linux, macOS arm64 |
+| `muzik-gpui` | `muzik-gpui`, the desktop app | Linux |
+| `muzik-server` | `muzik-server`, the web app | Linux, macOS arm64 |
+
+Run a program without installing it:
+
+```sh
+nix run github:TudorAndrei/muzik -- --help
+nix run github:TudorAndrei/muzik#muzik-gpui
+```
+
+Install it in your profile:
+
+```sh
+nix profile install github:TudorAndrei/muzik
+```
+
+Or add the flake to the inputs of your NixOS or Home Manager flake:
+
+```nix
+inputs.muzik.url = "github:TudorAndrei/muzik";
+```
+
+Then add the packages in a module that gets `inputs` as a special argument:
+
+```nix
+{ inputs, lib, pkgs, ... }:
+let
+  muzik = inputs.muzik.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  environment.systemPackages = [
+    muzik.muzik
+  ]
+  # The desktop app is built only for Linux.
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ muzik.muzik-gpui ];
+}
+```
+
+In Home Manager, use `home.packages` in place of `environment.systemPackages`.
+`overlays.default` adds `muzik`, `muzik-server`, and, on Linux, `muzik-gpui` to
+`pkgs`.
+
+To build with the `nixpkgs` of your own system, add
+`inputs.muzik.inputs.nixpkgs.follows = "nixpkgs";`. That `nixpkgs` must have
+Rust 1.99 or later.
+
 For development, install from a source checkout:
 
 ```sh
@@ -170,14 +225,22 @@ mise run test
 the Cucumber tests and documentation tests in separate Cargo steps. CI uses the
 `ci` Nextest profile to run all tests after a test failure.
 
-Run the locked checks that CI runs on each push:
+Run all checks: the [hk](https://hk.jdx.dev) lints in `hk.pkl` on all files,
+the tests, and `cargo deny`:
 
 ```sh
 mise run check
 ```
 
-Add the release build with `mise run check-release`. The same checks run in CI
-and as individual pre-push hooks.
+Add the release build with `mise run check-release`. The pre-push hook runs the
+same hk lints on the files that you push.
+
+CI runs on each pull request, not on `main`. The `main` ruleset requires the
+checks on an up-to-date branch, so a PR tests the exact tree that it merges.
+A PR lints only its changed files with hk. It runs the tests only when Rust
+inputs change, and the macOS desktop app tests only when the app or the crates
+change. The RustSec advisory check runs each week and when `Cargo.lock` or
+`deny.toml` changes.
 
 Tests read and write only inside the repository. Temporary files go to `.tmp/`.
 On macOS, `mise run test-scoped` runs the tests in a sandbox that blocks the real
