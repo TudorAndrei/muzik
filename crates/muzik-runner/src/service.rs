@@ -93,7 +93,8 @@ pub struct Service {
     login: LoginSlot,
     thumbnails: Mutex<HashSet<String>>,
     logins: AtomicU64,
-    writes: Mutex<bool>,
+    writes: Mutex<()>,
+    playlist_write_pending: AtomicBool,
 }
 
 fn required<'a>(field: &'static str, value: &'a str) -> Result<&'a str> {
@@ -131,7 +132,8 @@ impl Service {
             login: Arc::new(Mutex::new(None)),
             thumbnails: Mutex::new(HashSet::new()),
             logins: AtomicU64::new(0),
-            writes: Mutex::new(false),
+            writes: Mutex::new(()),
+            playlist_write_pending: AtomicBool::new(false),
         })
     }
 
@@ -149,25 +151,34 @@ impl Service {
     /// Returns an error when the defaults cannot be saved or the playlist files cannot be written.
     pub fn save_defaults(&self, defaults: &GuiDefaults) -> Result<GuiDefaults> {
         let params = serde_json::to_value(defaults)?;
-        let mut pending = self.writes.lock();
+        let write = self.writes.lock();
         let before = app_config::load_gui_defaults(self.paths());
         let saved = app_config::save_gui_defaults(self.paths(), &params)?;
         if (before.playlists, before.playlist_format) != (saved.playlists, saved.playlist_format) {
-            *pending = true;
+            self.playlist_write_pending.store(true, Ordering::SeqCst);
         }
-        if *pending {
+        if self.playlist_write_pending.load(Ordering::SeqCst) {
             self.app.write_playlists()?;
-            *pending = false;
+            self.playlist_write_pending.store(false, Ordering::SeqCst);
         }
-        drop(pending);
+        drop(write);
         Ok(saved)
+    }
+
+    fn track_playlist_files(&self, edit: SourceEdit) -> SourceEdit {
+        if edit.files_error.is_some() {
+            self.playlist_write_pending.store(true, Ordering::SeqCst);
+        }
+        edit
     }
 
     /// # Errors
     /// Returns an error when the playlist ID is empty or the source cannot be saved.
     pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> Result<SourceEdit> {
-        self.app
-            .set_source_playlist(required("playlist_id", playlist_id)?, on)
+        let edit = self
+            .app
+            .set_source_playlist(required("playlist_id", playlist_id)?, on)?;
+        Ok(self.track_playlist_files(edit))
     }
 
     #[must_use]
@@ -257,17 +268,20 @@ impl Service {
     /// # Errors
     /// Returns an error when an argument is empty or the source cannot be renamed.
     pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<SourceEdit> {
-        self.app.rename_source(
+        let edit = self.app.rename_source(
             required("playlist_id", playlist_id)?,
             required("title", title)?,
-        )
+        )?;
+        Ok(self.track_playlist_files(edit))
     }
 
     /// # Errors
     /// Returns an error when the playlist ID is empty or the source cannot be removed.
     pub fn remove_source(&self, playlist_id: &str) -> Result<SourceEdit> {
-        self.app
-            .remove_source(required("playlist_id", playlist_id)?)
+        let edit = self
+            .app
+            .remove_source(required("playlist_id", playlist_id)?)?;
+        Ok(self.track_playlist_files(edit))
     }
 
     pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Vec<ThumbnailUpdate>> {
@@ -778,6 +792,28 @@ mod tests {
             edit.files_error
                 .is_some_and(|message| message.starts_with("The playlist files were not updated"))
         );
+    }
+
+    #[test]
+    fn a_failed_playlist_write_after_a_source_edit_is_retried_by_the_next_save() {
+        let (_state, backend, _) = started(false).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let edit = backend.rename_source("PL123", "Mix").unwrap();
+        assert!(edit.files_error.is_some());
+        assert!(!file.exists());
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
     }
 
     #[test]
