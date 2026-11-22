@@ -20,8 +20,10 @@ jobs:
     name: Version
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # No check runs here. The `main` ruleset lets a commit in only from a PR
+    # that passed the required checks on an up-to-date branch. Only deploy keys
+    # can skip it; the release uses one for the version and cask commits.
     permissions:
-      actions: read # read the Check workflow runs for this commit
       contents: write # push the version commit and tag
     outputs:
       tag: ${{ steps.tag.outputs.version }}
@@ -35,17 +37,6 @@ jobs:
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent
           echo "version=${TAG}" >> "$GITHUB_OUTPUT"
-      - name: Require a passing check on this commit
-        if: inputs.tag == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SHA: ${{ github.sha }}
-        run: |
-          passed=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/check.yml/runs?head_sha=${SHA}&status=success" -q .total_count)
-          if [ "$passed" = "0" ]; then
-            echo "::error::The Check workflow has not passed on ${SHA}. Wait for it, then run the release again."
-            exit 1
-          fi
       - uses: actions/checkout@v7
         if: inputs.tag == ''
         with:

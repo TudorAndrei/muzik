@@ -1,11 +1,11 @@
 [tools]
 hk = "2.11.1"
 node = "latest"
-rumdl = "latest"
-typos = "latest"
-gitleaks = "latest"
+rumdl = "0.3.5"
+typos = "1.52.2"
+gitleaks = "8.30.1"
 jactionlint = "2.4.0"
-shellcheck = "latest"
+shellcheck = "0.11.0"
 rust = { version = "1.99.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], mr_boxington = true }
 mr-boxington = "1.19.0"
 cargo-binstall = "1.25.2"
@@ -64,13 +64,11 @@ description = "Build the Rust CLI and desktop app"
 run = "cargo build --locked -p muzik-cli -p muzik-gpui"
 
 [tasks.check]
-description = "Run format, Clippy, tests, dependency, and workflow checks"
+description = "Run the hk checks on all files, the tests, and the dependency checks"
 run = """
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+hk check --all
 mise run --skip-tools test
 cargo deny check
-jactionlint
 """
 
 [tasks.test]
