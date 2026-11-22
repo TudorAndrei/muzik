@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use muzik_runner::library_info::{AlbumRow, LibraryInfo, date, duration, playtime};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use topcoat::{
     Result,
     context::Cx,
@@ -20,7 +20,8 @@ const LIFETIME: Duration = Duration::from_secs(30);
 const TEXT_LIMIT: usize = 120;
 const FORMAT_LIMIT: usize = 4;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Sort {
     Artist,
     Album,
@@ -42,18 +43,6 @@ impl Sort {
         Self::Added,
     ];
 
-    const fn key(self) -> &'static str {
-        match self {
-            Self::Artist => "artist",
-            Self::Album => "album",
-            Self::Year => "year",
-            Self::Tracks => "tracks",
-            Self::Length => "length",
-            Self::Format => "format",
-            Self::Added => "added",
-        }
-    }
-
     const fn label(self) -> &'static str {
         match self {
             Self::Artist => "Artist",
@@ -65,14 +54,30 @@ impl Sort {
             Self::Added => "Added",
         }
     }
+}
 
-    fn parse(text: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|sort| sort.key() == text)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Order {
+    pub column: Sort,
+    pub direction: Direction,
+}
+
+fn word(value: &impl Serialize) -> String {
+    match serde_json::to_value(value) {
+        Ok(serde_json::Value::String(word)) => word,
+        _ => String::new(),
     }
 }
 
 #[must_use]
-pub fn select(albums: &[Arc<AlbumRow>], needle: &str, sort: Option<(Sort, bool)>) -> Vec<usize> {
+pub fn select(albums: &[Arc<AlbumRow>], needle: &str, order: Option<Order>) -> Vec<usize> {
     let needle = needle.trim().to_lowercase();
     let mut chosen: Vec<usize> = albums
         .iter()
@@ -80,7 +85,7 @@ pub fn select(albums: &[Arc<AlbumRow>], needle: &str, sort: Option<(Sort, bool)>
         .filter(|(_, album)| needle.is_empty() || album.matches(&needle))
         .map(|(index, _)| index)
         .collect();
-    let Some((column, descending)) = sort else {
+    let Some(Order { column, direction }) = order else {
         return chosen;
     };
     let album = |index: &usize| albums.get(*index).map(Arc::as_ref);
@@ -107,7 +112,7 @@ pub fn select(albums: &[Arc<AlbumRow>], needle: &str, sort: Option<(Sort, bool)>
             Sort::Added => left.added.total_cmp(&right.added),
         }
     });
-    if descending {
+    if direction == Direction::Desc {
         chosen.reverse();
     }
     chosen
@@ -117,10 +122,10 @@ pub fn select(albums: &[Arc<AlbumRow>], needle: &str, sort: Option<(Sort, bool)>
 struct Lib {
     #[serde(skip_serializing_if = "String::is_empty")]
     q: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    sort: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sort: Option<Sort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dir: Option<Direction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     page: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -261,17 +266,24 @@ fn album_lines(
 
 #[query_params(error = bad_request)]
 struct LibraryQuery {
-    q: Option<String>,
-    sort: Option<String>,
-    dir: Option<String>,
+    #[serde(default)]
+    q: String,
+    sort: Option<Sort>,
+    dir: Option<Direction>,
     page: Option<usize>,
     album: Option<i64>,
-    reload: Option<String>,
+    #[serde(default)]
+    reload: bool,
 }
 
-async fn info(cx: &Cx) -> Result<Result<Arc<LibraryInfo>, String>> {
+enum Read {
+    Ready(Arc<LibraryInfo>),
+    Failed(String),
+}
+
+async fn info(cx: &Cx) -> Result<Read> {
     if let Some(cached) = hub(cx).library(LIFETIME) {
-        return Ok(Ok(cached));
+        return Ok(Read::Ready(cached));
     }
     let read = backend(cx)
         .run(|service| {
@@ -280,40 +292,37 @@ async fn info(cx: &Cx) -> Result<Result<Arc<LibraryInfo>, String>> {
             service.library(config.as_deref())
         })
         .await?;
-    Ok(read
-        .map(|info| hub(cx).store_library(info))
-        .map_err(|error| error.to_string()))
+    Ok(match read {
+        Ok(info) => Read::Ready(hub(cx).store_library(info)),
+        Err(error) => Read::Failed(error.to_string()),
+    })
 }
 
 #[page("/library")]
 pub async fn page(cx: &Cx) -> Result<impl View> {
     auth::require(cx).await?;
     let query = query_params::<LibraryQuery>(cx)?;
-    if query.reload.is_some() {
+    if query.reload {
         hub(cx).forget_library();
     }
     let outcome = info(cx).await?;
-    let sorted = query
-        .sort
-        .as_deref()
-        .and_then(Sort::parse)
-        .map(|sort| (sort, query.dir.as_deref() == Some("desc")));
+    let order = query.sort.map(|column| Order {
+        column,
+        direction: query.dir.unwrap_or(Direction::Asc),
+    });
     let here = Lib {
-        q: query.q.clone().unwrap_or_default().trim().to_owned(),
-        sort: sorted
-            .map(|(sort, _)| sort.key().to_owned())
-            .unwrap_or_default(),
-        dir: sorted
-            .filter(|(_, descending)| *descending)
-            .map(|_| "desc".to_owned())
-            .unwrap_or_default(),
+        q: query.q.trim().to_owned(),
+        sort: order.map(|order| order.column),
+        dir: order
+            .map(|order| order.direction)
+            .filter(|direction| *direction == Direction::Desc),
         page: None,
         album: None,
     };
-    let reload = href!(page).query(&ReloadQuery { reload: "1" }).resolve(cx);
+    let reload = href!(page).query(&ReloadQuery { reload: true }).resolve(cx);
     let library = match outcome {
-        Ok(library) => library,
-        Err(message) => {
+        Read::Ready(library) => library,
+        Read::Failed(message) => {
             return Ok(view! {
             <h1>"Library"</h1>
             <p class="notice error">(truncate(&message, 300))</p>
@@ -325,7 +334,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
             .boxed());
         }
     };
-    let chosen = select(&library.albums, &here.q, sorted);
+    let chosen = select(&library.albums, &here.q, order);
     let pages = chosen.len().div_ceil(PAGE_SIZE).max(1);
     let current = query.page.unwrap_or(1).clamp(1, pages);
     let rows = album_lines(&library, &chosen, current, query.album);
@@ -359,8 +368,8 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
                     placeholder="Search artist, album, genre, label or year"
                     autocomplete="off"
                 >
-                <input type="hidden" name="sort" value=(here.sort.clone())>
-                <input type="hidden" name="dir" value=(here.dir.clone())>
+                <input type="hidden" name="sort" value=(here.sort.as_ref().map(word).unwrap_or_default())>
+                <input type="hidden" name="dir" value=(here.dir.as_ref().map(word).unwrap_or_default())>
                 <button class="primary" type="submit">"Search"</button>
                 <a class="button" href=(reload)>"Refresh"</a>
             </form>
@@ -375,7 +384,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
 
 #[derive(Serialize)]
 struct ReloadQuery {
-    reload: &'static str,
+    reload: bool,
 }
 
 #[component]
@@ -408,15 +417,11 @@ async fn album_table(
     let heads: Vec<(&'static str, String, &'static str)> = Sort::ALL
         .into_iter()
         .map(|sort| {
-            let active = here.sort == sort.key();
-            let descending = active && here.dir == "desc";
+            let active = here.sort == Some(sort);
+            let descending = active && here.dir == Some(Direction::Desc);
             let link = go(&|next: &mut Lib| {
-                sort.key().clone_into(&mut next.sort);
-                next.dir = if active && !descending {
-                    "desc".to_owned()
-                } else {
-                    String::new()
-                };
+                next.sort = Some(sort);
+                next.dir = (active && !descending).then_some(Direction::Desc);
             });
             let mark = match (active, descending) {
                 (false, _) => "",
@@ -523,7 +528,7 @@ async fn album_detail(cx: &Cx, detail: Option<Detail>) -> Result<impl View> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Sort, select};
+    use super::{Direction, Order, Sort, select};
     use muzik_runner::library_info::{AlbumRow, Track};
     use std::sync::Arc;
 
@@ -551,10 +556,17 @@ mod tests {
         assert_eq!(select(&albums, "", None), [0, 1, 2]);
         assert_eq!(select(&albums, " PHONIKS ", None), [1, 2]);
         assert_eq!(select(&albums, "2011", None), [0]);
-        assert_eq!(select(&albums, "", Some((Sort::Artist, false))), [2, 1, 0]);
-        assert_eq!(select(&albums, "", Some((Sort::Added, true))), [1, 2, 0]);
+        let by = |column, direction| Some(Order { column, direction });
         assert_eq!(
-            select(&albums, "", Some((Sort::Tracks, true))).first(),
+            select(&albums, "", by(Sort::Artist, Direction::Asc)),
+            [2, 1, 0]
+        );
+        assert_eq!(
+            select(&albums, "", by(Sort::Added, Direction::Desc)),
+            [1, 2, 0]
+        );
+        assert_eq!(
+            select(&albums, "", by(Sort::Tracks, Direction::Desc)).first(),
             Some(&0)
         );
     }

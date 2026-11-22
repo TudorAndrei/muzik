@@ -778,6 +778,23 @@ async fn the_library_page_lists_filters_and_opens_albums_without_any_command() {
     let newer = sorted.find("Down To Earth").unwrap();
     assert!(older < newer);
 
+    let descending = page_text(&app, "/library?sort=year&dir=desc", &cookie).await;
+    assert!(
+        descending.find("Down To Earth").unwrap() < descending.find("Road to Knowhere").unwrap()
+    );
+    assert!(descending.contains("sort=year"));
+    assert!(descending.contains("name=\"dir\" value=\"desc\""));
+    let reloaded = page_text(&app, "/library?reload=true", &cookie).await;
+    assert!(reloaded.contains("Down To Earth"));
+    for path in [
+        "/library?sort=nonsense",
+        "/library?dir=sideways",
+        "/library?reload=maybe",
+    ] {
+        let response = app.router.handle(get(path, Some(&cookie))).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+
     assert!(all.contains("album=1"));
     assert!(all.contains("album=2"));
     let opened = page_text(&app, "/library?album=1", &cookie).await;
