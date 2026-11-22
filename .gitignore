@@ -23,3 +23,7 @@ __pycache__/
 *.so
 .pytest_cache/
 .ruff_cache/
+
+# Nix build output
+result
+result-*
