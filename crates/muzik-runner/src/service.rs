@@ -63,11 +63,39 @@ pub struct SpotifyStatus {
     pub playlists: Option<Vec<spotify::PlaylistRef>>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SoulseekForm {
     pub username: String,
-    pub password: String,
-    pub server_host: String,
-    pub server_port: String,
+    pub password: Option<String>,
+    pub server_host: Option<String>,
+    pub server_port: u16,
+}
+
+impl SoulseekForm {
+    /// Builds the form from the text of the input fields. An empty password
+    /// keeps the saved one and an empty host selects the default server.
+    ///
+    /// # Errors
+    /// Returns an error when the port is not a number from 1 to 65535.
+    pub fn from_fields(
+        username: &str,
+        password: &str,
+        server_host: &str,
+        server_port: &str,
+    ) -> Result<Self> {
+        let server_port = server_port
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or(Error::ServerPort)?;
+        Ok(Self {
+            username: username.to_owned(),
+            password: Some(password.to_owned()).filter(|password| !password.is_empty()),
+            server_host: Some(server_host.trim().to_owned()).filter(|host| !host.is_empty()),
+            server_port,
+        })
+    }
 }
 
 struct ActiveLogin {
@@ -352,19 +380,14 @@ impl Service {
     pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<SoulseekProfile> {
         let path = self.paths().config_file();
         let username = required("username", &form.username)?;
-        let server_port = form
-            .server_port
-            .trim()
-            .parse()
-            .map_err(|_| Error::from("Enter a server port from 1 to 65535."))?;
         let _write = self.writes.lock();
         setup::save_soulseek_account(
             &path,
             &setup::SoulseekAccount {
                 username: Some(username),
-                password: Some(&form.password),
-                server_host: Some(&form.server_host),
-                server_port: Some(server_port),
+                password: form.password.as_deref(),
+                server_host: form.server_host.as_deref(),
+                server_port: Some(u64::from(form.server_port)),
             },
         )?;
         setup::soulseek_account(&path)
@@ -454,7 +477,7 @@ impl Service {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActiveLogin, ItemRequest, Service, ServiceOptions};
+    use super::{ActiveLogin, ItemRequest, Service, ServiceOptions, SoulseekForm};
     use crate::{AppEvent, Error, PlaylistFile, RunnerMode, Storage};
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
@@ -852,6 +875,26 @@ mod tests {
         fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
         backend.save_defaults(&defaults).unwrap();
         assert!(file.is_file());
+    }
+
+    #[test]
+    fn the_soulseek_form_keeps_saved_values_for_empty_fields_and_checks_the_port() {
+        let form = SoulseekForm::from_fields("listener", "", " ", " 2242 ").unwrap();
+        assert_eq!(
+            form,
+            SoulseekForm {
+                username: "listener".into(),
+                password: None,
+                server_host: None,
+                server_port: 2242,
+            }
+        );
+        for port in ["", "0", "65536", "port"] {
+            assert!(matches!(
+                SoulseekForm::from_fields("listener", "secret", "host", port),
+                Err(Error::ServerPort)
+            ));
+        }
     }
 
     #[test]

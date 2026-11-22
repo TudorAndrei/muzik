@@ -258,7 +258,7 @@ impl Muzik {
     pub(crate) fn save_config(
         &mut self,
         defaults: GuiDefaults,
-        soulseek: Option<SoulseekForm>,
+        soulseek: Option<muzik_runner::Result<SoulseekForm>>,
         cx: &mut Context<Self>,
     ) {
         self.error = None;
@@ -267,7 +267,8 @@ impl Muzik {
             cx,
             move |backend| {
                 let saved = backend.save_defaults(&defaults);
-                let account = soulseek.map(|form| backend.save_soulseek(&form));
+                let account =
+                    soulseek.map(|form| form.and_then(|form| backend.save_soulseek(&form)));
                 (saved, account)
             },
             |view, (saved, account), window, cx| {

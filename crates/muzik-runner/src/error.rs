@@ -43,6 +43,8 @@ pub enum Error {
     DecisionNotPending,
     #[error("A Spotify login is already active.")]
     SpotifyLoginActive,
+    #[error("Enter a server port from 1 to 65535.")]
+    ServerPort,
     #[error("{0}")]
     Message(String),
 }

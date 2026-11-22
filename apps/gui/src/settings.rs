@@ -396,17 +396,17 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn soulseek_form(&self, cx: &App) -> Option<SoulseekForm> {
+    fn soulseek_form(&self, cx: &App) -> Option<Result<SoulseekForm, muzik_runner::Error>> {
         let username = self.soulseek.username.read(cx).value().trim().to_string();
         if username.is_empty() {
             return None;
         }
-        Some(SoulseekForm {
-            username,
-            password: self.soulseek.password.read(cx).value().to_string(),
-            server_host: self.soulseek.host.read(cx).value().trim().to_string(),
-            server_port: self.soulseek.port.read(cx).value().trim().to_string(),
-        })
+        Some(SoulseekForm::from_fields(
+            &username,
+            self.soulseek.password.read(cx).value().as_ref(),
+            self.soulseek.host.read(cx).value().as_ref(),
+            self.soulseek.port.read(cx).value().as_ref(),
+        ))
     }
 
     fn pick_path(index: usize, window: &Window, cx: &Context<Self>) {

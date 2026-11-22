@@ -745,16 +745,19 @@ struct SoulseekFields {
 #[route(POST "/settings/soulseek")]
 pub async fn save_soulseek(cx: &Cx, Form(form): Form<SoulseekFields>) -> Result<SeeOther> {
     auth::require(cx).await?;
-    let outcome = backend(cx)
-        .run(move |service| {
-            service.save_soulseek(&SoulseekForm {
-                username: form.username,
-                password: form.password,
-                server_host: form.server_host,
-                server_port: form.server_port,
-            })
-        })
-        .await?;
+    let outcome = match SoulseekForm::from_fields(
+        &form.username,
+        &form.password,
+        &form.server_host,
+        &form.server_port,
+    ) {
+        Ok(form) => {
+            backend(cx)
+                .run(move |service| service.save_soulseek(&form))
+                .await?
+        }
+        Err(error) => Err(error),
+    };
     Ok(back(
         cx,
         outcome
