@@ -616,11 +616,11 @@ pub(crate) fn same_album_name(fields: &muzik_library::Fields, artist: &str, albu
             .is_some_and(|value| album_title_key(value) == album_title_key(album))
 }
 
-pub(crate) fn shares_a_track(items: &[PlanItem], existing: &[&muzik_library::Item]) -> bool {
-    let incoming: BTreeSet<String> = items
-        .iter()
-        .map(|item| track_key(&item.match_item.title))
-        .collect();
+pub(crate) fn shares_a_track<'t>(
+    titles: impl IntoIterator<Item = &'t str>,
+    existing: &[&muzik_library::Item],
+) -> bool {
+    let incoming: BTreeSet<String> = titles.into_iter().map(track_key).collect();
     existing.iter().any(|item| {
         incoming.contains(&track_key(
             field_text(&item.fields, "title").unwrap_or_default(),
@@ -677,7 +677,13 @@ fn find_duplicates(
                 })
         }) {
             Some(DuplicateReason::SourceId)
-        } else if same_name && (existing.is_empty() || shares_a_track(items, existing)) {
+        } else if same_name
+            && (existing.is_empty()
+                || shares_a_track(
+                    items.iter().map(|item| item.match_item.title.as_str()),
+                    existing,
+                ))
+        {
             Some(DuplicateReason::ArtistAndAlbum)
         } else {
             field_text(&album.fields, "mb_albumid")

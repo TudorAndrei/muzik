@@ -77,6 +77,17 @@ Feature: Duplicate albums
     And the import added 1 song
     And that album has 2 songs
     And every imported file is in "Mara Vale/Night Lines" in the library folder
+    And that album has a cover
+
+  Scenario: A song that joins a compilation album is filed as a compilation
+    Given the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album is a compilation
+    And that album has the song "Other Song"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    And muzik imports the album as it is
+    Then the import added no albums
+    And every imported file is in "Compilations/Night Lines" in the library folder
 
   Scenario: An album of the same name that has the song is a duplicate
     Given the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"

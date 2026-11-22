@@ -386,6 +386,12 @@ fn write_album(
         } else {
             None
         };
+        if let (Some(id), Some(artpath)) =
+            (prepared.merge_into, prepared.album_fields.get("artpath"))
+        {
+            let fields = LibraryFields::from([("artpath".into(), artpath.clone())]);
+            writer.update_album(id, &fields, &LibraryFields::new())?;
+        }
         let mut item_ids = Vec::new();
         for (item, mut fields) in prepared.items.iter().zip(item_fields) {
             if let Some(album_id) = added.or(prepared.merge_into) {
@@ -457,6 +463,10 @@ fn prepare(
         None
     };
     let merged_fields = merge_into.map(|existing| album_text(&existing.fields));
+    let compilation = merged_fields
+        .as_ref()
+        .and_then(|fields| fields.get("comp"))
+        .map_or(compilation, |comp| comp == "1");
     let mut known = known_albums(&albums);
     for (index, item) in album.items.iter().enumerate() {
         let (tags, path_fields) = item_fields_in(
@@ -501,10 +511,13 @@ fn prepare(
             source_id: item.source_id.clone(),
         });
     }
-    let cover = if merge_into.is_some() {
+    let cover = if merge_into.is_some_and(has_art) {
         None
     } else {
-        album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved)?
+        match album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved) {
+            Err(ApplyError::DestinationExists(_)) if merge_into.is_some() => None,
+            cover => cover?,
+        }
     };
     if let Some((_, destination)) = &cover {
         album_fields.insert("artpath".into(), path_to_sql(destination));
@@ -550,6 +563,10 @@ fn item_fields_in(
     (tags, fields)
 }
 
+fn has_art(album: &muzik_library::Album) -> bool {
+    !matches!(album.fields.get("artpath"), None | Some(SqlValue::Null))
+}
+
 fn merge_target<'a>(
     library: &Library,
     album: &AlbumPlan,
@@ -557,11 +574,16 @@ fn merge_target<'a>(
     compilation: bool,
     albums: &'a [muzik_library::Album],
 ) -> Result<Option<&'a muzik_library::Album>, ApplyError> {
-    let Some(first) = album.items.first() else {
+    let tags: Vec<_> = album
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| item_tags(item, candidate, index, compilation))
+        .collect();
+    let Some(first) = tags.first() else {
         return Ok(None);
     };
-    let tags = item_tags(first, candidate, 0, compilation);
-    let field = |name| tags.fields.get(name).map_or("", String::as_str);
+    let field = |name| first.fields.get(name).map_or("", String::as_str);
     let artist = if field("albumartist").is_empty() {
         field("artist")
     } else {
@@ -577,7 +599,10 @@ fn merge_target<'a>(
         if items.is_empty() {
             continue;
         }
-        if plan::shares_a_track(&album.items, &items) {
+        let titles = tags
+            .iter()
+            .map(|tags| tags.fields.get("title").map_or("", String::as_str));
+        if plan::shares_a_track(titles, &items) {
             return Ok(None);
         }
         target = target.or(Some(existing));

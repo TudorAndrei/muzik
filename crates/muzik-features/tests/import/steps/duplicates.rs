@@ -105,6 +105,29 @@ fn album_song(world: &mut ImportWorld, title: String) -> StepResult {
     Ok(())
 }
 
+#[given("that album is a compilation")]
+fn album_is_compilation(world: &mut ImportWorld) -> StepResult {
+    let id = old_album(world)?;
+    let fields = Fields::from([("comp".into(), SqlValue::Integer(1))]);
+    world.library()?.update_album(id, &fields, &Fields::new())?;
+    Ok(())
+}
+
+#[then("that album has a cover")]
+fn album_has_cover(world: &mut ImportWorld) -> StepResult {
+    let id = old_album(world)?;
+    let album = world
+        .library()?
+        .album(id)?
+        .ok_or_else(|| anyhow::anyhow!("album {id} is gone"))?;
+    let path = match album.fields.get("artpath") {
+        Some(SqlValue::Blob(bytes)) => std::path::PathBuf::from(String::from_utf8(bytes.clone())?),
+        other => anyhow::bail!("that album has the artpath {other:?}"),
+    };
+    anyhow::ensure!(path.exists(), "{} does not exist", path.display());
+    Ok(())
+}
+
 #[then(expr = "that album has {int} song(s)")]
 fn that_album_songs(world: &mut ImportWorld, count: usize) -> StepResult {
     let id = old_album(world)?;
