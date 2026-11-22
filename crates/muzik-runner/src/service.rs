@@ -1,0 +1,949 @@
+use crate::agent::{Chooser, Codex};
+use crate::app::{SourceEdit, WatchlistCheck};
+use crate::library_info::{self, LibraryInfo};
+use crate::library_tasks::LibraryTask;
+use crate::setup::{ServiceStatus, SoulseekProfile};
+use crate::thumbnails::{self, ThumbnailUpdate};
+use crate::{
+    App, AppEvent, AppOptions, Error, JobsSnapshot, PlaylistFile, QuestionVersion, Result,
+    RunnerMode, Sink, Storage, setup,
+};
+use muzik_bandcamp as bandcamp;
+use muzik_core::app_config::{self, GuiDefaults};
+use muzik_core::paths::Paths;
+use muzik_import::beets;
+use muzik_spotify as spotify;
+use muzik_store::watchlist::{ItemAction, ItemId, Playlist, WatchlistView};
+use parking_lot::Mutex;
+use serde_json::{Value, json};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+const WORKERS: usize = 5;
+
+#[derive(Clone)]
+pub struct ServiceOptions {
+    pub workers: usize,
+    pub runner: RunnerMode,
+    pub storage: Storage,
+    pub chooser: Option<Arc<dyn Chooser>>,
+}
+
+impl Default for ServiceOptions {
+    fn default() -> Self {
+        Self {
+            workers: WORKERS,
+            runner: RunnerMode::Run,
+            storage: Storage::Disk,
+            chooser: Some(Arc::new(Codex)),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ItemRequest {
+    pub id: ItemId,
+    pub title: String,
+    pub action: ItemAction,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SpotifyStatus {
+    #[serde(default)]
+    pub client_id: String,
+    #[serde(default)]
+    pub redirect_uri: String,
+    #[serde(default)]
+    pub connected: bool,
+    pub account_name: Option<String>,
+    pub error: Option<String>,
+    #[serde(skip)]
+    pub playlists: Option<Vec<spotify::PlaylistRef>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SoulseekForm {
+    pub username: String,
+    pub password: Option<String>,
+    pub server_host: Option<String>,
+    pub server_port: u16,
+}
+
+impl SoulseekForm {
+    /// Builds the form from the text of the input fields. An empty password
+    /// keeps the saved one and an empty host selects the default server.
+    ///
+    /// # Errors
+    /// Returns an error when the port is not a number from 1 to 65535.
+    pub fn from_fields(
+        username: &str,
+        password: &str,
+        server_host: &str,
+        server_port: &str,
+    ) -> Result<Self> {
+        let server_port = server_port
+            .trim()
+            .parse::<u16>()
+            .ok()
+            .filter(|port| *port != 0)
+            .ok_or(Error::ServerPort)?;
+        Ok(Self {
+            username: username.to_owned(),
+            password: Some(password.to_owned()).filter(|password| !password.is_empty()),
+            server_host: Some(server_host.trim().to_owned()).filter(|host| !host.is_empty()),
+            server_port,
+        })
+    }
+}
+
+struct ActiveLogin {
+    job_id: String,
+    cancel: Arc<AtomicBool>,
+}
+
+type LoginSlot = Arc<Mutex<Option<ActiveLogin>>>;
+
+pub struct SpotifyLogin {
+    job_id: String,
+    cancel: Arc<AtomicBool>,
+    config: PathBuf,
+    token: PathBuf,
+    slot: LoginSlot,
+}
+
+impl SpotifyLogin {
+    #[must_use]
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
+    #[must_use]
+    pub fn run(self) -> AppEvent {
+        let job_id = self.job_id;
+        let event = match spotify::login(&self.config, &self.token, None, &self.cancel) {
+            Ok(name) => AppEvent::JobCompleted {
+                job_id,
+                result: json!({"account_name": name}),
+            },
+            Err(spotify::Error::Cancelled) => AppEvent::JobCancelled { job_id },
+            Err(error) => AppEvent::JobFailed {
+                job_id,
+                message: error.to_string(),
+            },
+        };
+        *self.slot.lock() = None;
+        event
+    }
+}
+
+pub struct Service {
+    app: App,
+    login: LoginSlot,
+    thumbnails: Mutex<HashSet<String>>,
+    logins: AtomicU64,
+    writes: Mutex<()>,
+    playlist_write_pending: AtomicBool,
+}
+
+struct PendingThumbnails<'a> {
+    pending: &'a Mutex<HashSet<String>>,
+    ids: Vec<String>,
+}
+
+impl<'a> PendingThumbnails<'a> {
+    fn claim(pending: &'a Mutex<HashSet<String>>, ids: Vec<String>) -> Self {
+        let ids = {
+            let mut held = pending.lock();
+            ids.into_iter()
+                .filter(|id| held.insert(id.clone()))
+                .collect()
+        };
+        Self { pending, ids }
+    }
+}
+
+impl Drop for PendingThumbnails<'_> {
+    fn drop(&mut self) {
+        let mut held = self.pending.lock();
+        for id in &self.ids {
+            held.remove(id);
+        }
+    }
+}
+
+fn required<'a>(field: &'static str, value: &'a str) -> Result<&'a str> {
+    Some(value.trim())
+        .filter(|value| !value.is_empty())
+        .ok_or(Error::Invalid { field })
+}
+
+impl Service {
+    /// # Errors
+    /// Returns an error when legacy data folders cannot be migrated.
+    pub fn user_paths() -> Result<Paths> {
+        let paths = Paths::user();
+        muzik_core::paths::migrate_legacy(&paths)?;
+        Ok(paths)
+    }
+
+    /// # Errors
+    /// Returns an error when the job queue cannot be opened or the runner cannot start.
+    pub fn start(paths: Paths, sink: Sink) -> Result<Self> {
+        Self::start_with(paths, ServiceOptions::default(), sink)
+    }
+
+    /// # Errors
+    /// Returns an error when the job queue cannot be opened or the runner cannot start.
+    pub fn start_with(paths: Paths, options: ServiceOptions, sink: Sink) -> Result<Self> {
+        let app = App::start(AppOptions {
+            paths,
+            workers: options.workers,
+            runner: options.runner,
+            storage: options.storage,
+            chooser: options.chooser,
+            sink,
+        })?;
+        Ok(Self {
+            app,
+            login: Arc::new(Mutex::new(None)),
+            thumbnails: Mutex::new(HashSet::new()),
+            logins: AtomicU64::new(0),
+            writes: Mutex::new(()),
+            playlist_write_pending: AtomicBool::new(false),
+        })
+    }
+
+    #[must_use]
+    pub const fn paths(&self) -> &Paths {
+        self.app.paths()
+    }
+
+    #[must_use]
+    pub fn defaults(&self) -> GuiDefaults {
+        app_config::load_gui_defaults(self.paths())
+    }
+
+    /// # Errors
+    /// Returns an error when the defaults cannot be saved or the playlist files cannot be written.
+    pub fn save_defaults(&self, defaults: &GuiDefaults) -> Result<GuiDefaults> {
+        let params = serde_json::to_value(defaults)?;
+        let write = self.writes.lock();
+        let before = app_config::load_gui_defaults(self.paths());
+        let saved = app_config::save_gui_defaults(self.paths(), &params)?;
+        if (before.playlists, before.playlist_format) != (saved.playlists, saved.playlist_format) {
+            self.playlist_write_pending.store(true, Ordering::SeqCst);
+        }
+        if self.playlist_write_pending.load(Ordering::SeqCst) {
+            self.app.write_playlists()?;
+            self.playlist_write_pending.store(false, Ordering::SeqCst);
+        }
+        drop(write);
+        Ok(saved)
+    }
+
+    fn track_playlist_files(&self, edit: SourceEdit) -> SourceEdit {
+        if edit.files_error.is_some() {
+            self.playlist_write_pending.store(true, Ordering::SeqCst);
+        }
+        edit
+    }
+
+    /// # Errors
+    /// Returns an error when the playlist ID is empty or the source cannot be saved.
+    pub fn set_source_playlist(&self, playlist_id: &str, file: PlaylistFile) -> Result<SourceEdit> {
+        let edit = self
+            .app
+            .set_source_playlist(required("playlist_id", playlist_id)?, file)?;
+        Ok(self.track_playlist_files(edit))
+    }
+
+    #[must_use]
+    pub fn jobs(&self) -> JobsSnapshot {
+        self.app.jobs()
+    }
+
+    /// # Errors
+    /// Returns an error when the request is invalid or cannot be queued.
+    pub fn start_workflow(&self, params: &Value) -> Result<String> {
+        Ok(self.app.start_workflow(params)?)
+    }
+
+    /// # Errors
+    /// Returns an error when the task cannot be queued.
+    pub fn start_library_task(&self, task: LibraryTask) -> Result<String> {
+        Ok(self.app.start_library_task(task)?)
+    }
+
+    /// # Errors
+    /// Returns an error when the refresh cannot be queued.
+    pub fn refresh(&self, source: Option<(&str, &str)>) -> Result<String> {
+        Ok(self.app.refresh(source)?)
+    }
+
+    /// # Errors
+    /// Returns an error when the item cannot be queued.
+    pub fn run_item(&self, item: &ItemRequest) -> Result<String> {
+        Ok(self.app.run_item(&item.id, &item.title, item.action)?)
+    }
+
+    /// # Errors
+    /// Returns an error when the job ID is empty, the job is not active, or it cannot be stopped.
+    pub fn cancel(&self, job_id: &str) -> Result<()> {
+        let job_id = required("job_id", job_id)?;
+        if self.app.cancel(job_id)? {
+            return Ok(());
+        }
+        if let Some(active) = self
+            .login
+            .lock()
+            .as_ref()
+            .filter(|active| active.job_id == job_id)
+        {
+            active.cancel.store(true, Ordering::Relaxed);
+            return Ok(());
+        }
+        Err(Error::JobNotActive)
+    }
+
+    /// # Errors
+    /// Returns an error when the decision ID is empty or the decision is not pending.
+    pub fn reply(&self, decision_id: &str, value: Value) -> Result<()> {
+        let decision_id = required("decision_id", decision_id)?;
+        if self.app.reply(decision_id, value) {
+            Ok(())
+        } else {
+            Err(Error::DecisionNotPending)
+        }
+    }
+
+    /// # Errors
+    /// Returns an error when the answer cannot be saved.
+    pub fn answer_version(
+        &self,
+        id: i64,
+        version: QuestionVersion,
+        value: &Value,
+    ) -> Result<crate::Answered> {
+        self.app.answer_version(id, version, value)
+    }
+
+    /// # Errors
+    /// Returns an error when the saved watchlist cannot be read.
+    pub fn load_watchlist(&self) -> Result<(WatchlistView, WatchlistCheck)> {
+        let login = Arc::clone(&self.login);
+        self.app
+            .load_watchlist(Arc::new(move || login.lock().is_some()))
+    }
+
+    /// # Errors
+    /// Returns an error when the URL is empty or the source cannot be added.
+    pub fn add_source(&self, url: &str) -> Result<Playlist> {
+        self.app.add_source(required("url", url)?)
+    }
+
+    /// # Errors
+    /// Returns an error when an argument is empty or the source cannot be renamed.
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<SourceEdit> {
+        let edit = self.app.rename_source(
+            required("playlist_id", playlist_id)?,
+            required("title", title)?,
+        )?;
+        Ok(self.track_playlist_files(edit))
+    }
+
+    /// # Errors
+    /// Returns an error when the playlist ID is empty or the source cannot be removed.
+    pub fn remove_source(&self, playlist_id: &str) -> Result<SourceEdit> {
+        let edit = self
+            .app
+            .remove_source(required("playlist_id", playlist_id)?)?;
+        Ok(self.track_playlist_files(edit))
+    }
+
+    pub fn cache_thumbnails(&self, ids: Vec<String>) -> Option<Vec<ThumbnailUpdate>> {
+        let claim = PendingThumbnails::claim(&self.thumbnails, ids);
+        if claim.ids.is_empty() {
+            return None;
+        }
+        Some(thumbnails::cache_requested(
+            &claim.ids,
+            &self.app.repository(),
+            &self.paths().cache,
+        ))
+    }
+
+    /// # Errors
+    /// Returns an error when the beets config or the library database cannot be read.
+    pub fn library(&self, config: Option<&Path>) -> Result<LibraryInfo> {
+        let config = config.map_or_else(|| self.paths().beets.clone(), Path::to_path_buf);
+        let (_, paths) = beets::load_paths(Some(&config), json!({}))?;
+        library_info::read(&paths.library, &paths.directory)
+    }
+
+    #[must_use]
+    pub fn services(&self) -> Vec<ServiceStatus> {
+        setup::check_services(self.paths())
+    }
+
+    /// # Errors
+    /// Returns an error when the config file cannot be read.
+    pub fn soulseek_account(&self) -> Result<SoulseekProfile> {
+        setup::soulseek_account(&self.paths().config_file())
+    }
+
+    /// # Errors
+    /// Returns an error when the form is invalid or the account cannot be saved.
+    pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<SoulseekProfile> {
+        let path = self.paths().config_file();
+        let username = required("username", &form.username)?;
+        let _write = self.writes.lock();
+        setup::save_soulseek_account(
+            &path,
+            &setup::SoulseekAccount {
+                username: Some(username),
+                password: form.password.as_deref(),
+                server_host: form.server_host.as_deref(),
+                server_port: Some(u64::from(form.server_port)),
+            },
+        )?;
+        setup::soulseek_account(&path)
+    }
+
+    #[must_use]
+    pub fn bandcamp(&self) -> bandcamp::Status {
+        bandcamp::status(self.paths())
+    }
+
+    /// # Errors
+    /// Returns an error when the login cannot be saved.
+    pub fn save_bandcamp(&self, user: &str, cookies: &str) -> Result<bandcamp::Status> {
+        let _write = self.writes.lock();
+        bandcamp::Login::save(self.paths(), Some(user), cookies)?;
+        crate::watchlist::ensure_sources(self.paths())?;
+        Ok(bandcamp::status(self.paths()))
+    }
+
+    /// # Errors
+    /// Returns an error when the login cannot be removed.
+    pub fn logout_bandcamp(&self) -> Result<bandcamp::Status> {
+        let _write = self.writes.lock();
+        bandcamp::Login::clear(self.paths())?;
+        Ok(bandcamp::status(self.paths()))
+    }
+
+    /// # Errors
+    /// Returns an error when the Spotify settings cannot be read.
+    pub fn spotify_status(&self) -> Result<SpotifyStatus> {
+        Ok(serde_json::from_value(spotify::status(
+            &self.paths().config_file(),
+            &self.paths().spotify_token(),
+        )?)?)
+    }
+
+    /// # Errors
+    /// Returns an error when the playlists cannot be fetched.
+    pub fn spotify_playlists(&self) -> Result<Vec<spotify::PlaylistRef>> {
+        Ok(spotify::list_playlists(
+            &self.paths().config_file(),
+            &self.paths().spotify_token(),
+        )?)
+    }
+
+    /// # Errors
+    /// Returns an error when the client ID cannot be saved.
+    pub fn set_spotify_client_id(&self, client_id: &str) -> Result<String> {
+        let _write = self.writes.lock();
+        Ok(spotify::set_client_id(
+            &self.paths().config_file(),
+            client_id,
+        )?)
+    }
+
+    /// # Errors
+    /// Returns an error when the saved tokens cannot be removed.
+    pub fn spotify_logout(&self) -> Result<bool> {
+        let _write = self.writes.lock();
+        Ok(spotify::clear_tokens(&self.paths().spotify_token())?)
+    }
+
+    /// # Errors
+    /// Returns an error when a Spotify login is already active.
+    pub fn spotify_login(&self) -> Result<SpotifyLogin> {
+        let mut slot = self.login.lock();
+        if slot.is_some() {
+            return Err(Error::SpotifyLoginActive);
+        }
+        let number = self.logins.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+        let job_id = format!("spotify-login-{number}");
+        let cancel = Arc::new(AtomicBool::new(false));
+        *slot = Some(ActiveLogin {
+            job_id: job_id.clone(),
+            cancel: Arc::clone(&cancel),
+        });
+        drop(slot);
+        Ok(SpotifyLogin {
+            job_id,
+            cancel,
+            config: self.paths().config_file(),
+            token: self.paths().spotify_token(),
+            slot: Arc::clone(&self.login),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ActiveLogin, ItemRequest, PendingThumbnails, Service, ServiceOptions, SoulseekForm,
+    };
+    use crate::{AppEvent, Error, PlaylistFile, RunnerMode, Storage};
+    use muzik_core::paths::Paths;
+    use muzik_store::watchlist::{ItemAction, ItemId};
+    use serde_json::json;
+    use std::collections::{HashSet, VecDeque};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, Receiver};
+    use std::time::{Duration, Instant};
+
+    struct Events {
+        receiver: Receiver<AppEvent>,
+        skipped: VecDeque<AppEvent>,
+    }
+
+    impl Events {
+        fn next(
+            &mut self,
+            timeout: Duration,
+            wanted: impl Fn(&AppEvent) -> bool,
+        ) -> Result<AppEvent, Box<dyn std::error::Error>> {
+            if let Some(index) = self.skipped.iter().position(&wanted)
+                && let Some(event) = self.skipped.remove(index)
+            {
+                return Ok(event);
+            }
+            let deadline = Instant::now()
+                .checked_add(timeout)
+                .ok_or("timeout is too long")?;
+            while Instant::now() < deadline {
+                match self.receiver.try_recv() {
+                    Ok(event) if wanted(&event) => return Ok(event),
+                    Ok(event) => self.skipped.push_back(event),
+                    Err(_) => std::thread::sleep(Duration::from_millis(10)),
+                }
+            }
+            Err("no matching event".into())
+        }
+
+        fn job(
+            &mut self,
+            job_id: &str,
+            wanted: impl Fn(&AppEvent) -> bool,
+        ) -> Result<AppEvent, Box<dyn std::error::Error>> {
+            match self.next(Duration::from_secs(20), |event| {
+                event.job_id() == Some(job_id)
+                    && (wanted(event) || matches!(event, AppEvent::JobFailed { .. }))
+            })? {
+                AppEvent::JobFailed { message, .. } => Err(format!("job failed: {message}").into()),
+                event => Ok(event),
+            }
+        }
+    }
+
+    fn started(
+        runner: RunnerMode,
+    ) -> Result<(tempfile::TempDir, Service, Events), Box<dyn std::error::Error>> {
+        let state = tempfile::tempdir()?;
+        let (sender, receiver) = mpsc::channel();
+        let service = Service::start_with(
+            Paths::under(state.path()),
+            ServiceOptions {
+                runner,
+                storage: Storage::Memory,
+                chooser: None,
+                ..ServiceOptions::default()
+            },
+            Arc::new(move |event| {
+                let _ = sender.send(event);
+            }),
+        )?;
+        let events = Events {
+            receiver,
+            skipped: VecDeque::new(),
+        };
+        Ok((state, service, events))
+    }
+
+    fn fixture_import(
+        dir: &std::path::Path,
+    ) -> Result<(PathBuf, PathBuf, PathBuf), Box<dyn std::error::Error>> {
+        let audio = dir.join("track.flac");
+        fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../muzik-tags/tests/fixtures/blank.flac"),
+            &audio,
+        )?;
+        let database = dir.join("library.db");
+        let config = dir.join("config.yaml");
+        fs::write(
+            &config,
+            format!(
+                "directory: {}\nlibrary: {}\nstatefile: {}\nimport:\n  autotag: false\n",
+                dir.join("Music").display(),
+                database.display(),
+                dir.join("state.pickle").display()
+            ),
+        )?;
+        Ok((audio, database, config))
+    }
+
+    #[test]
+    fn invalid_requests_are_rejected() {
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
+        assert!(backend.start_workflow(&json!({"raw":"  "})).is_err());
+        assert!(matches!(
+            backend.reply("", json!("as_is")),
+            Err(Error::Invalid {
+                field: "decision_id"
+            })
+        ));
+        assert!(matches!(
+            backend.reply("missing", json!("as_is")),
+            Err(Error::DecisionNotPending)
+        ));
+        assert!(matches!(
+            backend.cancel(""),
+            Err(Error::Invalid { field: "job_id" })
+        ));
+        assert!(matches!(
+            backend.cancel("queue-999"),
+            Err(Error::JobNotActive)
+        ));
+    }
+
+    #[test]
+    fn local_workflow_runs_as_a_queue_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let audio = dir.path().join("track.flac");
+        fs::write(&audio, b"audio").unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
+        let job = backend
+            .start_workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
+            .unwrap();
+        assert!(job.starts_with("queue-"));
+        events
+            .job(&job, |event| matches!(event, AppEvent::JobStarted { .. }))
+            .unwrap();
+        let AppEvent::JobCompleted { result, .. } = events
+            .job(&job, |event| matches!(event, AppEvent::JobCompleted { .. }))
+            .unwrap()
+        else {
+            panic!("the job did not complete");
+        };
+        assert_eq!(result["singles"], 1);
+        assert!(audio.exists());
+    }
+
+    #[test]
+    fn two_workflow_runs_share_the_import_gate() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let (audio_one, database_one, config_one) = fixture_import(first.path()).unwrap();
+        let (audio_two, database_two, config_two) = fixture_import(second.path()).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
+        let mut jobs = Vec::new();
+        for (audio, config) in [(&audio_one, &config_one), (&audio_two, &config_two)] {
+            jobs.push(
+                backend
+                    .start_workflow(
+                        &json!({"raw":audio,"config":config,"no_split":true,"interactive":true}),
+                    )
+                    .unwrap(),
+            );
+        }
+        let mut asked = HashSet::new();
+        let mut done = 0;
+        while done < 2 {
+            match events.next(Duration::from_secs(20), |_| true).unwrap() {
+                AppEvent::DecisionRequest {
+                    job_id,
+                    decision_id,
+                    kind,
+                    ..
+                } => {
+                    assert_eq!(kind, muzik_core::DecisionKind::ImportMatch);
+                    asked.insert(job_id);
+                    backend.reply(&decision_id, json!("as_is")).unwrap();
+                }
+                AppEvent::JobCompleted { job_id, .. } if jobs.contains(&job_id) => done += 1,
+                AppEvent::JobFailed { message, .. } => {
+                    panic!("job failed: {message}");
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(asked.len(), 2);
+        assert!(database_one.exists() && database_two.exists());
+        assert!(!audio_one.exists() && !audio_two.exists());
+    }
+
+    #[test]
+    fn cancel_ends_a_pending_local_import_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let (audio, database, config) = fixture_import(dir.path()).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
+        let job = backend
+            .start_workflow(&json!({"raw":audio,"config":config,"no_split":true}))
+            .unwrap();
+        let AppEvent::DecisionRequest { decision_id, .. } = events
+            .job(&job, |event| {
+                matches!(event, AppEvent::DecisionRequest { .. })
+            })
+            .unwrap()
+        else {
+            panic!("no decision request");
+        };
+        backend.cancel(&job).unwrap();
+        events
+            .job(&job, |event| matches!(event, AppEvent::JobCancelled { .. }))
+            .unwrap();
+        assert!(audio.exists());
+        assert!(!database.exists());
+        assert!(backend.reply(&decision_id, json!("as_is")).is_err());
+    }
+
+    #[test]
+    fn cancel_removes_a_queued_item_job() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let item = ItemRequest {
+            id: ItemId::new("PL1", Some("abcdefghijk")),
+            title: "Song".into(),
+            action: ItemAction::Run,
+        };
+        let job = backend.run_item(&item).unwrap();
+        assert!(backend.run_item(&item).is_err());
+        let listed = backend.jobs();
+        assert_eq!(listed.queue.open[0].job_id, job);
+        assert!(!listed.runner);
+        backend.cancel(&job).unwrap();
+        assert_eq!(backend.jobs().queue.open, Vec::new());
+    }
+
+    #[test]
+    fn thumbnails_already_in_progress_are_not_fetched_again() {
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
+        assert!(backend.cache_thumbnails(Vec::new()).is_none());
+        backend.thumbnails.lock().insert("abcdefghijk".into());
+        assert!(
+            backend
+                .cache_thumbnails(vec!["abcdefghijk".into(), "abcdefghijk".into()])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn claimed_thumbnail_ids_are_released_when_the_work_panics() {
+        let pending = parking_lot::Mutex::new(HashSet::from(["taken".to_owned()]));
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let claim = PendingThumbnails::claim(&pending, vec!["fresh".into(), "taken".into()]);
+            assert_eq!(claim.ids, ["fresh"]);
+            assert!(pending.lock().contains("fresh"));
+            panic!("the fetch failed");
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(*pending.lock(), HashSet::from(["taken".to_owned()]));
+    }
+
+    #[test]
+    fn spotify_login_uses_its_own_slot() {
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        *backend.login.lock() = Some(ActiveLogin {
+            job_id: "spotify-login-test".into(),
+            cancel: Arc::clone(&cancel),
+        });
+        assert!(matches!(
+            backend.spotify_login(),
+            Err(Error::SpotifyLoginActive)
+        ));
+        backend.cancel("spotify-login-test").unwrap();
+        assert!(cancel.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn watchlist_load_returns_saved_cards_before_local_check() {
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
+        let playlist = backend
+            .add_source("https://www.youtube.com/playlist?list=PLnative123")
+            .unwrap();
+        assert_eq!(playlist.playlist_id, "PLnative123");
+        let (saved, check) = backend.load_watchlist().unwrap();
+        assert_eq!(saved.playlists[0].playlist_id, "PLnative123");
+        check.run();
+        let AppEvent::WatchlistUpdated(checked) = events
+            .next(Duration::from_secs(5), |event| {
+                matches!(event, AppEvent::WatchlistUpdated(_))
+            })
+            .unwrap()
+        else {
+            panic!("no checked watchlist");
+        };
+        assert_eq!(checked.playlists[0].playlist_id, "PLnative123");
+    }
+
+    #[test]
+    fn watchlist_edits_go_through_the_app() {
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        assert!(
+            backend
+                .rename_source("PL123", "  New name  ")
+                .unwrap()
+                .changed
+        );
+        assert!(backend.rename_source("PL123", "").is_err());
+        assert!(backend.remove_source("PL123").unwrap().changed);
+    }
+
+    #[test]
+    fn playlist_files_follow_the_setting_and_the_source_switch() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        backend.rename_source("PL123", "Mix").unwrap();
+        assert!(!file.exists());
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
+        let off = backend
+            .set_source_playlist("PL123", PlaylistFile::Off)
+            .unwrap();
+        assert!(off.changed);
+        assert_eq!(off.files_error, None);
+        assert!(!file.exists());
+        assert!(
+            backend
+                .set_source_playlist("PL123", PlaylistFile::On)
+                .unwrap()
+                .changed
+        );
+        assert!(file.is_file());
+        defaults.playlists = false;
+        backend.save_defaults(&defaults).unwrap();
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn a_failed_playlist_write_is_retried_by_the_next_save() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        backend.rename_source("PL123", "Mix").unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        assert!(backend.save_defaults(&defaults).is_err());
+        assert!(!file.exists());
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
+    }
+
+    #[test]
+    fn a_failed_playlist_write_after_a_source_edit_is_returned_to_the_caller() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let edit = backend
+            .set_source_playlist("PL123", PlaylistFile::Off)
+            .unwrap();
+        assert!(edit.changed);
+        assert!(
+            edit.files_error
+                .is_some_and(|message| message.starts_with("The playlist files were not updated"))
+        );
+    }
+
+    #[test]
+    fn a_failed_playlist_write_after_a_source_edit_is_retried_by_the_next_save() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        let file = beets.parent().unwrap().join("music/Playlists/Mix.m3u8");
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let edit = backend.rename_source("PL123", "Mix").unwrap();
+        assert!(edit.files_error.is_some());
+        assert!(!file.exists());
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend.save_defaults(&defaults).unwrap();
+        assert!(file.is_file());
+    }
+
+    #[test]
+    fn the_soulseek_form_keeps_saved_values_for_empty_fields_and_checks_the_port() {
+        let form = SoulseekForm::from_fields("listener", "", " ", " 2242 ").unwrap();
+        assert_eq!(
+            form,
+            SoulseekForm {
+                username: "listener".into(),
+                password: None,
+                server_host: None,
+                server_port: 2242,
+            }
+        );
+        for port in ["", "0", "65536", "port"] {
+            assert!(matches!(
+                SoulseekForm::from_fields("listener", "secret", "host", port),
+                Err(Error::ServerPort)
+            ));
+        }
+    }
+
+    #[test]
+    fn spotify_status_reads_the_saved_client_id_and_redirect() {
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
+        let config = backend.paths().config_file();
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(
+            &config,
+            "spotify:\n  client_id: saved\n  redirect_port: '9123'\n",
+        )
+        .unwrap();
+        let status = backend.spotify_status().unwrap();
+        assert_eq!(status.client_id, "saved");
+        assert_eq!(status.redirect_uri, "http://127.0.0.1:9123/callback");
+        assert!(!status.connected);
+        assert!(status.account_name.is_none() && status.error.is_none());
+    }
+}

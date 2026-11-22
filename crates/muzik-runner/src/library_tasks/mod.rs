@@ -403,7 +403,7 @@ mod tests {
         };
         let (report, events) = run(AfterImport::default());
         assert_eq!(report, TaskReport::default());
-        assert!(events.is_empty());
+        assert_eq!(events, []);
         let (_, events) = run(AfterImport {
             replaygain: false,
             covers: true,
@@ -428,6 +428,6 @@ mod tests {
             &cancelled,
             &mut |event| events.push(event),
         );
-        assert!(events.is_empty());
+        assert_eq!(events, []);
     }
 }

@@ -6,7 +6,7 @@ typos = "latest"
 gitleaks = "latest"
 jactionlint = "2.4.0"
 shellcheck = "latest"
-rust = { version = "1.98.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], mr_boxington = true }
+rust = { version = "1.99.1", profile = "minimal", components = ["rustfmt", "clippy"], targets = ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"], mr_boxington = true }
 mr-boxington = "1.19.0"
 cargo-binstall = "1.25.2"
 "cargo:cargo-nextest" = "0.9.150"
@@ -33,6 +33,18 @@ env = { MUZIK_HOME = "{{config_root}}/.dev" }
 run = """
 scripts/dev-profile.sh init
 cargo run --locked -p muzik-gpui
+"""
+
+[tasks.server]
+description = "Run the web server"
+run = "cargo run --locked -p muzik-server"
+
+[tasks.server-dev]
+description = "Run the web server with the isolated .dev profile"
+env = { MUZIK_HOME = "{{config_root}}/.dev" }
+run = """
+scripts/dev-profile.sh init
+cargo run --locked -p muzik-server
 """
 
 [tasks.cli-dev]
@@ -144,3 +156,7 @@ cargo about generate --workspace --locked --fail -o "${usage_output}" about.md.h
 description = "Run the complete locked verification gate with the release build"
 depends = ["check"]
 run = "cargo auditable build --workspace --release --locked"
+
+[tasks.server-image]
+description = "Build the muzik-server container image"
+run = "docker build --platform linux/amd64 -f packaging/server/Dockerfile -t muzik-server ."

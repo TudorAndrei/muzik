@@ -51,7 +51,6 @@ struct ExpectedRanking {
 }
 
 #[test]
-#[expect(clippy::float_cmp, reason = "beets parity needs exact float equality")]
 fn matches_beets_assignment_and_ranking() {
     let fixture: Fixture = serde_json::from_str(include_str!("fixtures/ranking.json")).unwrap();
     assert_eq!(fixture.beets_version, "2.13.1");
@@ -154,10 +153,10 @@ fn assignment_preserves_pairs_and_extra_order_across_word_boundaries() {
         let all_extras: Vec<_> = (0..items.len()).rev().collect();
         let without_tracks = assign_items(&items, &[], &config).unwrap();
         assert_eq!(without_tracks.extra_items, all_extras);
-        assert!(without_tracks.pairs.is_empty());
+        assert_eq!(without_tracks.pairs, []);
         let without_items = assign_items(&[], &tracks, &config).unwrap();
         assert_eq!(without_items.extra_tracks, all_extras);
-        assert!(without_items.pairs.is_empty());
+        assert_eq!(without_items.pairs, []);
         let selected: Vec<_> = (0..items.len()).step_by(2).rev().collect();
         let expected_extra: Vec<_> = (0..items.len())
             .filter(|index| index % 2 != 0)
@@ -175,7 +174,7 @@ fn assignment_preserves_pairs_and_extra_order_across_word_boundaries() {
             .collect();
         assert_eq!(actual.pairs, expected_pairs, "{count} items");
         assert_eq!(actual.extra_items, expected_extra, "{count} items");
-        assert!(actual.extra_tracks.is_empty());
+        assert_eq!(actual.extra_tracks, Vec::<usize>::new());
 
         let selected_items: Vec<_> = selected.iter().map(|&index| items[index].clone()).collect();
         let actual = assign_items(&selected_items, &tracks, &config).unwrap();
@@ -187,6 +186,6 @@ fn assignment_preserves_pairs_and_extra_order_across_word_boundaries() {
             .collect();
         assert_eq!(actual.pairs, expected_pairs, "{count} tracks");
         assert_eq!(actual.extra_tracks, expected_extra, "{count} tracks");
-        assert!(actual.extra_items.is_empty());
+        assert_eq!(actual.extra_items, Vec::<usize>::new());
     }
 }

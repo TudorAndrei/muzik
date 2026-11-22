@@ -27,7 +27,7 @@ fn mapping_uses_preferred_event_and_ignored_media() {
     let mapped = release_candidate_with_options(&release, &options);
     assert_eq!(mapped.country.as_deref(), Some("XE"));
     assert_eq!(mapped.year, Some(1994));
-    assert!(mapped.tracks.is_empty());
+    assert_eq!(mapped.tracks, []);
 }
 
 #[test]

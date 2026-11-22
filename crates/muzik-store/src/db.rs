@@ -50,6 +50,7 @@ const MIGRATIONS: &[&str] = &[
     ) WITHOUT ROWID;",
     REKEY_ITEM_JOBS,
     PARK_STORED_HOLDS,
+    "ALTER TABLE jobs ADD COLUMN question_version INTEGER NOT NULL DEFAULT 0;",
 ];
 
 const PARK_STORED_HOLDS: &str = "

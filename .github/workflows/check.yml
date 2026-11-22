@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
@@ -19,6 +21,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      server: ${{ steps.filter.outputs.server }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -31,20 +34,29 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           code=true
-          if [ "$EVENT" = pull_request ]; then
+          server=true
+          if [ "$EVENT" = schedule ]; then
             code=false
+          elif [ "$EVENT" = pull_request ]; then
+            code=false
+            server=false
             files=$(git diff --name-only "$BASE...$HEAD")
             while IFS= read -r path; do
               case "$path" in
                 *.md | .rumdl.toml | LICENSE*) ;;
                 *) code=true ;;
               esac
+              case "$path" in
+                packaging/server/* | apps/server/* | crates/* | Cargo.toml | Cargo.lock) server=true ;;
+              esac
             done <<< "$files"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "server=$server" >> "$GITHUB_OUTPUT"
 
   commits:
     name: Commits
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -84,8 +96,51 @@ jobs:
           install_args: rust mr-boxington hk jactionlint shellcheck cargo-binstall cargo:cargo-deny cargo:cargo-nextest conda:ffmpeg
       - uses: jdx/mr-boxington-action@v1
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.99.1"
       - run: mise run --skip-tools check
+
+  server-image:
+    name: Server image
+    needs: changes
+    if: needs.changes.outputs.server == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: docker build --platform linux/amd64 -f packaging/server/Dockerfile -t muzik-server .
+      - name: Check the tools
+        run: |
+          docker run --rm --entrypoint yt-dlp muzik-server --version
+          docker run --rm --entrypoint ffmpeg muzik-server -version
+          docker run --rm --entrypoint ffprobe muzik-server -version
+          docker run --rm --entrypoint bgutil-pot muzik-server --version
+      - name: Check the audio encoders
+        run: |
+          for codec in libopus libmp3lame flac; do
+            docker run --rm --network none --entrypoint ffmpeg muzik-server \
+              -hide_banner -loglevel error -f lavfi -i sine=frequency=440:duration=1 \
+              -c:a "$codec" -f null -
+          done
+      - name: Check the PO token provider
+        run: |
+          docker run --rm --network none --entrypoint yt-dlp muzik-server \
+            -v -s 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' > provider.log 2>&1 || true
+          grep 'PO Token Providers: bgutil:cli' provider.log
+      - name: Check the server
+        env:
+          MUZIK_SERVER_TOKEN: ci-throwaway-token-0123456789
+        run: |
+          docker run -d --name muzik -e MUZIK_SERVER_TOKEN -p 127.0.0.1:8080:8080 muzik-server
+          code=$(curl -s -o /dev/null -w '%{http_code}' --retry 30 --retry-delay 1 --retry-connrefused --retry-all-errors http://127.0.0.1:8080/login)
+          test "$code" = 200
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/jobs)
+          test "$code" = 401
+      - name: Show the server log
+        if: failure()
+        run: docker logs muzik
 
   gpui-macos:
     name: GPUI on macOS
@@ -102,6 +157,6 @@ jobs:
           install_args: rust mr-boxington hk cargo-binstall cargo:cargo-nextest
       - uses: jdx/mr-boxington-action@v1
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.99.1"
       - run: cargo nextest run --manifest-path apps/gui/Cargo.toml --locked --profile ci
       - run: cargo run --manifest-path apps/gui/Cargo.toml --locked -- --version

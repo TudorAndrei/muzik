@@ -7,6 +7,8 @@ use gpui_kit::component::setting::{
     Settings,
 };
 use muzik_core::app_config::MotionPreference;
+use muzik_runner::BandcampStatus;
+use muzik_runner::setup::SoulseekProfile;
 use muzik_soulseek::session::{DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT};
 
 const PATHS: [(&str, &str, bool); 3] = [
@@ -329,13 +331,13 @@ impl ConfigView {
 
     pub(crate) fn set_bandcamp(
         &mut self,
-        settings: &Value,
+        settings: &BandcampStatus,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.bandcamp.logged_in = settings["logged_in"] == true;
-        if let Some(user) = settings["user"].as_str().filter(|user| !user.is_empty()) {
-            let user = user.to_string();
+        self.bandcamp.logged_in = settings.logged_in;
+        if !settings.user.is_empty() {
+            let user = settings.user.clone();
             self.bandcamp
                 .user
                 .update(cx, |state, cx| state.set_value(user, window, cx));
@@ -368,21 +370,20 @@ impl ConfigView {
 
     pub(crate) fn set_soulseek(
         &mut self,
-        settings: &Value,
+        settings: &SoulseekProfile,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = |key: &str| describe(&settings[key]);
         for (state, value) in [
-            (&self.soulseek.username, text("username")),
-            (&self.soulseek.host, text("server_host")),
-            (&self.soulseek.port, text("server_port")),
+            (&self.soulseek.username, settings.username.clone()),
+            (&self.soulseek.host, settings.server_host.clone()),
+            (&self.soulseek.port, settings.server_port.to_string()),
         ] {
             if !value.is_empty() {
                 state.update(cx, |state, cx| state.set_value(value, window, cx));
             }
         }
-        self.soulseek.has_password = settings["has_password"] == true;
+        self.soulseek.has_password = settings.has_password;
         let placeholder = if self.soulseek.has_password {
             "Saved. Type a new one to change it."
         } else {
@@ -395,17 +396,17 @@ impl ConfigView {
         cx.notify();
     }
 
-    fn soulseek_form(&self, cx: &App) -> Option<SoulseekForm> {
+    fn soulseek_form(&self, cx: &App) -> Option<Result<SoulseekForm, muzik_runner::Error>> {
         let username = self.soulseek.username.read(cx).value().trim().to_string();
         if username.is_empty() {
             return None;
         }
-        Some(SoulseekForm {
-            username,
-            password: self.soulseek.password.read(cx).value().to_string(),
-            server_host: self.soulseek.host.read(cx).value().trim().to_string(),
-            server_port: self.soulseek.port.read(cx).value().trim().to_string(),
-        })
+        Some(SoulseekForm::from_fields(
+            &username,
+            self.soulseek.password.read(cx).value().as_ref(),
+            self.soulseek.host.read(cx).value().as_ref(),
+            self.soulseek.port.read(cx).value().as_ref(),
+        ))
     }
 
     fn pick_path(index: usize, window: &Window, cx: &Context<Self>) {

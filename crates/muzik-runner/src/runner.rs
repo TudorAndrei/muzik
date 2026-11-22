@@ -204,7 +204,7 @@ impl Shared {
     }
 
     fn watch(&self) {
-        let mut last = Value::Null;
+        let mut last = None;
         while !self.stop.load(Ordering::SeqCst) {
             let requests = self.store().cancel_requests().unwrap_or_default();
             {
@@ -216,9 +216,9 @@ impl Shared {
                 }
             }
             let snapshot = self.jobs.snapshot();
-            if snapshot != last {
+            if last.as_ref() != Some(&snapshot) {
                 (self.sink)(AppEvent::JobsUpdated(snapshot.clone()));
-                last = snapshot;
+                last = Some(snapshot);
             }
             thread::sleep(Duration::from_secs(1));
         }
@@ -548,10 +548,7 @@ mod tests {
         runner.wake();
         let started = Instant::now();
         let waiting = loop {
-            if let Some(job) = jobs.snapshot()["waiting"]
-                .as_array()
-                .and_then(|waiting| waiting.first().cloned())
-            {
+            if let Some(job) = jobs.snapshot().waiting.into_iter().next() {
                 break job;
             }
             assert!(
@@ -560,8 +557,8 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(50));
         };
-        assert_eq!(waiting["kind"], "import_match");
-        assert_eq!(waiting["item"], r#"["PL1","abcdefghijk"]"#);
+        assert_eq!(waiting.kind, Some(muzik_core::DecisionKind::ImportMatch));
+        assert_eq!(waiting.item, r#"["PL1","abcdefghijk"]"#);
         let shown = muzik_store::watchlist::view(
             &repository.snapshot().unwrap(),
             &output,
@@ -581,8 +578,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let id = waiting["id"].as_i64().unwrap();
-        assert!(jobs.answer(id, &json!("as_is")).unwrap());
+        assert_eq!(
+            jobs.answer_version(waiting.id, waiting.version, &json!("as_is"))
+                .unwrap(),
+            crate::Answered::Saved
+        );
         runner.wake();
         runner.wait_until_idle(&AtomicBool::new(false));
         let items = repository.load().unwrap().playlists[0].items.clone();
@@ -597,7 +597,7 @@ mod tests {
                 (3, StageStatus::Complete)
             ]
         );
-        assert_eq!(jobs.snapshot()["open"], json!([]));
+        assert_eq!(jobs.snapshot().open, Vec::new());
         assert_eq!(
             muzik_library::Library::open_read_only(&dir.path().join("library.db"))
                 .unwrap()

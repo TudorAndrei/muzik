@@ -5,8 +5,8 @@ use muzik_media::process::tool_command;
 use muzik_soulseek::session::{
     self, DEFAULT_SERVER_HOST, DEFAULT_SERVER_PORT, Session, SessionSettings,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::Path;
 
 pub struct SoulseekAccount<'a> {
@@ -16,25 +16,34 @@ pub struct SoulseekAccount<'a> {
     pub server_port: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoulseekProfile {
+    pub username: String,
+    pub has_password: bool,
+    pub server_host: String,
+    pub server_port: u16,
+}
+
 /// # Errors
 /// Returns an error when the config file cannot be read.
-pub fn soulseek_account(config_file: &Path) -> Result<Value> {
+pub fn soulseek_account(config_file: &Path) -> Result<SoulseekProfile> {
     let config = app_config::load(config_file)?;
     let section = config.get("soulseek").unwrap_or(&Value::Null);
     let text = |key: &str| section[key].as_str().unwrap_or("").to_owned();
     let port = section["server_port"]
         .as_u64()
         .or_else(|| section["server_port"].as_str()?.parse().ok())
-        .unwrap_or_else(|| u64::from(DEFAULT_SERVER_PORT));
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or(DEFAULT_SERVER_PORT);
     let host = Some(text("server_host"))
         .filter(|host| !host.is_empty())
         .unwrap_or_else(|| DEFAULT_SERVER_HOST.to_owned());
-    Ok(json!({
-        "username": text("username"),
-        "has_password": !text("password").is_empty() || session::saved_password().is_some(),
-        "server_host": host,
-        "server_port": port,
-    }))
+    Ok(SoulseekProfile {
+        username: text("username"),
+        has_password: !text("password").is_empty() || session::saved_password().is_some(),
+        server_host: host,
+        server_port: port,
+    })
 }
 
 /// # Errors
@@ -105,12 +114,12 @@ pub fn move_soulseek_password(config_file: &Path) -> Result<()> {
     )?)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ServiceStatus {
-    name: &'static str,
-    available: Option<bool>,
-    detail: String,
-    optional: bool,
+    pub name: &'static str,
+    pub available: Option<bool>,
+    pub detail: String,
+    pub optional: bool,
 }
 
 #[must_use]
@@ -206,7 +215,10 @@ fn check_soulseek(paths: &Paths) -> ServiceStatus {
 
 #[cfg(test)]
 mod tests {
-    use super::{SoulseekAccount, check_binary, save_soulseek_account, soulseek_account, version};
+    use super::{
+        SoulseekAccount, SoulseekProfile, check_binary, save_soulseek_account, soulseek_account,
+        version,
+    };
     use std::fs;
 
     fn account<'a>(
@@ -260,11 +272,15 @@ mod tests {
         )
         .unwrap();
         let settings = soulseek_account(&path).unwrap();
-        assert_eq!(settings["username"], "listener");
-        assert_eq!(settings["has_password"], true);
-        assert_eq!(settings["server_host"], "server.slsknet.org");
-        assert_eq!(settings["server_port"], 2242);
-        assert!(settings.get("password").is_none());
+        assert_eq!(
+            settings,
+            SoulseekProfile {
+                username: "listener".into(),
+                has_password: true,
+                server_host: "server.slsknet.org".into(),
+                server_port: 2242,
+            }
+        );
         save_soulseek_account(&path, &account(Some("renamed"), Some(""), Some(2242))).unwrap();
         let saved = fs::read_to_string(&path).unwrap();
         assert!(saved.contains("secret"));
@@ -279,9 +295,9 @@ mod tests {
         save_soulseek_account(&path, &account(Some("a"), Some("b"), None)).unwrap();
         save_soulseek_account(&path, &account(None, None, Some(2242))).unwrap();
         let settings = soulseek_account(&path).unwrap();
-        assert_eq!(settings["username"], "a");
-        assert_eq!(settings["has_password"], true);
-        assert_eq!(settings["server_port"], 2242);
+        assert_eq!(settings.username, "a");
+        assert!(settings.has_password);
+        assert_eq!(settings.server_port, 2242);
     }
 
     #[test]

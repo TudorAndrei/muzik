@@ -361,7 +361,7 @@ mod tests {
         let (paths, files) = library(dir.path(), None);
         let provider = Provider::new(release("Quiet Hours", TITLES));
         let (report, asked) = fill(&paths, &provider, false, &json!(MatchAnswer::Skip));
-        assert!(asked.is_empty());
+        assert_eq!(asked, []);
         assert_eq!((report.processed, report.changed), (1, 1));
         assert_eq!(album_field(&paths, "mb_albumid"), text("release-1"));
         assert_eq!(album_field(&paths, "album"), text("Quiet Hours"));
@@ -415,7 +415,7 @@ mod tests {
         let provider = Provider::new(release("Quiet Hours", TITLES));
         let (report, asked) = fill(&paths, &provider, false, &json!(MatchAnswer::Skip));
         assert_eq!(report, TaskReport::default());
-        assert!(asked.is_empty());
+        assert_eq!(asked, []);
         assert_eq!(provider.searches.get(), 0);
         assert_eq!(album_field(&paths, "mb_albumid"), text("known"));
     }
@@ -428,11 +428,11 @@ mod tests {
         let database = fs::read(&paths.library).unwrap();
         let strong = Provider::new(release("Quiet Hours", TITLES));
         let (report, asked) = fill(&paths, &strong, true, &json!(MatchAnswer::Skip));
-        assert!(asked.is_empty());
+        assert_eq!(asked, []);
         assert_eq!(report.changed, 1);
         let weak = Provider::new(release("Loud Days", ["Static", "Noise Floor"]));
         let (report, asked) = fill(&paths, &weak, true, &json!(MatchAnswer::Skip));
-        assert!(asked.is_empty());
+        assert_eq!(asked, []);
         assert_eq!((report.skipped, report.changed), (1, 0));
         assert_eq!(fs::read(&files[0]).unwrap(), before);
         assert_eq!(fs::read(&paths.library).unwrap(), database);

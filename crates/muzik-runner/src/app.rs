@@ -3,7 +3,7 @@
 use crate::agent::Chooser;
 use crate::events::AppEvent;
 use crate::library_tasks::{LibraryRequest, LibraryTask};
-use crate::queue::{EnqueueError, Jobs, job_id, parse_job_id};
+use crate::queue::{EnqueueError, Jobs, JobsSnapshot, QuestionVersion, job_id, parse_job_id};
 use crate::runner::{Options, Prompt, Runner, Sink};
 use crate::settings::Settings;
 use crate::{gates, watchlist};
@@ -23,13 +23,43 @@ use std::time::Duration;
 type Decisions = Arc<Mutex<HashMap<String, Sender<Value>>>>;
 pub type Busy = Arc<dyn Fn() -> bool + Send + Sync>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunnerMode {
+    Run,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlaylistFile {
+    On,
+    Off,
+}
+
+impl From<bool> for PlaylistFile {
+    fn from(on: bool) -> Self {
+        if on { Self::On } else { Self::Off }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Storage {
+    Disk,
+    Memory,
+}
+
 pub struct AppOptions {
     pub paths: Paths,
     pub workers: usize,
-    pub run: bool,
-    pub in_memory: bool,
+    pub runner: RunnerMode,
+    pub storage: Storage,
     pub chooser: Option<Arc<dyn Chooser>>,
     pub sink: Sink,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceEdit {
+    pub changed: bool,
+    pub files_error: Option<String>,
 }
 
 pub struct App {
@@ -45,14 +75,14 @@ impl App {
     /// # Errors
     /// Returns an error when the job queue cannot be opened or the runner cannot start.
     pub fn start(options: AppOptions) -> crate::Result<Self> {
-        let jobs = Arc::new(if options.in_memory {
-            Jobs::in_memory(&options.paths)?
-        } else {
-            Jobs::open(&options.paths)?
+        let jobs = Arc::new(match options.storage {
+            Storage::Memory => Jobs::in_memory(&options.paths)?,
+            Storage::Disk => Jobs::open(&options.paths)?,
         });
         let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
         let generation = Arc::new(AtomicU64::new(0));
-        let runner = if options.run {
+        let wants_runner = options.runner == RunnerMode::Run;
+        let runner = if wants_runner {
             let sink = Arc::clone(&options.sink);
             let pending = Arc::clone(&decisions);
             let asked = AtomicU64::new(0);
@@ -72,10 +102,10 @@ impl App {
         } else {
             None
         };
-        if options.run && runner.is_none() {
-            (options.sink)(AppEvent::RemoteRunner(
-                "Another muzik process runs the queue. New jobs go into its queue.".into(),
-            ));
+        if wants_runner && runner.is_none() {
+            (options.sink)(AppEvent::RemoteRunner {
+                message: "Another muzik process runs the queue. New jobs go into its queue.".into(),
+            });
         }
         Ok(Self {
             jobs,
@@ -98,13 +128,12 @@ impl App {
     }
 
     #[must_use]
-    pub fn jobs(&self) -> Value {
-        let mut snapshot = self.jobs.snapshot();
-        if let Some(fields) = snapshot.as_object_mut() {
-            fields.insert("gates".into(), gates::snapshot());
-            fields.insert("runner".into(), json!(self.runner.is_some()));
+    pub fn jobs(&self) -> JobsSnapshot {
+        JobsSnapshot {
+            queue: self.jobs.snapshot(),
+            gates: gates::snapshot(),
+            runner: self.runner.is_some(),
         }
-        snapshot
     }
 
     /// # Errors
@@ -144,8 +173,13 @@ impl App {
 
     /// # Errors
     /// Returns an error when the answer cannot be saved in the job queue.
-    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
-        let answered = self.jobs.answer(id, value)?;
+    pub fn answer_version(
+        &self,
+        id: i64,
+        version: QuestionVersion,
+        value: &Value,
+    ) -> crate::Result<crate::Answered> {
+        let answered = self.jobs.answer_version(id, version, value)?;
         self.changed();
         Ok(answered)
     }
@@ -193,26 +227,28 @@ impl App {
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<SourceEdit> {
         let renamed = self.edit(|repository| Ok(repository.rename(playlist_id, title)?))?;
-        self.follow_playlists();
-        Ok(renamed)
+        Ok(self.followed(renamed))
     }
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
+    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<SourceEdit> {
         let removed = self.edit(|repository| Ok(repository.remove(playlist_id)?))?;
-        self.follow_playlists();
-        Ok(removed)
+        Ok(self.followed(removed))
     }
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> crate::Result<bool> {
+    pub fn set_source_playlist(
+        &self,
+        playlist_id: &str,
+        file: PlaylistFile,
+    ) -> crate::Result<SourceEdit> {
+        let on = file == PlaylistFile::On;
         let changed = self.edit(|repository| Ok(repository.set_playlist_file(playlist_id, on)?))?;
-        self.follow_playlists();
-        Ok(changed)
+        Ok(self.followed(changed))
     }
 
     /// # Errors
@@ -221,17 +257,25 @@ impl App {
         watchlist::write_playlists(&Settings::resolve(&self.paths, &json!({}))?)
     }
 
-    fn follow_playlists(&self) {
+    fn followed(&self, changed: bool) -> SourceEdit {
+        SourceEdit {
+            changed,
+            files_error: self.follow_playlists(),
+        }
+    }
+
+    fn follow_playlists(&self) -> Option<String> {
         let enabled = Settings::resolve(&self.paths, &json!({}))
             .is_ok_and(|settings| settings.playlists.is_some());
         if !enabled {
-            return;
+            return None;
         }
-        if let Err(error) = self.write_playlists() {
-            (self.sink)(AppEvent::WatchlistError(format!(
-                "The playlist files were not updated: {error}"
-            )));
-        }
+        let error = self.write_playlists().err()?;
+        let message = format!("The playlist files were not updated: {error}");
+        (self.sink)(AppEvent::WatchlistError {
+            message: message.clone(),
+        });
+        Some(message)
     }
 
     /// # Errors
@@ -242,7 +286,9 @@ impl App {
     ) -> crate::Result<(muzik_store::watchlist::WatchlistView, WatchlistCheck)> {
         let (saved, check) = self.checks.prepare::<crate::Error>(self.repository(), || {
             if let Err(error) = watchlist::ensure_sources(&self.paths) {
-                (self.sink)(AppEvent::WatchlistError(error.to_string()));
+                (self.sink)(AppEvent::WatchlistError {
+                    message: error.to_string(),
+                });
             }
             let settings = Settings::resolve(&self.paths, &json!({}))?;
             Ok(settings.reconcile().into())
@@ -292,7 +338,9 @@ impl WatchlistCheck {
             |result| {
                 (self.sink)(match result {
                     Ok(visible) => AppEvent::WatchlistUpdated(visible),
-                    Err(error) => AppEvent::WatchlistError(error.to_string()),
+                    Err(error) => AppEvent::WatchlistError {
+                        message: error.to_string(),
+                    },
                 });
             },
         );
@@ -332,7 +380,7 @@ fn ask(
 
 #[cfg(test)]
 mod tests {
-    use super::{App, AppOptions};
+    use super::{App, AppOptions, RunnerMode, Storage};
     use crate::events::AppEvent;
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
@@ -341,13 +389,13 @@ mod tests {
     use std::sync::mpsc::{self, Receiver};
     use std::time::Duration;
 
-    fn app(root: &std::path::Path, run: bool) -> Result<(App, Receiver<AppEvent>), String> {
+    fn app(root: &std::path::Path) -> Result<(App, Receiver<AppEvent>), String> {
         let (sender, receiver) = mpsc::channel();
         let app = App::start(AppOptions {
             paths: Paths::under(root),
             workers: 2,
-            run,
-            in_memory: true,
+            runner: RunnerMode::Off,
+            storage: Storage::Memory,
             chooser: None,
             sink: Arc::new(move |event| {
                 let _ = sender.send(event);
@@ -359,7 +407,7 @@ mod tests {
     #[test]
     fn a_watchlist_load_sends_saved_cards_and_then_the_checked_ones() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, events) = app(dir.path(), false).unwrap();
+        let (app, events) = app(dir.path()).unwrap();
         app.add_source("https://www.youtube.com/playlist?list=PLnative123")
             .unwrap();
         let (saved, check) = app.load_watchlist(Arc::new(|| false)).unwrap();
@@ -368,7 +416,7 @@ mod tests {
         let checked = loop {
             match events.recv_timeout(Duration::from_secs(5)).unwrap() {
                 AppEvent::WatchlistUpdated(watchlist) => break watchlist,
-                AppEvent::WatchlistError(message) => panic!("{message}"),
+                AppEvent::WatchlistError { message } => panic!("{message}"),
                 _ => {}
             }
         };
@@ -378,15 +426,19 @@ mod tests {
     #[test]
     fn an_item_has_one_open_job_and_a_cancel_removes_it() {
         let dir = tempfile::tempdir().unwrap();
-        let (app, _) = app(dir.path(), false).unwrap();
+        let (app, _) = app(dir.path()).unwrap();
         let id = ItemId::new("PL1", Some("abcdefghijk"));
         let job = app.run_item(&id, "Song", ItemAction::Run).unwrap();
         assert!(app.run_item(&id, "Song", ItemAction::Run).is_err());
-        assert_eq!(app.jobs()["open"][0]["job_id"], job);
-        assert_eq!(app.jobs()["open"][0]["item"], r#"["PL1","abcdefghijk"]"#);
-        assert_eq!(app.jobs()["runner"], false);
+        let listed = app.jobs();
+        assert_eq!(listed.queue.open[0].job_id, job);
+        assert_eq!(
+            listed.queue.open[0].item.as_deref(),
+            Some(r#"["PL1","abcdefghijk"]"#)
+        );
+        assert!(!listed.runner);
         assert!(app.cancel(&job).unwrap());
-        assert_eq!(app.jobs()["open"], json!([]));
+        assert_eq!(app.jobs().queue, crate::QueueSnapshot::default());
         assert!(!app.cancel("queue-999").unwrap());
         assert!(!app.reply("missing", json!("as_is")));
     }

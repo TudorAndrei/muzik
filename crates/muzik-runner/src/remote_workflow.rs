@@ -377,8 +377,12 @@ where
 fn event_record(event: WorkflowEvent) -> JobEvent {
     match event {
         WorkflowEvent::InputClassified(_) => JobEvent::message("Reading remote input."),
-        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted(Step::Download),
-        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished(Step::Download),
+        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted {
+            step: Step::Download,
+        },
+        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished {
+            step: Step::Download,
+        },
         WorkflowEvent::Completed => JobEvent::message("Remote workflow complete."),
         other => local_workflow::event_record(other),
     }

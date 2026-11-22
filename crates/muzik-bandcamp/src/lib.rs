@@ -9,7 +9,7 @@ mod login;
 
 pub use collection::{Purchase, collection};
 pub use download::{audio_files, download};
-pub use login::{Cookie, Login, status};
+pub use login::{Cookie, Login, Status, status};
 
 const USER_AGENT: &str =
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:128.0) Gecko/20100101 Firefox/128.0";

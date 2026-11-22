@@ -4,7 +4,7 @@ members=["trial-library-move","trial-library-batch","trial-match-stack","trial-m
 [workspace.package]
 version="2.14.1"
 edition="2024"
-rust-version="1.98"
+rust-version="1.99"
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn="deny"
 [package]

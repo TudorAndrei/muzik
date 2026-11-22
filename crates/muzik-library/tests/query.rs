@@ -45,7 +45,7 @@ fn parsed_queries_match_beets() {
 fn query_with_non_ascii_final_character_is_a_search_term() {
     let query = Query::parse("Beyoncé").unwrap();
     assert_eq!(query.groups[0][0].pattern(), "Beyoncé");
-    assert!(query.sorts.is_empty());
+    assert_eq!(query.sorts, []);
 
     let sorted = Query::parse("Beyoncé+").unwrap();
     assert_eq!(sorted.sorts[0].field, "Beyoncé");

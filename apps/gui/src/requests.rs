@@ -1,5 +1,7 @@
 use super::*;
 use crate::backend::{Backend, ItemRequest, SoulseekForm};
+use muzik_runner::setup::SoulseekProfile;
+use muzik_runner::{Answered, BandcampStatus, PlaylistFile, QUESTION_CHANGED, QuestionVersion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Read {
@@ -157,7 +159,7 @@ impl Muzik {
         &mut self,
         call: Call,
         cx: &Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         self.spawn_call(
@@ -175,7 +177,7 @@ impl Muzik {
         &mut self,
         read: Read,
         cx: &Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         if self.backend.is_none() {
@@ -240,7 +242,7 @@ impl Muzik {
                     .activity
                     .decision()
                     .map(|decision| decision.target().clone());
-                view.activity.apply_jobs(&jobs);
+                view.activity.apply_jobs(&jobs.queue);
                 if previous.as_ref() != view.activity.decision().map(Decision::target) {
                     view.prepare_decision(window, cx);
                 }
@@ -248,7 +250,7 @@ impl Muzik {
                 if view.activity.take_holds_changed() {
                     view.load_watchlist(cx);
                 }
-                view.gates = jobs.get("gates").cloned().unwrap_or_default();
+                view.gates = jobs.gates;
             },
         );
     }
@@ -256,7 +258,7 @@ impl Muzik {
     pub(crate) fn save_config(
         &mut self,
         defaults: GuiDefaults,
-        soulseek: Option<SoulseekForm>,
+        soulseek: Option<muzik_runner::Result<SoulseekForm>>,
         cx: &mut Context<Self>,
     ) {
         self.error = None;
@@ -265,7 +267,8 @@ impl Muzik {
             cx,
             move |backend| {
                 let saved = backend.save_defaults(&defaults);
-                let account = soulseek.map(|form| backend.save_soulseek(&form));
+                let account =
+                    soulseek.map(|form| form.and_then(|form| backend.save_soulseek(&form)));
                 (saved, account)
             },
             |view, (saved, account), window, cx| {
@@ -293,13 +296,23 @@ impl Muzik {
         cx.notify();
     }
 
-    fn show_soulseek(&self, account: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_soulseek(
+        &self,
+        account: &SoulseekProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_soulseek(account, window, cx));
         }
     }
 
-    fn show_bandcamp(&self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_bandcamp(
+        &self,
+        settings: &BandcampStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_bandcamp(settings, window, cx));
         }
@@ -429,7 +442,7 @@ impl Muzik {
         self.call(
             Call::WatchlistPlaylist,
             cx,
-            move |backend| backend.set_source_playlist(&playlist_id, on),
+            move |backend| backend.set_source_playlist(&playlist_id, PlaylistFile::from(on)),
             |view, _, _, cx| view.load_watchlist(cx),
         );
     }
@@ -447,7 +460,7 @@ impl Muzik {
         &mut self,
         call: Call,
         cx: &mut Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<String> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<String> + Send + 'static,
     ) {
         self.error = None;
         self.call(call, cx, work, |view, _, _, _| {
@@ -511,26 +524,29 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn send_answer(&mut self, id: Option<i64>, value: Value, cx: &Context<Self>) {
-        let Some(id) = id else {
-            self.failed(Call::JobsAnswer, "id and value are required.".into());
-            return;
-        };
+    pub(crate) fn send_answer(
+        &mut self,
+        id: i64,
+        version: QuestionVersion,
+        value: Value,
+        cx: &Context<Self>,
+    ) {
         self.call(
             Call::JobsAnswer,
             cx,
-            move |backend| backend.answer(id, &value),
-            |view, saved, _, cx| {
-                if saved {
-                    view.status = "Answer saved; the item is queued".into();
-                } else {
-                    view.failed(
-                        Call::JobsAnswer,
-                        "The answer was not saved: this choice is no longer open.".into(),
-                    );
-                    view.load_jobs(cx);
-                    view.load_watchlist(cx);
-                }
+            move |backend| backend.answer_version(id, version, &value),
+            |view, answered, _, cx| {
+                let message = match answered {
+                    Answered::Saved => {
+                        view.status = "Answer saved; the item is queued".into();
+                        return;
+                    }
+                    Answered::Changed => QUESTION_CHANGED,
+                    Answered::Closed => "The answer was not saved: this choice is no longer open.",
+                };
+                view.failed(Call::JobsAnswer, message.into());
+                view.load_jobs(cx);
+                view.load_watchlist(cx);
             },
         );
     }

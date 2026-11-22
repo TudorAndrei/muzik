@@ -1,14 +1,17 @@
+use serde::Serialize;
 use serde_json::Value;
 use strum_macros::Display;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Severity {
     Info,
     Warning,
     Error,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Step {
     Read,
@@ -16,13 +19,15 @@ pub enum Step {
     Import,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum CandidateSource {
     Soulseek,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Task {
     LocalSplit,
     BandcampDownload,
@@ -30,14 +35,19 @@ pub enum Task {
     LibraryMaintenance,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobEvent {
     Message {
         message: String,
         severity: Severity,
     },
-    StepStarted(Step),
-    StepFinished(Step),
+    StepStarted {
+        step: Step,
+    },
+    StepFinished {
+        step: Step,
+    },
     ProgressStarted {
         task: Task,
         description: String,

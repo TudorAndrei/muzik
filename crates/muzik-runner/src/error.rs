@@ -25,10 +25,26 @@ pub enum Error {
     Soulseek(#[from] muzik_soulseek::error::BridgeError),
     #[error(transparent)]
     Import(#[from] muzik_import::Error),
+    #[error(transparent)]
+    Spotify(#[from] muzik_spotify::Error),
+    #[error(transparent)]
+    Bandcamp(#[from] muzik_bandcamp::Error),
+    #[error(transparent)]
+    Enqueue(#[from] crate::EnqueueError),
     #[error("{0} queue wait cancelled")]
     GateCancelled(Gate),
     #[error("job cancelled")]
     Cancelled,
+    #[error("{field} must be a non-empty string.")]
+    Invalid { field: &'static str },
+    #[error("The job is not active.")]
+    JobNotActive,
+    #[error("The decision is not pending.")]
+    DecisionNotPending,
+    #[error("A Spotify login is already active.")]
+    SpotifyLoginActive,
+    #[error("Enter a server port from 1 to 65535.")]
+    ServerPort,
     #[error("{0}")]
     Message(String),
 }

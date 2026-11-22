@@ -1,6 +1,6 @@
 use crate::{Error, Result};
 use parking_lot::{Condvar, Mutex, MutexGuard};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::DerefMut;
@@ -28,6 +28,31 @@ impl Gate {
         match self {
             Self::Download => 2,
             Self::Process | Self::Import => 1,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaneSnapshot {
+    pub limit: usize,
+    pub active: Vec<String>,
+    pub waiting: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatesSnapshot {
+    pub download: LaneSnapshot,
+    pub process: LaneSnapshot,
+    pub import: LaneSnapshot,
+}
+
+impl GatesSnapshot {
+    #[must_use]
+    pub const fn lane(&self, gate: Gate) -> &LaneSnapshot {
+        match gate {
+            Gate::Download => &self.download,
+            Gate::Process => &self.process,
+            Gate::Import => &self.import,
         }
     }
 }
@@ -103,9 +128,8 @@ impl<T: Eq + Hash> State<T> {
             .unwrap_or_default()
     }
 
-    fn describe(&self) -> Value {
-        let mut lanes = serde_json::Map::new();
-        for gate in Gate::ALL.iter().copied() {
+    fn describe(&self) -> GatesSnapshot {
+        let describe = |gate: Gate| {
             let lane = self.lane(gate);
             let names = |entries: &[Entry]| {
                 entries
@@ -113,12 +137,17 @@ impl<T: Eq + Hash> State<T> {
                     .map(|entry| entry.label.clone())
                     .collect::<Vec<_>>()
             };
-            lanes.insert(
-                gate.to_string(),
-                json!({"limit":gate.limit(),"active":names(&lane.active),"waiting":names(&lane.waiting)}),
-            );
+            LaneSnapshot {
+                limit: gate.limit(),
+                active: names(&lane.active),
+                waiting: names(&lane.waiting),
+            }
+        };
+        GatesSnapshot {
+            download: describe(Gate::Download),
+            process: describe(Gate::Process),
+            import: describe(Gate::Import),
         }
-        Value::Object(lanes)
     }
 }
 
@@ -134,7 +163,7 @@ trait Monitor: Send + Sync {
     fn notify_all(&self);
 }
 
-type Listener = Box<dyn Fn(Value) + Send>;
+type Listener = Box<dyn Fn(GatesSnapshot) + Send>;
 
 struct Gates<M> {
     monitor: M,
@@ -162,7 +191,7 @@ impl<M: Monitor> Gates<M> {
         }
     }
 
-    fn listen(&self, listener: impl Fn(Value) + Send + 'static) {
+    fn listen(&self, listener: impl Fn(GatesSnapshot) + Send + 'static) {
         *self.listener.lock() = Some(Box::new(listener));
         self.publish(&self.monitor.lock());
     }
@@ -268,7 +297,7 @@ impl<M: Monitor> Gates<M> {
         }
     }
 
-    fn snapshot(&self) -> Value {
+    fn snapshot(&self) -> GatesSnapshot {
         self.monitor.lock().describe()
     }
 
@@ -318,7 +347,7 @@ pub struct Permit {
     _held: GatePermit<'static, Parking>,
 }
 
-pub fn listen(listener: impl Fn(Value) + Send + 'static) {
+pub fn listen(listener: impl Fn(GatesSnapshot) + Send + 'static) {
     GATES.listen(listener);
 }
 
@@ -338,15 +367,15 @@ pub fn suspended<T>(work: impl FnOnce() -> T) -> T {
     GATES.suspended(work)
 }
 
-pub fn snapshot() -> Value {
+#[must_use]
+pub fn snapshot() -> GatesSnapshot {
     GATES.snapshot()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Gate, Gates, Monitor, State};
+    use super::{Gate, Gates, GatesSnapshot, LaneSnapshot, Monitor, State};
     use crate::Error;
-    use serde_json::{Value, json};
     use shuttle::sync::{Condvar, Mutex, MutexGuard};
     use shuttle::thread::{self, ThreadId};
     use std::sync::Arc;
@@ -393,38 +422,33 @@ mod tests {
         }))
     }
 
-    fn names(snapshot: &Value, gate: Gate, part: &str) -> Vec<String> {
-        snapshot[gate.as_ref()][part]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|name| name.as_str().map(str::to_owned))
-            .collect()
-    }
-
     #[derive(Default)]
     struct History {
-        last: Option<Value>,
+        last: GatesSnapshot,
         queued: Vec<String>,
         admitted: Vec<String>,
     }
 
-    fn record(history: &parking_lot::Mutex<History>, gate: Gate, snapshot: &Value) {
+    fn record(history: &parking_lot::Mutex<History>, gate: Gate, snapshot: &GatesSnapshot) {
         let mut history = history.lock();
-        let active = names(snapshot, gate, "active");
-        assert!(active.len() <= gate.limit(), "{active:?} exceed the limit");
-        let before = history.last.take().unwrap_or(Value::Null);
-        for name in names(snapshot, gate, "waiting") {
-            if !names(&before, gate, "waiting").contains(&name) {
-                history.queued.push(name);
+        let lane = snapshot.lane(gate);
+        assert!(
+            lane.active.len() <= gate.limit(),
+            "{:?} exceed the limit",
+            lane.active
+        );
+        let before = std::mem::take(&mut history.last);
+        for name in &lane.waiting {
+            if !before.lane(gate).waiting.contains(name) {
+                history.queued.push(name.clone());
             }
         }
-        for name in active {
-            if !names(&before, gate, "active").contains(&name) {
-                history.admitted.push(name);
+        for name in &lane.active {
+            if !before.lane(gate).active.contains(name) {
+                history.admitted.push(name.clone());
             }
         }
-        history.last = Some(snapshot.clone());
+        history.last = snapshot.clone();
     }
 
     #[test]
@@ -454,8 +478,12 @@ mod tests {
                 assert_eq!(history.admitted.len(), 4);
                 assert_eq!(history.admitted, history.queued);
                 assert_eq!(
-                    gates.snapshot()[gate.as_ref()],
-                    json!({"limit":2,"active":[],"waiting":[]})
+                    gates.snapshot().lane(gate),
+                    &LaneSnapshot {
+                        limit: 2,
+                        active: Vec::new(),
+                        waiting: Vec::new()
+                    }
                 );
             },
             1000,
@@ -486,10 +514,10 @@ mod tests {
                     Err(Error::GateCancelled(Gate::Import))
                 ));
                 let snapshot = gates.snapshot();
-                assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
-                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                assert_eq!(snapshot.import.active, ["holder"]);
+                assert_eq!(snapshot.import.waiting, Vec::<String>::new());
                 drop(held);
-                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+                assert_eq!(gates.snapshot().import.active, Vec::<String>::new());
             },
             1000,
             3,
@@ -516,11 +544,11 @@ mod tests {
                 let finished = gates.suspended(|| waiter.join().unwrap());
                 assert!(finished.is_ok());
                 let snapshot = gates.snapshot();
-                assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
-                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                assert_eq!(snapshot.import.active, ["holder"]);
+                assert_eq!(snapshot.import.waiting, Vec::<String>::new());
                 drop(again);
                 drop(held);
-                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+                assert_eq!(gates.snapshot().import.active, Vec::<String>::new());
             },
             1000,
             3,

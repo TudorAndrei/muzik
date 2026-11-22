@@ -1,0 +1,17 @@
+services:
+  muzik:
+    image: muzik-server
+    platform: linux/amd64
+    build:
+      context: ../..
+      dockerfile: packaging/server/Dockerfile
+    restart: unless-stopped
+    env_file: server.env
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - muzik-data:/data
+      - ./music:/music
+
+volumes:
+  muzik-data:

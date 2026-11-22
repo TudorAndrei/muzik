@@ -5,6 +5,7 @@ use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::table::{Table, TableBody, TableCell, TableHead, TableHeader, TableRow};
 use gpui_kit::component::tag::Tag;
 use muzik_core::source_reference::SpotifyReference;
+use muzik_runner::setup::ServiceStatus;
 use muzik_spotify::PlaylistRef;
 
 fn update_main(
@@ -25,13 +26,7 @@ impl Muzik {
         };
         let view = main_view.read(cx);
         let checking = view.reading(Read::Services);
-        let services = view
-            .services
-            .get("services")
-            .and_then(Value::as_array)
-            .or_else(|| view.services.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let services = view.services.clone();
         let check = Button::new("service-refresh")
             .ghost()
             .small()
@@ -46,7 +41,7 @@ impl Muzik {
             });
         let missing = services
             .iter()
-            .filter(|service| service["available"] == false && service["optional"] != true)
+            .filter(|service| service.available == Some(false) && !service.optional)
             .count();
         let mut section = div()
             .v_flex()
@@ -298,11 +293,11 @@ impl Muzik {
     }
 }
 
-fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
+fn service_row(index: usize, service: &ServiceStatus, cx: &App) -> impl IntoElement {
     let theme = cx.theme();
-    let (word, tag) = match service["available"].as_bool() {
+    let (word, tag) = match service.available {
         Some(true) => ("Available", Tag::success()),
-        Some(false) if service["optional"] == true => ("Optional", Tag::warning()),
+        Some(false) if service.optional => ("Optional", Tag::warning()),
         Some(false) => ("Unavailable", Tag::danger()),
         None => ("Not set up", Tag::secondary().outline()),
     };
@@ -319,13 +314,9 @@ fn service_row(index: usize, service: &Value, cx: &App) -> impl IntoElement {
                 .flex_none()
                 .text_sm()
                 .font_semibold()
-                .child(service["name"].as_str().unwrap_or("Service").to_string()),
+                .child(service.name.to_string()),
         )
-        .child(
-            style::meta(service["detail"].as_str().unwrap_or("").to_string(), cx)
-                .flex_1()
-                .min_w_0(),
-        )
+        .child(style::meta(service.detail.clone(), cx).flex_1().min_w_0())
         .child(div().flex().flex_none().child(tag.small().child(word)))
 }
 
