@@ -121,6 +121,7 @@ struct Card {
 struct Detail {
     id: String,
     title: String,
+    name: String,
     facts: String,
     url: Option<String>,
     error: Option<String>,
@@ -426,6 +427,7 @@ fn detail(
         Detail {
             id: playlist.playlist_id.clone(),
             title: truncate(playlist_title(playlist), TITLE_LIMIT),
+            name: playlist_title(playlist).to_owned(),
             facts: format!(
                 "{} · {} items · {}",
                 kind_name(playlist.kind),
@@ -788,7 +790,7 @@ async fn watch_board(cx: &Cx, data: Board) -> Result<impl View> {
                     </div>
                     tools_bar(
                         id: detail.id.clone(),
-                        title: detail.title.clone(),
+                        title: detail.name.clone(),
                         url: detail.url.clone().unwrap_or_default(),
                         retry: detail.retry,
                         file_on: detail.playlist_file,

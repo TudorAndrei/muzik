@@ -451,6 +451,28 @@ async fn a_long_source_is_paged_so_every_item_can_be_reached() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_rename_field_holds_the_whole_title_of_a_long_name() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    app.router
+        .handle(post("/watchlist/add", PLAYLIST_FORM, Some(&cookie)))
+        .await;
+    let title = "a".repeat(200);
+    let response = app
+        .router
+        .handle(post(
+            &format!("/watchlist/rename?source={SOURCE}"),
+            &format!("playlist_id={SOURCE}&title={title}"),
+            Some(&cookie),
+        ))
+        .await;
+    assert!(location(&response).contains("notice="));
+    let page = page_text(&app, &format!("/watchlist?source={SOURCE}"), &cookie).await;
+    assert!(page.contains(&format!("value=\"{title}\"")));
+    assert!(!page.contains(&format!("<div class=\"title\">{title}</div>")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_source_that_is_not_a_playlist_link_is_refused() {
     let app = app(Some(TOKEN));
     let cookie = sign_in(&app).await;
