@@ -182,7 +182,7 @@ impl Jobs {
             .store()
             .enqueue(&NewJob {
                 kind: Kind::Library,
-                item_key: &request.task.item_key(),
+                item_key: &request.item_key(),
                 title: request.task.title(),
                 params: &params,
             })?
@@ -522,6 +522,25 @@ mod tests {
         assert_eq!(open[0].item, None);
         assert_eq!(
             jobs.get(first).unwrap().map(|job| job.params),
+            Some(json!({"task":"replaygain","dry_run":false}))
+        );
+    }
+
+    #[test]
+    fn a_real_library_task_does_not_reuse_an_open_dry_run_job() {
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
+        let dry_run = jobs
+            .library(&LibraryRequest {
+                dry_run: true,
+                ..LibraryRequest::new(LibraryTask::ReplayGain)
+            })
+            .unwrap();
+        let real = jobs
+            .library(&LibraryRequest::new(LibraryTask::ReplayGain))
+            .unwrap();
+        assert_ne!(real, dry_run);
+        assert_eq!(
+            jobs.get(real).unwrap().map(|job| job.params),
             Some(json!({"task":"replaygain","dry_run":false}))
         );
     }

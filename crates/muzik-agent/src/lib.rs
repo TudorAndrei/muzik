@@ -1,6 +1,7 @@
 use muzik_core::{DecisionKind, MatchAnswer};
 use muzik_media::process::{self, Stopped};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::fmt::Write as _;
 use std::io::Write as _;
@@ -16,6 +17,8 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_FILES: usize = 25;
 
 const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["action","index","confidence","reason"],"properties":{"action":{"type":"string","enum":["pick","keep","ask"]},"index":{"type":"integer"},"confidence":{"type":"number"},"reason":{"type":"string"}}}"#;
+
+const TRACKLIST_SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"required":["tracks"],"properties":{"tracks":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["start_seconds","title"],"properties":{"start_seconds":{"type":"integer","minimum":0},"title":{"type":"string"}}}}}}"#;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -104,8 +107,70 @@ pub fn decide(kind: DecisionKind, payload: &Value, model: &str) -> Result<Outcom
     if options.is_empty() {
         return Err("There are no candidates to choose from.".into());
     }
-    let answer = run_codex(&prompt(kind, payload, &options), model)?;
+    let answer: Answer = run_codex(&prompt(kind, payload, &options), model, SCHEMA)?;
     Ok(interpret(kind, &answer, &options))
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize)]
+pub struct TracklistEntry {
+    pub start_seconds: i64,
+    pub title: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Tracklist {
+    #[serde(default)]
+    tracks: Vec<TracklistEntry>,
+}
+
+pub struct TracklistRequest<'a> {
+    pub video_title: &'a str,
+    pub duration_seconds: Option<f64>,
+    pub comments: &'a [String],
+}
+
+/// # Errors
+/// Returns an error when Codex cannot run or gives no valid answer.
+pub fn read_tracklist(request: &TracklistRequest<'_>, model: &str) -> Result<Vec<TracklistEntry>> {
+    let tracklist: Tracklist = run_codex(&tracklist_prompt(request), model, TRACKLIST_SCHEMA)?;
+    Ok(tracklist.tracks)
+}
+
+#[must_use]
+pub fn tracklist_prompt(request: &TracklistRequest<'_>) -> String {
+    let mut text = String::new();
+    let _ = writeln!(
+        text,
+        "You read the tracklist of one YouTube video from its viewer comments."
+    );
+    let _ = writeln!(text, "Video title: {}", request.video_title);
+    if let Some(duration) = request.duration_seconds {
+        let _ = writeln!(text, "Video length: {duration:.0} seconds");
+    }
+    let _ = writeln!(
+        text,
+        "Use only start times that a comment gives. Do not calculate or guess a time."
+    );
+    let _ = writeln!(
+        text,
+        "Take the tracks from the one comment with the most complete tracklist."
+    );
+    let _ = writeln!(
+        text,
+        "Write each title as the comment gives it, with the artist when the comment names one, as \"Artist - Title\"."
+    );
+    let _ = writeln!(
+        text,
+        "Give start_seconds as whole seconds from the start of the video, in time order."
+    );
+    let _ = writeln!(
+        text,
+        "If no comment has a tracklist with start times, give an empty tracks list."
+    );
+    for (index, comment) in request.comments.iter().enumerate() {
+        let _ = writeln!(text, "\nComment {}:\n{comment}", index.saturating_add(1));
+    }
+    text
 }
 
 #[must_use]
@@ -289,11 +354,11 @@ fn interpret(kind: DecisionKind, answer: &Answer, options: &[(String, Value)]) -
     }
 }
 
-fn run_codex(prompt: &str, model: &str) -> Result<Answer> {
+fn run_codex<T: DeserializeOwned>(prompt: &str, model: &str, schema_text: &str) -> Result<T> {
     let directory = tempfile::tempdir()?;
     let schema = directory.path().join("schema.json");
     let answer = directory.path().join("answer.json");
-    std::fs::write(&schema, SCHEMA)?;
+    std::fs::write(&schema, schema_text)?;
     let log_path = directory.path().join("codex.log");
     let log = std::fs::File::create(&log_path)?;
     let mut command = process::tool_command("codex");
@@ -344,7 +409,8 @@ fn run_codex(prompt: &str, model: &str) -> Result<Answer> {
         return Err(line.trim().into());
     }
     let text = std::fs::read_to_string(&answer).map_err(|_| "Codex gave no answer.")?;
-    serde_json::from_str(&text).map_err(|_| "Codex gave an answer that is not valid JSON.".into())
+    serde_json::from_str(&text)
+        .map_err(|_| "Codex gave an answer that does not match the schema.".into())
 }
 
 fn release_label(item: &Value) -> String {

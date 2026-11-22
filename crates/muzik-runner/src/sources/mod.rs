@@ -58,6 +58,7 @@ fn organize(
         cancelled,
         stage: &stage,
         after_import: adapter.prepared.settings.after_import,
+        agent_model: adapter.prepared.settings.agent_model.as_deref(),
     };
     local
         .organize(target, options)

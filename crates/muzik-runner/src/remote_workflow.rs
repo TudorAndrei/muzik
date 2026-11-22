@@ -105,6 +105,7 @@ pub fn run(
             cancelled,
             stage: &progress.stage,
             after_import: settings.after_import,
+            agent_model: settings.agent_model.as_deref(),
         },
         paths: settings.paths.clone(),
         prefer: settings.options.prefer,
@@ -189,6 +190,21 @@ struct RemoteOperations<'a> {
 }
 
 impl WorkflowOperations for RemoteOperations<'_> {
+    fn read_comment_tracklist(
+        &mut self,
+        video_title: &str,
+        duration: Option<f64>,
+        comments: &[String],
+        cancelled: &AtomicBool,
+    ) -> Result<Vec<Chapter>, String> {
+        self.local
+            .read_comment_tracklist(video_title, duration, comments, cancelled)
+    }
+
+    fn warn(&mut self, message: &str) {
+        self.local.warn(message);
+    }
+
     fn download_youtube(
         &mut self,
         url: &str,

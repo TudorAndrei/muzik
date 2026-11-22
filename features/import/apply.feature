@@ -28,6 +28,22 @@ Feature: Applying an import
     And the imported album has these fields:
       | mb_albumid | new-release |
 
+  Scenario: Songs that only add a featured artist are not a compilation
+    Given the incoming song "03 Duet.flac" that muzik knows as "Duet" by "Mara Vale feat. Guest" on "Night Lines" from 2021
+    When muzik plans the import of the songs
+    And muzik imports the album as it is and keeps duplicates
+    Then the import added 2 songs
+    And the imported album has these fields:
+      | comp | 0 |
+
+  Scenario: Songs by different artists imported as they are make a compilation
+    Given the incoming song "03 Other.flac" that muzik knows as "Other" by "Ana Rios" on "Night Lines" from 2021
+    When muzik plans the import of the songs
+    And muzik imports the album as it is and keeps duplicates
+    Then the import added 2 songs
+    And the imported album has these fields:
+      | comp | 1 |
+
   Scenario: A singleton goes to the singleton path and gets no album
     Given the import uses the singleton path "Singles/$artist/$title"
     When muzik plans the import of the songs as singletons

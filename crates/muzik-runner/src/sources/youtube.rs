@@ -194,7 +194,13 @@ pub(super) fn local_stage(
     }
     if action == ItemAction::ParseAgain {
         let video_url = required(item.video_url.as_deref(), "video_url")?;
-        let chapter_path = refresh_chapters(&audio, video_url, cancelled, adapter.decide)?;
+        let chapter_path = refresh_chapters(
+            &audio,
+            video_url,
+            cancelled,
+            adapter.decide,
+            adapter.prepared.settings.agent_model.as_deref(),
+        )?;
         item.apply(Stage::Parse, StageEvent::Complete(Some(chapter_path)));
         item.invalidate(&[Stage::Split, Stage::Organize]);
         return Ok(());
@@ -224,6 +230,7 @@ pub(super) fn local_stage(
         cancelled,
         stage: &stage,
         after_import: adapter.prepared.settings.after_import,
+        agent_model: adapter.prepared.settings.agent_model.as_deref(),
     };
     local
         .split_with_cancel(&task, &options, cancelled, &mut |_| {})
@@ -277,12 +284,42 @@ fn refresh_chapters(
     video_url: &str,
     cancelled: &AtomicBool,
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
+    agent_model: Option<&str>,
 ) -> Result<PathBuf, JobError> {
-    refresh_chapters_with(audio, cancelled, decide, |comments| {
-        YtDlp::default()
-            .video(video_url, comments, cancelled)
-            .map_err(workflow_error)
-    })
+    refresh_chapters_with(
+        audio,
+        cancelled,
+        decide,
+        |comments| {
+            YtDlp::default()
+                .video(video_url, comments, cancelled)
+                .map_err(workflow_error)
+        },
+        |metadata| read_top_comments(metadata, agent_model),
+    )
+}
+
+fn read_top_comments(
+    metadata: &Value,
+    agent_model: Option<&str>,
+) -> Result<Vec<chapters::Chapter>, JobError> {
+    let Some(model) = agent_model else {
+        return Ok(Vec::new());
+    };
+    let comments = chapters::tracklist_comments(metadata);
+    if comments.is_empty() {
+        return Ok(Vec::new());
+    }
+    crate::agent::comment_tracklist(
+        model,
+        metadata
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        metadata.get("duration").and_then(Value::as_f64),
+        &comments,
+    )
+    .map_err(JobError::Operation)
 }
 
 fn refresh_chapters_with(
@@ -290,6 +327,7 @@ fn refresh_chapters_with(
     cancelled: &AtomicBool,
     decide: &mut dyn FnMut(DecisionKind, Value) -> Result<Value, String>,
     mut fetch: impl FnMut(bool) -> Result<Value, JobError>,
+    mut read: impl FnMut(&Value) -> Result<Vec<chapters::Chapter>, JobError>,
 ) -> Result<PathBuf, JobError> {
     let metadata = fetch(false)?;
     let info = serde_json::to_string_pretty(&metadata)
@@ -308,6 +346,9 @@ fn refresh_chapters_with(
     if found.is_empty() {
         let comments = fetch(true)?;
         found = chapters::best_comment_tracklist(&comments);
+        if found.is_empty() {
+            found = read(&comments)?;
+        }
     }
     if found.is_empty() {
         return Err(JobError::Operation(
@@ -471,13 +512,14 @@ mod tests {
     };
     use crate::sources::of;
     use crate::sources::testing::{fixture, library_config, settings, with_adapter};
-    use muzik_core::chapters::{Chapter, parse_chapters};
+    use muzik_core::chapters::{self, Chapter, parse_chapters};
     use muzik_core::{ChapterAnswer, DecisionKind};
     use muzik_store::watchlist::{
         ItemAction, Playlist, SourceKind, Stage, StageEvent, StageStatus, WatchItem,
     };
     use muzik_workflow::quality::QualityUpgradeResult;
     use proptest::prelude::*;
+    use serde_json::Value;
     use serde_json::json;
     use std::fs;
     use std::sync::atomic::AtomicBool;
@@ -779,6 +821,7 @@ mod tests {
                     {"start_time":125,"title":"Second"}
                 ]}))
             },
+            |_| Ok(Vec::new()),
         )
         .unwrap();
         assert!(asked);
@@ -790,6 +833,40 @@ mod tests {
             fs::read_to_string(directory.path().join("Album.info.json"))
                 .unwrap()
                 .contains("Second")
+        );
+    }
+
+    #[test]
+    fn the_agent_reads_the_comments_when_no_parser_finds_chapters() {
+        let directory = tempfile::tempdir().unwrap();
+        let audio = directory.path().join("Album.flac");
+        fs::write(&audio, []).unwrap();
+        let comments = json!({"comments":[{"text":"Opening at 0:00 and Closing from 2:10"}]});
+        let mut read_from = Value::Null;
+        let path = refresh_chapters_with(
+            &audio,
+            &AtomicBool::new(false),
+            &mut |_, _| Ok(json!(ChapterAnswer::Accept)),
+            |with_comments| {
+                Ok(if with_comments {
+                    comments.clone()
+                } else {
+                    json!({"description":"Full album"})
+                })
+            },
+            |metadata| {
+                read_from = metadata.clone();
+                Ok(chapters::tracklist_chapters(
+                    [(0, "Opening".into()), (130, "Closing".into())],
+                    None,
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(read_from, comments);
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "00:00 Opening\n02:10 Closing\n"
         );
     }
 }
