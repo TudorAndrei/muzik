@@ -636,11 +636,16 @@ fn merge_target<'a>(
 }
 
 fn is_compilation(album: &AlbumPlan, candidate: Option<&PlannedCandidate>) -> bool {
+    let main_artist = |item: &PlanItem| {
+        muzik_core::featured::parse(&item.match_item.artist)
+            .0
+            .to_lowercase()
+    };
     candidate.is_some_and(|candidate| candidate.release.is_various_artists)
         || (candidate.is_none()
             && album.items.split_first().is_some_and(|(first, rest)| {
-                rest.iter()
-                    .any(|item| item.match_item.artist != first.match_item.artist)
+                let first = main_artist(first);
+                rest.iter().any(|item| main_artist(item) != first)
             }))
 }
 
