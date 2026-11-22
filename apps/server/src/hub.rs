@@ -249,7 +249,7 @@ impl State {
                 self.reload_sequence = self.reload_sequence.saturating_add(1);
                 self.store(self.reload_sequence, view.clone());
             }
-            AppEvent::WatchlistError(message) => self.watchlist_error = Some(message.clone()),
+            AppEvent::WatchlistError { message } => self.watchlist_error = Some(message.clone()),
             AppEvent::WatchlistSaved
             | AppEvent::JobsUpdated(_)
             | AppEvent::JobCompleted { .. }
@@ -365,10 +365,10 @@ impl State {
                     progress.completed = total;
                 }
             }
-            JobEvent::StepStarted(step) => {
+            JobEvent::StepStarted { step } => {
                 self.entry(job_id).status = step.to_string();
             }
-            JobEvent::StepFinished(_) => {
+            JobEvent::StepFinished { .. } => {
                 let progress = self.entry(job_id);
                 if progress.total.is_some() {
                     progress.completed = progress.completed.saturating_add(1);

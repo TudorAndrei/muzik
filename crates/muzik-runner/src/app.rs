@@ -79,9 +79,9 @@ impl App {
             None
         };
         if options.run && runner.is_none() {
-            (options.sink)(AppEvent::RemoteRunner(
-                "Another muzik process runs the queue. New jobs go into its queue.".into(),
-            ));
+            (options.sink)(AppEvent::RemoteRunner {
+                message: "Another muzik process runs the queue. New jobs go into its queue.".into(),
+            });
         }
         Ok(Self {
             jobs,
@@ -243,7 +243,9 @@ impl App {
         }
         let error = self.write_playlists().err()?;
         let message = format!("The playlist files were not updated: {error}");
-        (self.sink)(AppEvent::WatchlistError(message.clone()));
+        (self.sink)(AppEvent::WatchlistError {
+            message: message.clone(),
+        });
         Some(message)
     }
 
@@ -255,7 +257,9 @@ impl App {
     ) -> crate::Result<(muzik_store::watchlist::WatchlistView, WatchlistCheck)> {
         let (saved, check) = self.checks.prepare::<crate::Error>(self.repository(), || {
             if let Err(error) = watchlist::ensure_sources(&self.paths) {
-                (self.sink)(AppEvent::WatchlistError(error.to_string()));
+                (self.sink)(AppEvent::WatchlistError {
+                    message: error.to_string(),
+                });
             }
             let settings = Settings::resolve(&self.paths, &json!({}))?;
             Ok(settings.reconcile().into())
@@ -305,7 +309,9 @@ impl WatchlistCheck {
             |result| {
                 (self.sink)(match result {
                     Ok(visible) => AppEvent::WatchlistUpdated(visible),
-                    Err(error) => AppEvent::WatchlistError(error.to_string()),
+                    Err(error) => AppEvent::WatchlistError {
+                        message: error.to_string(),
+                    },
                 });
             },
         );
@@ -381,7 +387,7 @@ mod tests {
         let checked = loop {
             match events.recv_timeout(Duration::from_secs(5)).unwrap() {
                 AppEvent::WatchlistUpdated(watchlist) => break watchlist,
-                AppEvent::WatchlistError(message) => panic!("{message}"),
+                AppEvent::WatchlistError { message } => panic!("{message}"),
                 _ => {}
             }
         };

@@ -420,13 +420,13 @@ impl Muzik {
                 self.cache_visible_thumbnails(cx);
                 self.status = "Watchlist updated".into();
             }
-            AppEvent::WatchlistError(message) => self.error = Some(message),
+            AppEvent::WatchlistError { message } => self.error = Some(message),
             AppEvent::WatchlistSaved => self.reload_watchlist = true,
             AppEvent::JobsUpdated(_) => {
                 self.sync_watch_table(cx);
             }
             AppEvent::QueuesUpdated(data) => self.gates = data,
-            AppEvent::RemoteRunner(message) => self.status = message,
+            AppEvent::RemoteRunner { message } => self.status = message,
             AppEvent::JobStarted { .. }
             | AppEvent::JobEvent { .. }
             | AppEvent::DecisionRequest { .. }

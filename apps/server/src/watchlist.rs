@@ -586,7 +586,7 @@ const fn relevant(event: &AppEvent) -> bool {
         event,
         AppEvent::WatchlistUpdated(_)
             | AppEvent::WatchlistSaved
-            | AppEvent::WatchlistError(_)
+            | AppEvent::WatchlistError { .. }
             | AppEvent::JobsUpdated(_)
             | AppEvent::JobCompleted { .. }
             | AppEvent::JobFailed { .. }

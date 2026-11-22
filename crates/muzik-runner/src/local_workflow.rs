@@ -114,7 +114,7 @@ impl WorkflowOperations for LocalOperations<'_> {
             )));
             return Ok(());
         }
-        (self.on_import_event)(JobEvent::StepStarted(Step::Import));
+        (self.on_import_event)(JobEvent::StepStarted { step: Step::Import });
         let preview = beets::plan_import_with_cancel(
             ImportRequest {
                 source: target.to_path_buf(),
@@ -159,7 +159,7 @@ impl WorkflowOperations for LocalOperations<'_> {
                 "The album is already in the library. Muzik did not import it again.",
             ));
         }
-        (self.on_import_event)(JobEvent::StepFinished(Step::Import));
+        (self.on_import_event)(JobEvent::StepFinished { step: Step::Import });
         drop(permit);
         if !options.dry_run {
             library_tasks::after_import(
@@ -354,8 +354,8 @@ fn match_score(distance: f64) -> u64 {
 pub fn event_record(event: WorkflowEvent) -> JobEvent {
     match event {
         WorkflowEvent::InputClassified(_) => JobEvent::message("Reading local audio."),
-        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted(Step::Read),
-        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished(Step::Read),
+        WorkflowEvent::AcquisitionStarted => JobEvent::StepStarted { step: Step::Read },
+        WorkflowEvent::AcquisitionCompleted { .. } => JobEvent::StepFinished { step: Step::Read },
         WorkflowEvent::PlanReady { albums, singles } => {
             JobEvent::message(format!("Found {albums} album(s) and {singles} single(s)."))
         }

@@ -285,7 +285,7 @@ async fn the_event_stream_sends_each_event_as_json() {
     let event: Value = serde_json::from_str(data.trim()).unwrap();
     assert_eq!(
         event,
-        serde_json::json!({"type": "job_cancelled", "data": {"job_id": "queue-9"}})
+        serde_json::json!({"type": "job_cancelled", "job_id": "queue-9"})
     );
 }
 

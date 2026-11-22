@@ -473,11 +473,11 @@ impl Activity {
                 }
                 format!("{} finished", progress.description)
             }
-            JobEvent::StepStarted(step) => {
+            JobEvent::StepStarted { step } => {
                 self.set_status(job_id, step.to_string());
                 format!("Started {step}")
             }
-            JobEvent::StepFinished(step) => {
+            JobEvent::StepFinished { step } => {
                 if let Some(run) = self.run_mut(job_id)
                     && run.progress.total.is_some()
                 {
@@ -835,7 +835,9 @@ mod tests {
     #[test]
     fn job_events_update_status_and_bound_candidate_rows() {
         let mut activity = Activity::default();
-        activity.apply(&job_event(JobEvent::StepStarted(muzik_core::Step::Import)));
+        activity.apply(&job_event(JobEvent::StepStarted {
+            step: muzik_core::Step::Import,
+        }));
         assert_eq!(activity.runs()[0].status, "import");
         activity.apply(&job_event(JobEvent::CandidatesFound {
             source: muzik_core::CandidateSource::Soulseek,

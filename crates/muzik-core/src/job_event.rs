@@ -36,14 +36,18 @@ pub enum Task {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum JobEvent {
     Message {
         message: String,
         severity: Severity,
     },
-    StepStarted(Step),
-    StepFinished(Step),
+    StepStarted {
+        step: Step,
+    },
+    StepFinished {
+        step: Step,
+    },
     ProgressStarted {
         task: Task,
         description: String,
