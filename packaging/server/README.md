@@ -53,13 +53,17 @@ volumes:
 | --- | --- | --- |
 | `yt-dlp` | The `h3nc4/yt-dlp-slim` image. It has the official `yt-dlp_linux` binary. | Image tag and digest |
 | `bgutil-pot` and the `yt-dlp` plugin | The `ghcr.io/jim60105/bgutil-pot` image. | Image tag and digest |
-| `ffmpeg` and `ffprobe` | The `yt-dlp/FFmpeg-Builds` release asset `linux64-gpl`. | `ARG` version and SHA-256 checksum |
+| `ffmpeg` and `ffprobe` | The `BtbN/FFmpeg-Builds` release asset `linux64-lgpl-shared` of the FFmpeg 9.0 branch. | `ARG` version and SHA-256 checksum |
 | `quickjs` | Debian | Debian release |
 
 The Dockerfile pins each image by tag and digest. The `ffmpeg` build is a dated
-autobuild. The build checks its SHA-256 checksum. The FFmpeg-Builds project has
-no release-branch build after 7.1. The dated autobuild is a build of the
-FFmpeg `master` branch.
+autobuild of the FFmpeg 9.0 release branch. The build checks its SHA-256
+checksum.
+
+The `ffmpeg` build is a shared LGPL build. `ffmpeg` and `ffprobe` use one copy
+of the FFmpeg libraries in `/usr/local/lib`. The LGPL build has all the audio
+encoders that muzik uses: `libopus`, `libmp3lame`, `flac`, `aac`, and
+`libvorbis`. It does not have the GPL video encoders, for example `libx264`.
 
 The `yt-dlp-slim` image exists for `linux/amd64` only. For this reason the
 muzik image is `linux/amd64` only. The `mise run server-image` task and the
@@ -92,8 +96,10 @@ in, set `MUZIK_YTDLP_COOKIES`. Cookies work with the provider.
 Dependabot opens a pull request each week for the images in the Dockerfile.
 Dependabot cannot track a release asset. Update these values by hand:
 
-- `FFMPEG_BUILD`, `FFMPEG_ARCHIVE`, and `FFMPEG_SHA256` in the Dockerfile. Get
-  the checksum from the `checksums.sha256` file of the release.
+- `FFMPEG_BUILD`, `FFMPEG_ARCHIVE`, and `FFMPEG_SHA256` in the Dockerfile. Use
+  a dated `autobuild-*` release of `BtbN/FFmpeg-Builds` and its
+  `linux64-lgpl-shared` asset for the same FFmpeg branch. Get the checksum
+  from the `checksums.sha256` file of the release.
 
 The CI job `Server image` builds the image each week. It also builds the image
 when the server files change. The job runs the tools and the server.

@@ -117,6 +117,13 @@ jobs:
           docker run --rm --entrypoint ffmpeg muzik-server -version
           docker run --rm --entrypoint ffprobe muzik-server -version
           docker run --rm --entrypoint bgutil-pot muzik-server --version
+      - name: Check the audio encoders
+        run: |
+          for codec in libopus libmp3lame flac; do
+            docker run --rm --network none --entrypoint ffmpeg muzik-server \
+              -hide_banner -loglevel error -f lavfi -i sine=frequency=440:duration=1 \
+              -c:a "$codec" -f null -
+          done
       - name: Check the PO token provider
         run: |
           docker run --rm --network none --entrypoint yt-dlp muzik-server \

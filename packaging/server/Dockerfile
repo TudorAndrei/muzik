@@ -7,14 +7,15 @@ FROM debian:trixie-slim AS ffmpeg
 RUN apt-get update \
     && apt-get install -y --no-install-recommends xz-utils \
     && rm -rf /var/lib/apt/lists/*
-ARG FFMPEG_BUILD=autobuild-2026-11-16-23-35
-ARG FFMPEG_ARCHIVE=ffmpeg-N-128970-g11337618b2-linux64-gpl
-ARG FFMPEG_SHA256=49d74477584a7a5d786003d7ef67e1e42304c022239ee1186ade87eefb480687
+ARG FFMPEG_BUILD=autobuild-2026-11-21-12-37
+ARG FFMPEG_ARCHIVE=ffmpeg-n9.0.2-61-gd59078794d-linux64-lgpl-shared-9.0
+ARG FFMPEG_SHA256=6e3fc3aaabeff05d18c48a1353a67354b530d5d8d3d93aa0698e3b548b59ef5a
 ADD --checksum=sha256:${FFMPEG_SHA256} \
-    https://github.com/yt-dlp/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/${FFMPEG_ARCHIVE}.tar.xz \
+    https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BUILD}/${FFMPEG_ARCHIVE}.tar.xz \
     /tmp/ffmpeg.tar.xz
-RUN tar -xJf /tmp/ffmpeg.tar.xz -C /usr/local/bin --strip-components=2 \
-    ${FFMPEG_ARCHIVE}/bin/ffmpeg ${FFMPEG_ARCHIVE}/bin/ffprobe
+RUN mkdir -p /out \
+    && tar -xJf /tmp/ffmpeg.tar.xz -C /out --strip-components=1 --wildcards \
+    "${FFMPEG_ARCHIVE}/bin/ffmpeg" "${FFMPEG_ARCHIVE}/bin/ffprobe" "${FFMPEG_ARCHIVE}/lib/*.so.*"
 
 FROM rust:1.99.1-trixie AS build
 WORKDIR /src
@@ -35,7 +36,8 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/muzik muzik \
 COPY --from=yt-dlp /bin/yt-dlp /usr/local/bin/yt-dlp
 COPY --from=bgutil-pot /bgutil-pot /usr/local/bin/bgutil-pot
 COPY --from=bgutil-pot /client/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/yt_dlp_plugins
-COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
+COPY --from=ffmpeg /out/bin/ /usr/local/bin/
+COPY --from=ffmpeg /out/lib/ /usr/local/lib/
 COPY packaging/server/yt-dlp.conf /etc/yt-dlp.conf
 COPY --from=build /out/muzik-server /usr/local/bin/muzik-server
 ENV MUZIK_HOME=/data \
