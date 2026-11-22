@@ -40,21 +40,63 @@ Build the image from the repository root.
 mise run server-image
 ```
 
-The image has the server, `ffmpeg`, `ffprobe`, `yt-dlp`, and `quickjs`. It runs
-as a user without root rights. It uses two volumes:
+The image has the server, `ffmpeg`, `ffprobe`, `yt-dlp`, `quickjs`, and a
+YouTube PO token provider. It runs as a user without root rights. It uses two
+volumes:
 
 - `/data` holds the state.
 - `/music` holds the music library.
 
-The build copies `yt-dlp` from the `h3nc4/yt-dlp-slim` image. It copies
-`ffmpeg` and `ffprobe` from the `mwader/static-ffmpeg` image. The Dockerfile
-pins each image by digest. `quickjs` comes from Debian.
+### Where each tool comes from
+
+| Tool | Source | Pin |
+| --- | --- | --- |
+| `yt-dlp` | The `h3nc4/yt-dlp-slim` image. It has the official `yt-dlp_linux` binary. | Image tag and digest |
+| `bgutil-pot` and the `yt-dlp` plugin | The `ghcr.io/jim60105/bgutil-pot` image. | Image tag and digest |
+| `ffmpeg` and `ffprobe` | The `yt-dlp/FFmpeg-Builds` release asset `linux64-gpl`. | `ARG` version and SHA-256 checksum |
+| `quickjs` | Debian | Debian release |
+
+The Dockerfile pins each image by tag and digest. The `ffmpeg` build is a dated
+autobuild. The build checks its SHA-256 checksum. The FFmpeg-Builds project has
+no release-branch build after 7.1. The dated autobuild is a build of the
+FFmpeg `master` branch.
 
 The `yt-dlp-slim` image exists for `linux/amd64` only. For this reason the
 muzik image is `linux/amd64` only. The `mise run server-image` task and the
 Compose file set this platform. If you run `docker build` yourself, add
-`--platform linux/amd64`. On Apple Silicon or another Arm host, Docker uses emulation. The build is
-slow, because it compiles the server in the emulator.
+`--platform linux/amd64`. On Apple Silicon or another Arm host, Docker uses
+emulation. The build is slow, because it compiles the server in the emulator.
+
+### PO token provider
+
+YouTube can ask for a proof-of-origin token. The image has the `bgutil` PO token
+provider in script mode. The `yt-dlp` plugin is in
+`/etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider`. The plugin finds `bgutil-pot`
+in `PATH` and runs it when `yt-dlp` needs a token. No extra process or
+container is necessary.
+
+To check the provider, run this command. It uses no network.
+
+```sh
+docker run --rm --network none --entrypoint yt-dlp muzik-server \
+  -v -s 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' 2>&1 | grep 'PO Token'
+```
+
+The line `PO Token Providers: bgutil:cli` must show in the output.
+
+A token does not always stop the bot checks. If YouTube still asks you to sign
+in, set `MUZIK_YTDLP_COOKIES`. Cookies work with the provider.
+
+### Updates
+
+Dependabot opens a pull request each week for the images in the Dockerfile.
+Dependabot cannot track a release asset. Update these values by hand:
+
+- `FFMPEG_BUILD`, `FFMPEG_ARCHIVE`, and `FFMPEG_SHA256` in the Dockerfile. Get
+  the checksum from the `checksums.sha256` file of the release.
+
+The CI job `Server image` builds the image each week. It also builds the image
+when the server files change. The job runs the tools and the server.
 
 Start the server with Compose.
 
