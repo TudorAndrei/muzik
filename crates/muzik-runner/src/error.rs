@@ -25,6 +25,12 @@ pub enum Error {
     Soulseek(#[from] muzik_soulseek::error::BridgeError),
     #[error(transparent)]
     Import(#[from] muzik_import::Error),
+    #[error(transparent)]
+    Spotify(#[from] muzik_spotify::Error),
+    #[error(transparent)]
+    Bandcamp(#[from] muzik_bandcamp::Error),
+    #[error(transparent)]
+    Enqueue(#[from] crate::EnqueueError),
     #[error("{0} queue wait cancelled")]
     GateCancelled(Gate),
     #[error("job cancelled")]

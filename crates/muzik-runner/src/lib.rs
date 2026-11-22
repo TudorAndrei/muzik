@@ -6,14 +6,17 @@ pub mod choices;
 mod error;
 mod events;
 pub mod gates;
+pub mod library_info;
 pub mod library_tasks;
 mod local_workflow;
 mod queue;
 mod remote_workflow;
 mod runner;
+pub mod service;
 pub mod settings;
 pub mod setup;
 mod sources;
+pub mod thumbnails;
 pub mod watchlist;
 mod workflow_result;
 

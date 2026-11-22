@@ -5394,18 +5394,12 @@ dependencies = [
  "anyhow",
  "async-channel",
  "gpui-kit",
- "jiff",
  "keyring",
- "muzik-bandcamp",
  "muzik-core",
- "muzik-import",
- "muzik-library",
  "muzik-runner",
  "muzik-soulseek",
  "muzik-spotify",
  "muzik-store",
- "parking_lot 0.13.0",
- "serde",
  "serde_json",
  "strum 0.28.0",
  "strum_macros 0.28.0",
@@ -5413,8 +5407,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "ureq",
- "url",
 ]
 
 [[package]]
@@ -5521,6 +5513,7 @@ dependencies = [
 name = "muzik-runner"
 version = "2.16.0"
 dependencies = [
+ "jiff",
  "keyring-core",
  "muzik-agent",
  "muzik-bandcamp",
@@ -5544,6 +5537,8 @@ dependencies = [
  "strum_macros 0.28.0",
  "tempfile",
  "thiserror 2.0.21",
+ "ureq",
+ "url",
 ]
 
 [[package]]

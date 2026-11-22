@@ -157,7 +157,7 @@ impl Muzik {
         &mut self,
         call: Call,
         cx: &Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         self.spawn_call(
@@ -175,7 +175,7 @@ impl Muzik {
         &mut self,
         read: Read,
         cx: &Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<T> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<T> + Send + 'static,
         done: impl FnOnce(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
     ) {
         if self.backend.is_none() {
@@ -447,7 +447,7 @@ impl Muzik {
         &mut self,
         call: Call,
         cx: &mut Context<Self>,
-        work: impl FnOnce(&Backend) -> anyhow::Result<String> + Send + 'static,
+        work: impl FnOnce(&Backend) -> muzik_runner::Result<String> + Send + 'static,
     ) {
         self.error = None;
         self.call(call, cx, work, |view, _, _, _| {

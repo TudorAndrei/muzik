@@ -22,6 +22,7 @@ muzik-tags = { path = "../muzik-tags" }
 muzik-soulseek = { path = "../muzik-soulseek" }
 muzik-spotify = { path = "../muzik-spotify" }
 muzik-workflow = { path = "../muzik-workflow" }
+jiff = "1.0"
 parking_lot = "0.13"
 rusqlite = { version = "0.43", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +31,8 @@ strum = "0.28"
 strum_macros = "0.28"
 tempfile = "3"
 thiserror = "2"
+ureq = "3.5.2"
+url = "2.5.8"
 
 [dev-dependencies]
 keyring-core = "1.0"

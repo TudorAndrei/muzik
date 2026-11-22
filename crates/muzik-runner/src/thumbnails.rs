@@ -1,5 +1,3 @@
-//! Fetch watchlist images into the existing user cache.
-
 use muzik_core::thumbnails as cache;
 use muzik_store::watchlist::Repository;
 use std::collections::BTreeMap;
@@ -12,6 +10,7 @@ pub struct ThumbnailUpdate {
     pub result: Result<PathBuf, String>,
 }
 
+#[must_use]
 pub fn cache_requested(
     ids: &[String],
     repository: &Repository,

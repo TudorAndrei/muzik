@@ -7,7 +7,6 @@ mod pages;
 mod requests;
 mod settings;
 mod style;
-mod thumbnails;
 mod watch_table;
 mod watchlist_view;
 
@@ -50,6 +49,7 @@ use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::gates::Gate;
 use muzik_runner::library_tasks::LibraryTask;
+use muzik_runner::thumbnails;
 use muzik_store::watchlist::{
     ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
 };
@@ -216,7 +216,7 @@ impl Muzik {
             config_status: Rc::new(RefCell::new(String::new())),
         };
         if start_backend {
-            match Backend::start() {
+            match backend::start() {
                 Ok((backend, events)) => {
                     this.backend = Some(Arc::new(backend));
                     this.events = Some(Self::listen(events, window, cx));
@@ -1480,7 +1480,7 @@ fn main() -> std::process::ExitCode {
 }
 
 fn check_backend() -> anyhow::Result<()> {
-    Backend::start()?;
+    backend::start()?;
     println!("Rust backend ready");
     Ok(())
 }
