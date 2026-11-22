@@ -156,3 +156,7 @@ cargo about generate --workspace --locked --fail -o "${usage_output}" about.md.h
 description = "Run the complete locked verification gate with the release build"
 depends = ["check"]
 run = "cargo auditable build --workspace --release --locked"
+
+[tasks.server-image]
+description = "Build the muzik-server container image"
+run = "docker build -f packaging/server/Dockerfile -t muzik-server ."

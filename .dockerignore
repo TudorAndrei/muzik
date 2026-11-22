@@ -1,0 +1,17 @@
+target/
+.dev/
+.git/
+.github/
+node_modules/
+dist/
+build/
+.env
+.env.*
+*.log
+.DS_Store
+.rumdl_cache/
+__fuzz__/
+docs/
+features/
+perf-log.md
+.tmp/
