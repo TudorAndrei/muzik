@@ -1,10 +1,11 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, fmt, str::FromStr, time::Duration};
 
 use muzik_core::DecisionKind;
 use muzik_runner::{
-    Answered, AppEvent, JobsSnapshot, OpenJob, QuestionVersion, choices, job_id, service::Service,
+    Answered, AppEvent, JobsSnapshot, OpenJob, QUESTION_CHANGED, QuestionVersion, choices, job_id,
+    service::Service,
 };
-use muzik_store::jobs::Status as JobStatus;
+use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
@@ -22,7 +23,7 @@ use topcoat::{
 
 use crate::{
     auth,
-    hub::{Progress, Snapshot},
+    hub::{Phase, Progress, Snapshot},
     state::{backend, events, hub},
 };
 
@@ -30,7 +31,6 @@ const JOB_LIMIT: usize = 100;
 const DETAIL_LIMIT: usize = 6;
 const LOG_LIMIT: usize = 30;
 const CHAPTER_LIMIT: usize = 500;
-const QUESTION_CHANGED: &str = "The question changed. Review the new question.";
 const SETTLE: Duration = Duration::from_millis(150);
 const RESYNC: Duration = Duration::from_secs(5);
 
@@ -61,7 +61,7 @@ pub struct ChapterRow {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DecisionCard {
-    pub target: String,
+    pub target: Target,
     pub job_id: String,
     pub heading: &'static str,
     pub job: String,
@@ -82,14 +82,53 @@ pub struct Board {
 }
 
 #[must_use]
-pub const fn kind_label(kind: &str) -> &'static str {
-    match kind.as_bytes() {
-        b"workflow" => "Workflow",
-        b"refresh" => "Watchlist check",
-        b"item" => "Item",
-        b"library" => "Library",
-        _ => "Job",
+pub const fn kind_label(kind: JobKind) -> &'static str {
+    match kind {
+        JobKind::Workflow => "Workflow",
+        JobKind::Refresh => "Watchlist check",
+        JobKind::Item => "Item",
+        JobKind::Library => "Library",
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    Live(String),
+    Queue { id: i64, version: QuestionVersion },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct TargetError;
+
+impl fmt::Display for Target {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Live(id) => write!(f, "live:{id}"),
+            Self::Queue { id, version } => write!(f, "queue:{id}:{}", version.0),
+        }
+    }
+}
+
+impl FromStr for Target {
+    type Err = TargetError;
+
+    fn from_str(text: &str) -> Result<Self, TargetError> {
+        if let Some(id) = text.strip_prefix("live:") {
+            return Ok(Self::Live(id.to_owned()));
+        }
+        let (id, version) = text
+            .strip_prefix("queue:")
+            .and_then(|rest| rest.split_once(':'))
+            .ok_or(TargetError)?;
+        Ok(Self::Queue {
+            id: id.parse().map_err(|_| TargetError)?,
+            version: QuestionVersion(version.parse().map_err(|_| TargetError)?),
+        })
+    }
+}
+
+fn question_value(kind: Option<DecisionKind>, payload: Option<&Value>) -> Value {
+    json!({"kind": kind, "payload": payload})
 }
 
 #[must_use]
@@ -106,28 +145,27 @@ pub fn truncate(text: &str, limit: usize) -> String {
 fn job_rows(jobs: &[OpenJob], progress: &HashMap<String, Progress>) -> (Vec<JobRow>, usize) {
     let mut rows: Vec<(bool, JobRow)> = jobs
         .iter()
-        .filter_map(|job| {
-            let id = Some(job.job_id.as_str()).filter(|id| !id.is_empty())?;
+        .map(|job| {
             let queued = job.status == JobStatus::Queued;
-            let known = progress.get(id);
+            let known = progress.get(&job.job_id);
             let status = if queued {
                 "Queued".to_owned()
             } else {
-                known
-                    .map(|progress| progress.status.clone())
-                    .filter(|status| !status.is_empty())
-                    .unwrap_or_else(|| "Starting".to_owned())
+                known.map_or_else(
+                    || Phase::Starting.to_string(),
+                    |progress| progress.status.to_string(),
+                )
             };
-            Some((
+            (
                 queued,
                 JobRow {
-                    id: id.to_owned(),
+                    id: job.job_id.clone(),
                     title: truncate(&job.title, 120),
-                    kind: kind_label(job.kind.as_ref()),
+                    kind: kind_label(job.kind),
                     status: truncate(&status, 120),
                     percent: known.and_then(Progress::percent),
                 },
-            ))
+            )
         })
         .collect();
     rows.sort_by_key(|(queued, _)| *queued);
@@ -142,7 +180,7 @@ fn job_rows(jobs: &[OpenJob], progress: &HashMap<String, Progress>) -> (Vec<JobR
 }
 
 #[must_use]
-pub fn decision_card(target: String, job_id: String, job: &str, question: &Value) -> DecisionCard {
+pub fn decision_card(target: Target, job_id: String, job: &str, question: &Value) -> DecisionCard {
     let kind = choices::kind(question);
     let suggested = choices::suggestion(question);
     let mut note = choices::note(question)
@@ -222,17 +260,20 @@ pub fn build_board(jobs: &JobsSnapshot, snapshot: &Snapshot) -> Board {
         .iter()
         .map(|decision| {
             decision_card(
-                format!("live:{}", decision.decision_id),
+                Target::Live(decision.decision_id.clone()),
                 decision.job_id.clone(),
                 &title_of(&decision.job_id),
-                &decision.question,
+                &question_value(Some(decision.kind), Some(&decision.payload)),
             )
         })
         .collect();
     decisions.extend(jobs.queue.waiting.iter().map(|waiting| {
-        let question = json!({"kind": waiting.kind, "payload": waiting.payload});
+        let question = question_value(waiting.kind, waiting.payload.as_ref());
         decision_card(
-            format!("queue:{}:{}", waiting.id, waiting.version.0),
+            Target::Queue {
+                id: waiting.id,
+                version: waiting.version,
+            },
             job_id(waiting.id),
             &waiting.title,
             &question,
@@ -439,7 +480,7 @@ async fn decision_form(cx: &Cx, card: DecisionCard) -> Result<impl View> {
     let has_note = !card.note.is_empty();
     Ok(view! {
         <form class="decision" method="post" action=(href!(decide)) id=(format!("decision-{}", card.target))>
-            <input type="hidden" name="target" value=(card.target.clone())>
+            <input type="hidden" name="target" value=(card.target.to_string())>
             <h3>(card.heading)</h3>
             <div class="meta">(card.job)</div>
             if has_note {
@@ -526,15 +567,7 @@ pub async fn start_download(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeO
         ));
     }
     let outcome = backend(cx)
-        .run(move |service| {
-            let mut params = match serde_json::to_value(service.defaults())? {
-                Value::Object(params) => params,
-                _ => serde_json::Map::new(),
-            };
-            params.remove("motion");
-            params.insert("raw".into(), json!(raw));
-            service.start_workflow(&Value::Object(params))
-        })
+        .run(move |service| service.start_workflow(&json!({"raw": raw})))
         .await?;
     Ok(back(
         cx,
@@ -592,26 +625,17 @@ fn chapter_answer(form: &HashMap<String, String>) -> Option<Value> {
     Some(Value::Array(chapters))
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Target {
-    Live(String),
-    Queue { id: i64, version: i64 },
+struct OpenQuestion {
+    value: Value,
+    version: Option<QuestionVersion>,
 }
 
-fn parse_target(text: &str) -> Option<Target> {
-    if let Some(id) = text.strip_prefix("live:") {
-        return Some(Target::Live(id.to_owned()));
-    }
-    let (id, version) = text.strip_prefix("queue:")?.split_once(':')?;
-    Some(Target::Queue {
-        id: id.parse().ok()?,
-        version: version.parse().ok()?,
-    })
-}
-
-async fn question_for(cx: &Cx, target: &Target) -> Result<Option<Value>> {
+async fn question_for(cx: &Cx, target: &Target) -> Result<Option<OpenQuestion>> {
     match target {
-        Target::Live(id) => Ok(hub(cx).decision(id).map(|decision| decision.question)),
+        Target::Live(id) => Ok(hub(cx).decision(id).map(|decision| OpenQuestion {
+            value: question_value(Some(decision.kind), Some(&decision.payload)),
+            version: None,
+        })),
         Target::Queue { id, .. } => {
             let id = *id;
             let jobs = backend(cx).run(Service::jobs).await?;
@@ -620,12 +644,9 @@ async fn question_for(cx: &Cx, target: &Target) -> Result<Option<Value>> {
                 .waiting
                 .into_iter()
                 .find(|waiting| waiting.id == id)
-                .map(|waiting| {
-                    json!({
-                        "kind": waiting.kind,
-                        "payload": waiting.payload,
-                        "version": waiting.version,
-                    })
+                .map(|waiting| OpenQuestion {
+                    value: question_value(waiting.kind, waiting.payload.as_ref()),
+                    version: Some(waiting.version),
                 }))
         }
     }
@@ -636,13 +657,14 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
     auth::require(cx).await?;
     let target = form
         .get("target")
-        .and_then(|text| parse_target(text))
+        .and_then(|text| text.parse::<Target>().ok())
         .ok_or_bad_request("The decision is not valid.")?;
-    let Some(question) = question_for(cx, &target).await? else {
+    let Some(open) = question_for(cx, &target).await? else {
         return Ok(back(cx, Err("This decision is no longer open.".into())));
     };
+    let question = open.value;
     if let Target::Queue { version, .. } = target
-        && question.get("version").and_then(Value::as_i64) != Some(version)
+        && open.version != Some(version)
     {
         return Ok(back(cx, Err(QUESTION_CHANGED.into())));
     }
@@ -671,13 +693,13 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
         Target::Queue { id, version } => {
             backend(cx)
                 .run(move |service| {
-                    service
-                        .answer_version(id, QuestionVersion(version), &value)
-                        .and_then(|answered| match answered {
+                    service.answer_version(id, version, &value).and_then(
+                        |answered| match answered {
                             Answered::Saved => Ok(()),
                             Answered::Changed => Err(QUESTION_CHANGED.into()),
                             Answered::Closed => Err("This decision is no longer open.".into()),
-                        })
+                        },
+                    )
                 })
                 .await?
         }
@@ -692,7 +714,8 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{Target, chapter_answer, parse_target};
+    use super::{Target, chapter_answer};
+    use muzik_runner::QuestionVersion;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -705,14 +728,17 @@ mod tests {
 
     #[test]
     fn targets_name_a_live_or_a_saved_decision() {
-        assert_eq!(parse_target("live:abc"), Some(Target::Live("abc".into())));
-        assert_eq!(
-            parse_target("queue:7:3"),
-            Some(Target::Queue { id: 7, version: 3 })
-        );
-        assert_eq!(parse_target("queue:7"), None);
-        assert_eq!(parse_target("queue:x:1"), None);
-        assert_eq!(parse_target("other:1"), None);
+        let live = Target::Live("abc".into());
+        let saved = Target::Queue {
+            id: 7,
+            version: QuestionVersion(3),
+        };
+        assert_eq!(live.to_string().parse(), Ok(live));
+        assert_eq!(saved.to_string(), "queue:7:3");
+        assert_eq!("queue:7:3".parse(), Ok(saved));
+        for text in ["queue:7", "queue:x:1", "queue:1:y", "other:1"] {
+            assert!(text.parse::<Target>().is_err(), "{text}");
+        }
     }
 
     #[test]
@@ -746,9 +772,9 @@ mod tests {
 
 #[cfg(test)]
 mod board_tests {
-    use super::build_board;
-    use crate::hub::{Progress, Snapshot};
-    use muzik_runner::JobsSnapshot;
+    use super::{Target, build_board};
+    use crate::hub::{Phase, Progress, Snapshot};
+    use muzik_runner::{JobsSnapshot, QuestionVersion};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -774,7 +800,7 @@ mod board_tests {
             progress: HashMap::from([(
                 "queue-1".to_owned(),
                 Progress {
-                    status: "Download".into(),
+                    status: Phase::Text("Download".into()),
                     completed: 1,
                     total: Some(4),
                     ..Progress::default()
@@ -789,7 +815,13 @@ mod board_tests {
         assert_eq!(board.jobs[0].percent, Some(25));
         assert_eq!(board.jobs[1].status, "Queued");
         assert_eq!(board.decisions.len(), 1);
-        assert_eq!(board.decisions[0].target, "queue:5:2");
+        assert_eq!(
+            board.decisions[0].target,
+            Target::Queue {
+                id: 5,
+                version: QuestionVersion(2)
+            }
+        );
         assert_eq!(board.decisions[0].job_id, "queue-5");
         assert_eq!(board.decisions[0].choices.len(), 3);
     }

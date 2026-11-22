@@ -1,6 +1,6 @@
 use futures_util::{Stream, stream};
 use muzik_runner::{JobsSnapshot, service::Service};
-use serde_json::json;
+use serde::Serialize;
 use std::time::Duration;
 
 use tokio::{sync::broadcast::error::RecvError, time::MissedTickBehavior};
@@ -22,6 +22,12 @@ use crate::{
 };
 
 const SESSION_CHECK: Duration = Duration::from_secs(1);
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum StreamNotice {
+    Resync,
+}
 
 #[route(GET "/api/jobs")]
 pub async fn jobs(cx: &Cx) -> Result<Json<JobsSnapshot>> {
@@ -54,7 +60,7 @@ pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Even
                             }
                             Err(RecvError::Lagged(_)) => {
                                 return Some((
-                                    Event::new().json_data(&json!({"type": "resync"})),
+                                    Event::new().json_data(&StreamNotice::Resync),
                                     (receiver, watch, check),
                                 ));
                             }

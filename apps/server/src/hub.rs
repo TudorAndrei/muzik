@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use muzik_core::{DecisionKind, JobEvent, Task};
+use muzik_core::{DecisionKind, JobEvent, Step, Task};
 use muzik_runner::{AppEvent, library_info::LibraryInfo, setup::ServiceStatus};
 use muzik_store::watchlist::WatchlistView;
 use parking_lot::Mutex;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 const LOG_LIMIT: usize = 200;
 const FINISHED_LIMIT: usize = 200;
@@ -15,8 +16,59 @@ const RELOAD_BACKOFF_LIMIT: Duration = Duration::from_secs(60);
 const THUMBNAIL_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
+    #[default]
+    Starting,
+    DecisionNeeded,
+    WaitingForUser,
+    Step(Step),
+    Chose(String),
+    Text(String),
+}
+
+impl Phase {
+    fn text(text: &str) -> Self {
+        if text.is_empty() {
+            Self::Starting
+        } else {
+            Self::Text(text.to_owned())
+        }
+    }
+}
+
+impl fmt::Display for Phase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Starting => f.write_str("Starting"),
+            Self::DecisionNeeded => f.write_str("Decision needed"),
+            Self::WaitingForUser => f.write_str("Waiting for you"),
+            Self::Step(step) => step.fmt(f),
+            Self::Chose(label) => write!(f, "Chose {label}"),
+            Self::Text(text) => f.write_str(text),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Ending {
+    Completed,
+    Cancelled,
+    Failed(String),
+}
+
+impl fmt::Display for Ending {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Completed => f.write_str("completed"),
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Failed(message) => write!(f, "failed: {message}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
-    pub status: String,
+    pub status: Phase,
     pub task: Option<Task>,
     pub completed: u64,
     pub total: Option<u64>,
@@ -40,7 +92,8 @@ impl Progress {
 pub struct LiveDecision {
     pub decision_id: String,
     pub job_id: String,
-    pub question: Value,
+    pub kind: DecisionKind,
+    pub payload: Value,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -271,7 +324,7 @@ impl State {
         }
         match event {
             AppEvent::JobStarted { job_id, title, .. } => {
-                self.entry(job_id).status = "Starting".into();
+                self.entry(job_id).status = Phase::Starting;
                 self.push_log(format!("Started {title}"));
             }
             AppEvent::JobEvent { job_id, event, .. } => self.job_event(job_id, event),
@@ -289,15 +342,16 @@ impl State {
                     self.decisions.push(LiveDecision {
                         decision_id: decision_id.clone(),
                         job_id: job_id.clone(),
-                        question: question(*kind, payload),
+                        kind: *kind,
+                        payload: payload.clone(),
                     });
                 }
-                self.entry(job_id).status = "Decision needed".into();
+                self.entry(job_id).status = Phase::DecisionNeeded;
             }
-            AppEvent::JobCompleted { job_id, .. } => self.finish(job_id, "completed"),
-            AppEvent::JobCancelled { job_id } => self.finish(job_id, "cancelled"),
+            AppEvent::JobCompleted { job_id, .. } => self.finish(job_id, &Ending::Completed),
+            AppEvent::JobCancelled { job_id } => self.finish(job_id, &Ending::Cancelled),
             AppEvent::JobFailed { job_id, message } => {
-                self.finish(job_id, &format!("failed: {message}"));
+                self.finish(job_id, &Ending::Failed(message.clone()));
             }
             _ => {}
         }
@@ -307,7 +361,7 @@ impl State {
         self.progress.entry(job_id.to_owned()).or_default()
     }
 
-    fn finish(&mut self, job_id: &str, ending: &str) {
+    fn finish(&mut self, job_id: &str, ending: &Ending) {
         self.progress.remove(job_id);
         self.decisions.retain(|decision| decision.job_id != job_id);
         self.push_log(format!("Job {job_id} {ending}"));
@@ -337,7 +391,7 @@ impl State {
             } => {
                 let progress = self.entry(job_id);
                 progress.task = Some(*task);
-                progress.status.clone_from(description);
+                progress.status = Phase::text(description);
                 progress.completed = 0;
                 progress.total = total.filter(|total| *total > 0);
             }
@@ -366,7 +420,7 @@ impl State {
                 }
             }
             JobEvent::StepStarted { step } => {
-                self.entry(job_id).status = step.to_string();
+                self.entry(job_id).status = Phase::Step(*step);
             }
             JobEvent::StepFinished { .. } => {
                 let progress = self.entry(job_id);
@@ -375,11 +429,11 @@ impl State {
                 }
             }
             JobEvent::Message { message, .. } => {
-                self.entry(job_id).status.clone_from(message);
+                self.entry(job_id).status = Phase::text(message);
                 self.push_log(message.clone());
             }
             JobEvent::ItemWaiting { title, .. } => {
-                self.entry(job_id).status = "Waiting for you".into();
+                self.entry(job_id).status = Phase::WaitingForUser;
                 self.push_log(format!("{title} waits for you"));
             }
             JobEvent::AgentDecided {
@@ -387,7 +441,7 @@ impl State {
                 confidence,
                 reason,
             } => {
-                self.entry(job_id).status = format!("Chose {label}");
+                self.entry(job_id).status = Phase::Chose(label.clone());
                 self.push_log(format!("Chose {label} ({confidence:.0}): {reason}"));
             }
             JobEvent::CandidatesFound { .. } | JobEvent::WatchlistSaved => {}
@@ -395,13 +449,9 @@ impl State {
     }
 }
 
-fn question(kind: DecisionKind, payload: &Value) -> Value {
-    json!({"kind": kind, "payload": payload})
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Hub, State};
+    use super::{Hub, Phase, State};
     use muzik_core::{JobEvent, Task};
     use muzik_runner::{AppEvent, Source};
     use muzik_store::watchlist::WatchlistView;
@@ -435,7 +485,7 @@ mod tests {
             total: None,
         }));
         let progress = hub.snapshot().progress["queue-1"].clone();
-        assert_eq!(progress.status, "Split tracks");
+        assert_eq!(progress.status, Phase::Text("Split tracks".into()));
         assert_eq!(progress.percent(), Some(40));
         hub.apply(&AppEvent::JobCompleted {
             job_id: "queue-1".into(),
@@ -528,8 +578,8 @@ mod tests {
         hub.apply(&request("d2", "queue-2"));
         assert_eq!(hub.snapshot().decisions.len(), 2);
         assert_eq!(
-            hub.decision("d1").unwrap().question["kind"],
-            "import_duplicate"
+            hub.decision("d1").unwrap().kind,
+            muzik_core::DecisionKind::ImportDuplicate
         );
         hub.resolve("d1");
         assert!(hub.decision("d1").is_none());
