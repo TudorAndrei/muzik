@@ -26,7 +26,7 @@ use topcoat::{
 use crate::{
     activity::{settle, truncate},
     auth,
-    notice::Notice,
+    notice::{Notice, describe},
     state::{backend, events, hub, shared_hub},
 };
 
@@ -38,8 +38,8 @@ const ERROR_LIMIT: usize = 160;
 pub struct Place {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub source: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub filter: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<Summary>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub item: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -54,7 +54,7 @@ const fn at(number: usize) -> Option<usize> {
 struct SourceCard {
     id: String,
     title: String,
-    kind: &'static str,
+    kind: SourceKind,
     count: usize,
     failing: bool,
     selected: bool,
@@ -63,19 +63,20 @@ struct SourceCard {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Tab {
     label: &'static str,
-    filter: String,
+    filter: Option<Summary>,
     active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Pip {
-    tip: String,
+struct StageView {
+    label: &'static str,
+    word: &'static str,
     class: &'static str,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Act {
-    name: &'static str,
+    name: ItemAction,
     label: String,
     enabled: bool,
 }
@@ -88,14 +89,14 @@ struct Row {
     summary: String,
     tone: &'static str,
     error: String,
-    pips: Vec<Pip>,
+    stages: Vec<StageView>,
     action: Option<Act>,
     selected: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CardAction {
-    name: &'static str,
+    name: ItemAction,
     label: String,
     enabled: bool,
     reason: String,
@@ -112,7 +113,7 @@ struct Card {
     url: Option<String>,
     thumb: Option<String>,
     error: String,
-    stages: Vec<(&'static str, &'static str, &'static str)>,
+    stages: Vec<StageView>,
     note: String,
     actions: Vec<CardAction>,
 }
@@ -240,17 +241,58 @@ fn retryable(item: &ItemView) -> bool {
             .is_some_and(|retry| retry.enabled)
 }
 
-fn pips(item: &ItemView) -> Vec<Pip> {
+fn stage_views(item: &ItemView) -> Vec<StageView> {
     Stage::ALL
         .iter()
         .map(|stage| {
             let status = item.status(*stage);
-            Pip {
-                tip: format!("{} · {}", stage_label(*stage), status_word(status)),
+            StageView {
+                label: stage_label(*stage),
+                word: status_word(status),
                 class: status_class(status),
             }
         })
         .collect()
+}
+
+struct Listing<'a> {
+    playlist: &'a PlaylistView,
+    ids: Vec<ItemId>,
+}
+
+impl<'a> Listing<'a> {
+    fn new(playlist: &'a PlaylistView) -> Self {
+        Self {
+            ids: playlist.item_ids(),
+            playlist,
+        }
+    }
+
+    fn entries(&self) -> impl Iterator<Item = (&ItemId, &'a ItemView)> {
+        self.ids.iter().zip(&self.playlist.items)
+    }
+
+    fn find(&self, key: &str) -> Option<(&ItemId, &'a ItemView)> {
+        let wanted = ItemId::new(&self.playlist.playlist_id, Some(key));
+        self.entries().find(|(id, _)| **id == wanted)
+    }
+
+    fn has(&self, key: &str) -> bool {
+        !key.is_empty() && self.find(key).is_some()
+    }
+
+    fn retry_requests(&self) -> Vec<ItemRequest> {
+        let mut seen = HashSet::new();
+        self.entries()
+            .filter(|(_, item)| retryable(item))
+            .filter(|(id, _)| seen.insert((*id).clone()))
+            .map(|(id, item)| ItemRequest {
+                id: id.clone(),
+                title: item.item.title.clone(),
+                action: ItemAction::Retry,
+            })
+            .collect()
+    }
 }
 
 fn empty_message(playlist: &PlaylistView, filter: Option<Summary>) -> String {
@@ -269,16 +311,12 @@ fn empty_message(playlist: &PlaylistView, filter: Option<Summary>) -> String {
 }
 
 fn card(
-    playlist: &PlaylistView,
+    listing: &Listing,
     key: &str,
     queued: &HashSet<ItemId>,
     cache: &Path,
 ) -> Option<(Card, Option<String>)> {
-    let ids = playlist.item_ids();
-    let (id, item) = ids
-        .iter()
-        .zip(&playlist.items)
-        .find(|(id, _)| id.key.as_deref() == Some(key))?;
+    let (id, item) = listing.find(key)?;
     let (id_label, open_label) = match item.item.kind {
         SourceKind::Spotify => ("Spotify ID", "Open in Spotify"),
         SourceKind::Bandcamp => ("Bandcamp ID", "Open on Bandcamp"),
@@ -306,7 +344,7 @@ fn card(
                 (None, Some(availability)) => availability.reason.clone().unwrap_or_default(),
             };
             CardAction {
-                name: (*action).into(),
+                name: *action,
                 label,
                 enabled: open_job.is_none() && availability.is_some_and(|a| a.enabled),
                 reason,
@@ -333,17 +371,7 @@ fn card(
             url: item.item.video_url.as_deref().and_then(web_url),
             thumb: cached,
             error: truncate(item.item.last_error.as_deref().unwrap_or_default(), 300),
-            stages: Stage::ALL
-                .iter()
-                .map(|stage| {
-                    let status = item.status(*stage);
-                    (
-                        stage_label(*stage),
-                        status_word(status),
-                        status_class(status),
-                    )
-                })
-                .collect(),
+            stages: stage_views(item),
             note: open_job.unwrap_or_default().to_owned(),
             actions,
         },
@@ -352,16 +380,15 @@ fn card(
 }
 
 fn detail(
-    playlist: &PlaylistView,
+    listing: &Listing,
     place: &Place,
-    filter: Option<Summary>,
     queued: &HashSet<ItemId>,
     cache: &Path,
 ) -> (Detail, Option<String>) {
-    let ids = playlist.item_ids();
-    let shown: Vec<(&ItemId, &ItemView)> = ids
-        .iter()
-        .zip(&playlist.items)
+    let playlist = listing.playlist;
+    let filter = place.filter;
+    let shown: Vec<(&ItemId, &ItemView)> = listing
+        .entries()
         .filter(|(_, item)| matches_filter(item, filter))
         .collect();
     let selected = Some(place.item.as_str()).filter(|key| !key.is_empty());
@@ -379,7 +406,7 @@ fn detail(
                 (item.summary.to_string(), summary_tone(item.summary))
             };
             let action = item.primary_action.as_ref().map(|primary| Act {
-                name: primary.action.into(),
+                name: primary.action,
                 label: primary.label.clone(),
                 enabled: !busy
                     && item
@@ -397,31 +424,27 @@ fn detail(
                     item.item.last_error.as_deref().unwrap_or_default(),
                     ERROR_LIMIT,
                 ),
-                pips: pips(item),
+                stages: stage_views(item),
                 action,
                 selected: selected.is_some() && selected == id.key.as_deref(),
             }
         })
         .collect();
-    let mut seen = HashSet::new();
-    let retry = ids
+    let retry = listing
+        .retry_requests()
         .iter()
-        .zip(&playlist.items)
-        .filter(|(id, item)| retryable(item) && !queued.contains(*id))
-        .filter(|(id, _)| seen.insert((*id).clone()))
+        .filter(|request| !queued.contains(&request.id))
         .count();
     let tabs = std::iter::once(None)
         .chain(Summary::ALL.iter().copied().map(Some))
         .map(|tab| Tab {
             label: tab.map_or("All", Into::into),
-            filter: tab.map_or(String::new(), |summary| {
-                <&'static str>::from(summary).to_owned()
-            }),
+            filter: tab,
             active: tab == filter,
         })
         .collect();
     let (card, wanted) = selected
-        .and_then(|key| card(playlist, key, queued, cache))
+        .and_then(|key| card(listing, key, queued, cache))
         .unzip();
     (
         Detail {
@@ -456,14 +479,6 @@ fn detail(
     )
 }
 
-fn has_item(playlist: &PlaylistView, key: &str) -> bool {
-    !key.is_empty()
-        && playlist
-            .item_ids()
-            .iter()
-            .any(|id| id.key.as_deref() == Some(key))
-}
-
 fn build_board(
     view: Option<&WatchlistView>,
     error: Option<String>,
@@ -476,36 +491,38 @@ fn build_board(
         .iter()
         .position(|playlist| playlist.playlist_id == requested.source)
         .or_else(|| (!playlists.is_empty()).then_some(0));
-    let filter = Summary::from_str(&requested.filter).ok();
     let sources = playlists
         .iter()
         .enumerate()
         .map(|(index, playlist)| SourceCard {
             id: playlist.playlist_id.clone(),
             title: truncate(playlist_title(playlist), TITLE_LIMIT),
-            kind: kind_name(playlist.kind),
+            kind: playlist.kind,
             count: playlist.items.len(),
             failing: playlist.last_error.is_some(),
             selected: chosen == Some(index),
         })
         .collect();
     let source = chosen.and_then(|index| playlists.get(index));
-    let asked = source.filter(|playlist| playlist.playlist_id == requested.source);
+    let source = source.map(Listing::new);
+    let asked = source
+        .as_ref()
+        .filter(|listing| listing.playlist.playlist_id == requested.source);
     let mut place = Place {
         source: source
-            .map(|playlist| playlist.playlist_id.clone())
+            .as_ref()
+            .map(|listing| listing.playlist.playlist_id.clone())
             .unwrap_or_default(),
-        filter: filter
-            .map(|summary| <&'static str>::from(summary).to_owned())
-            .unwrap_or_default(),
+        filter: requested.filter,
         item: asked
-            .filter(|playlist| has_item(playlist, &requested.item))
+            .filter(|listing| listing.has(&requested.item))
             .map(|_| requested.item.clone())
             .unwrap_or_default(),
         page: asked.and(requested.page),
     };
     let (detail, wanted) = source
-        .map(|playlist| detail(playlist, &place, filter, queued, cache))
+        .as_ref()
+        .map(|listing| detail(listing, &place, queued, cache))
         .unzip();
     if let Some(detail) = &detail {
         place.page = at(detail.page);
@@ -570,14 +587,20 @@ async fn load(cx: &Cx, place: &Place) -> Result<Board> {
         &cache,
         place,
     );
-    if let Some(id) = board.wanted.clone().filter(|id| hub(cx).try_thumbnail(id)) {
+    if let Some(mut lease) = board
+        .wanted
+        .as_deref()
+        .and_then(|id| shared_hub(cx).lease_thumbnail(id))
+    {
         let bus = events(cx).clone();
         let service = Arc::clone(&backend(cx).0);
-        let shared = shared_hub(cx);
         drop(tokio::task::spawn_blocking(move || {
+            let id = lease.id().to_owned();
             let fetched = service.cache_thumbnails(vec![id.clone()]).is_some();
-            let cached = thumbnails::cached_path(&id, &service.paths().cache).is_some();
-            shared.finish_thumbnail(&id, cached);
+            if thumbnails::cached_path(&id, &service.paths().cache).is_some() {
+                lease.mark_cached();
+            }
+            drop(lease);
             if fetched {
                 bus.publish(AppEvent::WatchlistSaved);
             }
@@ -601,9 +624,11 @@ const fn relevant(event: &AppEvent) -> bool {
 
 #[query_params(error = bad_request)]
 struct WatchQuery {
-    source: Option<String>,
-    filter: Option<String>,
-    item: Option<String>,
+    #[serde(default)]
+    source: String,
+    filter: Option<Summary>,
+    #[serde(default)]
+    item: String,
     page: Option<usize>,
     notice: Option<String>,
     error: Option<String>,
@@ -611,9 +636,11 @@ struct WatchQuery {
 
 #[query_params(error = bad_request)]
 struct PlaceQuery {
-    source: Option<String>,
-    filter: Option<String>,
-    item: Option<String>,
+    #[serde(default)]
+    source: String,
+    filter: Option<Summary>,
+    #[serde(default)]
+    item: String,
     page: Option<usize>,
 }
 
@@ -628,9 +655,9 @@ struct Outcome {
 fn place_of(cx: &Cx) -> Result<Place> {
     let query = query_params::<PlaceQuery>(cx)?;
     Ok(Place {
-        source: query.source.clone().unwrap_or_default(),
-        filter: query.filter.clone().unwrap_or_default(),
-        item: query.item.clone().unwrap_or_default(),
+        source: query.source.clone(),
+        filter: query.filter,
+        item: query.item.clone(),
         page: query.page,
     })
 }
@@ -652,13 +679,14 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
     let query = query_params::<WatchQuery>(cx)?;
     let message = query.error.clone().or_else(|| query.notice.clone());
     let failed = query.error.is_some();
-    let source = query.source.clone().unwrap_or_default();
-    let filter = query.filter.clone().unwrap_or_default();
-    let item = query.item.clone().unwrap_or_default();
+    let source = query.source.clone();
+    let filter = query.filter;
+    let filter_name = filter.map_or("", <&'static str>::from).to_owned();
+    let item = query.item.clone();
     let number = query.page.unwrap_or_default();
     let place = Place {
         source: source.clone(),
-        filter: filter.clone(),
+        filter,
         item: item.clone(),
         page: query.page,
     };
@@ -679,7 +707,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
             <button class="primary" type="submit">"Add playlist"</button>
             <button type="submit" formaction=(refresh_all) formnovalidate="true">"Refresh all"</button>
         </form>
-        live_board(source: source, filter: filter, item: item, number: number)
+        live_board(source: source, filter: filter_name, item: item, number: number)
     })
 }
 
@@ -694,7 +722,7 @@ pub async fn live_board(
     auth::require(cx).await?;
     let place = Place {
         source,
-        filter,
+        filter: Summary::from_str(&filter).ok(),
         item,
         page: at(number),
     };
@@ -729,11 +757,11 @@ pub async fn live_board(
     })
 }
 
-fn go(cx: &Cx, source: &str, filter: &str, item: &str, number: usize) -> String {
+fn go(cx: &Cx, source: &str, filter: Option<Summary>, item: &str, number: usize) -> String {
     href!(page)
         .query(&Place {
             source: source.to_owned(),
-            filter: filter.to_owned(),
+            filter,
             item: item.to_owned(),
             page: at(number),
         })
@@ -754,7 +782,7 @@ fn linked(cx: &Cx, detail: Detail, place: &Place) -> Linked {
         .iter()
         .cloned()
         .map(|tab| {
-            let link = go(cx, &detail.id, &tab.filter, "", 0);
+            let link = go(cx, &detail.id, tab.filter, "", 0);
             (tab, link)
         })
         .collect();
@@ -763,11 +791,11 @@ fn linked(cx: &Cx, detail: Detail, place: &Place) -> Linked {
         .iter()
         .cloned()
         .map(|row| {
-            let link = go(cx, &detail.id, &place.filter, &row.key, detail.page);
+            let link = go(cx, &detail.id, place.filter, &row.key, detail.page);
             (row, link)
         })
         .collect();
-    let around = |number: usize| go(cx, &detail.id, &place.filter, &place.item, number);
+    let around = |number: usize| go(cx, &detail.id, place.filter, &place.item, number);
     let previous = (detail.page > 1).then(|| around(detail.page.saturating_sub(1)));
     let following = (detail.page < detail.pages).then(|| around(detail.page.saturating_add(1)));
     (detail, tabs, rows, previous, following)
@@ -780,7 +808,7 @@ async fn watch_board(cx: &Cx, data: Board) -> Result<impl View> {
         .sources
         .into_iter()
         .map(|source| {
-            let link = go(cx, &source.id, "", "", 0);
+            let link = go(cx, &source.id, None, "", 0);
             (source, link)
         })
         .collect();
@@ -864,7 +892,7 @@ async fn source_list(
                     >
                         <span class="title">(source.title)</span>
                         <span class="meta">
-                            (source.kind) " · " (source.count) " items"
+                            (kind_name(source.kind)) " · " (source.count) " items"
                             if source.failing {
                                 " · error"
                             }
@@ -971,8 +999,8 @@ async fn item_list(
                         <div class="meta">(row.error.clone())</div>
                     </div>
                     <span class="pips">
-                        for pip in row.pips.clone() {
-                            <span class=(format!("pip {}", pip.class)) title=(pip.tip)></span>
+                        for stage in row.stages.clone() {
+                            <span class=(format!("pip {}", stage.class)) title=(format!("{} · {}", stage.label, stage.word))></span>
                         }
                     </span>
                     <span class=(row.tone)>(row.summary.clone())</span>
@@ -981,7 +1009,7 @@ async fn item_list(
                             <form class="inline" method="post" action=(run.clone())>
                                 <input type="hidden" name="playlist_id" value=(id.clone())>
                                 <input type="hidden" name="key" value=(row.key.clone())>
-                                <input type="hidden" name="action" value=(action.name)>
+                                <input type="hidden" name="action" value=(action.name.as_ref())>
                                 <button class="small" type="submit" disabled=(!action.enabled)>(action.label)</button>
                             </form>
                         }
@@ -1026,10 +1054,10 @@ async fn item_card(cx: &Cx, card: Card, source: String, run: String) -> Result<i
                 }
                 <div class="meta error">(card.error.clone())</div>
                 <div class="stages">
-                    for (label, word, class) in card.stages.clone() {
+                    for stage in card.stages.clone() {
                         <span class="stage">
-                            <span class=(format!("pip {class}")) title=(word)></span>
-                            (label) " " <span class="meta">(word)</span>
+                            <span class=(format!("pip {}", stage.class)) title=(stage.word)></span>
+                            (stage.label) " " <span class="meta">(stage.word)</span>
                         </span>
                     }
                 </div>
@@ -1047,7 +1075,7 @@ async fn item_card(cx: &Cx, card: Card, source: String, run: String) -> Result<i
                     >
                         <input type="hidden" name="playlist_id" value=(source.clone())>
                         <input type="hidden" name="key" value=(card.key.clone())>
-                        <input type="hidden" name="action" value=(action.name)>
+                        <input type="hidden" name="action" value=(action.name.as_ref())>
                         <button class="small" type="submit" disabled=(!action.enabled) title=(action.reason.clone())>(action.label)</button>
                     </form>
                 }
@@ -1084,12 +1112,26 @@ pub async fn add(cx: &Cx, Form(form): Form<AddForm>) -> Result<SeeOther> {
 }
 
 #[derive(Deserialize)]
-struct SourceForm {
+struct RenameForm {
     playlist_id: String,
     #[serde(default)]
     title: String,
-    #[serde(default)]
-    on: String,
+}
+
+#[derive(Deserialize)]
+struct RemoveForm {
+    playlist_id: String,
+}
+
+#[derive(Deserialize)]
+struct PlaylistFileForm {
+    playlist_id: String,
+    on: bool,
+}
+
+#[derive(Deserialize)]
+struct RetryForm {
+    playlist_id: String,
 }
 
 fn saved(done: &str, files_error: Option<String>) -> Result<String, String> {
@@ -1100,7 +1142,7 @@ fn saved(done: &str, files_error: Option<String>) -> Result<String, String> {
 }
 
 #[route(POST "/watchlist/rename")]
-pub async fn rename(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
+pub async fn rename(cx: &Cx, Form(form): Form<RenameForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let place = place_of(cx)?;
     let outcome = backend(cx)
@@ -1121,7 +1163,7 @@ pub async fn rename(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
 }
 
 #[route(POST "/watchlist/remove")]
-pub async fn remove(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
+pub async fn remove(cx: &Cx, Form(form): Form<RemoveForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let mut place = place_of(cx)?;
     let removed = form.playlist_id.clone();
@@ -1148,10 +1190,10 @@ pub async fn remove(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
 }
 
 #[route(POST "/watchlist/playlist-file")]
-pub async fn playlist_file(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
+pub async fn playlist_file(cx: &Cx, Form(form): Form<PlaylistFileForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let place = place_of(cx)?;
-    let on = form.on == "true";
+    let on = form.on;
     let outcome = backend(cx)
         .run(move |service| service.set_source_playlist(&form.playlist_id, PlaylistFile::from(on)))
         .await?;
@@ -1204,9 +1246,7 @@ pub async fn refresh(cx: &Cx, Form(form): Form<RefreshForm>) -> Result<SeeOther>
     Ok(back(
         cx,
         place,
-        outcome
-            .map(|id| format!("Queued {id}"))
-            .map_err(|error| error.to_string()),
+        describe(outcome, |id| format!("Queued {id}")),
     ))
 }
 
@@ -1215,13 +1255,9 @@ fn find_item(view: &WatchlistView, playlist_id: &str, key: &str) -> Option<(Item
         .playlists
         .iter()
         .find(|playlist| playlist.playlist_id == playlist_id)?;
-    let wanted = ItemId::new(playlist_id, Some(key));
-    playlist
-        .item_ids()
-        .into_iter()
-        .zip(&playlist.items)
-        .find(|(id, _)| *id == wanted)
-        .map(|(id, item)| (id, item.item.title.clone()))
+    let listing = Listing::new(playlist);
+    let (id, item) = listing.find(key)?;
+    Some((id.clone(), item.item.title.clone()))
 }
 
 #[derive(Deserialize)]
@@ -1229,16 +1265,14 @@ struct ItemForm {
     playlist_id: String,
     #[serde(default)]
     key: String,
-    action: String,
+    action: ItemAction,
 }
 
 #[route(POST "/watchlist/item")]
 pub async fn run_item(cx: &Cx, Form(form): Form<ItemForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let place = place_of(cx)?;
-    let action = ItemAction::from_str(&form.action)
-        .ok()
-        .ok_or_bad_request("The action is not valid.")?;
+    let action = form.action;
     let Some(view) = current(cx).await? else {
         return Ok(back(
             cx,
@@ -1259,14 +1293,12 @@ pub async fn run_item(cx: &Cx, Form(form): Form<ItemForm>) -> Result<SeeOther> {
     Ok(back(
         cx,
         place,
-        outcome
-            .map(|id| format!("Queued {id}"))
-            .map_err(|error| error.to_string()),
+        describe(outcome, |id| format!("Queued {id}")),
     ))
 }
 
 #[route(POST "/watchlist/retry-failed")]
-pub async fn retry_failed(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
+pub async fn retry_failed(cx: &Cx, Form(form): Form<RetryForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let place = place_of(cx)?;
     let Some(view) = current(cx).await? else {
@@ -1287,19 +1319,7 @@ pub async fn retry_failed(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOt
             Err("The playlist is not in the watchlist.".into()),
         ));
     };
-    let mut seen = HashSet::new();
-    let requests: Vec<ItemRequest> = playlist
-        .item_ids()
-        .into_iter()
-        .zip(&playlist.items)
-        .filter(|(_, item)| retryable(item))
-        .filter(|(id, _)| seen.insert(id.clone()))
-        .map(|(id, item)| ItemRequest {
-            id,
-            title: item.item.title.clone(),
-            action: ItemAction::Retry,
-        })
-        .collect();
+    let requests = Listing::new(playlist).retry_requests();
     let report = backend(cx)
         .run(move |service| {
             let open = queued_items(&service.jobs());
@@ -1386,10 +1406,51 @@ pub async fn thumbnail(
 
 #[cfg(test)]
 mod tests {
-    use super::{RetryReport, retry_all};
+    use super::{Listing, Place, RetryReport, detail, retry_all};
     use muzik_runner::service::ItemRequest;
-    use muzik_store::watchlist::{ItemAction, ItemId};
-    use std::collections::HashSet;
+    use muzik_store::watchlist::{
+        Holds, ItemAction, ItemId, Snapshot, SourceKind, Stage, WatchItem, Watchlist, parse_source,
+        view,
+    };
+    use std::{collections::HashSet, path::Path};
+
+    fn failing_playlist(failed: &[&str]) -> muzik_store::watchlist::PlaylistView {
+        let mut playlist =
+            parse_source("https://www.youtube.com/playlist?list=PLabcdefgh12345").unwrap();
+        playlist.items = failed
+            .iter()
+            .zip(1..)
+            .map(|(key, position)| {
+                let mut item = WatchItem::new(position, key, SourceKind::Youtube);
+                item.video_id = Some((*key).to_owned());
+                item.video_url = Some(format!("https://www.youtube.com/watch?v={key}"));
+                item.fail(Stage::Download, ItemAction::Run, "no network");
+                item
+            })
+            .collect();
+        let document = Watchlist {
+            playlists: vec![playlist],
+            ..Watchlist::default()
+        };
+        let snapshot = Snapshot::new(document, Holds::default());
+        view(&snapshot, Path::new("out"), Path::new("cache"))
+            .playlists
+            .remove(0)
+    }
+
+    #[test]
+    fn the_retry_count_is_the_number_of_items_the_retry_queues() {
+        let playlist = failing_playlist(&["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]);
+        let listing = Listing::new(&playlist);
+        let requests = listing.retry_requests();
+        assert_eq!(requests.len(), 3);
+        let none = HashSet::new();
+        let (shown, _) = detail(&listing, &Place::default(), &none, Path::new("cache"));
+        assert_eq!(shown.retry, requests.len());
+        let busy = HashSet::from([requests[0].id.clone()]);
+        let (shown, _) = detail(&listing, &Place::default(), &busy, Path::new("cache"));
+        assert_eq!(shown.retry, 2);
+    }
 
     fn request(key: &str) -> ItemRequest {
         ItemRequest {

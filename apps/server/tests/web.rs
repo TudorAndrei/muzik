@@ -527,6 +527,32 @@ async fn a_playlist_file_that_cannot_be_written_is_reported_with_the_result() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_filter_is_a_known_status_or_the_request_is_refused() {
+    let app = app(Some(TOKEN));
+    seed(&app, &[(1, "One")]);
+    let cookie = sign_in(&app).await;
+    let page = page_text(
+        &app,
+        &format!("/watchlist?source={SOURCE}&filter=Pending"),
+        &cookie,
+    )
+    .await;
+    assert!(page.contains("class=\"tab current\""));
+    assert!(page.contains("filter=Failed"));
+    for path in [
+        format!("/watchlist?source={SOURCE}&filter=nonsense"),
+        format!("/watchlist/refresh?source={SOURCE}&filter=nonsense"),
+    ] {
+        let response = if path.starts_with("/watchlist/refresh") {
+            app.router.handle(post(&path, "", Some(&cookie))).await
+        } else {
+            app.router.handle(get(&path, Some(&cookie))).await
+        };
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{path}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_item_of_another_source_is_not_selected() {
     let app = app(Some(TOKEN));
     seed(&app, &[(1, "One"), (2, "Two")]);

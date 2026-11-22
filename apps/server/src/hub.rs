@@ -128,6 +128,29 @@ pub struct Hub {
     state: Mutex<State>,
 }
 
+pub struct ThumbnailLease {
+    hub: Arc<Hub>,
+    id: String,
+    cached: bool,
+}
+
+impl ThumbnailLease {
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub const fn mark_cached(&mut self) {
+        self.cached = true;
+    }
+}
+
+impl Drop for ThumbnailLease {
+    fn drop(&mut self) {
+        self.hub.finish_thumbnail(&self.id, self.cached);
+    }
+}
+
 impl Hub {
     #[must_use]
     pub fn new() -> Self {
@@ -196,11 +219,18 @@ impl Hub {
     }
 
     #[must_use]
-    pub fn try_thumbnail(&self, id: &str) -> bool {
-        self.state.lock().try_thumbnail(id, Instant::now())
+    pub fn lease_thumbnail(self: &Arc<Self>, id: &str) -> Option<ThumbnailLease> {
+        self.state
+            .lock()
+            .try_thumbnail(id, Instant::now())
+            .then(|| ThumbnailLease {
+                hub: Arc::clone(self),
+                id: id.to_owned(),
+                cached: false,
+            })
     }
 
-    pub fn finish_thumbnail(&self, id: &str, cached: bool) {
+    fn finish_thumbnail(&self, id: &str, cached: bool) {
         self.state
             .lock()
             .finish_thumbnail(id, cached, Instant::now());
@@ -289,6 +319,7 @@ impl State {
 
     fn finish_thumbnail(&mut self, id: &str, cached: bool, now: Instant) {
         self.thumbnails.remove(id);
+        self.thumbnail_retry_at.retain(|_, until| now < *until);
         if cached {
             self.thumbnail_retry_at.remove(id);
         } else if let Some(until) = now.checked_add(THUMBNAIL_COOLDOWN) {
@@ -456,6 +487,7 @@ mod tests {
     use muzik_runner::{AppEvent, Source};
     use muzik_store::watchlist::WatchlistView;
     use serde_json::json;
+    use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     fn event(event: JobEvent) -> AppEvent {
@@ -562,6 +594,46 @@ mod tests {
         assert!(state.try_thumbnail("abcdefghijk", after(start, 61)));
         state.finish_thumbnail("abcdefghijk", true, after(start, 62));
         assert!(state.try_thumbnail("abcdefghijk", after(start, 62)));
+    }
+
+    #[test]
+    fn a_finished_thumbnail_forgets_the_rests_that_have_ended() {
+        let start = Instant::now();
+        let mut state = State::default();
+        assert!(state.try_thumbnail("aaaaaaaaaaa", start));
+        state.finish_thumbnail("aaaaaaaaaaa", false, start);
+        assert!(state.try_thumbnail("bbbbbbbbbbb", after(start, 90)));
+        state.finish_thumbnail("bbbbbbbbbbb", false, after(start, 90));
+        assert_eq!(state.thumbnail_retry_at.len(), 1);
+        assert!(state.thumbnail_retry_at.contains_key("bbbbbbbbbbb"));
+    }
+
+    #[test]
+    fn a_thumbnail_lease_is_released_when_the_fetch_panics() {
+        let hub = Arc::new(Hub::new());
+        let lease = hub.lease_thumbnail("abcdefghijk").unwrap();
+        assert!(hub.lease_thumbnail("abcdefghijk").is_none());
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _lease = lease;
+            panic!("the fetch failed");
+        }));
+        assert!(outcome.is_err());
+        assert!(hub.state.lock().thumbnails.is_empty());
+        assert!(
+            hub.state
+                .lock()
+                .thumbnail_retry_at
+                .contains_key("abcdefghijk")
+        );
+    }
+
+    #[test]
+    fn a_cached_thumbnail_lease_clears_its_rest() {
+        let hub = Arc::new(Hub::new());
+        let mut lease = hub.lease_thumbnail("abcdefghijk").unwrap();
+        lease.mark_cached();
+        drop(lease);
+        assert!(hub.lease_thumbnail("abcdefghijk").is_some());
     }
 
     #[test]
