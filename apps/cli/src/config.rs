@@ -10,11 +10,6 @@ use muzik_core::app_config;
 use muzik_core::paths::{Paths, expand_home};
 use muzik_runner::setup::{self, SoulseekAccount};
 
-#[derive(serde::Deserialize)]
-struct PasswordState {
-    has_password: bool,
-}
-
 pub fn show(path: Option<&Path>) -> anyhow::Result<()> {
     let library_path = path.map_or_else(muzik_core::default_config_path, Path::to_path_buf);
     let library = read_yaml(&library_path)?;
@@ -46,11 +41,7 @@ pub fn show(path: Option<&Path>) -> anyhow::Result<()> {
     );
     println!(
         "  Soulseek password: {}",
-        if setup::soulseek_account(&app_config::path())
-            .ok()
-            .and_then(|account| serde_json::from_value::<PasswordState>(account).ok())
-            .is_some_and(|account| account.has_password)
-        {
+        if setup::soulseek_account(&app_config::path()).is_ok_and(|account| account.has_password) {
             "set"
         } else {
             "not set"

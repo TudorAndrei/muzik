@@ -16,10 +16,7 @@ fn the_soulseek_password_lives_in_the_keychain() {
     setup::move_soulseek_password(&path).unwrap();
     assert!(!fs::read_to_string(&path).unwrap().contains("secret"));
     assert_eq!(session::saved_password().as_deref(), Some("secret"));
-    assert_eq!(
-        setup::soulseek_account(&path).unwrap()["has_password"],
-        true
-    );
+    assert!(setup::soulseek_account(&path).unwrap().has_password);
 
     setup::save_soulseek_account(
         &path,

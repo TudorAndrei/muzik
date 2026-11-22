@@ -2,7 +2,8 @@
 
 use crate::{PAGE_LIMIT, Result, USER_AGENT};
 use muzik_core::paths::Paths;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::Write;
@@ -274,14 +275,25 @@ fn request(url: &str, cookies: &[Cookie]) -> Result<ureq::http::Response<ureq::B
 }
 
 #[must_use]
-pub fn status(paths: &Paths) -> Value {
+pub fn status(paths: &Paths) -> Status {
     match Login::load(paths) {
-        Some(login) => json!({"logged_in": true, "user": login.user}),
-        None => json!({
-            "logged_in": false,
-            "user": fs::read_to_string(paths.bandcamp_user()).map(|user| user.trim().to_owned()).unwrap_or_default(),
-        }),
+        Some(login) => Status {
+            logged_in: true,
+            user: login.user,
+        },
+        None => Status {
+            logged_in: false,
+            user: fs::read_to_string(paths.bandcamp_user())
+                .map(|user| user.trim().to_owned())
+                .unwrap_or_default(),
+        },
     }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Status {
+    pub logged_in: bool,
+    pub user: String,
 }
 
 fn write_private(path: &Path, text: &str) -> Result<()> {
@@ -319,6 +331,7 @@ fn page_blob(html: &str) -> Option<Value> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use serde_json::json;
 
     fn cookies() -> impl Strategy<Value = Vec<Cookie>> {
         (

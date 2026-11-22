@@ -2,7 +2,7 @@ use std::{collections::HashSet, path::Path, str::FromStr, sync::Arc};
 
 use muzik_core::thumbnails;
 use muzik_runner::{
-    AppEvent,
+    AppEvent, JobsSnapshot,
     service::{ItemRequest, Service},
 };
 use muzik_store::watchlist::{
@@ -544,12 +544,11 @@ async fn current(cx: &Cx) -> Result<Option<Arc<WatchlistView>>> {
     Ok(hub(cx).watchlist())
 }
 
-fn queued_items(jobs: &serde_json::Value) -> HashSet<ItemId> {
-    jobs.get("open")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|job| job["item"].as_str()?.parse().ok())
+fn queued_items(jobs: &JobsSnapshot) -> HashSet<ItemId> {
+    jobs.queue
+        .open
+        .iter()
+        .filter_map(|job| job.item.as_deref()?.parse().ok())
         .collect()
 }
 

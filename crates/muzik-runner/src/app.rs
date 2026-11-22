@@ -3,7 +3,7 @@
 use crate::agent::Chooser;
 use crate::events::AppEvent;
 use crate::library_tasks::{LibraryRequest, LibraryTask};
-use crate::queue::{EnqueueError, Jobs, job_id, parse_job_id};
+use crate::queue::{EnqueueError, Jobs, JobsSnapshot, QuestionVersion, job_id, parse_job_id};
 use crate::runner::{Options, Prompt, Runner, Sink};
 use crate::settings::Settings;
 use crate::{gates, watchlist};
@@ -104,13 +104,12 @@ impl App {
     }
 
     #[must_use]
-    pub fn jobs(&self) -> Value {
-        let mut snapshot = self.jobs.snapshot();
-        if let Some(fields) = snapshot.as_object_mut() {
-            fields.insert("gates".into(), gates::snapshot());
-            fields.insert("runner".into(), json!(self.runner.is_some()));
+    pub fn jobs(&self) -> JobsSnapshot {
+        JobsSnapshot {
+            queue: self.jobs.snapshot(),
+            gates: gates::snapshot(),
+            runner: self.runner.is_some(),
         }
-        snapshot
     }
 
     /// # Errors
@@ -161,7 +160,7 @@ impl App {
     pub fn answer_version(
         &self,
         id: i64,
-        version: i64,
+        version: QuestionVersion,
         value: &Value,
     ) -> crate::Result<crate::Answered> {
         let answered = self.jobs.answer_version(id, version, value)?;
@@ -404,11 +403,15 @@ mod tests {
         let id = ItemId::new("PL1", Some("abcdefghijk"));
         let job = app.run_item(&id, "Song", ItemAction::Run).unwrap();
         assert!(app.run_item(&id, "Song", ItemAction::Run).is_err());
-        assert_eq!(app.jobs()["open"][0]["job_id"], job);
-        assert_eq!(app.jobs()["open"][0]["item"], r#"["PL1","abcdefghijk"]"#);
-        assert_eq!(app.jobs()["runner"], false);
+        let listed = app.jobs();
+        assert_eq!(listed.queue.open[0].job_id, job);
+        assert_eq!(
+            listed.queue.open[0].item.as_deref(),
+            Some(r#"["PL1","abcdefghijk"]"#)
+        );
+        assert!(!listed.runner);
         assert!(app.cancel(&job).unwrap());
-        assert_eq!(app.jobs()["open"], json!([]));
+        assert_eq!(app.jobs().queue, crate::QueueSnapshot::default());
         assert!(!app.cancel("queue-999").unwrap());
         assert!(!app.reply("missing", json!("as_is")));
     }

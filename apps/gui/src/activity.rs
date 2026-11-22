@@ -1,6 +1,6 @@
 //! Desktop activity state. Queue snapshots and live events enter through this module.
 use muzik_core::{JobEvent, Task as JobTask};
-use muzik_runner::{AppEvent, choices};
+use muzik_runner::{AppEvent, QueueSnapshot, WaitingJob, choices};
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use muzik_store::watchlist::ItemId;
 use serde_json::{Value, json};
@@ -22,15 +22,14 @@ pub struct Decision {
     pub question: Value,
 }
 impl Decision {
-    fn saved(job: &Value) -> Option<Self> {
-        let id = job["id"].as_i64()?;
-        Some(Self {
-            target: ReplyTarget::Queue(id),
-            job_id: muzik_runner::job_id(id),
-            title: job["title"].as_str().map(str::to_owned),
-            item: job["item"].as_str().map(str::to_owned),
-            question: json!({"kind":job["kind"],"payload":job["payload"]}),
-        })
+    fn saved(job: &WaitingJob) -> Self {
+        Self {
+            target: ReplyTarget::Queue(job.id),
+            job_id: muzik_runner::job_id(job.id),
+            title: Some(job.title.clone()),
+            item: Some(job.item.clone()),
+            question: json!({"kind":job.kind,"payload":job.payload}),
+        }
     }
 
     pub const fn queue_job(&self) -> Option<i64> {
@@ -96,8 +95,7 @@ pub enum Ending {
     Cancelled,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, EnumString)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RunKind {
     Workflow,
     Refresh,
@@ -105,7 +103,6 @@ pub enum RunKind {
     Library,
     SpotifyLogin,
     #[default]
-    #[strum(disabled)]
     Unknown,
 }
 
@@ -121,13 +118,6 @@ impl From<JobKind> for RunKind {
 }
 
 impl RunKind {
-    fn parse(value: &Value) -> Self {
-        value
-            .as_str()
-            .and_then(|kind| kind.parse().ok())
-            .unwrap_or_default()
-    }
-
     pub const fn label(self) -> &'static str {
         match self {
             Self::Workflow => "Workflow",
@@ -358,13 +348,8 @@ impl Activity {
         }
     }
 
-    pub fn apply_jobs(&mut self, snapshot: &Value) {
-        self.waiting = snapshot["waiting"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Decision::saved)
-            .collect();
+    pub fn apply_jobs(&mut self, snapshot: &QueueSnapshot) {
+        self.waiting = snapshot.waiting.iter().map(Decision::saved).collect();
         if self.decision.as_ref().is_some_and(|choice| {
             matches!(choice.target, ReplyTarget::Queue(_))
                 && !self
@@ -374,26 +359,15 @@ impl Activity {
         }) {
             self.decision = self.requests.first().cloned();
         }
-        let open: &[Value] = snapshot["open"].as_array().map_or(&[], Vec::as_slice);
+        let open = &snapshot.open;
         self.queued_items = open
             .iter()
-            .filter_map(|job| job["item"].as_str()?.parse().ok())
+            .filter_map(|job| job.item.as_deref()?.parse().ok())
             .collect();
         let held: HashSet<(String, String, Option<String>)> = open
             .iter()
-            .filter(|job| {
-                job["status"]
-                    .as_str()
-                    .and_then(|status| status.parse::<JobStatus>().ok())
-                    == Some(JobStatus::Running)
-            })
-            .filter_map(|job| {
-                Some((
-                    job["item"].as_str()?.to_owned(),
-                    job["job_id"].as_str().unwrap_or_default().to_owned(),
-                    None,
-                ))
-            })
+            .filter(|job| job.status == JobStatus::Running)
+            .filter_map(|job| Some((job.item.clone()?, job.job_id.clone(), None)))
             .chain(self.waiting.iter().filter_map(|choice| {
                 Some((
                     choice.item.clone()?,
@@ -413,25 +387,17 @@ impl Activity {
             self.held_items = held;
             self.holds_changed = true;
         }
-        let listed: HashSet<&str> = open
-            .iter()
-            .filter_map(|job| job["job_id"].as_str())
-            .collect();
+        let listed: HashSet<&str> = open.iter().map(|job| job.job_id.as_str()).collect();
         self.runs
             .retain(|run| !run.queued || listed.contains(run.id.as_str()));
         for job in open {
-            let Some(id) = job["job_id"]
-                .as_str()
-                .filter(|id| !id.is_empty() && !self.finished_runs.contains(*id))
-            else {
+            let id = job.job_id.as_str();
+            if id.is_empty() || self.finished_runs.contains(id) {
                 continue;
-            };
-            let queued = job["status"]
-                .as_str()
-                .and_then(|status| status.parse::<JobStatus>().ok())
-                == Some(JobStatus::Queued);
-            let kind = RunKind::parse(&job["kind"]);
-            let title = job["title"].as_str().unwrap_or("Job");
+            }
+            let queued = job.status == JobStatus::Queued;
+            let kind = RunKind::from(job.kind);
+            let title = job.title.as_str();
             if let Some(run) = self.runs.iter_mut().find(|run| run.id == id) {
                 run.kind = kind;
                 run.title = title.into();
@@ -627,6 +593,8 @@ pub fn job_label(kind: RunKind, title: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use muzik_core::DecisionKind;
+    use muzik_runner::{OpenJob, QuestionVersion};
     fn job_event(event: JobEvent) -> AppEvent {
         AppEvent::JobEvent {
             job_id: "queue-1".into(),
@@ -635,34 +603,69 @@ mod tests {
         }
     }
 
+    fn queue(open: Vec<OpenJob>, waiting: Vec<WaitingJob>) -> QueueSnapshot {
+        QueueSnapshot { open, waiting }
+    }
+
+    fn open_job(kind: JobKind, title: &str, status: JobStatus, item: Option<&str>) -> OpenJob {
+        OpenJob {
+            job_id: "queue-1".into(),
+            title: title.into(),
+            kind,
+            status,
+            item: item.map(str::to_owned),
+        }
+    }
+
+    fn waiting_job(id: i64, item: Option<&str>, kind: DecisionKind) -> WaitingJob {
+        WaitingJob {
+            id,
+            title: "Song".into(),
+            kind: Some(kind),
+            payload: None,
+            item: item.unwrap_or_default().into(),
+            version: QuestionVersion(1),
+        }
+    }
+
     #[test]
     fn the_watchlist_reloads_only_when_an_item_starts_or_stops_running_or_waiting() {
         let mut activity = Activity::default();
-        let open = |status: &str| json!({"open":[{"job_id":"queue-1","kind":"item","title":"Track","status":status,"item":"a"}],"waiting":[]});
-        activity.apply_jobs(&open("queued"));
+        let open = |status| {
+            queue(
+                vec![open_job(JobKind::Item, "Track", status, Some("a"))],
+                Vec::new(),
+            )
+        };
+        let waiting = |id, kind| queue(Vec::new(), vec![waiting_job(id, Some("a"), kind)]);
+        activity.apply_jobs(&open(JobStatus::Queued));
         assert!(!activity.take_holds_changed());
-        activity.apply_jobs(&open("running"));
+        activity.apply_jobs(&open(JobStatus::Running));
         assert!(activity.take_holds_changed());
-        activity.apply_jobs(&open("running"));
+        activity.apply_jobs(&open(JobStatus::Running));
         assert!(!activity.take_holds_changed());
-        activity
-            .apply_jobs(&json!({"open":[],"waiting":[{"id":1,"item":"a","kind":"import_match"}]}));
+        activity.apply_jobs(&waiting(1, DecisionKind::ImportMatch));
         assert!(activity.take_holds_changed());
-        activity
-            .apply_jobs(&json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"import_match"}]}));
+        activity.apply_jobs(&waiting(2, DecisionKind::ImportMatch));
         assert!(activity.take_holds_changed());
-        activity.apply_jobs(
-            &json!({"open":[],"waiting":[{"id":2,"item":"a","kind":"chapter_review"}]}),
-        );
+        activity.apply_jobs(&waiting(2, DecisionKind::ChapterReview));
         assert!(activity.take_holds_changed());
-        activity.apply_jobs(&json!({"open":[],"waiting":[]}));
+        activity.apply_jobs(&QueueSnapshot::default());
         assert!(activity.take_holds_changed());
     }
 
     #[test]
     fn snapshots_and_live_progress_describe_one_run_until_it_finishes() {
         let mut activity = Activity::default();
-        let snapshot = json!({"open":[{"job_id":"queue-1", "kind":"item", "title":"Album", "status":"queued", "item":r#"["spotify:playlist:p","spotify:track:t#1"]"#}], "waiting":[]});
+        let snapshot = queue(
+            vec![open_job(
+                JobKind::Item,
+                "Album",
+                JobStatus::Queued,
+                Some(r#"["spotify:playlist:p","spotify:track:t#1"]"#),
+            )],
+            Vec::new(),
+        );
         activity.apply_jobs(&snapshot);
         assert!(activity.queued_items().contains(&ItemId::new(
             "spotify:playlist:p",
@@ -712,7 +715,15 @@ mod tests {
     #[test]
     fn a_library_task_run_shows_its_title_and_progress() {
         let mut activity = Activity::default();
-        activity.apply_jobs(&json!({"open":[{"job_id":"queue-1","kind":"library","title":"Add cover files","status":"running"}],"waiting":[]}));
+        activity.apply_jobs(&queue(
+            vec![open_job(
+                JobKind::Library,
+                "Add cover files",
+                JobStatus::Running,
+                None,
+            )],
+            Vec::new(),
+        ));
         assert_eq!(activity.runs()[0].kind, RunKind::Library);
         activity.apply(&job_event(JobEvent::ProgressStarted {
             task: JobTask::LibraryMaintenance,
@@ -749,7 +760,14 @@ mod tests {
         activity.apply(&request("queue-1", "first"));
         activity.apply(&request("queue-2", "second"));
         activity.apply(&request("queue-2", "second"));
-        activity.apply_jobs(&json!({"waiting":[{"id":3,"item":"PL1:3:video", "kind":"chapter_edit", "payload":{"chapters":[]}}]}));
+        activity.apply_jobs(&queue(
+            Vec::new(),
+            vec![waiting_job(
+                3,
+                Some("PL1:3:video"),
+                DecisionKind::ChapterEdit,
+            )],
+        ));
         activity.open_waiting(3);
         assert_eq!(activity.decision().unwrap().queue_job(), Some(3));
         assert_eq!(
@@ -789,10 +807,13 @@ mod tests {
     #[test]
     fn a_saved_choice_closes_when_the_queue_no_longer_waits_for_it() {
         let mut activity = Activity::default();
-        activity.apply_jobs(&json!({"waiting":[{"id":3,"kind":"chapter_edit"}]}));
+        activity.apply_jobs(&queue(
+            Vec::new(),
+            vec![waiting_job(3, None, DecisionKind::ChapterEdit)],
+        ));
         activity.open_waiting(3);
         activity.apply(&request("queue-4", "live"));
-        activity.apply_jobs(&json!({"waiting":[]}));
+        activity.apply_jobs(&QueueSnapshot::default());
         assert_eq!(activity.reply(), Some(ReplyTarget::Live("live".into())));
     }
 

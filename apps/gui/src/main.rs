@@ -47,8 +47,9 @@ use muzik_core::{
 };
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
-use muzik_runner::gates::Gate;
+use muzik_runner::gates::{Gate, GatesSnapshot};
 use muzik_runner::library_tasks::LibraryTask;
+use muzik_runner::setup::ServiceStatus;
 use muzik_runner::thumbnails;
 use muzik_store::watchlist::{
     ItemAction, ItemId, ItemView, PlaylistView, SourceKind, Summary, WatchlistView,
@@ -119,7 +120,7 @@ struct Muzik {
     status: String,
     error: Option<String>,
     activity: Activity,
-    gates: Value,
+    gates: GatesSnapshot,
     reload_watchlist: bool,
     watchlist: WatchlistView,
     selected_playlist: usize,
@@ -130,7 +131,7 @@ struct Muzik {
     library: Option<library::LibraryInfo>,
     library_table: Entity<TableState<library::LibraryTable>>,
     library_search: Entity<InputState>,
-    services: Value,
+    services: Vec<ServiceStatus>,
     spotify: backend::SpotifyStatus,
     defaults: Option<GuiDefaults>,
     config_status: Rc<RefCell<String>>,
@@ -199,7 +200,7 @@ impl Muzik {
             status: String::new(),
             error: None,
             activity: Activity::default(),
-            gates: Value::Null,
+            gates: GatesSnapshot::default(),
             reload_watchlist: false,
             watchlist: WatchlistView::default(),
             selected_playlist: 0,
@@ -210,7 +211,7 @@ impl Muzik {
             library: None,
             library_table,
             library_search,
-            services: Value::Null,
+            services: Vec::new(),
             spotify: backend::SpotifyStatus::default(),
             defaults: None,
             config_status: Rc::new(RefCell::new(String::new())),
@@ -769,19 +770,14 @@ impl Muzik {
 
     fn lanes(&self, cx: &App) -> Div {
         let mut lanes = div().v_flex().gap_1p5();
-        for (key, label, gate) in [
-            ("download", "Download", Gate::Download),
-            ("process", "Process", Gate::Process),
-            ("import", "Import", Gate::Import),
+        for (label, gate) in [
+            ("Download", Gate::Download),
+            ("Process", Gate::Process),
+            ("Import", Gate::Import),
         ] {
-            let lane = self.gates.get(key).unwrap_or(&Value::Null);
-            let active: Vec<&str> = lane["active"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            let waiting = lane["waiting"].as_array().map_or(0, Vec::len);
+            let lane = self.gates.lane(gate);
+            let active: Vec<&str> = lane.active.iter().map(String::as_str).collect();
+            let waiting = lane.waiting.len();
             let limit = gate.limit();
             let counts = if waiting > 0 {
                 format!("{}/{limit} · {waiting} waiting", active.len())
@@ -1602,30 +1598,76 @@ mod tests {
         });
         cx.update_window(handle, |_, window, cx| {
             main.update(cx, |view, cx| {
-                view.app_event(muzik_runner::AppEvent::DecisionRequest {
-                    job_id: "queue-1".into(), decision_id: "live".into(),
-                    kind: muzik_core::DecisionKind::ChapterEdit,
-                    payload: json!({"chapters":[{"index":1,"start":0,"title":"Original"}]}),
-                }, window, cx);
-                view.chapter_rows[0].title.update(cx, |state, cx| state.set_value("Edited", window, cx));
-                view.app_event(muzik_runner::AppEvent::JobEvent {
-                    job_id: "queue-1".into(), source: muzik_runner::Source::Native,
-                    event: muzik_core::JobEvent::message("Still working"),
-                }, window, cx);
-                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Edited");
-                view.app_event(muzik_runner::AppEvent::JobsUpdated(json!({"waiting":[{
-                    "id":2,"kind":"chapter_edit", "payload":{"chapters":[{"index":1,"start":0,"title":"Saved"}]}
-                }]})), window, cx);
+                view.app_event(
+                    muzik_runner::AppEvent::DecisionRequest {
+                        job_id: "queue-1".into(),
+                        decision_id: "live".into(),
+                        kind: muzik_core::DecisionKind::ChapterEdit,
+                        payload: json!({"chapters":[{"index":1,"start":0,"title":"Original"}]}),
+                    },
+                    window,
+                    cx,
+                );
+                view.chapter_rows[0]
+                    .title
+                    .update(cx, |state, cx| state.set_value("Edited", window, cx));
+                view.app_event(
+                    muzik_runner::AppEvent::JobEvent {
+                        job_id: "queue-1".into(),
+                        source: muzik_runner::Source::Native,
+                        event: muzik_core::JobEvent::message("Still working"),
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.chapter_rows[0].title.read(cx).value().as_str(),
+                    "Edited"
+                );
+                view.app_event(
+                    muzik_runner::AppEvent::JobsUpdated(muzik_runner::QueueSnapshot {
+                        open: Vec::new(),
+                        waiting: vec![muzik_runner::WaitingJob {
+                            id: 2,
+                            title: "Song".into(),
+                            kind: Some(muzik_core::DecisionKind::ChapterEdit),
+                            payload: Some(
+                                json!({"chapters":[{"index":1,"start":0,"title":"Saved"}]}),
+                            ),
+                            item: "PL1:2:video".into(),
+                            version: muzik_runner::QuestionVersion(1),
+                        }],
+                    }),
+                    window,
+                    cx,
+                );
                 view.open_waiting(2, window, cx);
-                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Saved");
-                view.app_event(muzik_runner::AppEvent::JobsUpdated(json!({"waiting":[]})), window, cx);
-                assert_eq!(view.chapter_rows[0].title.read(cx).value().as_str(), "Original");
-                view.app_event(muzik_runner::AppEvent::JobCancelled { job_id: "queue-1".into() }, window, cx);
+                assert_eq!(
+                    view.chapter_rows[0].title.read(cx).value().as_str(),
+                    "Saved"
+                );
+                view.app_event(
+                    muzik_runner::AppEvent::JobsUpdated(muzik_runner::QueueSnapshot::default()),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    view.chapter_rows[0].title.read(cx).value().as_str(),
+                    "Original"
+                );
+                view.app_event(
+                    muzik_runner::AppEvent::JobCancelled {
+                        job_id: "queue-1".into(),
+                    },
+                    window,
+                    cx,
+                );
                 assert!(view.chapter_rows.is_empty());
             });
             window.render_frame(cx);
             assert!(window.try_find("decision").is_none());
-        }).unwrap();
+        })
+        .unwrap();
     }
 
     #[gpui_kit::test]

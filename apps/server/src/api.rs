@@ -1,6 +1,6 @@
 use futures_util::{Stream, stream};
-use muzik_runner::service::Service;
-use serde_json::{Value, json};
+use muzik_runner::{JobsSnapshot, service::Service};
+use serde_json::json;
 use std::time::Duration;
 
 use tokio::{sync::broadcast::error::RecvError, time::MissedTickBehavior};
@@ -24,7 +24,7 @@ use crate::{
 const SESSION_CHECK: Duration = Duration::from_secs(1);
 
 #[route(GET "/api/jobs")]
-pub async fn jobs(cx: &Cx) -> Result<Json<Value>> {
+pub async fn jobs(cx: &Cx) -> Result<Json<JobsSnapshot>> {
     auth::require(cx).await?;
     Ok(Json(backend(cx).run(Service::jobs).await?))
 }

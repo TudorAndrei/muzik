@@ -1,11 +1,14 @@
+use crate::gates::GatesSnapshot;
 use crate::library_tasks::LibraryRequest;
 use crate::settings::Settings;
+use muzik_core::DecisionKind;
 use muzik_core::paths::Paths;
 use muzik_store::db;
 use muzik_store::jobs::{Admission, CancelRequest, Job, Kind, NewJob, RunnerLock, Status, Store};
 use muzik_store::watchlist::jobs::{self as watchlist_jobs, PendingItem};
 use muzik_store::watchlist::{ItemAction, ItemId};
 use parking_lot::{Mutex, MutexGuard};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -226,19 +229,24 @@ impl Jobs {
 
     /// # Errors
     /// Returns an error when the job queue cannot be read or written.
-    pub fn answer_version(&self, id: i64, version: i64, value: &Value) -> crate::Result<Answered> {
+    pub fn answer_version(
+        &self,
+        id: i64,
+        version: QuestionVersion,
+        value: &Value,
+    ) -> crate::Result<Answered> {
         let store = self.store();
         let Some(job) = store.get(id)?.filter(|job| job.status == Status::Waiting) else {
             return Ok(Answered::Closed);
         };
-        if job.question_version != version {
+        if job.question_version != version.0 {
             return Ok(Answered::Changed);
         }
         let kind = job
             .question
             .and_then(|question| question.get("kind").cloned())
             .unwrap_or(Value::Null);
-        if store.answer_version(id, version, &json!({"kind":kind,"value":value}))? {
+        if store.answer_version(id, version.0, &json!({"kind":kind,"value":value}))? {
             return Ok(Answered::Saved);
         }
         let waiting = store
@@ -280,30 +288,80 @@ impl Jobs {
             .is_ok_and(|jobs| jobs.iter().any(|job| job.status == Status::Running))
     }
 
-    pub fn snapshot(&self) -> Value {
+    pub fn snapshot(&self) -> QueueSnapshot {
         snapshot(&self.store())
     }
 }
 
-fn snapshot(store: &Store) -> Value {
-    let open: Vec<Value> = store
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct QuestionVersion(pub i64);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenJob {
+    pub job_id: String,
+    pub title: String,
+    pub kind: Kind,
+    pub status: Status,
+    pub item: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitingJob {
+    pub id: i64,
+    pub title: String,
+    pub kind: Option<DecisionKind>,
+    pub payload: Option<Value>,
+    pub item: String,
+    pub version: QuestionVersion,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueueSnapshot {
+    pub open: Vec<OpenJob>,
+    pub waiting: Vec<WaitingJob>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobsSnapshot {
+    #[serde(flatten)]
+    pub queue: QueueSnapshot,
+    pub gates: GatesSnapshot,
+    pub runner: bool,
+}
+
+fn snapshot(store: &Store) -> QueueSnapshot {
+    let open = store
         .list_open()
         .unwrap_or_default()
         .into_iter()
-        .map(|job| {
-            json!({"job_id":job_id(job.id),"title":job.title,"kind":job.kind.as_ref(),"status":job.status.as_ref(),"item":(job.kind == Kind::Item).then_some(job.item_key)})
+        .map(|job| OpenJob {
+            job_id: job_id(job.id),
+            title: job.title,
+            kind: job.kind,
+            status: job.status,
+            item: (job.kind == Kind::Item).then_some(job.item_key),
         })
         .collect();
-    let waiting: Vec<Value> = store
+    let waiting = store
         .list(Status::Waiting)
         .unwrap_or_default()
         .into_iter()
         .map(|job| {
             let question = job.question.unwrap_or(Value::Null);
-            json!({"id":job.id,"title":job.title,"kind":question.get("kind"),"payload":question.get("payload"),"item":job.item_key,"version":job.question_version})
+            WaitingJob {
+                id: job.id,
+                title: job.title,
+                kind: question
+                    .get("kind")
+                    .and_then(|kind| serde_json::from_value(kind.clone()).ok()),
+                payload: question.get("payload").cloned(),
+                item: job.item_key,
+                version: QuestionVersion(job.question_version),
+            }
         })
         .collect();
-    json!({"open":open,"waiting":waiting})
+    QueueSnapshot { open, waiting }
 }
 
 #[must_use]
@@ -337,7 +395,7 @@ fn unique() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Answered, EnqueueError, Jobs, parse_job_id};
+    use super::{Answered, EnqueueError, Jobs, QuestionVersion, parse_job_id};
     use crate::library_tasks::{LibraryRequest, LibraryTask};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
@@ -362,7 +420,7 @@ mod tests {
             .store()
             .park(&new_job, &json!({"kind":"import_match","payload":{}}))
             .unwrap();
-        let shown = jobs.get(id).unwrap().unwrap().question_version;
+        let shown = QuestionVersion(jobs.get(id).unwrap().unwrap().question_version);
         jobs.store()
             .park(&new_job, &json!({"kind":"import_duplicate","payload":{}}))
             .unwrap();
@@ -371,7 +429,7 @@ mod tests {
             Answered::Changed
         );
         assert_eq!(jobs.get(id).unwrap().unwrap().status, Status::Waiting);
-        let current = jobs.get(id).unwrap().unwrap().question_version;
+        let current = QuestionVersion(jobs.get(id).unwrap().unwrap().question_version);
         assert_eq!(
             jobs.answer_version(id, current, &json!("skip")).unwrap(),
             Answered::Saved
@@ -379,6 +437,49 @@ mod tests {
         assert_eq!(
             jobs.answer_version(id, current, &json!("skip")).unwrap(),
             Answered::Closed
+        );
+    }
+
+    #[test]
+    fn the_jobs_snapshot_keeps_its_wire_shape() {
+        let snapshot = super::JobsSnapshot {
+            queue: super::QueueSnapshot {
+                open: vec![super::OpenJob {
+                    job_id: "queue-1".into(),
+                    title: "Song".into(),
+                    kind: Kind::Item,
+                    status: Status::Queued,
+                    item: Some(KEY.into()),
+                }],
+                waiting: vec![super::WaitingJob {
+                    id: 2,
+                    title: "Album".into(),
+                    kind: Some(muzik_core::DecisionKind::ImportMatch),
+                    payload: Some(json!({})),
+                    item: KEY.into(),
+                    version: QuestionVersion(3),
+                }],
+            },
+            gates: crate::gates::GatesSnapshot::default(),
+            runner: true,
+        };
+        let wire = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(
+            wire["open"][0],
+            json!({"job_id":"queue-1","title":"Song","kind":"item","status":"queued","item":KEY})
+        );
+        assert_eq!(
+            wire["waiting"][0],
+            json!({"id":2,"title":"Album","kind":"import_match","payload":{},"item":KEY,"version":3})
+        );
+        assert_eq!(wire["runner"], true);
+        assert_eq!(
+            wire["gates"]["download"],
+            json!({"limit":0,"active":[],"waiting":[]})
+        );
+        assert_eq!(
+            serde_json::from_value::<super::JobsSnapshot>(wire).unwrap(),
+            snapshot
         );
     }
 
@@ -408,9 +509,9 @@ mod tests {
             jobs.item(&json!({"playlist_id":"PL1","key":"abcdefghijk","action":"sing"})),
             Err(EnqueueError::Invalid(_))
         ));
-        assert_eq!(jobs.snapshot()["open"][0]["item"], KEY);
+        assert_eq!(jobs.snapshot().open[0].item.as_deref(), Some(KEY));
         jobs.cancel(first).unwrap();
-        assert_eq!(jobs.snapshot()["open"], json!([]));
+        assert_eq!(jobs.snapshot().open, Vec::new());
         assert_eq!(parse_job_id("queue-7"), Some(7));
         assert_eq!(parse_job_id("7"), Some(7));
     }
@@ -425,10 +526,10 @@ mod tests {
             .library(&LibraryRequest::new(LibraryTask::Covers))
             .unwrap();
         assert_ne!(other, first);
-        let open = &jobs.snapshot()["open"];
-        assert_eq!(open[0]["kind"], "library");
-        assert_eq!(open[0]["title"], LibraryTask::ReplayGain.title());
-        assert_eq!(open[0]["item"], serde_json::Value::Null);
+        let open = jobs.snapshot().open;
+        assert_eq!(open[0].kind, Kind::Library);
+        assert_eq!(open[0].title, LibraryTask::ReplayGain.title());
+        assert_eq!(open[0].item, None);
         assert_eq!(
             jobs.get(first).unwrap().map(|job| job.params),
             Some(json!({"task":"replaygain","dry_run":false}))
@@ -456,22 +557,22 @@ mod tests {
                 .unwrap(),
             1
         );
-        let open: Vec<_> = jobs.snapshot()["open"]
-            .as_array()
+        let open: Vec<_> = jobs
+            .snapshot()
+            .open
             .into_iter()
-            .flatten()
-            .map(|job| (job["job_id"].clone(), job["item"].clone()))
+            .map(|job| (job.job_id, job.item))
             .collect();
         assert_eq!(
             open,
             [
                 (
-                    json!(super::job_id(existing)),
-                    json!(r#"["PL1","abcdefghijk"]"#)
+                    super::job_id(existing),
+                    Some(r#"["PL1","abcdefghijk"]"#.to_owned())
                 ),
                 (
-                    json!(super::job_id(existing + 1)),
-                    json!(r#"["PL1","bcdefghijkl"]"#)
+                    super::job_id(existing + 1),
+                    Some(r#"["PL1","bcdefghijkl"]"#.to_owned())
                 ),
             ]
         );

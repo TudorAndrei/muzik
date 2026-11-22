@@ -4,10 +4,9 @@ use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
-use muzik_runner::{AppEvent, Jobs, Options, Prompt, Runner, job_id, parse_job_id};
+use muzik_runner::{AppEvent, Jobs, Options, Prompt, QueueSnapshot, Runner, job_id, parse_job_id};
 use muzik_store::jobs::CancelRequest;
 use parking_lot::Mutex;
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -33,36 +32,11 @@ pub fn open() -> anyhow::Result<Arc<Jobs>> {
     Ok(Arc::new(Jobs::open(&Paths::user())?))
 }
 
-#[derive(Deserialize)]
-struct Snapshot {
-    open: Vec<OpenJob>,
-    waiting: Vec<WaitingJob>,
-}
-
-#[derive(Deserialize)]
-struct OpenJob {
-    job_id: String,
-    title: String,
-    kind: String,
-    status: String,
-}
-
-#[derive(Deserialize)]
-struct WaitingJob {
-    id: i64,
-    title: String,
-    kind: Option<String>,
-}
-
-fn snapshot(jobs: &Jobs) -> anyhow::Result<Snapshot> {
-    serde_json::from_value(jobs.snapshot()).context("The job queue snapshot is not valid.")
-}
-
 pub fn list() -> anyhow::Result<()> {
-    let Snapshot {
+    let QueueSnapshot {
         open: open_jobs,
         waiting,
-    } = snapshot(&*open()?)?;
+    } = open()?.snapshot();
     if open_jobs.is_empty() && waiting.is_empty() {
         println!("The queue is empty.");
         return Ok(());
@@ -70,7 +44,10 @@ pub fn list() -> anyhow::Result<()> {
     for job in &open_jobs {
         println!(
             "{:<8} {:<10} {:<9} {}",
-            job.status, job.job_id, job.kind, job.title
+            job.status.as_ref(),
+            job.job_id,
+            job.kind.as_ref(),
+            job.title
         );
     }
     for job in &waiting {
@@ -80,7 +57,7 @@ pub fn list() -> anyhow::Result<()> {
             job_id(job.id),
             "item",
             job.title,
-            choices::title(job.kind.as_deref().and_then(|kind| kind.parse().ok()))
+            choices::title(job.kind)
         );
     }
     if !waiting.is_empty() {
@@ -182,7 +159,7 @@ pub fn drain(jobs: &Arc<Jobs>) -> anyhow::Result<()> {
     if INTERRUPTED.load(Ordering::SeqCst) {
         bail!("Interrupted. Queued jobs stay in the queue.");
     }
-    let waiting = snapshot(jobs)?.waiting.len();
+    let waiting = jobs.snapshot().waiting.len();
     if waiting > 0 {
         println!("{waiting} item(s) wait for a choice. Run `muzik jobs list`.");
     }

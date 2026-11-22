@@ -2,8 +2,9 @@ use crate::agent::{Chooser, Codex};
 use crate::app::{SourceEdit, WatchlistCheck};
 use crate::library_info::{self, LibraryInfo};
 use crate::library_tasks::LibraryTask;
+use crate::setup::{ServiceStatus, SoulseekProfile};
 use crate::thumbnails::{self, ThumbnailUpdate};
-use crate::{App, AppEvent, AppOptions, Error, Result, Sink, setup};
+use crate::{App, AppEvent, AppOptions, Error, JobsSnapshot, QuestionVersion, Result, Sink, setup};
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config::{self, GuiDefaults};
 use muzik_core::paths::Paths;
@@ -170,7 +171,7 @@ impl Service {
     }
 
     #[must_use]
-    pub fn jobs(&self) -> Value {
+    pub fn jobs(&self) -> JobsSnapshot {
         self.app.jobs()
     }
 
@@ -236,7 +237,12 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the answer cannot be saved.
-    pub fn answer_version(&self, id: i64, version: i64, value: &Value) -> Result<crate::Answered> {
+    pub fn answer_version(
+        &self,
+        id: i64,
+        version: QuestionVersion,
+        value: &Value,
+    ) -> Result<crate::Answered> {
         self.app.answer_version(id, version, value)
     }
 
@@ -299,19 +305,19 @@ impl Service {
     }
 
     #[must_use]
-    pub fn services(&self) -> Value {
-        json!({"services": setup::check_services(self.paths())})
+    pub fn services(&self) -> Vec<ServiceStatus> {
+        setup::check_services(self.paths())
     }
 
     /// # Errors
     /// Returns an error when the config file cannot be read.
-    pub fn soulseek_account(&self) -> Result<Value> {
+    pub fn soulseek_account(&self) -> Result<SoulseekProfile> {
         setup::soulseek_account(&self.paths().config_file())
     }
 
     /// # Errors
     /// Returns an error when the form is invalid or the account cannot be saved.
-    pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<Value> {
+    pub fn save_soulseek(&self, form: &SoulseekForm) -> Result<SoulseekProfile> {
         let path = self.paths().config_file();
         let username = required("username", &form.username)?;
         let server_port = form
@@ -333,13 +339,13 @@ impl Service {
     }
 
     #[must_use]
-    pub fn bandcamp(&self) -> Value {
+    pub fn bandcamp(&self) -> bandcamp::Status {
         bandcamp::status(self.paths())
     }
 
     /// # Errors
     /// Returns an error when the login cannot be saved.
-    pub fn save_bandcamp(&self, user: &str, cookies: &str) -> Result<Value> {
+    pub fn save_bandcamp(&self, user: &str, cookies: &str) -> Result<bandcamp::Status> {
         let _write = self.writes.lock();
         bandcamp::Login::save(self.paths(), Some(user), cookies)?;
         crate::watchlist::ensure_sources(self.paths())?;
@@ -348,7 +354,7 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the login cannot be removed.
-    pub fn logout_bandcamp(&self) -> Result<Value> {
+    pub fn logout_bandcamp(&self) -> Result<bandcamp::Status> {
         let _write = self.writes.lock();
         bandcamp::Login::clear(self.paths())?;
         Ok(bandcamp::status(self.paths()))
@@ -627,10 +633,10 @@ mod tests {
         let job = backend.run_item(&item).unwrap();
         assert!(backend.run_item(&item).is_err());
         let listed = backend.jobs();
-        assert_eq!(listed["open"][0]["job_id"], job);
-        assert_eq!(listed["runner"], false);
+        assert_eq!(listed.queue.open[0].job_id, job);
+        assert!(!listed.runner);
         backend.cancel(&job).unwrap();
-        assert_eq!(backend.jobs()["open"], json!([]));
+        assert_eq!(backend.jobs().queue.open, Vec::new());
     }
 
     #[test]

@@ -1,3 +1,5 @@
+use crate::gates::GatesSnapshot;
+use crate::queue::QueueSnapshot;
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_store::jobs::Kind;
 use serde::Serialize;
@@ -14,8 +16,8 @@ pub enum Source {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum AppEvent {
-    JobsUpdated(Value),
-    QueuesUpdated(Value),
+    JobsUpdated(QueueSnapshot),
+    QueuesUpdated(GatesSnapshot),
     JobStarted {
         job_id: String,
         title: String,

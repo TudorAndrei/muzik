@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use muzik_core::{DecisionKind, JobEvent, Task};
-use muzik_runner::{AppEvent, library_info::LibraryInfo};
+use muzik_runner::{AppEvent, library_info::LibraryInfo, setup::ServiceStatus};
 use muzik_store::watchlist::WatchlistView;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -67,7 +67,7 @@ struct State {
     thumbnails: HashSet<String>,
     thumbnail_retry_at: HashMap<String, Instant>,
     library: Option<(Instant, Arc<LibraryInfo>)>,
-    services: Option<Value>,
+    services: Option<Vec<ServiceStatus>>,
 }
 
 #[derive(Default)]
@@ -130,11 +130,11 @@ impl Hub {
     }
 
     #[must_use]
-    pub fn services(&self) -> Option<Value> {
+    pub fn services(&self) -> Option<Vec<ServiceStatus>> {
         self.state.lock().services.clone()
     }
 
-    pub fn store_services(&self, services: Value) {
+    pub fn store_services(&self, services: Vec<ServiceStatus>) {
         self.state.lock().services = Some(services);
     }
 

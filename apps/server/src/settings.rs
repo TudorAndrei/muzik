@@ -7,9 +7,9 @@ use muzik_core::{
 use muzik_runner::{
     library_tasks::LibraryTask,
     service::{Service, SoulseekForm, SpotifyStatus},
+    setup::{ServiceStatus, SoulseekProfile},
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use topcoat::{
     Result,
     context::Cx,
@@ -340,20 +340,12 @@ struct ServiceRow {
     tone: &'static str,
 }
 
-fn text_of(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Number(number)) => number.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn soulseek_of(value: &Value) -> Soulseek {
+fn soulseek_of(profile: &SoulseekProfile) -> Soulseek {
     Soulseek {
-        username: text_of(value, "username"),
-        host: text_of(value, "server_host"),
-        port: text_of(value, "server_port"),
-        has_password: value.get("has_password") == Some(&Value::Bool(true)),
+        username: profile.username.clone(),
+        host: profile.server_host.clone(),
+        port: profile.server_port.to_string(),
+        has_password: profile.has_password,
     }
 }
 
@@ -370,24 +362,19 @@ fn spotify_of(status: &SpotifyStatus) -> Spotify {
     }
 }
 
-fn service_rows(checked: &Value) -> Vec<ServiceRow> {
+fn service_rows(checked: &[ServiceStatus]) -> Vec<ServiceRow> {
     checked
-        .get("services")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+        .iter()
         .map(|service| {
-            let (word, tone) = match service.get("available").and_then(Value::as_bool) {
+            let (word, tone) = match service.available {
                 Some(true) => ("Available", "tag ok"),
-                Some(false) if service.get("optional") == Some(&Value::Bool(true)) => {
-                    ("Optional", "tag warn")
-                }
+                Some(false) if service.optional => ("Optional", "tag warn"),
                 Some(false) => ("Unavailable", "tag bad"),
                 None => ("Not set up", "tag mute"),
             };
             ServiceRow {
-                name: truncate(&text_of(service, "name"), 60),
-                detail: truncate(&text_of(service, "detail"), 200),
+                name: truncate(service.name, 60),
+                detail: truncate(&service.detail, 200),
                 word,
                 tone,
             }
@@ -447,8 +434,8 @@ async fn screen(cx: &Cx) -> Result<Screen> {
         groups: groups(&defaults),
         soulseek: soulseek.ok().map(|account| soulseek_of(&account)),
         bandcamp: Bandcamp {
-            user: text_of(&bandcamp, "user"),
-            logged_in: bandcamp.get("logged_in") == Some(&Value::Bool(true)),
+            user: bandcamp.user,
+            logged_in: bandcamp.logged_in,
         },
         spotify: spotify.ok().map(|status| spotify_of(&status)),
         services: hub(cx).services().map(|checked| service_rows(&checked)),

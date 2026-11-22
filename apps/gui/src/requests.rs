@@ -1,5 +1,7 @@
 use super::*;
 use crate::backend::{Backend, ItemRequest, SoulseekForm};
+use muzik_runner::BandcampStatus;
+use muzik_runner::setup::SoulseekProfile;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Read {
@@ -240,7 +242,7 @@ impl Muzik {
                     .activity
                     .decision()
                     .map(|decision| decision.target().clone());
-                view.activity.apply_jobs(&jobs);
+                view.activity.apply_jobs(&jobs.queue);
                 if previous.as_ref() != view.activity.decision().map(Decision::target) {
                     view.prepare_decision(window, cx);
                 }
@@ -248,7 +250,7 @@ impl Muzik {
                 if view.activity.take_holds_changed() {
                     view.load_watchlist(cx);
                 }
-                view.gates = jobs.get("gates").cloned().unwrap_or_default();
+                view.gates = jobs.gates;
             },
         );
     }
@@ -293,13 +295,23 @@ impl Muzik {
         cx.notify();
     }
 
-    fn show_soulseek(&self, account: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_soulseek(
+        &self,
+        account: &SoulseekProfile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_soulseek(account, window, cx));
         }
     }
 
-    fn show_bandcamp(&self, settings: &Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_bandcamp(
+        &self,
+        settings: &BandcampStatus,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(view) = self.config_view.clone() {
             view.update(cx, |view, cx| view.set_bandcamp(settings, window, cx));
         }

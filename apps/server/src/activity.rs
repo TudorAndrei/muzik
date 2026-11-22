@@ -1,7 +1,10 @@
 use std::{collections::HashMap, time::Duration};
 
 use muzik_core::DecisionKind;
-use muzik_runner::{Answered, AppEvent, choices, job_id, service::Service};
+use muzik_runner::{
+    Answered, AppEvent, JobsSnapshot, OpenJob, QuestionVersion, choices, job_id, service::Service,
+};
+use muzik_store::jobs::Status as JobStatus;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
@@ -100,14 +103,12 @@ pub fn truncate(text: &str, limit: usize) -> String {
     }
 }
 
-fn job_rows(jobs: &Value, progress: &HashMap<String, Progress>) -> (Vec<JobRow>, usize) {
-    let mut rows: Vec<(bool, JobRow)> = jobs["open"]
-        .as_array()
-        .into_iter()
-        .flatten()
+fn job_rows(jobs: &[OpenJob], progress: &HashMap<String, Progress>) -> (Vec<JobRow>, usize) {
+    let mut rows: Vec<(bool, JobRow)> = jobs
+        .iter()
         .filter_map(|job| {
-            let id = job["job_id"].as_str().filter(|id| !id.is_empty())?;
-            let queued = job["status"].as_str() == Some("queued");
+            let id = Some(job.job_id.as_str()).filter(|id| !id.is_empty())?;
+            let queued = job.status == JobStatus::Queued;
             let known = progress.get(id);
             let status = if queued {
                 "Queued".to_owned()
@@ -121,8 +122,8 @@ fn job_rows(jobs: &Value, progress: &HashMap<String, Progress>) -> (Vec<JobRow>,
                 queued,
                 JobRow {
                     id: id.to_owned(),
-                    title: truncate(job["title"].as_str().unwrap_or("Job"), 120),
-                    kind: kind_label(job["kind"].as_str().unwrap_or_default()),
+                    title: truncate(&job.title, 120),
+                    kind: kind_label(job.kind.as_ref()),
                     status: truncate(&status, 120),
                     percent: known.and_then(Progress::percent),
                 },
@@ -206,16 +207,14 @@ pub fn decision_card(target: String, job_id: String, job: &str, question: &Value
 }
 
 #[must_use]
-pub fn build_board(jobs: &Value, snapshot: &Snapshot) -> Board {
-    let (rows, hidden_jobs) = job_rows(jobs, &snapshot.progress);
+pub fn build_board(jobs: &JobsSnapshot, snapshot: &Snapshot) -> Board {
+    let (rows, hidden_jobs) = job_rows(&jobs.queue.open, &snapshot.progress);
     let title_of = |id: &str| {
-        jobs["open"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|job| job["job_id"].as_str() == Some(id))
-            .and_then(|job| job["title"].as_str())
-            .unwrap_or("Job")
+        jobs.queue
+            .open
+            .iter()
+            .find(|job| job.job_id == id)
+            .map_or("Job", |job| job.title.as_str())
             .to_owned()
     };
     let mut decisions: Vec<DecisionCard> = snapshot
@@ -230,25 +229,17 @@ pub fn build_board(jobs: &Value, snapshot: &Snapshot) -> Board {
             )
         })
         .collect();
-    decisions.extend(
-        jobs["waiting"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|waiting| {
-                let id = waiting["id"].as_i64()?;
-                let version = waiting["version"].as_i64()?;
-                let question = json!({"kind": waiting["kind"], "payload": waiting["payload"]});
-                Some(decision_card(
-                    format!("queue:{id}:{version}"),
-                    job_id(id),
-                    waiting["title"].as_str().unwrap_or("Item"),
-                    &question,
-                ))
-            }),
-    );
+    decisions.extend(jobs.queue.waiting.iter().map(|waiting| {
+        let question = json!({"kind": waiting.kind, "payload": waiting.payload});
+        decision_card(
+            format!("queue:{}:{}", waiting.id, waiting.version.0),
+            job_id(waiting.id),
+            &waiting.title,
+            &question,
+        )
+    }));
     Board {
-        runner: jobs["runner"].as_bool().unwrap_or(true),
+        runner: jobs.runner,
         jobs: rows,
         hidden_jobs,
         decisions,
@@ -625,16 +616,15 @@ async fn question_for(cx: &Cx, target: &Target) -> Result<Option<Value>> {
             let id = *id;
             let jobs = backend(cx).run(Service::jobs).await?;
             Ok(jobs
-                .get("waiting")
-                .and_then(Value::as_array)
+                .queue
+                .waiting
                 .into_iter()
-                .flatten()
-                .find(|waiting| waiting["id"].as_i64() == Some(id))
+                .find(|waiting| waiting.id == id)
                 .map(|waiting| {
                     json!({
-                        "kind": waiting["kind"],
-                        "payload": waiting["payload"],
-                        "version": waiting["version"],
+                        "kind": waiting.kind,
+                        "payload": waiting.payload,
+                        "version": waiting.version,
                     })
                 }))
         }
@@ -681,13 +671,13 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
         Target::Queue { id, version } => {
             backend(cx)
                 .run(move |service| {
-                    service.answer_version(id, version, &value).and_then(
-                        |answered| match answered {
+                    service
+                        .answer_version(id, QuestionVersion(version), &value)
+                        .and_then(|answered| match answered {
                             Answered::Saved => Ok(()),
                             Answered::Changed => Err(QUESTION_CHANGED.into()),
                             Answered::Closed => Err("This decision is no longer open.".into()),
-                        },
-                    )
+                        })
                 })
                 .await?
         }
@@ -758,21 +748,28 @@ mod tests {
 mod board_tests {
     use super::build_board;
     use crate::hub::{Progress, Snapshot};
+    use muzik_runner::JobsSnapshot;
     use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
     fn the_board_lists_running_jobs_first_and_both_kinds_of_decision() {
-        let jobs = json!({
+        let jobs: JobsSnapshot = serde_json::from_value(json!({
             "open": [
                 {"job_id": "queue-2", "title": "Waiting", "kind": "item", "status": "queued", "item": null},
                 {"job_id": "queue-1", "title": "Album", "kind": "workflow", "status": "running", "item": null},
             ],
             "waiting": [
-                {"id": 5, "title": "Song", "kind": "import_duplicate", "payload": {}, "item": null, "version": 2},
+                {"id": 5, "title": "Song", "kind": "import_duplicate", "payload": {}, "item": "key", "version": 2},
             ],
+            "gates": {
+                "download": {"limit": 2, "active": [], "waiting": []},
+                "process": {"limit": 1, "active": [], "waiting": []},
+                "import": {"limit": 1, "active": [], "waiting": []},
+            },
             "runner": true,
-        });
+        }))
+        .unwrap();
         let snapshot = Snapshot {
             progress: HashMap::from([(
                 "queue-1".to_owned(),

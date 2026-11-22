@@ -9,7 +9,20 @@ use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
 const COLUMNS: &str =
     "id, queue, kind, item_key, title, status, params, question, answer, error, question_version";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, AsRefStr, Display, EnumString, IntoStaticStr)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Status {
     Queued,
@@ -37,6 +50,7 @@ pub enum Queue {
     Eq,
     Hash,
     serde::Serialize,
+    serde::Deserialize,
     AsRefStr,
     Display,
     EnumString,

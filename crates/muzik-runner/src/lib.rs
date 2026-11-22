@@ -23,6 +23,10 @@ mod workflow_result;
 pub use app::{App, AppOptions};
 pub use error::{Error, Result};
 pub use events::{AppEvent, Source};
-pub use queue::{Answered, EnqueueError, Jobs, job_id, parse_job_id};
+pub use muzik_bandcamp::Status as BandcampStatus;
+pub use queue::{
+    Answered, EnqueueError, Jobs, JobsSnapshot, OpenJob, QuestionVersion, QueueSnapshot,
+    WaitingJob, job_id, parse_job_id,
+};
 pub use runner::{Ask, Options, Prompt, Runner, Running, Sink};
 pub use settings::Settings;
