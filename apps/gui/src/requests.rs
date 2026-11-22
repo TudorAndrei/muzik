@@ -1,7 +1,7 @@
 use super::*;
 use crate::backend::{Backend, ItemRequest, SoulseekForm};
-use muzik_runner::BandcampStatus;
 use muzik_runner::setup::SoulseekProfile;
+use muzik_runner::{Answered, BandcampStatus, QUESTION_CHANGED, QuestionVersion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Read {
@@ -523,26 +523,29 @@ impl Muzik {
         );
     }
 
-    pub(crate) fn send_answer(&mut self, id: Option<i64>, value: Value, cx: &Context<Self>) {
-        let Some(id) = id else {
-            self.failed(Call::JobsAnswer, "id and value are required.".into());
-            return;
-        };
+    pub(crate) fn send_answer(
+        &mut self,
+        id: i64,
+        version: QuestionVersion,
+        value: Value,
+        cx: &Context<Self>,
+    ) {
         self.call(
             Call::JobsAnswer,
             cx,
-            move |backend| backend.answer(id, &value),
-            |view, saved, _, cx| {
-                if saved {
-                    view.status = "Answer saved; the item is queued".into();
-                } else {
-                    view.failed(
-                        Call::JobsAnswer,
-                        "The answer was not saved: this choice is no longer open.".into(),
-                    );
-                    view.load_jobs(cx);
-                    view.load_watchlist(cx);
-                }
+            move |backend| backend.answer_version(id, version, &value),
+            |view, answered, _, cx| {
+                let message = match answered {
+                    Answered::Saved => {
+                        view.status = "Answer saved; the item is queued".into();
+                        return;
+                    }
+                    Answered::Changed => QUESTION_CHANGED,
+                    Answered::Closed => "The answer was not saved: this choice is no longer open.",
+                };
+                view.failed(Call::JobsAnswer, message.into());
+                view.load_jobs(cx);
+                view.load_watchlist(cx);
             },
         );
     }

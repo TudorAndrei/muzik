@@ -231,12 +231,6 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the answer cannot be saved.
-    pub fn answer(&self, id: i64, value: &Value) -> Result<bool> {
-        self.app.answer(id, value)
-    }
-
-    /// # Errors
-    /// Returns an error when the answer cannot be saved.
     pub fn answer_version(
         &self,
         id: i64,

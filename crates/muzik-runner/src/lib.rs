@@ -25,8 +25,8 @@ pub use error::{Error, Result};
 pub use events::{AppEvent, Source};
 pub use muzik_bandcamp::Status as BandcampStatus;
 pub use queue::{
-    Answered, EnqueueError, Jobs, JobsSnapshot, OpenJob, QuestionVersion, QueueSnapshot,
-    WaitingJob, job_id, parse_job_id,
+    Answered, EnqueueError, Jobs, JobsSnapshot, OpenJob, QUESTION_CHANGED, QuestionVersion,
+    QueueSnapshot, WaitingJob, job_id, parse_job_id,
 };
 pub use runner::{Ask, Options, Prompt, Runner, Running, Sink};
 pub use settings::Settings;

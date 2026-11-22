@@ -4,7 +4,10 @@ use muzik_core::paths::Paths;
 use muzik_core::{DecisionKind, JobEvent};
 use muzik_runner::agent::Codex;
 use muzik_runner::choices::{self, Choice};
-use muzik_runner::{AppEvent, Jobs, Options, Prompt, QueueSnapshot, Runner, job_id, parse_job_id};
+use muzik_runner::{
+    Answered, AppEvent, Jobs, Options, Prompt, QUESTION_CHANGED, QuestionVersion, QueueSnapshot,
+    Runner, job_id, parse_job_id,
+};
 use muzik_store::jobs::CancelRequest;
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -101,8 +104,10 @@ pub fn answer(id: &str, choice: Option<usize>, value: Option<&str>) -> anyhow::R
         (None, Some(value)) => serde_json::from_str(value).unwrap_or_else(|_| Value::from(value)),
         _ => bail!("Give a choice number or --value, not both."),
     };
-    if !jobs.answer(number, &answer)? {
-        bail!("This job does not wait for a choice now.");
+    match jobs.answer_version(number, QuestionVersion(job.question_version), &answer)? {
+        Answered::Saved => {}
+        Answered::Changed => bail!(QUESTION_CHANGED),
+        Answered::Closed => bail!("This job does not wait for a choice now."),
     }
     println!(
         "The answer is saved and {} is back in the queue.",

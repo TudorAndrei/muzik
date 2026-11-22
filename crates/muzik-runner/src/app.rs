@@ -149,14 +149,6 @@ impl App {
 
     /// # Errors
     /// Returns an error when the answer cannot be saved in the job queue.
-    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
-        let answered = self.jobs.answer(id, value)?;
-        self.changed();
-        Ok(answered)
-    }
-
-    /// # Errors
-    /// Returns an error when the answer cannot be saved in the job queue.
     pub fn answer_version(
         &self,
         id: i64,

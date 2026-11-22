@@ -1,6 +1,6 @@
 //! Desktop activity state. Queue snapshots and live events enter through this module.
 use muzik_core::{JobEvent, Task as JobTask};
-use muzik_runner::{AppEvent, QueueSnapshot, WaitingJob, choices};
+use muzik_runner::{AppEvent, QuestionVersion, QueueSnapshot, WaitingJob, choices};
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
 use muzik_store::watchlist::ItemId;
 use serde_json::{Value, json};
@@ -16,6 +16,7 @@ pub enum ReplyTarget {
 #[derive(Clone)]
 pub struct Decision {
     target: ReplyTarget,
+    version: Option<QuestionVersion>,
     job_id: String,
     pub title: Option<String>,
     pub item: Option<String>,
@@ -25,11 +26,16 @@ impl Decision {
     fn saved(job: &WaitingJob) -> Self {
         Self {
             target: ReplyTarget::Queue(job.id),
+            version: Some(job.version),
             job_id: muzik_runner::job_id(job.id),
             title: Some(job.title.clone()),
             item: Some(job.item.clone()),
             question: json!({"kind":job.kind,"payload":job.payload}),
         }
+    }
+
+    pub const fn version(&self) -> Option<QuestionVersion> {
+        self.version
     }
 
     pub const fn queue_job(&self) -> Option<i64> {
@@ -221,7 +227,7 @@ impl Activity {
             self.decision = self.requests.first().cloned();
         }
     }
-    pub fn reply(&mut self) -> Option<ReplyTarget> {
+    pub fn reply(&mut self) -> Option<Decision> {
         let choice = self.decision.take()?;
         self.requests
             .retain(|request| request.target != choice.target);
@@ -231,7 +237,7 @@ impl Activity {
             self.set_status(&choice.job_id, "Working");
         }
         self.decision = self.requests.first().cloned();
-        Some(choice.target)
+        Some(choice)
     }
     pub fn apply(&mut self, event: &AppEvent) -> Option<Finished> {
         if let AppEvent::JobStarted { job_id, .. } = event {
@@ -267,6 +273,7 @@ impl Activity {
                 if !self.requests.iter().any(|choice| choice.target == target) {
                     self.requests.push(Decision {
                         target,
+                        version: None,
                         job_id: job_id.clone(),
                         title: None,
                         item: None,
@@ -787,9 +794,14 @@ mod tests {
             ReplyTarget::Live("second".into())
         );
         activity.open_waiting(3);
-        assert_eq!(activity.reply(), Some(ReplyTarget::Queue(3)));
+        let answered = activity.reply().unwrap();
+        assert_eq!(answered.target, ReplyTarget::Queue(3));
+        assert_eq!(answered.version(), Some(QuestionVersion(1)));
         assert!(activity.waiting().is_empty());
-        assert_eq!(activity.reply(), Some(ReplyTarget::Live("second".into())));
+        assert_eq!(
+            activity.reply().map(|decision| decision.target),
+            Some(ReplyTarget::Live("second".into()))
+        );
         assert!(activity.decision().is_none());
         assert_eq!(
             activity
@@ -814,7 +826,10 @@ mod tests {
         activity.open_waiting(3);
         activity.apply(&request("queue-4", "live"));
         activity.apply_jobs(&QueueSnapshot::default());
-        assert_eq!(activity.reply(), Some(ReplyTarget::Live("live".into())));
+        assert_eq!(
+            activity.reply().map(|decision| decision.target),
+            Some(ReplyTarget::Live("live".into()))
+        );
     }
 
     #[test]

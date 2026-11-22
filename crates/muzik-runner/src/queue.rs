@@ -35,6 +35,8 @@ impl From<muzik_store::Error> for EnqueueError {
     }
 }
 
+pub const QUESTION_CHANGED: &str = "The question changed. Review the new question.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Answered {
     Saved,
@@ -213,18 +215,6 @@ impl Jobs {
         }
         drop(store);
         Ok(queued)
-    }
-
-    /// # Errors
-    /// Returns an error when the job queue cannot be read or written.
-    pub fn answer(&self, id: i64, value: &Value) -> crate::Result<bool> {
-        let store = self.store();
-        let kind = store
-            .get(id)?
-            .and_then(|job| job.question)
-            .and_then(|question| question.get("kind").cloned())
-            .unwrap_or(Value::Null);
-        Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
     /// # Errors

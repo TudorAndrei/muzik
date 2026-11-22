@@ -605,10 +605,13 @@ impl Muzik {
     }
 
     fn reply(&mut self, value: Value, window: &mut Window, cx: &mut Context<Self>) {
-        match self.activity.reply() {
-            Some(ReplyTarget::Live(id)) => self.send_reply(id, value, cx),
-            Some(ReplyTarget::Queue(id)) => self.send_answer(Some(id), value, cx),
-            None => return,
+        let Some(decision) = self.activity.reply() else {
+            return;
+        };
+        match (decision.target(), decision.version()) {
+            (ReplyTarget::Live(id), _) => self.send_reply(id.clone(), value, cx),
+            (ReplyTarget::Queue(id), Some(version)) => self.send_answer(*id, version, value, cx),
+            (ReplyTarget::Queue(_), None) => {}
         }
         self.prepare_decision(window, cx);
         cx.notify();
