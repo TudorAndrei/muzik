@@ -32,6 +32,12 @@ pub struct AppOptions {
     pub sink: Sink,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceEdit {
+    pub changed: bool,
+    pub files_error: Option<String>,
+}
+
 pub struct App {
     jobs: Arc<Jobs>,
     runner: Option<Runner>,
@@ -206,26 +212,23 @@ impl App {
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<bool> {
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> crate::Result<SourceEdit> {
         let renamed = self.edit(|repository| Ok(repository.rename(playlist_id, title)?))?;
-        self.follow_playlists();
-        Ok(renamed)
+        Ok(self.followed(renamed))
     }
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<bool> {
+    pub fn remove_source(&self, playlist_id: &str) -> crate::Result<SourceEdit> {
         let removed = self.edit(|repository| Ok(repository.remove(playlist_id)?))?;
-        self.follow_playlists();
-        Ok(removed)
+        Ok(self.followed(removed))
     }
 
     /// # Errors
     /// Returns an error when the watchlist cannot be saved.
-    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> crate::Result<bool> {
+    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> crate::Result<SourceEdit> {
         let changed = self.edit(|repository| Ok(repository.set_playlist_file(playlist_id, on)?))?;
-        self.follow_playlists();
-        Ok(changed)
+        Ok(self.followed(changed))
     }
 
     /// # Errors
@@ -234,17 +237,23 @@ impl App {
         watchlist::write_playlists(&Settings::resolve(&self.paths, &json!({}))?)
     }
 
-    fn follow_playlists(&self) {
+    fn followed(&self, changed: bool) -> SourceEdit {
+        SourceEdit {
+            changed,
+            files_error: self.follow_playlists(),
+        }
+    }
+
+    fn follow_playlists(&self) -> Option<String> {
         let enabled = Settings::resolve(&self.paths, &json!({}))
             .is_ok_and(|settings| settings.playlists.is_some());
         if !enabled {
-            return;
+            return None;
         }
-        if let Err(error) = self.write_playlists() {
-            (self.sink)(AppEvent::WatchlistError(format!(
-                "The playlist files were not updated: {error}"
-            )));
-        }
+        let error = self.write_playlists().err()?;
+        let message = format!("The playlist files were not updated: {error}");
+        (self.sink)(AppEvent::WatchlistError(message.clone()));
+        Some(message)
     }
 
     /// # Errors

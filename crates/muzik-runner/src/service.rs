@@ -1,5 +1,5 @@
 use crate::agent::{Chooser, Codex};
-use crate::app::WatchlistCheck;
+use crate::app::{SourceEdit, WatchlistCheck};
 use crate::library_info::{self, LibraryInfo};
 use crate::library_tasks::LibraryTask;
 use crate::thumbnails::{self, ThumbnailUpdate};
@@ -164,7 +164,7 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the playlist ID is empty or the source cannot be saved.
-    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> Result<bool> {
+    pub fn set_source_playlist(&self, playlist_id: &str, on: bool) -> Result<SourceEdit> {
         self.app
             .set_source_playlist(required("playlist_id", playlist_id)?, on)
     }
@@ -256,7 +256,7 @@ impl Service {
 
     /// # Errors
     /// Returns an error when an argument is empty or the source cannot be renamed.
-    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<bool> {
+    pub fn rename_source(&self, playlist_id: &str, title: &str) -> Result<SourceEdit> {
         self.app.rename_source(
             required("playlist_id", playlist_id)?,
             required("title", title)?,
@@ -265,7 +265,7 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the playlist ID is empty or the source cannot be removed.
-    pub fn remove_source(&self, playlist_id: &str) -> Result<bool> {
+    pub fn remove_source(&self, playlist_id: &str) -> Result<SourceEdit> {
         self.app
             .remove_source(required("playlist_id", playlist_id)?)
     }
@@ -685,9 +685,14 @@ mod tests {
         backend
             .add_source("https://www.youtube.com/playlist?list=PL123")
             .unwrap();
-        assert!(backend.rename_source("PL123", "  New name  ").unwrap());
+        assert!(
+            backend
+                .rename_source("PL123", "  New name  ")
+                .unwrap()
+                .changed
+        );
         assert!(backend.rename_source("PL123", "").is_err());
-        assert!(backend.remove_source("PL123").unwrap());
+        assert!(backend.remove_source("PL123").unwrap().changed);
     }
 
     #[test]
@@ -706,9 +711,11 @@ mod tests {
         defaults.playlists = true;
         backend.save_defaults(&defaults).unwrap();
         assert!(file.is_file());
-        assert!(backend.set_source_playlist("PL123", false).unwrap());
+        let off = backend.set_source_playlist("PL123", false).unwrap();
+        assert!(off.changed);
+        assert_eq!(off.files_error, None);
         assert!(!file.exists());
-        assert!(backend.set_source_playlist("PL123", true).unwrap());
+        assert!(backend.set_source_playlist("PL123", true).unwrap().changed);
         assert!(file.is_file());
         defaults.playlists = false;
         backend.save_defaults(&defaults).unwrap();
@@ -733,6 +740,27 @@ mod tests {
         fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
         backend.save_defaults(&defaults).unwrap();
         assert!(file.is_file());
+    }
+
+    #[test]
+    fn a_failed_playlist_write_after_a_source_edit_is_returned_to_the_caller() {
+        let (_state, backend, _) = started(false).unwrap();
+        let beets = backend.paths().beets.clone();
+        fs::create_dir_all(beets.parent().unwrap()).unwrap();
+        fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+        backend
+            .add_source("https://www.youtube.com/playlist?list=PL123")
+            .unwrap();
+        let mut defaults = backend.defaults();
+        defaults.playlists = true;
+        backend.save_defaults(&defaults).unwrap();
+        fs::write(&beets, "directory: [\n").unwrap();
+        let edit = backend.set_source_playlist("PL123", false).unwrap();
+        assert!(edit.changed);
+        assert!(
+            edit.files_error
+                .is_some_and(|message| message.starts_with("The playlist files were not updated"))
+        );
     }
 
     #[test]

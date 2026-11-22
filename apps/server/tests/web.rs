@@ -473,6 +473,44 @@ async fn an_item_link_follows_the_item_when_the_list_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_playlist_file_that_cannot_be_written_is_reported_with_the_result() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let beets = Paths::under(app.home.path()).beets;
+    std::fs::create_dir_all(beets.parent().unwrap()).unwrap();
+    std::fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
+    app.router
+        .handle(post("/watchlist/add", PLAYLIST_FORM, Some(&cookie)))
+        .await;
+    let response = app
+        .router
+        .handle(post(
+            "/settings/defaults",
+            "jobs=3&min_bitrate=192&audio_source=soulseek&playlists=on",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(
+        location(&response).contains("notice="),
+        "{}",
+        location(&response)
+    );
+    std::fs::write(&beets, "directory: [\n").unwrap();
+    let response = app
+        .router
+        .handle(post(
+            &format!("/watchlist/playlist-file?source={SOURCE}"),
+            &format!("playlist_id={SOURCE}&on=false"),
+            Some(&cookie),
+        ))
+        .await;
+    let target = location(&response).to_owned();
+    assert!(target.contains("error="), "{target}");
+    assert!(target.contains("Playlist+file+turned+off"), "{target}");
+    assert!(target.contains("not+updated"), "{target}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_item_of_another_source_is_not_selected() {
     let app = app(Some(TOKEN));
     seed(&app, &[(1, "One"), (2, "Two")]);

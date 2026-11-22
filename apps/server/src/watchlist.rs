@@ -1092,6 +1092,13 @@ struct SourceForm {
     on: String,
 }
 
+fn saved(done: &str, files_error: Option<String>) -> Result<String, String> {
+    files_error.map_or_else(
+        || Ok(done.to_owned()),
+        |error| Err(format!("{done}. {error}")),
+    )
+}
+
 #[route(POST "/watchlist/rename")]
 pub async fn rename(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
     auth::require(cx).await?;
@@ -1100,11 +1107,11 @@ pub async fn rename(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
         .run(move |service| service.rename_source(&form.playlist_id, &form.title))
         .await?;
     Ok(match outcome {
-        Ok(true) => {
+        Ok(edit) if edit.changed => {
             reload(cx).await?;
-            back(cx, place, Ok("Playlist renamed".into()))
+            back(cx, place, saved("Playlist renamed", edit.files_error))
         }
-        Ok(false) => back(
+        Ok(_) => back(
             cx,
             place,
             Err("The playlist is not in the watchlist.".into()),
@@ -1122,15 +1129,16 @@ pub async fn remove(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOther> {
         .run(move |service| service.remove_source(&form.playlist_id))
         .await?;
     Ok(match outcome {
-        Ok(true) => {
+        Ok(edit) if edit.changed => {
             reload(cx).await?;
             if place.source == removed {
                 place.source.clear();
                 place.item.clear();
+                place.page = None;
             }
-            back(cx, place, Ok("Playlist removed".into()))
+            back(cx, place, saved("Playlist removed", edit.files_error))
         }
-        Ok(false) => back(
+        Ok(_) => back(
             cx,
             place,
             Err("The playlist is not in the watchlist.".into()),
@@ -1148,19 +1156,16 @@ pub async fn playlist_file(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeO
         .run(move |service| service.set_source_playlist(&form.playlist_id, on))
         .await?;
     Ok(match outcome {
-        Ok(true) => {
+        Ok(edit) if edit.changed => {
             reload(cx).await?;
-            back(
-                cx,
-                place,
-                Ok(if on {
-                    "Playlist file turned on".into()
-                } else {
-                    "Playlist file turned off".into()
-                }),
-            )
+            let done = if on {
+                "Playlist file turned on"
+            } else {
+                "Playlist file turned off"
+            };
+            back(cx, place, saved(done, edit.files_error))
         }
-        Ok(false) => back(
+        Ok(_) => back(
             cx,
             place,
             Err("The playlist is not in the watchlist.".into()),
