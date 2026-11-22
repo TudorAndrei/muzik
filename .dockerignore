@@ -15,3 +15,5 @@ docs/
 features/
 perf-log.md
 .tmp/
+packaging/server/*.env
+!packaging/server/*.env.example
