@@ -697,6 +697,9 @@ pub async fn live_board(
         let mut changes = events(cx).0.subscribe();
         let mut shown: Option<Board> = None;
         loop {
+            if !auth::authenticated(cx).await? {
+                break emit! { <p class="empty">"The session has ended. Reload the page to sign in again."</p> };
+            }
             let current = load(cx, &place).await?;
             let token = if shown.as_ref() == Some(&current) {
                 None
@@ -709,9 +712,6 @@ pub async fn live_board(
                     Some(token) => break Ok(token),
                     None => continue,
                 }
-            }
-            if !auth::authenticated(cx).await? {
-                break emit! { <p class="empty">"The session has ended. Reload the page to sign in again."</p> };
             }
             if !settle(&mut changes, relevant).await {
                 break if let Some(token) = token {
