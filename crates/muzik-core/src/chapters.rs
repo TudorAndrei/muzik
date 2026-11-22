@@ -161,7 +161,7 @@ pub const TRACKLIST_COMMENTS: usize = 3;
 /// comments first, then the most liked. It is empty when none of them has two timestamps.
 #[must_use]
 pub fn tracklist_comments(metadata: &Value) -> Vec<String> {
-    static TIME: LazyLock<Regex> = LazyLock::new(|| fixed(r"\b\d{1,2}:\d{2}(?::\d{2})?\b"));
+    static TIME: LazyLock<Regex> = LazyLock::new(|| fixed(r"\b\d{1,3}:\d{2}(?::\d{2})?\b"));
     let mut comments: Vec<&Value> = metadata
         .get("comments")
         .and_then(Value::as_array)
@@ -514,6 +514,17 @@ mod tests {
             {"text":"great","like_count":2}
         ]});
         assert_eq!(tracklist_comments(&metadata), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_start_time_past_ninety_nine_minutes_counts_as_a_timestamp() {
+        let metadata = serde_json::json!({"comments":[
+            {"text":"First starts at 0:00; Second starts at 100:00."}
+        ]});
+        assert_eq!(
+            tracklist_comments(&metadata),
+            ["First starts at 0:00; Second starts at 100:00."]
+        );
     }
 
     #[test]
