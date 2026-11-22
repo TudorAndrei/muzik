@@ -291,6 +291,31 @@ async fn the_event_stream_sends_each_event_as_json() {
 const PLAYLIST_FORM: &str = "url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLabcdefgh12345";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_slow_event_stream_is_told_to_reload_the_jobs() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let response = app.router.handle(get("/api/events", Some(&cookie))).await;
+    let mut stream = response.into_body().into_data_stream();
+    for number in 0..2048 {
+        app.bus.publish(AppEvent::JobCancelled {
+            job_id: format!("queue-{number}"),
+        });
+    }
+    let chunk = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let frame = String::from_utf8(chunk.to_vec()).unwrap();
+    let data = frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data:"))
+        .unwrap();
+    let event: Value = serde_json::from_str(data.trim()).unwrap();
+    assert_eq!(event, serde_json::json!({"type": "resync"}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_event_stream_ends_when_the_session_ends() {
     let app = app(Some(TOKEN));
     let cookie = sign_in(&app).await;

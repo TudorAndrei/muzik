@@ -1,6 +1,6 @@
 use futures_util::{Stream, stream};
 use muzik_runner::service::Service;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::time::Duration;
 
 use tokio::{sync::broadcast::error::RecvError, time::MissedTickBehavior};
@@ -52,7 +52,12 @@ pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Even
                                     (receiver, watch, check),
                                 ));
                             }
-                            Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Lagged(_)) => {
+                                return Some((
+                                    Event::new().json_data(&json!({"type": "resync"})),
+                                    (receiver, watch, check),
+                                ));
+                            }
                             Err(RecvError::Closed) => return None,
                         }
                     }
