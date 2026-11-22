@@ -85,17 +85,17 @@ fn youtube<O: WorkflowOperations + ?Sized>(
     if !found.is_empty() {
         return Ok(found);
     }
-    Ok(read_top_comments(&comments, cancelled, operations))
+    read_top_comments(&comments, cancelled, operations)
 }
 
 fn read_top_comments<O: WorkflowOperations + ?Sized>(
     metadata: &Value,
     cancelled: &AtomicBool,
     operations: &mut O,
-) -> Vec<Chapter> {
+) -> Result<Vec<Chapter>> {
     let comments = chapters::tracklist_comments(metadata);
     if comments.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let title = metadata
         .get("title")
@@ -103,14 +103,13 @@ fn read_top_comments<O: WorkflowOperations + ?Sized>(
         .unwrap_or_default();
     let duration = metadata.get("duration").and_then(Value::as_f64);
     match operations.read_comment_tracklist(title, duration, &comments, cancelled) {
-        Ok(found) => found,
+        Ok(found) => Ok(found),
+        Err(_) if cancelled.load(Ordering::SeqCst) => Err("cancelled".into()),
         Err(error) => {
-            if !cancelled.load(Ordering::SeqCst) {
-                operations.warn(&format!(
-                    "The agent could not read the comment tracklist: {error}"
-                ));
-            }
-            Vec::new()
+            operations.warn(&format!(
+                "The agent could not read the comment tracklist: {error}"
+            ));
+            Ok(Vec::new())
         }
     }
 }
@@ -311,7 +310,8 @@ mod tests {
             answer: Some(Ok(chapters.clone())),
             ..Reader::default()
         };
-        let found = read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader);
+        let found =
+            read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader).unwrap();
         assert_eq!(found, chapters);
         assert_eq!(
             reader.asked,
@@ -328,12 +328,24 @@ mod tests {
             answer: Some(Err("Codex is not installed.".into())),
             ..Reader::default()
         };
-        let found = read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader);
+        let found =
+            read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader).unwrap();
         assert_eq!(found, Vec::<Chapter>::new());
         assert_eq!(
             reader.warnings,
             ["The agent could not read the comment tracklist: Codex is not installed."]
         );
+    }
+
+    #[test]
+    fn a_cancelled_agent_read_stops_the_lookup() {
+        let mut reader = Reader {
+            answer: Some(Err("Codex was stopped.".into())),
+            ..Reader::default()
+        };
+        let result = read_top_comments(&top_comments(), &AtomicBool::new(true), &mut reader);
+        assert_eq!(result.unwrap_err().to_string(), "cancelled");
+        assert_eq!(reader.warnings, Vec::<String>::new());
     }
 
     #[test]
