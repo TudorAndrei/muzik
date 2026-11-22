@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use muzik_core::paths::Paths;
 use muzik_runner::{AppEvent, service::Service};
+use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use topcoat::{
     asset::RouterBuilderAssetExt,
@@ -38,10 +39,12 @@ pub struct Config {
 pub struct Bus {
     hub: Arc<Hub>,
     sender: broadcast::Sender<AppEvent>,
+    order: Arc<Mutex<()>>,
 }
 
 impl Bus {
     pub fn publish(&self, event: AppEvent) {
+        let _order = self.order.lock();
         self.hub.apply(&event);
         let _ = self.sender.send(event);
     }
@@ -58,6 +61,7 @@ pub fn build(paths: Paths, config: Config) -> muzik_runner::Result<Server> {
     let bus = Bus {
         hub: Arc::new(Hub::new()),
         sender: broadcast::channel::<AppEvent>(EVENT_BUFFER).0,
+        order: Arc::default(),
     };
     let service = Service::start(paths, {
         let bus = bus.clone();
