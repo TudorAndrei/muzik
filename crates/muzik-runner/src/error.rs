@@ -35,6 +35,14 @@ pub enum Error {
     GateCancelled(Gate),
     #[error("job cancelled")]
     Cancelled,
+    #[error("{field} must be a non-empty string.")]
+    Invalid { field: &'static str },
+    #[error("The job is not active.")]
+    JobNotActive,
+    #[error("The decision is not pending.")]
+    DecisionNotPending,
+    #[error("A Spotify login is already active.")]
+    SpotifyLoginActive,
     #[error("{0}")]
     Message(String),
 }

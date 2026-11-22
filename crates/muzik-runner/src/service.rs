@@ -96,10 +96,10 @@ pub struct Service {
     writes: Mutex<bool>,
 }
 
-fn required<'a>(key: &str, value: &'a str) -> Result<&'a str> {
+fn required<'a>(field: &'static str, value: &'a str) -> Result<&'a str> {
     Some(value.trim())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| Error::Message(format!("{key} must be a non-empty string.")))
+        .ok_or(Error::Invalid { field })
 }
 
 impl Service {
@@ -215,7 +215,7 @@ impl Service {
             active.cancel.store(true, Ordering::Relaxed);
             return Ok(());
         }
-        Err("The job is not active.".into())
+        Err(Error::JobNotActive)
     }
 
     /// # Errors
@@ -225,7 +225,7 @@ impl Service {
         if self.app.reply(decision_id, value) {
             Ok(())
         } else {
-            Err("The decision is not pending.".into())
+            Err(Error::DecisionNotPending)
         }
     }
 
@@ -394,7 +394,7 @@ impl Service {
     pub fn spotify_login(&self) -> Result<SpotifyLogin> {
         let mut slot = self.login.lock();
         if slot.is_some() {
-            return Err("A Spotify login is already active.".into());
+            return Err(Error::SpotifyLoginActive);
         }
         let number = self.logins.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         let job_id = format!("spotify-login-{number}");
@@ -417,7 +417,7 @@ impl Service {
 #[cfg(test)]
 mod tests {
     use super::{ActiveLogin, ItemRequest, Service};
-    use crate::AppEvent;
+    use crate::{AppEvent, Error};
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
@@ -519,10 +519,24 @@ mod tests {
     fn invalid_requests_are_rejected() {
         let (_state, backend, _) = started(true).unwrap();
         assert!(backend.start_workflow(&json!({"raw":"  "})).is_err());
-        assert!(backend.reply("", json!("as_is")).is_err());
-        assert!(backend.reply("missing", json!("as_is")).is_err());
-        assert!(backend.cancel("").is_err());
-        assert!(backend.cancel("queue-999").is_err());
+        assert!(matches!(
+            backend.reply("", json!("as_is")),
+            Err(Error::Invalid {
+                field: "decision_id"
+            })
+        ));
+        assert!(matches!(
+            backend.reply("missing", json!("as_is")),
+            Err(Error::DecisionNotPending)
+        ));
+        assert!(matches!(
+            backend.cancel(""),
+            Err(Error::Invalid { field: "job_id" })
+        ));
+        assert!(matches!(
+            backend.cancel("queue-999"),
+            Err(Error::JobNotActive)
+        ));
     }
 
     #[test]
@@ -653,7 +667,10 @@ mod tests {
             job_id: "spotify-login-test".into(),
             cancel: Arc::clone(&cancel),
         });
-        assert!(backend.spotify_login().is_err());
+        assert!(matches!(
+            backend.spotify_login(),
+            Err(Error::SpotifyLoginActive)
+        ));
         backend.cancel("spotify-login-test").unwrap();
         assert!(cancel.load(Ordering::Relaxed));
     }
