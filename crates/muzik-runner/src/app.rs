@@ -41,11 +41,17 @@ impl From<bool> for PlaylistFile {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Storage {
+    Disk,
+    Memory,
+}
+
 pub struct AppOptions {
     pub paths: Paths,
     pub workers: usize,
     pub runner: RunnerMode,
-    pub in_memory: bool,
+    pub storage: Storage,
     pub chooser: Option<Arc<dyn Chooser>>,
     pub sink: Sink,
 }
@@ -69,10 +75,9 @@ impl App {
     /// # Errors
     /// Returns an error when the job queue cannot be opened or the runner cannot start.
     pub fn start(options: AppOptions) -> crate::Result<Self> {
-        let jobs = Arc::new(if options.in_memory {
-            Jobs::in_memory(&options.paths)?
-        } else {
-            Jobs::open(&options.paths)?
+        let jobs = Arc::new(match options.storage {
+            Storage::Memory => Jobs::in_memory(&options.paths)?,
+            Storage::Disk => Jobs::open(&options.paths)?,
         });
         let decisions: Decisions = Arc::new(Mutex::new(HashMap::new()));
         let generation = Arc::new(AtomicU64::new(0));
@@ -375,7 +380,7 @@ fn ask(
 
 #[cfg(test)]
 mod tests {
-    use super::{App, AppOptions, RunnerMode};
+    use super::{App, AppOptions, RunnerMode, Storage};
     use crate::events::AppEvent;
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
@@ -390,7 +395,7 @@ mod tests {
             paths: Paths::under(root),
             workers: 2,
             runner: RunnerMode::Off,
-            in_memory: true,
+            storage: Storage::Memory,
             chooser: None,
             sink: Arc::new(move |event| {
                 let _ = sender.send(event);

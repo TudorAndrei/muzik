@@ -5,8 +5,8 @@
 
 use futures_util::StreamExt;
 use muzik_core::{DecisionKind, paths::Paths};
-use muzik_runner::AppEvent;
-use muzik_server::{Bus, Config, build};
+use muzik_runner::{AppEvent, Storage, service::ServiceOptions};
+use muzik_server::{Bus, Config, build_with};
 use serde_json::Value;
 use tempfile::TempDir;
 use topcoat::router::{
@@ -27,8 +27,13 @@ fn app(token: Option<&str>) -> App {
     for dir in [&paths.data, &paths.config, &paths.cache] {
         std::fs::create_dir_all(dir).unwrap();
     }
-    let server = build(
+    let server = build_with(
         paths,
+        ServiceOptions {
+            storage: Storage::Memory,
+            chooser: None,
+            ..ServiceOptions::default()
+        },
         Config {
             token: token.map(str::to_owned),
             secure_cookie: false,

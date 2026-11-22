@@ -20,7 +20,7 @@ pub mod thumbnails;
 pub mod watchlist;
 mod workflow_result;
 
-pub use app::{App, AppOptions, PlaylistFile, RunnerMode};
+pub use app::{App, AppOptions, PlaylistFile, RunnerMode, Storage};
 pub use error::{Error, Result};
 pub use events::{AppEvent, Source};
 pub use muzik_bandcamp::Status as BandcampStatus;

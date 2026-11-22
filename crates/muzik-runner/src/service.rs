@@ -6,7 +6,7 @@ use crate::setup::{ServiceStatus, SoulseekProfile};
 use crate::thumbnails::{self, ThumbnailUpdate};
 use crate::{
     App, AppEvent, AppOptions, Error, JobsSnapshot, PlaylistFile, QuestionVersion, Result,
-    RunnerMode, Sink, setup,
+    RunnerMode, Sink, Storage, setup,
 };
 use muzik_bandcamp as bandcamp;
 use muzik_core::app_config::{self, GuiDefaults};
@@ -22,6 +22,25 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const WORKERS: usize = 5;
+
+#[derive(Clone)]
+pub struct ServiceOptions {
+    pub workers: usize,
+    pub runner: RunnerMode,
+    pub storage: Storage,
+    pub chooser: Option<Arc<dyn Chooser>>,
+}
+
+impl Default for ServiceOptions {
+    fn default() -> Self {
+        Self {
+            workers: WORKERS,
+            runner: RunnerMode::Run,
+            storage: Storage::Disk,
+            chooser: Some(Arc::new(Codex)),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ItemRequest {
@@ -118,16 +137,18 @@ impl Service {
     /// # Errors
     /// Returns an error when the job queue cannot be opened or the runner cannot start.
     pub fn start(paths: Paths, sink: Sink) -> Result<Self> {
-        Self::with(paths, RunnerMode::Run, sink)
+        Self::start_with(paths, ServiceOptions::default(), sink)
     }
 
-    pub(crate) fn with(paths: Paths, runner: RunnerMode, sink: Sink) -> Result<Self> {
+    /// # Errors
+    /// Returns an error when the job queue cannot be opened or the runner cannot start.
+    pub fn start_with(paths: Paths, options: ServiceOptions, sink: Sink) -> Result<Self> {
         let app = App::start(AppOptions {
             paths,
-            workers: WORKERS,
-            runner,
-            in_memory: cfg!(test),
-            chooser: (!cfg!(test)).then(|| -> Arc<dyn Chooser> { Arc::new(Codex) }),
+            workers: options.workers,
+            runner: options.runner,
+            storage: options.storage,
+            chooser: options.chooser,
             sink,
         })?;
         Ok(Self {
@@ -433,8 +454,8 @@ impl Service {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActiveLogin, ItemRequest, Service};
-    use crate::{AppEvent, Error, PlaylistFile, RunnerMode};
+    use super::{ActiveLogin, ItemRequest, Service, ServiceOptions};
+    use crate::{AppEvent, Error, PlaylistFile, RunnerMode, Storage};
     use muzik_core::paths::Paths;
     use muzik_store::watchlist::{ItemAction, ItemId};
     use serde_json::json;
@@ -491,16 +512,17 @@ mod tests {
     }
 
     fn started(
-        run: bool,
+        runner: RunnerMode,
     ) -> Result<(tempfile::TempDir, Service, Events), Box<dyn std::error::Error>> {
         let state = tempfile::tempdir()?;
         let (sender, receiver) = mpsc::channel();
-        let service = Service::with(
+        let service = Service::start_with(
             Paths::under(state.path()),
-            if run {
-                RunnerMode::Run
-            } else {
-                RunnerMode::Off
+            ServiceOptions {
+                runner,
+                storage: Storage::Memory,
+                chooser: None,
+                ..ServiceOptions::default()
             },
             Arc::new(move |event| {
                 let _ = sender.send(event);
@@ -538,7 +560,7 @@ mod tests {
 
     #[test]
     fn invalid_requests_are_rejected() {
-        let (_state, backend, _) = started(true).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
         assert!(backend.start_workflow(&json!({"raw":"  "})).is_err());
         assert!(matches!(
             backend.reply("", json!("as_is")),
@@ -565,7 +587,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let audio = dir.path().join("track.flac");
         fs::write(&audio, b"audio").unwrap();
-        let (_state, backend, mut events) = started(true).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
         let job = backend
             .start_workflow(&json!({"raw":audio,"no_organize":true,"no_split":true,"dry_run":true}))
             .unwrap();
@@ -589,7 +611,7 @@ mod tests {
         let second = tempfile::tempdir().unwrap();
         let (audio_one, database_one, config_one) = fixture_import(first.path()).unwrap();
         let (audio_two, database_two, config_two) = fixture_import(second.path()).unwrap();
-        let (_state, backend, mut events) = started(true).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
         let mut jobs = Vec::new();
         for (audio, config) in [(&audio_one, &config_one), (&audio_two, &config_two)] {
             jobs.push(
@@ -630,7 +652,7 @@ mod tests {
     fn cancel_ends_a_pending_local_import_decision() {
         let dir = tempfile::tempdir().unwrap();
         let (audio, database, config) = fixture_import(dir.path()).unwrap();
-        let (_state, backend, mut events) = started(true).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
         let job = backend
             .start_workflow(&json!({"raw":audio,"config":config,"no_split":true}))
             .unwrap();
@@ -653,7 +675,7 @@ mod tests {
 
     #[test]
     fn cancel_removes_a_queued_item_job() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let item = ItemRequest {
             id: ItemId::new("PL1", Some("abcdefghijk")),
             title: "Song".into(),
@@ -670,7 +692,7 @@ mod tests {
 
     #[test]
     fn thumbnails_already_in_progress_are_not_fetched_again() {
-        let (_state, backend, _) = started(true).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
         assert!(backend.cache_thumbnails(Vec::new()).is_none());
         backend.thumbnails.lock().insert("abcdefghijk".into());
         assert!(
@@ -682,7 +704,7 @@ mod tests {
 
     #[test]
     fn spotify_login_uses_its_own_slot() {
-        let (_state, backend, _) = started(true).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
         let cancel = Arc::new(AtomicBool::new(false));
         *backend.login.lock() = Some(ActiveLogin {
             job_id: "spotify-login-test".into(),
@@ -698,7 +720,7 @@ mod tests {
 
     #[test]
     fn watchlist_load_returns_saved_cards_before_local_check() {
-        let (_state, backend, mut events) = started(true).unwrap();
+        let (_state, backend, mut events) = started(RunnerMode::Run).unwrap();
         let playlist = backend
             .add_source("https://www.youtube.com/playlist?list=PLnative123")
             .unwrap();
@@ -719,7 +741,7 @@ mod tests {
 
     #[test]
     fn watchlist_edits_go_through_the_app() {
-        let (_state, backend, _) = started(true).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Run).unwrap();
         backend
             .add_source("https://www.youtube.com/playlist?list=PL123")
             .unwrap();
@@ -735,7 +757,7 @@ mod tests {
 
     #[test]
     fn playlist_files_follow_the_setting_and_the_source_switch() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let beets = backend.paths().beets.clone();
         fs::create_dir_all(beets.parent().unwrap()).unwrap();
         fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
@@ -769,7 +791,7 @@ mod tests {
 
     #[test]
     fn a_failed_playlist_write_is_retried_by_the_next_save() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let beets = backend.paths().beets.clone();
         fs::create_dir_all(beets.parent().unwrap()).unwrap();
         fs::write(&beets, "directory: [\n").unwrap();
@@ -789,7 +811,7 @@ mod tests {
 
     #[test]
     fn a_failed_playlist_write_after_a_source_edit_is_returned_to_the_caller() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let beets = backend.paths().beets.clone();
         fs::create_dir_all(beets.parent().unwrap()).unwrap();
         fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
@@ -812,7 +834,7 @@ mod tests {
 
     #[test]
     fn a_failed_playlist_write_after_a_source_edit_is_retried_by_the_next_save() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let beets = backend.paths().beets.clone();
         fs::create_dir_all(beets.parent().unwrap()).unwrap();
         fs::write(&beets, "directory: music\nlibrary: library.db\n").unwrap();
@@ -834,7 +856,7 @@ mod tests {
 
     #[test]
     fn spotify_status_reads_the_saved_client_id_and_redirect() {
-        let (_state, backend, _) = started(false).unwrap();
+        let (_state, backend, _) = started(RunnerMode::Off).unwrap();
         let config = backend.paths().config_file();
         fs::create_dir_all(config.parent().unwrap()).unwrap();
         fs::write(

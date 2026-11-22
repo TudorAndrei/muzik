@@ -13,7 +13,10 @@ pub mod watchlist;
 use std::sync::Arc;
 
 use muzik_core::paths::Paths;
-use muzik_runner::{AppEvent, service::Service};
+use muzik_runner::{
+    AppEvent,
+    service::{Service, ServiceOptions},
+};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use topcoat::{
@@ -58,12 +61,22 @@ pub struct Server {
 /// # Errors
 /// Returns an error when the job queue cannot be opened or the runner cannot start.
 pub fn build(paths: Paths, config: Config) -> muzik_runner::Result<Server> {
+    build_with(paths, ServiceOptions::default(), config)
+}
+
+/// # Errors
+/// Returns an error when the job queue cannot be opened or the runner cannot start.
+pub fn build_with(
+    paths: Paths,
+    options: ServiceOptions,
+    config: Config,
+) -> muzik_runner::Result<Server> {
     let bus = Bus {
         hub: Arc::new(Hub::new()),
         sender: broadcast::channel::<AppEvent>(EVENT_BUFFER).0,
         order: Arc::default(),
     };
-    let service = Service::start(paths, {
+    let service = Service::start_with(paths, options, {
         let bus = bus.clone();
         Arc::new(move |event| bus.publish(event))
     })?;
