@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fmt, str::FromStr, time::Duration};
 
-use muzik_core::DecisionKind;
+use muzik_core::{DecisionKind, app_config::GuiDefaults};
 use muzik_runner::{
     Answered, AppEvent, JobsSnapshot, OpenJob, QUESTION_CHANGED, QuestionVersion, choices, job_id,
     service::Service,
@@ -550,9 +550,28 @@ pub async fn start_download(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeO
         ));
     }
     let outcome = backend(cx)
-        .run(move |service| service.start_workflow(&json!({"raw": raw})))
+        .run(move |service| {
+            let params =
+                launch_params(&service.defaults(), raw).map_err(|error| error.to_string())?;
+            service
+                .start_workflow(&params)
+                .map_err(|error| error.to_string())
+        })
         .await?;
     Ok(back(cx, describe(outcome, |id| format!("Queued {id}"))))
+}
+
+fn launch_params(defaults: &GuiDefaults, raw: String) -> Result<Value, serde_json::Error> {
+    let Value::Object(fields) = serde_json::to_value(defaults)? else {
+        return Err(serde::ser::Error::custom("the defaults are not a mapping"));
+    };
+    Ok(Value::Object(
+        fields
+            .into_iter()
+            .filter(|(name, _)| name != "motion")
+            .chain([("raw".to_owned(), Value::String(raw))])
+            .collect(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -685,10 +704,25 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{Target, chapter_answer};
+    use super::{Target, chapter_answer, launch_params};
+    use muzik_core::app_config::GuiDefaults;
     use muzik_runner::QuestionVersion;
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn a_queued_download_carries_the_saved_defaults_and_the_input() {
+        let defaults = GuiDefaults {
+            jobs: 3,
+            review: true,
+            ..GuiDefaults::default()
+        };
+        let params = launch_params(&defaults, "a song".to_owned()).unwrap();
+        assert_eq!(params["raw"], "a song");
+        assert_eq!(params["jobs"], 3);
+        assert_eq!(params["review"], true);
+        assert!(params.get("motion").is_none());
+    }
 
     fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
