@@ -105,6 +105,17 @@ fn album_song(world: &mut ImportWorld, title: String) -> StepResult {
     Ok(())
 }
 
+#[given(expr = "the library folder {string} has the file {string}")]
+fn library_folder_file(world: &mut ImportWorld, folder: String, name: String) -> StepResult {
+    let folder = world.root.join(folder);
+    fs::create_dir_all(&folder)?;
+    fs::copy(
+        crate::support::fixture("muzik-tags/tests/fixtures/cover.png"),
+        folder.join(name),
+    )?;
+    Ok(())
+}
+
 #[given("that album is a compilation")]
 fn album_is_compilation(world: &mut ImportWorld) -> StepResult {
     let id = old_album(world)?;

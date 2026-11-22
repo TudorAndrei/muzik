@@ -84,6 +84,7 @@ pub struct PlannedCandidate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DuplicateReason {
     ReleaseId(String),
+    ReleaseName(String),
     SourceId,
     ArtistAndAlbum,
 }
@@ -107,6 +108,13 @@ pub struct AlbumPlan {
 impl AlbumPlan {
     #[must_use]
     pub fn duplicates_for(&self, choice: MatchDecision) -> Vec<Duplicate> {
+        let candidate = match choice {
+            MatchDecision::Candidate(index) => self
+                .candidates
+                .get(index)
+                .map(|candidate| candidate.release.id.0.as_str()),
+            MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
         let selected: BTreeSet<&str> = match choice {
             MatchDecision::Candidate(index) => self
                 .candidates
@@ -125,6 +133,7 @@ impl AlbumPlan {
             .iter()
             .filter(|duplicate| match &duplicate.reason {
                 DuplicateReason::ReleaseId(id) => selected.contains(id.as_str()),
+                DuplicateReason::ReleaseName(id) => candidate == Some(id.as_str()),
                 DuplicateReason::SourceId | DuplicateReason::ArtistAndAlbum => true,
             })
             .cloned()
@@ -246,7 +255,13 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             check_cancelled(cancelled)?;
             let (candidates, recommendation) = self.rank(&current, &releases)?;
             let duplicates = if mode == ImportMode::Album {
-                find_duplicates(&items, &releases, &library_albums, &library_items)
+                find_duplicates(
+                    &items,
+                    &releases,
+                    &candidates,
+                    &library_albums,
+                    &library_items,
+                )
             } else {
                 Vec::new()
             };
@@ -628,6 +643,25 @@ pub(crate) fn shares_a_track<'t>(
     })
 }
 
+fn has_candidate_songs(
+    candidate: &PlannedCandidate,
+    fields: &muzik_library::Fields,
+    existing: &[&muzik_library::Item],
+) -> bool {
+    let release = &candidate.release;
+    same_album_name(fields, &release.artist, &release.title)
+        && (existing.is_empty()
+            || shares_a_track(
+                candidate
+                    .assignment
+                    .pairs
+                    .iter()
+                    .filter_map(|(_, track)| release.tracks.get(*track))
+                    .map(|track| track.title.as_str()),
+                existing,
+            ))
+}
+
 fn track_key(title: &str) -> String {
     comparable(&crate::ftclean::clean(title, "").0)
 }
@@ -635,6 +669,7 @@ fn track_key(title: &str) -> String {
 fn find_duplicates(
     items: &[PlanItem],
     releases: &[ReleaseCandidate],
+    candidates: &[PlannedCandidate],
     albums: &[muzik_library::Album],
     library_items: &[muzik_library::Item],
 ) -> Vec<Duplicate> {
@@ -689,6 +724,14 @@ fn find_duplicates(
             field_text(&album.fields, "mb_albumid")
                 .filter(|id| ids.contains(id))
                 .map(|id| DuplicateReason::ReleaseId(id.to_owned()))
+                .or_else(|| {
+                    candidates
+                        .iter()
+                        .find(|candidate| has_candidate_songs(candidate, &album.fields, existing))
+                        .map(|candidate| {
+                            DuplicateReason::ReleaseName(candidate.release.id.0.clone())
+                        })
+                })
         };
         if let Some(reason) = reason {
             result.push(Duplicate {

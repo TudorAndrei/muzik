@@ -358,8 +358,10 @@ fn place_album(
     }
     if let Some((source, destination)) = &prepared.cover {
         check_cancelled(cancelled)?;
-        files::place(source, destination, Placement::Copy)?;
-        created.push(destination.clone());
+        if source != destination {
+            files::place(source, destination, Placement::Copy)?;
+            created.push(destination.clone());
+        }
         if options.embed_art {
             let bytes = fs::read(source)?;
             let mime = muzik_tags::cover_mime_type(source);
@@ -511,14 +513,14 @@ fn prepare(
             source_id: item.source_id.clone(),
         });
     }
-    let cover = if merge_into.is_some_and(has_art) {
-        None
-    } else {
-        match album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved) {
-            Err(ApplyError::DestinationExists(_)) if merge_into.is_some() => None,
-            cover => cover?,
-        }
-    };
+    let cover = merge_cover(
+        album,
+        merge_into,
+        &prepared,
+        &old_paths,
+        &mut occupied_paths,
+        reserved,
+    )?;
     if let Some((_, destination)) = &cover {
         album_fields.insert("artpath".into(), path_to_sql(destination));
     }
@@ -546,6 +548,10 @@ fn item_fields_in(
     compilation: bool,
     merged: Option<&BTreeMap<String, String>>,
 ) -> (TagData, BTreeMap<String, String>) {
+    if merged.is_some() {
+        tags.fields
+            .insert("comp".into(), if compilation { "1" } else { "0" }.into());
+    }
     let merged = merged.into_iter().flatten();
     for (key, value) in merged
         .clone()
@@ -561,6 +567,25 @@ fn item_fields_in(
             .map(|(key, value)| (key.clone(), value.clone())),
     );
     (tags, fields)
+}
+
+fn merge_cover(
+    album: &AlbumPlan,
+    merge_into: Option<&muzik_library::Album>,
+    prepared: &[PreparedItem],
+    old_paths: &[PathBuf],
+    occupied_paths: &mut Vec<PathBuf>,
+    reserved: &mut BTreeSet<PathBuf>,
+) -> Result<Option<(PathBuf, PathBuf)>, ApplyError> {
+    if merge_into.is_some_and(has_art) {
+        return Ok(None);
+    }
+    match album_cover(album, prepared, old_paths, occupied_paths, reserved) {
+        Err(ApplyError::DestinationExists(existing)) if merge_into.is_some() => {
+            Ok(Some((existing.clone(), existing)))
+        }
+        cover => cover,
+    }
 }
 
 fn has_art(album: &muzik_library::Album) -> bool {

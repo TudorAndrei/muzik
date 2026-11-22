@@ -88,6 +88,19 @@ Feature: Duplicate albums
     And muzik imports the album as it is
     Then the import added no albums
     And every imported file is in "Compilations/Night Lines" in the library folder
+    And the imported file has these tags:
+      | comp | 1 |
+
+  Scenario: A song that joins an album uses the cover file that is already in its folder
+    Given the beets config has the default path "$albumartist/$album/$title"
+    And the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album has the song "Other Song"
+    And the library folder "Mara Vale/Night Lines" has the file "cover.png"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    And muzik imports the album as it is
+    Then the import added 1 song
+    And that album has a cover
 
   Scenario: An album of the same name that has the song is a duplicate
     Given the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
