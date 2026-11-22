@@ -544,18 +544,21 @@ async fn current(cx: &Cx) -> Result<Option<Arc<WatchlistView>>> {
     Ok(hub(cx).watchlist())
 }
 
+fn queued_items(jobs: &serde_json::Value) -> HashSet<ItemId> {
+    jobs.get("open")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|job| job["item"].as_str()?.parse().ok())
+        .collect()
+}
+
 async fn load(cx: &Cx, place: &Place) -> Result<Board> {
     let view = current(cx).await?;
     let (jobs, cache) = backend(cx)
         .run(|service| (service.jobs(), service.paths().cache.clone()))
         .await?;
-    let queued: HashSet<ItemId> = jobs
-        .get("open")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|job| job["item"].as_str()?.parse().ok())
-        .collect();
+    let queued = queued_items(&jobs);
     let board = build_board(
         view.as_deref(),
         hub(cx).watchlist_error(),
@@ -1300,24 +1303,59 @@ pub async fn retry_failed(cx: &Cx, Form(form): Form<SourceForm>) -> Result<SeeOt
             action: ItemAction::Retry,
         })
         .collect();
-    let outcome = backend(cx)
+    let report = backend(cx)
         .run(move |service| {
-            let mut queued = 0_usize;
-            for request in &requests {
-                match service.run_item(request) {
-                    Ok(_) => queued = queued.saturating_add(1),
-                    Err(error) if queued == 0 => return Err(error.to_string()),
-                    Err(_) => {}
-                }
-            }
-            Ok(queued)
+            let open = queued_items(&service.jobs());
+            retry_all(&requests, &open, |request| {
+                service.run_item(request).map_err(|error| error.to_string())
+            })
         })
         .await?;
-    Ok(back(
-        cx,
-        place,
-        outcome.map(|queued| format!("Queued {queued} items")),
-    ))
+    Ok(back(cx, place, report.outcome()))
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RetryReport {
+    queued: usize,
+    busy: usize,
+    failed: usize,
+    first_error: Option<String>,
+}
+
+impl RetryReport {
+    fn outcome(&self) -> Result<String, String> {
+        let mut parts = vec![format!("Queued {} items", self.queued)];
+        if self.busy > 0 {
+            parts.push(format!("{} already in the queue", self.busy));
+        }
+        if let Some(error) = &self.first_error {
+            parts.push(format!("{} could not be queued: {error}", self.failed));
+        }
+        let text = parts.join(". ");
+        if self.failed > 0 { Err(text) } else { Ok(text) }
+    }
+}
+
+fn retry_all(
+    requests: &[ItemRequest],
+    open: &HashSet<ItemId>,
+    mut run: impl FnMut(&ItemRequest) -> Result<String, String>,
+) -> RetryReport {
+    let mut report = RetryReport::default();
+    for request in requests {
+        if open.contains(&request.id) {
+            report.busy = report.busy.saturating_add(1);
+            continue;
+        }
+        match run(request) {
+            Ok(_) => report.queued = report.queued.saturating_add(1),
+            Err(error) => {
+                report.failed = report.failed.saturating_add(1);
+                report.first_error.get_or_insert(error);
+            }
+        }
+    }
+    report
 }
 
 path_param!(thumbnail_id);
@@ -1347,4 +1385,60 @@ pub async fn thumbnail(
         ],
         bytes,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RetryReport, retry_all};
+    use muzik_runner::service::ItemRequest;
+    use muzik_store::watchlist::{ItemAction, ItemId};
+    use std::collections::HashSet;
+
+    fn request(key: &str) -> ItemRequest {
+        ItemRequest {
+            id: ItemId::new("PL1", Some(key)),
+            title: key.to_owned(),
+            action: ItemAction::Retry,
+        }
+    }
+
+    #[test]
+    fn a_bulk_retry_skips_queued_items_and_goes_on_after_a_refusal() {
+        let requests = ["a", "b", "c", "d"].map(request);
+        let open = HashSet::from([ItemId::new("PL1", Some("a"))]);
+        let mut asked = Vec::new();
+        let report = retry_all(&requests, &open, |request| {
+            asked.push(request.title.clone());
+            if request.title == "b" {
+                Err("refused".to_owned())
+            } else {
+                Ok("queued".to_owned())
+            }
+        });
+        assert_eq!(asked, ["b", "c", "d"]);
+        assert_eq!(
+            report,
+            RetryReport {
+                queued: 2,
+                busy: 1,
+                failed: 1,
+                first_error: Some("refused".into()),
+            }
+        );
+        assert_eq!(
+            report.outcome(),
+            Err("Queued 2 items. 1 already in the queue. 1 could not be queued: refused".into())
+        );
+    }
+
+    #[test]
+    fn a_bulk_retry_of_queued_items_only_is_not_an_error() {
+        let requests = [request("a")];
+        let open = HashSet::from([ItemId::new("PL1", Some("a"))]);
+        let report = retry_all(&requests, &open, |_| Err("never".to_owned()));
+        assert_eq!(
+            report.outcome(),
+            Ok("Queued 0 items. 1 already in the queue".into())
+        );
+    }
 }
