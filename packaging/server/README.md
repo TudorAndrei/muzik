@@ -40,7 +40,7 @@ Build the image from the repository root.
 mise run server-image
 ```
 
-The image has the server, `ffmpeg`, and `yt-dlp`. It runs as a user without
+The image has the server, `ffmpeg`, `yt-dlp`, and `deno`. It runs as a user without
 root rights. It uses two volumes:
 
 - `/data` holds the state.
@@ -61,7 +61,7 @@ Open `http://127.0.0.1:8080/login`. Enter the token.
 ### Set the music folder
 
 The default library folder is `~/Music`. Set it to `/music` in
-`/data/config/config.yaml`.
+`/data/beets/config.yaml`.
 
 ```yaml
 directory: /music
@@ -79,7 +79,8 @@ cargo build --locked --release -p muzik-server
 sudo install -m 0755 target/release/muzik-server /usr/local/bin/muzik-server
 ```
 
-Install `ffmpeg` and `yt-dlp` on the host.
+Install `ffmpeg`, `yt-dlp`, and `deno` on the host. `yt-dlp` needs `deno` for
+full YouTube support.
 
 Make the user and the config folder.
 
@@ -95,7 +96,7 @@ Edit `/etc/muzik/server.env`. Put your token in it.
 
 Set the music folder. The unit allows writes to `/srv/music` only. Change
 `ReadWritePaths` in the unit if your library is in another folder. Set
-`directory` in `/var/lib/muzik/config/config.yaml` to the same folder.
+`directory` in `/var/lib/muzik/beets/config.yaml` to the same folder.
 
 Start the service.
 
@@ -148,12 +149,12 @@ Open the URL that the command prints.
 
 - `data/muzik.db` is the database.
 - `data/downloads` and `data/splits` are work folders.
-- `config/config.yaml` is the config file.
+- `config/config.yaml` has the Spotify and Soulseek settings.
 - `config/spotify-token.json` is the Spotify login.
 - `beets/config.yaml` is the beets config.
 - `cache/logs` has the logs.
 
-The music library is the `directory` value in the config file.
+The music library is the `directory` value in `beets/config.yaml`.
 
 Back up the `/data` volume and the music folder.
 
