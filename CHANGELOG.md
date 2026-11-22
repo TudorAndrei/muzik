@@ -2,6 +2,74 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v2.17.0 - 2026-11-22
+#### Features
+- (**runner**) serialize app events - (2e76719) - TudorAndrei
+- (**server**) add the Settings page - (cd1e495) - TudorAndrei
+- (**server**) add the Library page - (079c98e) - TudorAndrei
+- (**server**) add the Watchlist page - (427f8ac) - TudorAndrei
+- (**server**) add the muzik-server web app with token login - (9e79c2f) - TudorAndrei
+#### Bug Fixes
+- (**gui**) answer queued questions by version - (aba478d) - TudorAndrei
+- (**jobs**) reject answers to a changed question - (5b9e832) - TudorAndrei
+- (**runner**) release thumbnail ids on panic - (d1172fa) - TudorAndrei
+- (**runner**) retry playlist writes after a failed save - (3919e4b) - TudorAndrei
+- (**server**) queue downloads with the saved defaults - (ae668aa) - TudorAndrei
+- (**server**) limit failed logins and name the cookie mode - (c1fe0a8) - TudorAndrei
+- (**server**) use QuickJS instead of Deno for YouTube - (deca9c0) - TudorAndrei
+- (**server**) link albums by id - (3956f9c) - TudorAndrei
+- (**server**) skip queued items in the bulk Watchlist retry - (10f5809) - TudorAndrei
+- (**server**) show playlist file errors with the result - (e4f74b2) - TudorAndrei
+- (**server**) retry failed Watchlist reloads with backoff - (6db5337) - TudorAndrei
+- (**server**) check the session before the Watchlist board updates - (8214f82) - TudorAndrei
+- (**server**) link Watchlist items by id - (83cbe06) - TudorAndrei
+- (**server**) keep the whole title in the rename field - (5bd28cc) - TudorAndrei
+- (**server**) page the Watchlist items - (ee15672) - TudorAndrei
+- (**server**) let cancel skip chapter validation - (9e30316) - TudorAndrei
+- (**server**) add Deno to the image for YouTube - (157474b) - TudorAndrei
+- (**server**) publish events in one order - (123fd81) - TudorAndrei
+- (**server**) signal skipped events on the event stream - (afbec3b) - TudorAndrei
+- (**server**) end event streams when the session ends - (04aa247) - TudorAndrei
+- (**server**) keep the token file out of the image build - (ab307f5) - TudorAndrei
+#### Documentation
+- (**server**) set the library directory in the beets config - (2847d9a) - TudorAndrei
+- (**server**) document running muzik as a server - (9f5b372) - TudorAndrei
+#### Tests
+- use clippy's emptiness assertions - (90ca65b) - TudorAndrei
+#### Build system
+- (**deps**) update url to 2.5.9 - (b9fab11) - TudorAndrei
+- (**deps**) track the server image sources with Dependabot - (af0fd06) - TudorAndrei
+- (**mise**) add server tasks - (154e33b) - TudorAndrei
+- (**server**) use a shared LGPL ffmpeg 9.0 build - (c8f9890) - TudorAndrei
+- (**server**) shrink the image build context - (911ca7d) - TudorAndrei
+- (**server**) use yt-dlp's ffmpeg builds - (880bbd4) - TudorAndrei
+- (**server**) add a YouTube PO token provider - (041c121) - TudorAndrei
+- (**server**) copy yt-dlp and ffmpeg from published images - (683dfe5) - TudorAndrei
+- (**server**) add a systemd unit - (ae8d904) - TudorAndrei
+- (**server**) add a container image - (69d08c3) - TudorAndrei
+- update the Rust toolchain to 1.99.1 - (20ca5e0) - TudorAndrei
+#### Continuous Integration
+- build the server image - (16236f5) - TudorAndrei
+#### Refactoring
+- (**core**) tag job events by type - (0ddc2c5) - TudorAndrei
+- (**runner**) type the Soulseek form - (c4343fb) - TudorAndrei
+- (**runner**) make service test options explicit - (9173f65) - TudorAndrei
+- (**runner**) replace bool parameters with enums - (75800fd) - TudorAndrei
+- (**runner**) split the write lock from the pending flag - (bda41da) - TudorAndrei
+- (**runner**) add typed service errors - (430b112) - TudorAndrei
+- (**runner**) return a typed jobs snapshot - (f5997db) - TudorAndrei
+- (**runner**) move the desktop backend into muzik-runner - (ba23f84) - TudorAndrei
+- (**server**) type the Library sort order - (42c90f5) - TudorAndrei
+- (**server**) parse Watchlist forms at the boundary - (e0ee319) - TudorAndrei
+- (**server**) type the Settings fields - (86dffe1) - TudorAndrei
+- (**server**) share one notice helper across pages - (7e46aec) - TudorAndrei
+- (**server**) carry decisions, targets, and endings as types - (fb92a72) - TudorAndrei
+- (**server**) route every event through the bus - (d7d7e8a) - TudorAndrei
+#### Miscellaneous Chores
+- (**homebrew**) update the cask to v2.16.0 - (35a371e) - github-actions[bot]
+
+- - -
+
 ## v2.16.0 - 2026-11-19
 #### Features
 - (**cli**) add watchlist playlist commands - (975e5b9) - TudorAndrei
