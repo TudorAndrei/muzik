@@ -123,6 +123,61 @@ mise installs only the `muzik` command-line program:
 Each [GitHub release](https://github.com/TudorAndrei/muzik/releases/latest) also
 has `muzik-cli-<version>-<target>.tar.gz`, and a `muzik-gpui` archive for Linux.
 
+### Nix
+
+The repository is a Nix flake. It builds each program from source and adds
+`ffmpeg` and `yt-dlp` to its `PATH`. A `yt-dlp` that is already on your `PATH`
+comes first, so you can keep a newer one.
+
+| Package | Program | Systems |
+| --- | --- | --- |
+| `muzik` (default) | `muzik`, the command-line program | Linux, macOS arm64 |
+| `muzik-gpui` | `muzik-gpui`, the desktop app | Linux |
+| `muzik-server` | `muzik-server`, the web app | Linux, macOS arm64 |
+
+Run a program without installing it:
+
+```sh
+nix run github:TudorAndrei/muzik -- --help
+nix run github:TudorAndrei/muzik#muzik-gpui
+```
+
+Install it in your profile:
+
+```sh
+nix profile install github:TudorAndrei/muzik
+```
+
+Or add the flake to the inputs of your NixOS or Home Manager flake:
+
+```nix
+inputs.muzik.url = "github:TudorAndrei/muzik";
+```
+
+Then add the packages in a module that gets `inputs` as a special argument:
+
+```nix
+{ inputs, lib, pkgs, ... }:
+let
+  muzik = inputs.muzik.packages.${pkgs.stdenv.hostPlatform.system};
+in
+{
+  environment.systemPackages = [
+    muzik.muzik
+  ]
+  # The desktop app is built only for Linux.
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ muzik.muzik-gpui ];
+}
+```
+
+In Home Manager, use `home.packages` in place of `environment.systemPackages`.
+`overlays.default` adds `muzik`, `muzik-server`, and, on Linux, `muzik-gpui` to
+`pkgs`.
+
+To build with the `nixpkgs` of your own system, add
+`inputs.muzik.inputs.nixpkgs.follows = "nixpkgs";`. That `nixpkgs` must have
+Rust 1.99 or later.
+
 For development, install from a source checkout:
 
 ```sh
