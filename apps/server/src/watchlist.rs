@@ -270,7 +270,7 @@ fn empty_message(playlist: &PlaylistView, filter: Option<Summary>) -> String {
 
 fn card(
     playlist: &PlaylistView,
-    position: u64,
+    key: &str,
     queued: &HashSet<ItemId>,
     cache: &Path,
 ) -> Option<(Card, Option<String>)> {
@@ -278,7 +278,7 @@ fn card(
     let (id, item) = ids
         .iter()
         .zip(&playlist.items)
-        .find(|(_, item)| item.item.position == position)?;
+        .find(|(id, _)| id.key.as_deref() == Some(key))?;
     let (id_label, open_label) = match item.item.kind {
         SourceKind::Spotify => ("Spotify ID", "Open in Spotify"),
         SourceKind::Bandcamp => ("Bandcamp ID", "Open on Bandcamp"),
@@ -364,7 +364,7 @@ fn detail(
         .zip(&playlist.items)
         .filter(|(_, item)| matches_filter(item, filter))
         .collect();
-    let selected: Option<u64> = place.item.parse().ok();
+    let selected = Some(place.item.as_str()).filter(|key| !key.is_empty());
     let pages = shown.len().div_ceil(ROW_LIMIT).max(1);
     let number = place.page.unwrap_or(1).clamp(1, pages);
     let rows: Vec<Row> = shown
@@ -399,7 +399,7 @@ fn detail(
                 ),
                 pips: pips(item),
                 action,
-                selected: selected == Some(item.item.position),
+                selected: selected.is_some() && selected == id.key.as_deref(),
             }
         })
         .collect();
@@ -421,7 +421,7 @@ fn detail(
         })
         .collect();
     let (card, wanted) = selected
-        .and_then(|position| card(playlist, position, queued, cache))
+        .and_then(|key| card(playlist, key, queued, cache))
         .unzip();
     (
         Detail {
@@ -456,6 +456,14 @@ fn detail(
     )
 }
 
+fn has_item(playlist: &PlaylistView, key: &str) -> bool {
+    !key.is_empty()
+        && playlist
+            .item_ids()
+            .iter()
+            .any(|id| id.key.as_deref() == Some(key))
+}
+
 fn build_board(
     view: Option<&WatchlistView>,
     error: Option<String>,
@@ -481,19 +489,22 @@ fn build_board(
             selected: chosen == Some(index),
         })
         .collect();
+    let source = chosen.and_then(|index| playlists.get(index));
+    let asked = source.filter(|playlist| playlist.playlist_id == requested.source);
     let mut place = Place {
-        source: chosen
-            .and_then(|index| playlists.get(index))
+        source: source
             .map(|playlist| playlist.playlist_id.clone())
             .unwrap_or_default(),
         filter: filter
             .map(|summary| <&'static str>::from(summary).to_owned())
             .unwrap_or_default(),
-        item: requested.item.clone(),
-        page: requested.page,
+        item: asked
+            .filter(|playlist| has_item(playlist, &requested.item))
+            .map(|_| requested.item.clone())
+            .unwrap_or_default(),
+        page: asked.and(requested.page),
     };
-    let (detail, wanted) = chosen
-        .and_then(|index| playlists.get(index))
+    let (detail, wanted) = source
         .map(|playlist| detail(playlist, &place, filter, queued, cache))
         .unzip();
     if let Some(detail) = &detail {
@@ -747,13 +758,7 @@ fn linked(cx: &Cx, detail: Detail, place: &Place) -> Linked {
         .iter()
         .cloned()
         .map(|row| {
-            let link = go(
-                cx,
-                &detail.id,
-                &place.filter,
-                &row.position.to_string(),
-                detail.page,
-            );
+            let link = go(cx, &detail.id, &place.filter, &row.key, detail.page);
             (row, link)
         })
         .collect();

@@ -451,6 +451,39 @@ async fn a_long_source_is_paged_so_every_item_can_be_reached() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_item_link_follows_the_item_when_the_list_changes() {
+    let app = app(Some(TOKEN));
+    seed(&app, &[(1, "One"), (2, "Two"), (3, "Three")]);
+    let cookie = sign_in(&app).await;
+    let path = format!("/watchlist?source={SOURCE}&item={}", video(2));
+    let before = page_text(&app, &path, &cookie).await;
+    assert!(before.contains(&format!("YouTube ID: {}", video(2))));
+
+    seed(&app, &[(3, "Three"), (4, "Four"), (2, "Two"), (1, "One")]);
+    app.bus.publish(AppEvent::WatchlistSaved);
+    let after = page_text(&app, &path, &cookie).await;
+    assert!(after.contains(&format!("YouTube ID: {}", video(2))));
+    assert!(after.contains(&format!("item={}", video(4))));
+
+    seed(&app, &[(3, "Three"), (1, "One")]);
+    app.bus.publish(AppEvent::WatchlistSaved);
+    let gone = page_text(&app, &path, &cookie).await;
+    assert!(!gone.contains("YouTube ID:"));
+    assert!(gone.contains("Select a title"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_item_of_another_source_is_not_selected() {
+    let app = app(Some(TOKEN));
+    seed(&app, &[(1, "One"), (2, "Two")]);
+    let cookie = sign_in(&app).await;
+    let path = format!("/watchlist?source=PLother1234567&item={}", video(2));
+    let page = page_text(&app, &path, &cookie).await;
+    assert!(!page.contains("YouTube ID:"));
+    assert!(page.contains("Select a title"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_rename_field_holds_the_whole_title_of_a_long_name() {
     let app = app(Some(TOKEN));
     let cookie = sign_in(&app).await;
