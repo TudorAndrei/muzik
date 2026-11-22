@@ -487,9 +487,15 @@ mod tests {
                 ));
                 let snapshot = gates.snapshot();
                 assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
-                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                assert_eq!(
+                    names(&snapshot, Gate::Import, "waiting"),
+                    Vec::<String>::new()
+                );
                 drop(held);
-                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+                assert_eq!(
+                    names(&gates.snapshot(), Gate::Import, "active"),
+                    Vec::<String>::new()
+                );
             },
             1000,
             3,
@@ -517,10 +523,16 @@ mod tests {
                 assert!(finished.is_ok());
                 let snapshot = gates.snapshot();
                 assert_eq!(names(&snapshot, Gate::Import, "active"), ["holder"]);
-                assert!(names(&snapshot, Gate::Import, "waiting").is_empty());
+                assert_eq!(
+                    names(&snapshot, Gate::Import, "waiting"),
+                    Vec::<String>::new()
+                );
                 drop(again);
                 drop(held);
-                assert!(names(&gates.snapshot(), Gate::Import, "active").is_empty());
+                assert_eq!(
+                    names(&gates.snapshot(), Gate::Import, "active"),
+                    Vec::<String>::new()
+                );
             },
             1000,
             3,

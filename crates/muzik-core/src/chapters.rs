@@ -639,7 +639,7 @@ mod tests {
             "Text"
         );
         fs::write(Sidecar::Chapters.path(&audio), "invalid\n").expect("text file");
-        assert!(find_chapters(&audio).expect("invalid text").is_empty());
+        assert_eq!(find_chapters(&audio).expect("invalid text"), []);
     }
 
     #[test]
@@ -658,7 +658,7 @@ mod tests {
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",
         )
         .expect("second cue");
-        assert!(find_chapters(&audio).expect("ambiguous cues").is_empty());
+        assert_eq!(find_chapters(&audio).expect("ambiguous cues"), []);
         fs::write(
             Sidecar::Cue.path(&audio),
             "TRACK 01 AUDIO\nINDEX 01 00:00:00\n",

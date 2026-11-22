@@ -1073,7 +1073,7 @@ mod tests {
         fs::write(&path, bytes).unwrap();
         let destination = directory.path().join("out");
         assert!(extract(&path, &destination).is_err());
-        assert!(audio_files(&destination).is_empty());
+        assert_eq!(audio_files(&destination), Vec::<PathBuf>::new());
         assert!(!destination.exists());
     }
 
@@ -1140,10 +1140,10 @@ mod tests {
             destination.join("linked.flac"),
         )
         .unwrap();
-        assert!(audio_files(&destination).is_empty());
+        assert_eq!(audio_files(&destination), Vec::<PathBuf>::new());
         let root_link = directory.path().join("root-link");
         symlink(&outside, &root_link).unwrap();
-        assert!(audio_files(&root_link).is_empty());
+        assert_eq!(audio_files(&root_link), Vec::<PathBuf>::new());
         let path = directory.path().join("album.zip");
         archive(&path, &[("linked-folder/new.flac", b"new")]);
         extract(&path, &destination).unwrap();

@@ -785,7 +785,7 @@ mod tests {
             super::import_legacy_files(&mut store, &watchlist, &jobs_db).unwrap(),
             2
         );
-        assert!(store.list(Status::Failed).unwrap().is_empty());
+        assert_eq!(store.list(Status::Failed).unwrap(), []);
         let queued = store.list(Status::Queued).unwrap();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0].item_key, r#"["PL1","aaaaaaaaaaa"]"#);

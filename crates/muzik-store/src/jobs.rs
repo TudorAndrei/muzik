@@ -855,7 +855,7 @@ mod tests {
             store.request_cancel(running).unwrap(),
             CancelRequest::NotOpen
         );
-        assert!(store.cancel_requests().unwrap().is_empty());
+        assert_eq!(store.cancel_requests().unwrap(), Vec::<i64>::new());
     }
 
     #[test]
