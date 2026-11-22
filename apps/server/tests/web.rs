@@ -446,3 +446,110 @@ async fn a_command_for_an_item_that_is_not_saved_is_refused_without_queueing_a_j
     let jobs: Value = serde_json::from_str(&text(response).await).unwrap();
     assert_eq!(jobs["open"], serde_json::json!([]));
 }
+
+fn save_library(app: &App) {
+    use muzik_library::{Fields, Library, SqlValue};
+    let root = app.home.path();
+    let database = root.join("library.db");
+    let music = root.join("music");
+    std::fs::create_dir_all(root.join("beets")).unwrap();
+    std::fs::write(
+        root.join("beets/config.yaml"),
+        format!(
+            "library: {}\ndirectory: {}\n",
+            database.display(),
+            music.display()
+        ),
+    )
+    .unwrap();
+    let fields = |pairs: &[(&str, SqlValue)]| -> Fields {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), value.clone()))
+            .collect()
+    };
+    Library::open_or_create(&database)
+        .unwrap()
+        .transaction(|library| {
+            for (artist, title, year, songs) in [
+                ("Phoniks", "Down To Earth", 2015, ["First", "Second"]),
+                (
+                    "Tommy Guerrero",
+                    "Road to Knowhere",
+                    2011,
+                    ["Alpha", "Beta"],
+                ),
+            ] {
+                let album_id = library.insert_album(
+                    &fields(&[
+                        ("albumartist", SqlValue::Text(artist.into())),
+                        ("album", SqlValue::Text(title.into())),
+                        ("year", SqlValue::Integer(year)),
+                    ]),
+                    &Fields::new(),
+                )?;
+                for (number, song) in (1..).zip(songs) {
+                    library.insert_item(
+                        &fields(&[
+                            ("album_id", SqlValue::Integer(album_id)),
+                            ("track", SqlValue::Integer(number)),
+                            ("title", SqlValue::Text(song.into())),
+                            ("artist", SqlValue::Text(artist.into())),
+                            ("length", SqlValue::Real(60.)),
+                            ("format", SqlValue::Text("FLAC".into())),
+                            (
+                                "path",
+                                SqlValue::Text(format!("{}/{artist}/{song}.flac", music.display())),
+                            ),
+                        ]),
+                        &Fields::new(),
+                    )?;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_library_page_reports_a_library_that_cannot_be_read() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let page = page_text(&app, "/library", &cookie).await;
+    assert!(page.contains("<h1>Library</h1>"));
+    assert!(page.contains("Muzik cannot read the library database."));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_library_page_lists_filters_and_opens_albums_without_any_command() {
+    let app = app(Some(TOKEN));
+    save_library(&app);
+    let cookie = sign_in(&app).await;
+
+    let all = page_text(&app, "/library", &cookie).await;
+    assert!(all.contains("Down To Earth"));
+    assert!(all.contains("Road to Knowhere"));
+    assert!(all.contains("2 albums"));
+    assert!(all.contains("4 tracks"));
+    assert!(all.contains("Select an album to see its tracks."));
+    assert_eq!(all.matches("method=\"post\"").count(), 1);
+    assert!(all.contains("action=\"/logout\""));
+
+    let found = page_text(&app, "/library?q=tommy", &cookie).await;
+    assert!(found.contains("Road to Knowhere"));
+    assert!(!found.contains("Down To Earth"));
+    assert!(found.contains("1 of 2 albums"));
+
+    let none = page_text(&app, "/library?q=nothing+like+it", &cookie).await;
+    assert!(none.contains("No albums match."));
+
+    let sorted = page_text(&app, "/library?sort=year", &cookie).await;
+    let older = sorted.find("Road to Knowhere").unwrap();
+    let newer = sorted.find("Down To Earth").unwrap();
+    assert!(older < newer);
+
+    let opened = page_text(&app, "/library?album=0", &cookie).await;
+    assert!(opened.contains("First"));
+    assert!(opened.contains("Second"));
+    assert!(opened.contains("Folder"));
+}

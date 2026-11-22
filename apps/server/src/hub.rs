@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use muzik_core::{DecisionKind, JobEvent, Task};
-use muzik_runner::AppEvent;
+use muzik_runner::{AppEvent, library_info::LibraryInfo};
 use muzik_store::watchlist::WatchlistView;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -57,6 +58,7 @@ struct State {
     watchlist_error: Option<String>,
     watchlist_stale: bool,
     thumbnails: HashSet<String>,
+    library: Option<(Instant, Arc<LibraryInfo>)>,
 }
 
 #[derive(Default)]
@@ -94,6 +96,26 @@ impl Hub {
 
     pub fn fail_watchlist(&self, message: String) {
         self.state.lock().watchlist_error = Some(message);
+    }
+
+    #[must_use]
+    pub fn library(&self, lifetime: Duration) -> Option<Arc<LibraryInfo>> {
+        self.state
+            .lock()
+            .library
+            .as_ref()
+            .filter(|(read_at, _)| read_at.elapsed() < lifetime)
+            .map(|(_, info)| Arc::clone(info))
+    }
+
+    pub fn store_library(&self, info: LibraryInfo) -> Arc<LibraryInfo> {
+        let info = Arc::new(info);
+        self.state.lock().library = Some((Instant::now(), Arc::clone(&info)));
+        info
+    }
+
+    pub fn forget_library(&self) {
+        self.state.lock().library = None;
     }
 
     #[must_use]

@@ -3,6 +3,7 @@ pub mod api;
 pub mod assets;
 pub mod auth;
 pub mod hub;
+pub mod library;
 pub mod pages;
 pub mod state;
 pub mod ui;
@@ -88,7 +89,7 @@ pub fn build(paths: Paths, config: Config) -> muzik_runner::Result<Server> {
         .route(watchlist::retry_failed)
         .route(watchlist::thumbnail)
         .route(watchlist::live_board)
-        .page(pages::library)
+        .page(library::page)
         .page(pages::settings)
         .page(activity::page)
         .route(activity::start_download)

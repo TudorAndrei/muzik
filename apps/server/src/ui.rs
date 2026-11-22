@@ -311,6 +311,77 @@ button:disabled { opacity: 0.5; cursor: default; }
 .ic-actions { display: grid; gap: 6px; align-content: start; }
 .ic-actions form { display: block; }
 .ic-actions button { width: 100%; }
+.summary { height: 60px; margin-bottom: 8px; }
+.summary .meta {
+  height: 20px;
+  line-height: 20px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lib {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 800px) { .lib { grid-template-columns: minmax(0, 1fr); } }
+.lrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 48px 52px 60px 64px 88px;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.lrow.current { background: var(--track); }
+.lrow.lhead {
+  height: 36px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.lhead a { text-decoration: none; overflow: hidden; white-space: nowrap; }
+.lrow .cell, .tcell .title, .tcell .meta {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.lrow .num, .trow .num { text-align: right; }
+.scroll.libtable { height: 440px; }
+.scroll.libdetail { height: 480px; }
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border-top: 1px solid var(--line);
+}
+.pager .meta { flex: 1; }
+.facts {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.trow {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 56px;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.trow.thead { height: 32px; font-size: 12px; color: var(--muted); }
+.tcell { display: grid; min-width: 0; }
 "#;
 
 #[layout("/")]
@@ -330,8 +401,8 @@ pub async fn shell(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
         ),
         (
             "Library",
-            href!(crate::pages::library).is_current(cx),
-            href!(crate::pages::library).resolve(cx),
+            href!(crate::library::page).is_current(cx),
+            href!(crate::library::page).resolve(cx),
         ),
         (
             "Settings",

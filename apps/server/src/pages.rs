@@ -70,15 +70,6 @@ pub async fn logout(cx: &Cx) -> Result<SeeOther> {
     Ok(see_other(href!(login).resolve(cx)))
 }
 
-#[page("/library")]
-pub async fn library(cx: &Cx) -> Result<impl View> {
-    auth::require(cx).await?;
-    Ok(view! {
-        <h1>"Library"</h1>
-        <p class="placeholder">"The library is not available in the web app yet."</p>
-    })
-}
-
 #[page("/settings")]
 pub async fn settings(cx: &Cx) -> Result<impl View> {
     auth::require(cx).await?;

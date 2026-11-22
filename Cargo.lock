@@ -5641,6 +5641,7 @@ version = "2.16.0"
 dependencies = [
  "futures-util",
  "muzik-core",
+ "muzik-library",
  "muzik-runner",
  "muzik-store",
  "parking_lot 0.13.0",

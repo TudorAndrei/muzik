@@ -33,4 +33,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 usage-rs = "7.4.0"
 
 [dev-dependencies]
+muzik-library = { path = "../../crates/muzik-library" }
 tempfile = "3"
