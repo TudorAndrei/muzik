@@ -8,6 +8,21 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release -p muzik-server \
     && install -D target/release/muzik-server /out/muzik-server
 
+FROM debian:trixie-slim AS deno
+ARG TARGETARCH
+ARG DENO_VERSION=2.9.8
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends unzip curl ca-certificates \
+    && case "$TARGETARCH" in \
+        amd64) target=x86_64-unknown-linux-gnu ;; \
+        arm64) target=aarch64-unknown-linux-gnu ;; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL -o /tmp/deno.zip \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${target}.zip" \
+    && unzip -d /out /tmp/deno.zip \
+    && chmod 0755 /out/deno
+
 FROM debian:trixie-slim
 ARG TARGETARCH
 ARG YT_DLP_VERSION=2026.10.26
@@ -26,6 +41,7 @@ RUN apt-get update \
 RUN useradd --system --uid 10001 --create-home --home-dir /home/muzik muzik \
     && mkdir -p /data /music \
     && chown muzik:muzik /data /music
+COPY --from=deno /out/deno /usr/local/bin/deno
 COPY --from=build /out/muzik-server /usr/local/bin/muzik-server
 ENV MUZIK_HOME=/data \
     MUZIK_SERVER_BIND=0.0.0.0:8080
