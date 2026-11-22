@@ -6,11 +6,12 @@
 use futures_util::StreamExt;
 use muzik_core::{DecisionKind, paths::Paths};
 use muzik_runner::{AppEvent, Storage, service::ServiceOptions};
-use muzik_server::{Bus, Config, build_with};
+use muzik_server::{Bus, Config, auth::CookieMode, build_with};
 use serde_json::Value;
 use tempfile::TempDir;
 use topcoat::router::{
-    Body, Router, StatusCode, header, request::Request, response::Response, to_bytes,
+    Body, Method, Methods, Router, StatusCode, header, request::Request, response::Response,
+    to_bytes,
 };
 
 const TOKEN: &str = "a-long-enough-secret";
@@ -24,7 +25,7 @@ struct App {
 fn app(token: Option<&str>) -> App {
     app_with(Config {
         token: token.map(str::to_owned),
-        secure_cookie: false,
+        cookies: CookieMode::Insecure,
         ..Config::default()
     })
 }
@@ -333,7 +334,7 @@ async fn a_slow_event_stream_is_told_to_reload_the_jobs() {
     const BUFFER: usize = 4;
     let app = app_with(Config {
         token: Some(TOKEN.to_owned()),
-        secure_cookie: false,
+        cookies: CookieMode::Insecure,
         event_buffer: BUFFER,
     });
     let cookie = sign_in(&app).await;
@@ -906,4 +907,102 @@ async fn the_service_check_runs_only_when_asked_and_a_task_that_is_unknown_is_re
     let response = app.router.handle(get("/api/jobs", Some(&cookie))).await;
     let jobs: Value = serde_json::from_str(&text(response).await).unwrap();
     assert_eq!(jobs["open"], serde_json::json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_route_except_the_login_refuses_a_request_without_a_session() {
+    let app = app(Some(TOKEN));
+    let mut checked = Vec::new();
+    for route in app.router.routes() {
+        let methods = match route.methods() {
+            Methods::Only(methods) => methods.to_vec(),
+            Methods::Any => vec![Method::GET, Method::POST],
+        };
+        let path = match route.path().as_str() {
+            "" => "/".to_owned(),
+            path => path
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "x"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/"),
+        };
+        for method in methods {
+            if path == "/login" {
+                continue;
+            }
+            let request = if method == Method::GET {
+                get(&path, None)
+            } else {
+                post(&path, "", None)
+            };
+            let response = app.router.handle(request).await;
+            let refused = response.status() == StatusCode::UNAUTHORIZED
+                || (response.status().is_redirection() && location(&response) == "/login");
+            assert!(
+                refused,
+                "{method} {path} answered {} to {}",
+                response.status(),
+                location(&response)
+            );
+            checked.push(format!("{method} {path}"));
+        }
+    }
+    assert!(checked.len() > 25, "{checked:?}");
+    assert!(
+        checked.iter().any(|route| route.contains("/shards/")),
+        "{checked:?}"
+    );
+    assert!(
+        checked.iter().any(|route| route == "GET /api/events"),
+        "{checked:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_secure_session_cookie_carries_the_host_prefix_and_every_protection() {
+    let app = app_with(Config {
+        token: Some(TOKEN.to_owned()),
+        cookies: CookieMode::Secure,
+        ..Config::default()
+    });
+    let response = app
+        .router
+        .handle(post("/login", &format!("token={TOKEN}"), None))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let set_cookie = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with("__Host-muzik-session="))
+        .unwrap()
+        .to_owned();
+    let attributes: Vec<&str> = set_cookie.split("; ").skip(1).collect();
+    for expected in ["Secure", "HttpOnly", "SameSite=Lax", "Path=/"] {
+        assert!(attributes.contains(&expected), "{expected} in {set_cookie}");
+    }
+    assert!(
+        attributes
+            .iter()
+            .any(|attribute| attribute.starts_with("Max-Age=")),
+        "{set_cookie}"
+    );
+    assert!(
+        !attributes
+            .iter()
+            .any(|attribute| attribute.to_ascii_lowercase().starts_with("domain")),
+        "{set_cookie}"
+    );
+    let cookie = set_cookie.split(';').next().unwrap();
+    let response = app.router.handle(get("/", Some(cookie))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app.router.handle(get("/", None)).await;
+    assert_eq!(location(&response), "/login");
 }

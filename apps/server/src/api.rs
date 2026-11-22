@@ -1,7 +1,7 @@
 use futures_util::{Stream, stream};
 use muzik_runner::{JobsSnapshot, service::Service};
 use serde::Serialize;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use tokio::{sync::broadcast::error::RecvError, time::MissedTickBehavior};
 use topcoat::{
@@ -48,7 +48,7 @@ pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Even
             loop {
                 tokio::select! {
                     next = receiver.recv() => {
-                        if !watch.is_active() {
+                        if !watch.is_active(SystemTime::now()) {
                             return None;
                         }
                         match next {
@@ -68,7 +68,7 @@ pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Even
                         }
                     }
                     _ = check.tick() => {
-                        if !watch.is_active() {
+                        if !watch.is_active(SystemTime::now()) {
                             return None;
                         }
                     }

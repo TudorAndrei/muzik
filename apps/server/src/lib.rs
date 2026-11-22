@@ -29,14 +29,14 @@ use topcoat::{
 };
 
 use crate::{
-    auth::Auth,
+    auth::{Auth, CookieMode},
     hub::Hub,
     state::{Backend, EVENT_BUFFER, Events, Shared},
 };
 
 pub struct Config {
     pub token: Option<String>,
-    pub secure_cookie: bool,
+    pub cookies: CookieMode,
     pub event_buffer: usize,
 }
 
@@ -44,7 +44,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             token: None,
-            secure_cookie: true,
+            cookies: CookieMode::Secure,
             event_buffer: EVENT_BUFFER,
         }
     }
@@ -88,16 +88,21 @@ pub fn build_with(
     options: ServiceOptions,
     config: Config,
 ) -> muzik_runner::Result<Server> {
+    let Config {
+        token,
+        cookies,
+        event_buffer,
+    } = config;
     let bus = Bus {
         hub: Arc::new(Hub::new()),
-        sender: broadcast::channel::<AppEvent>(config.event_buffer).0,
+        sender: broadcast::channel::<AppEvent>(event_buffer).0,
         order: Arc::default(),
     };
     let service = Service::start_with(paths, options, {
         let bus = bus.clone();
         Arc::new(move |event| bus.publish(event))
     })?;
-    let auth = Auth::new(config.token, config.secure_cookie);
+    let auth = Auth::new(token.as_deref(), cookies);
     let tokens = SessionTokenStore::new(auth.token_store());
     let router = Router::builder()
         .with(Backend(Arc::new(service)))

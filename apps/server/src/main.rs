@@ -1,7 +1,11 @@
 use std::{net::SocketAddr, process::ExitCode};
 
 use muzik_runner::service::Service;
-use muzik_server::{Config, auth::resolve_token, build};
+use muzik_server::{
+    Config,
+    auth::{CookieMode, resolve_token},
+    build,
+};
 use usage_rs::Cli;
 
 const DEFAULT_BIND: &str = "127.0.0.1:8080";
@@ -39,7 +43,11 @@ fn setup(options: &Server) -> Result<(SocketAddr, Config), String> {
         address,
         Config {
             token,
-            secure_cookie: !options.insecure_cookie,
+            cookies: if options.insecure_cookie {
+                CookieMode::Insecure
+            } else {
+                CookieMode::Secure
+            },
             ..Config::default()
         },
     ))
