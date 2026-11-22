@@ -59,6 +59,7 @@ struct State {
     watchlist_stale: bool,
     thumbnails: HashSet<String>,
     library: Option<(Instant, Arc<LibraryInfo>)>,
+    services: Option<Value>,
 }
 
 #[derive(Default)]
@@ -112,6 +113,15 @@ impl Hub {
         let info = Arc::new(info);
         self.state.lock().library = Some((Instant::now(), Arc::clone(&info)));
         info
+    }
+
+    #[must_use]
+    pub fn services(&self) -> Option<Value> {
+        self.state.lock().services.clone()
+    }
+
+    pub fn store_services(&self, services: Value) {
+        self.state.lock().services = Some(services);
     }
 
     pub fn forget_library(&self) {

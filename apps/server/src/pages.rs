@@ -69,12 +69,3 @@ pub async fn logout(cx: &Cx) -> Result<SeeOther> {
     auth::logout(cx).await?;
     Ok(see_other(href!(login).resolve(cx)))
 }
-
-#[page("/settings")]
-pub async fn settings(cx: &Cx) -> Result<impl View> {
-    auth::require(cx).await?;
-    Ok(view! {
-        <h1>"Settings"</h1>
-        <p class="placeholder">"The settings are not available in the web app yet."</p>
-    })
-}

@@ -553,3 +553,147 @@ async fn the_library_page_lists_filters_and_opens_albums_without_any_command() {
     assert!(opened.contains("Second"));
     assert!(opened.contains("Folder"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_settings_page_shows_every_section() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(page.contains("<h1>Settings</h1>"));
+    for section in [
+        "Destinations",
+        "Sources and quality",
+        "Processing",
+        "AI decisions",
+        "After each import",
+        "Playlists",
+        "Soulseek",
+        "Bandcamp",
+        "Spotify",
+        "Services",
+        "Library maintenance",
+    ] {
+        assert!(page.contains(&format!("<h2>{section}</h2>")), "{section}");
+    }
+    assert!(page.contains("No service checks yet."));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_defaults_come_back_on_the_settings_page() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let response = app
+        .router
+        .handle(post(
+            "/settings/defaults",
+            "jobs=3&min_bitrate=192&agent_model=test-model&audio_source=soulseek&review=on",
+            Some(&cookie),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(location(&response).contains("notice=Config+saved"));
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(page.contains("name=\"jobs\" value=\"3\""));
+    assert!(page.contains("name=\"min_bitrate\" value=\"192\""));
+    assert!(page.contains("name=\"agent_model\" value=\"test-model\""));
+    assert!(page.contains("<option value=\"soulseek\" selected=\"\">"));
+    assert!(page.contains("name=\"review\" checked=\"\""));
+    assert!(!page.contains("name=\"interactive\" checked"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn defaults_that_are_not_valid_are_refused_and_not_saved() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    for form in ["fallback=nonsense", "jobs=many", "min_bitrate=-4"] {
+        let response = app
+            .router
+            .handle(post("/settings/defaults", form, Some(&cookie)))
+            .await;
+        assert_eq!(response.status(), StatusCode::SEE_OTHER, "{form}");
+        assert!(location(&response).contains("error="), "{form}");
+    }
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(!page.contains("name=\"jobs\" value=\"many\""));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_soulseek_password_is_saved_but_never_sent_back() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let password = "hunter2-very-secret";
+
+    let response = app
+        .router
+        .handle(post(
+            "/settings/soulseek",
+            "username=listener&password=&server_host=&server_port=2416",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(location(&response).contains("error="));
+
+    let form = format!(
+        "username=listener&password={password}&server_host=server.example&server_port=2416"
+    );
+    let response = app
+        .router
+        .handle(post("/settings/soulseek", &form, Some(&cookie)))
+        .await;
+    assert!(location(&response).contains("notice="));
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(page.contains("value=\"listener\""));
+    assert!(page.contains("value=\"server.example\""));
+    assert!(page.contains("Saved. Type a new one to change it."));
+    assert!(!page.contains(password));
+    assert!(!location(&response).contains(password));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_spotify_page_tells_the_user_to_log_in_on_the_server() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(page.contains("Save a client ID to connect your account."));
+    let response = app
+        .router
+        .handle(post(
+            "/settings/spotify",
+            "client_id=abc123clientid",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(location(&response).contains("notice="));
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(page.contains("value=\"abc123clientid\""));
+    assert!(page.contains("muzik spotify login"));
+    assert!(page.contains("http://127.0.0.1:8888/callback"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_service_check_runs_only_when_asked_and_a_task_that_is_unknown_is_refused() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let response = app
+        .router
+        .handle(post("/settings/services", "", Some(&cookie)))
+        .await;
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let page = page_text(&app, "/settings", &cookie).await;
+    assert!(!page.contains("No service checks yet."));
+    assert!(page.contains("ffmpeg"));
+    assert!(page.contains("Not set up"));
+
+    let response = app
+        .router
+        .handle(post(
+            "/settings/library-task",
+            "task=explode",
+            Some(&cookie),
+        ))
+        .await;
+    assert!(location(&response).contains("error="));
+    let response = app.router.handle(get("/api/jobs", Some(&cookie))).await;
+    let jobs: Value = serde_json::from_str(&text(response).await).unwrap();
+    assert_eq!(jobs["open"], serde_json::json!([]));
+}

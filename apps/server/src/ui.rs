@@ -382,6 +382,47 @@ button:disabled { opacity: 0.5; cursor: default; }
 }
 .trow.thead { height: 32px; font-size: 12px; color: var(--muted); }
 .tcell { display: grid; min-width: 0; }
+select {
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+}
+textarea { padding: 8px 12px; resize: none; }
+.setting { margin-bottom: 16px; }
+.setting .note { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.setting form { margin: 0; }
+.frow {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  height: 52px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+.frow:last-child { border-bottom: 0; }
+.frow input[type="text"], .frow input[type="password"], .frow input[type="number"], .frow select {
+  width: 100%;
+  max-width: 480px;
+}
+.frow input[type="checkbox"] { width: 20px; height: 20px; justify-self: start; }
+.frow.tall { height: 120px; align-items: start; padding-top: 12px; }
+.frow.tall textarea { width: 100%; max-width: 480px; height: 96px; }
+.frow.actions { display: flex; align-items: center; gap: 12px; }
+.frow.note-row { display: flex; height: auto; min-height: 52px; padding: 8px 12px; }
+.frow.service { grid-template-columns: 120px minmax(0, 1fr) 100px; }
+.frow.service .meta, .frow code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.frow.service .tag { justify-self: start; }
+.setting .notice { padding: 0 12px; margin: 0; }
+.savebar { display: flex; justify-content: flex-end; margin-bottom: 16px; }
+@media (max-width: 800px) {
+  .frow { grid-template-columns: minmax(0, 1fr); height: auto; min-height: 52px; padding: 8px 12px; gap: 4px; }
+  .frow.tall { height: 144px; }
+}
 "#;
 
 #[layout("/")]
@@ -406,8 +447,8 @@ pub async fn shell(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
         ),
         (
             "Settings",
-            href!(crate::pages::settings).is_current(cx),
-            href!(crate::pages::settings).resolve(cx),
+            href!(crate::settings::page).is_current(cx),
+            href!(crate::settings::page).resolve(cx),
         ),
     ];
     Ok(view! {

@@ -5,6 +5,7 @@ pub mod auth;
 pub mod hub;
 pub mod library;
 pub mod pages;
+pub mod settings;
 pub mod state;
 pub mod ui;
 pub mod watchlist;
@@ -90,7 +91,15 @@ pub fn build(paths: Paths, config: Config) -> muzik_runner::Result<Server> {
         .route(watchlist::thumbnail)
         .route(watchlist::live_board)
         .page(library::page)
-        .page(pages::settings)
+        .page(settings::page)
+        .route(settings::save_defaults)
+        .route(settings::save_soulseek)
+        .route(settings::save_bandcamp)
+        .route(settings::logout_bandcamp)
+        .route(settings::save_spotify_client)
+        .route(settings::logout_spotify)
+        .route(settings::check_services)
+        .route(settings::start_task)
         .page(activity::page)
         .route(activity::start_download)
         .route(activity::cancel)
