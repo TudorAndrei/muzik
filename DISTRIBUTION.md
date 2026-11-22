@@ -11,9 +11,10 @@ Run the complete gate:
 mise run check-release
 ```
 
-This checks format, Clippy, Rust tests, and Cargo licenses, then builds the
-release binaries. CI runs `mise run check` on each push. The `Release` workflow
-starts only after that check passed on the same commit.
+This runs the hk lints, the Rust tests, and `cargo deny`, then builds the
+release binaries. CI runs these checks on each pull request. The `main`
+ruleset lets a commit in only after they passed on an up-to-date branch, so the
+`Release` workflow does not run them again.
 The CLI and app read existing Beets config files and SQLite libraries. Check
 both programs against copies of real Beets data before a public release.
 

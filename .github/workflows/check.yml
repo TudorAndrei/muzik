@@ -1,11 +1,12 @@
 name: Check
 
+# The `main` ruleset requires these checks with an up-to-date branch, so a PR
+# has already tested the exact tree that it merges. Nothing runs again on push.
 on:
-  push:
-    branches: [main]
   pull_request:
   schedule:
     - cron: "17 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,7 +22,10 @@ jobs:
     timeout-minutes: 5
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      gui: ${{ steps.filter.outputs.gui }}
       server: ${{ steps.filter.outputs.server }}
+      deps: ${{ steps.filter.outputs.deps }}
+      lint-all: ${{ steps.filter.outputs.lint-all }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -33,26 +37,51 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          # code: Rust build and test inputs. gui: inputs of the macOS app.
+          # deps: inputs of the advisory check. lint-all: hk settings or tool pins.
           code=true
+          gui=true
           server=true
+          deps=true
+          lint_all=true
           if [ "$EVENT" = schedule ]; then
             code=false
+            gui=false
           elif [ "$EVENT" = pull_request ]; then
             code=false
+            gui=false
             server=false
+            deps=false
+            lint_all=false
             files=$(git diff --name-only "$BASE...$HEAD")
             while IFS= read -r path; do
               case "$path" in
-                *.md | .rumdl.toml | LICENSE*) ;;
-                *) code=true ;;
+                apps/* | crates/* | features/* | assets/* | Cargo.toml | Cargo.lock | deny.toml | clippy.toml | \
+                  .cargo/* | .config/* | mise.toml | mise.ci.toml | .github/workflows/check.yml) code=true ;;
               esac
               case "$path" in
-                packaging/server/* | apps/server/* | crates/* | Cargo.toml | Cargo.lock) server=true ;;
+                apps/gui/* | crates/* | assets/* | Cargo.toml | Cargo.lock | .cargo/* | .config/* | mise.toml | \
+                  .github/workflows/check.yml) gui=true ;;
+              esac
+              case "$path" in
+                packaging/server/* | apps/server/* | crates/* | Cargo.toml | Cargo.lock | \
+                  .github/workflows/check.yml) server=true ;;
+              esac
+              case "$path" in
+                Cargo.lock | deny.toml) deps=true ;;
+              esac
+              case "$path" in
+                hk.pkl | mise.toml | .typos.toml | .rumdl.toml | .gitleaks.toml | .github/jactionlint.yaml) lint_all=true ;;
               esac
             done <<< "$files"
           fi
-          echo "code=$code" >> "$GITHUB_OUTPUT"
-          echo "server=$server" >> "$GITHUB_OUTPUT"
+          {
+            echo "code=$code"
+            echo "gui=$gui"
+            echo "server=$server"
+            echo "deps=$deps"
+            echo "lint-all=$lint_all"
+          } >> "$GITHUB_OUTPUT"
 
   commits:
     name: Commits
@@ -69,20 +98,26 @@ jobs:
           install_args: cocogitto hk
       - run: cog check --from-latest-tag
 
+  # The lints come from hk.pkl, the same list as the pre-push hook. A PR lints
+  # only its changed files; the tests and dependency checks run when Rust
+  # inputs changed.
   check:
     name: Check
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       MISE_ENV: ci
       NEXTEST_PROFILE: ci
+      CODE: ${{ needs.changes.outputs.code }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Install GPUI Linux libraries
+        if: env.CODE == 'true'
         timeout-minutes: 20
         run: |
           sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
@@ -93,11 +128,51 @@ jobs:
             vulkan-validationlayers libvulkan1
       - uses: jdx/mise-action@v4
         with:
-          install_args: rust mr-boxington hk jactionlint shellcheck cargo-binstall cargo:cargo-deny cargo:cargo-nextest conda:ffmpeg
+          install_args: >-
+            hk typos rumdl gitleaks jactionlint
+            ${{ needs.changes.outputs.code == 'true' && 'rust mr-boxington cargo-binstall cargo:cargo-deny cargo:cargo-nextest conda:ffmpeg' || '' }}
       - uses: jdx/mr-boxington-action@v1
+        if: env.CODE == 'true'
         with:
           toolchain: "1.99.1"
-      - run: mise run --skip-tools check
+      - name: Run the hk checks
+        env:
+          # mise-action already put the tools on PATH. With HK_MISE, hk would
+          # run each step through `mise x`, which installs every tool in mise.toml.
+          HK_MISE: 0
+          EVENT: ${{ github.event_name }}
+          LINT_ALL: ${{ needs.changes.outputs.lint-all }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ] && [ "$LINT_ALL" != true ]; then
+            hk check --from-ref "$BASE" --to-ref HEAD
+          else
+            hk check --all
+          fi
+      - name: Run the tests
+        if: env.CODE == 'true'
+        run: mise run --skip-tools test
+      - name: Check dependency bans, licenses, and sources
+        if: env.CODE == 'true'
+        run: cargo deny check bans licenses sources
+
+  # Advisories change without a code change, so they run weekly and when
+  # dependencies change. This job is not required, so a network error in the
+  # advisory database fetch does not block a merge.
+  advisories:
+    name: Advisories
+    needs: changes
+    if: needs.changes.outputs.deps == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@v4
+        with:
+          install_args: rust mr-boxington cargo-binstall cargo:cargo-deny
+      - run: cargo deny check advisories
 
   server-image:
     name: Server image
@@ -145,7 +220,7 @@ jobs:
   gpui-macos:
     name: GPUI on macOS
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.gui == 'true'
     runs-on: macos-15
     timeout-minutes: 60
     steps:

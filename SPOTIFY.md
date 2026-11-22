@@ -113,6 +113,7 @@ selected audio source supplies the track.
 muzik has no Spotify application of its own, thus each user registers one:
 
 1. Open <https://developer.spotify.com/dashboard> and create an application.
+
 2. In **Edit settings**, add this redirect URI, then select **Add** and
    **Save**: `http://127.0.0.1:8888/callback`
 
@@ -120,6 +121,7 @@ muzik has no Spotify application of its own, thus each user registers one:
    IP address, but not the name `localhost`, and the path `/callback` is part
    of the value. Use `muzik spotify login --port <number>` for a different
    port; muzik then saves that port and shows the new URI.
+
 3. Save the client ID:
 
 ```sh
