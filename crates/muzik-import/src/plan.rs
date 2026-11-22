@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::Error as ImportError;
+use crate::apply::MatchDecision;
 use crate::history::IncrementalHistory;
 use muzik_core::{ReleaseCandidate, TrackCandidate};
 use muzik_library::{Library, SqlValue};
@@ -82,7 +83,7 @@ pub struct PlannedCandidate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DuplicateReason {
-    ReleaseId,
+    ReleaseId(String),
     SourceId,
     ArtistAndAlbum,
 }
@@ -101,6 +102,34 @@ pub struct AlbumPlan {
     pub candidates: Vec<PlannedCandidate>,
     pub recommendation: Recommendation,
     pub duplicates: Vec<Duplicate>,
+}
+
+impl AlbumPlan {
+    #[must_use]
+    pub fn duplicates_for(&self, choice: MatchDecision) -> Vec<Duplicate> {
+        let selected: BTreeSet<&str> = match choice {
+            MatchDecision::Candidate(index) => self
+                .candidates
+                .get(index)
+                .map(|candidate| candidate.release.id.0.as_str())
+                .into_iter()
+                .collect(),
+            MatchDecision::AsIs | MatchDecision::Skip => self
+                .items
+                .iter()
+                .map(|item| item.match_item.album_id.as_str())
+                .filter(|id| !id.is_empty())
+                .collect(),
+        };
+        self.duplicates
+            .iter()
+            .filter(|duplicate| match &duplicate.reason {
+                DuplicateReason::ReleaseId(id) => selected.contains(id.as_str()),
+                DuplicateReason::SourceId | DuplicateReason::ArtistAndAlbum => true,
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -579,6 +608,30 @@ fn album_title_key(title: &str) -> String {
     key
 }
 
+pub(crate) fn same_album_name(fields: &muzik_library::Fields, artist: &str, album: &str) -> bool {
+    field_text(fields, "albumartist")
+        .or_else(|| field_text(fields, "artist"))
+        .is_some_and(|value| comparable(value) == comparable(artist))
+        && field_text(fields, "album")
+            .is_some_and(|value| album_title_key(value) == album_title_key(album))
+}
+
+pub(crate) fn shares_a_track(items: &[PlanItem], existing: &[&muzik_library::Item]) -> bool {
+    let incoming: BTreeSet<String> = items
+        .iter()
+        .map(|item| track_key(&item.match_item.title))
+        .collect();
+    existing.iter().any(|item| {
+        incoming.contains(&track_key(
+            field_text(&item.fields, "title").unwrap_or_default(),
+        ))
+    })
+}
+
+fn track_key(title: &str) -> String {
+    comparable(&crate::ftclean::clean(title, "").0)
+}
+
 fn find_duplicates(
     items: &[PlanItem],
     releases: &[ReleaseCandidate],
@@ -599,36 +652,37 @@ fn find_duplicates(
         .iter()
         .filter_map(|item| item.source_id.as_deref())
         .collect();
+    let mut by_album = BTreeMap::<i64, Vec<&muzik_library::Item>>::new();
+    for item in library_items {
+        if let Some(id) = item.album_id() {
+            by_album.entry(id).or_default().push(item);
+        }
+    }
     let mut result = Vec::new();
     for album in albums {
-        let reason = if field_text(&album.fields, "mb_albumid").is_some_and(|id| ids.contains(id)) {
-            Some(DuplicateReason::ReleaseId)
-        } else if library_items.iter().any(|item| {
-            item.album_id() == Some(album.id)
-                && item
-                    .attribute("muzik_source_id")
-                    .is_some_and(|value| match value {
-                        SqlValue::Text(id) => sources.contains(id.as_str()),
-                        _ => false,
-                    })
-        }) {
-            Some(DuplicateReason::SourceId)
-        } else if let Some(first) = items.first() {
-            let artist = field_text(&album.fields, "albumartist")
-                .or_else(|| field_text(&album.fields, "artist"));
-            let title = field_text(&album.fields, "album");
+        let existing = by_album.get(&album.id).map_or(&[][..], Vec::as_slice);
+        let same_name = items.first().is_some_and(|first| {
             let local_artist = if first.match_item.album_artist.is_empty() {
                 &first.match_item.artist
             } else {
                 &first.match_item.album_artist
             };
-            (artist.is_some_and(|value| comparable(value) == comparable(local_artist))
-                && title.is_some_and(|value| {
-                    album_title_key(value) == album_title_key(&first.match_item.album)
-                }))
-            .then_some(DuplicateReason::ArtistAndAlbum)
+            same_album_name(&album.fields, local_artist, &first.match_item.album)
+        });
+        let reason = if existing.iter().any(|item| {
+            item.attribute("muzik_source_id")
+                .is_some_and(|value| match value {
+                    SqlValue::Text(id) => sources.contains(id.as_str()),
+                    _ => false,
+                })
+        }) {
+            Some(DuplicateReason::SourceId)
+        } else if same_name && (existing.is_empty() || shares_a_track(items, existing)) {
+            Some(DuplicateReason::ArtistAndAlbum)
         } else {
-            None
+            field_text(&album.fields, "mb_albumid")
+                .filter(|id| ids.contains(id))
+                .map(|id| DuplicateReason::ReleaseId(id.to_owned()))
         };
         if let Some(reason) = reason {
             result.push(Duplicate {

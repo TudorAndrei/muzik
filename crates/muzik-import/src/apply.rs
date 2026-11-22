@@ -8,7 +8,7 @@ use crate::fields::{insert_dates, release_tags, sql_scalar};
 use crate::files::{self, Placement};
 use crate::ftclean;
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
-use crate::plan::{AlbumPlan, ImportMode, ImportPlan, PlanItem, PlannedCandidate};
+use crate::plan::{self, AlbumPlan, Duplicate, ImportMode, ImportPlan, PlanItem, PlannedCandidate};
 use muzik_core::BeetsConfig;
 use muzik_library::{Fields as LibraryFields, Library, SqlValue, path_from_sql, path_to_sql};
 use muzik_tags::TagData;
@@ -156,6 +156,7 @@ struct PreparedAlbum {
     kind: ImportMode,
     items: Vec<PreparedItem>,
     album_fields: LibraryFields,
+    merge_into: Option<i64>,
     cover: Option<(PathBuf, PathBuf)>,
     replace_ids: Vec<i64>,
     old_paths: Vec<PathBuf>,
@@ -207,8 +208,9 @@ pub fn apply_with_cancel(
     let mut reserved = BTreeSet::new();
     for (album, decision) in plan.albums.iter().zip(decisions) {
         check_cancelled(cancelled)?;
+        let duplicates = album.duplicates_for(decision.choice);
         let skip_duplicate =
-            !album.duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
+            !duplicates.is_empty() && decision.duplicate == Some(DuplicateDecision::Skip);
         if skip_duplicate || decision.choice == MatchDecision::Skip {
             result.skipped_albums = result.skipped_albums.saturating_add(1);
             if !options.dry_run && !plan.incremental_skip_later {
@@ -216,7 +218,7 @@ pub fn apply_with_cancel(
             }
             continue;
         }
-        if !album.duplicates.is_empty() && decision.duplicate.is_none() {
+        if !duplicates.is_empty() && decision.duplicate.is_none() {
             return Err(ApplyError::DuplicateDecision);
         }
         let candidate = match decision.choice {
@@ -233,6 +235,7 @@ pub fn apply_with_cancel(
             library,
             album,
             candidate,
+            &duplicates,
             decision.duplicate,
             options,
             &mut reserved,
@@ -378,14 +381,14 @@ fn write_album(
         for id in &prepared.replace_ids {
             writer.remove_album(*id)?;
         }
-        let album_id = if prepared.kind == ImportMode::Album {
+        let added = if prepared.kind == ImportMode::Album && prepared.merge_into.is_none() {
             Some(writer.insert_album(&prepared.album_fields, &LibraryFields::new())?)
         } else {
             None
         };
         let mut item_ids = Vec::new();
         for (item, mut fields) in prepared.items.iter().zip(item_fields) {
-            if let Some(album_id) = album_id {
+            if let Some(album_id) = added.or(prepared.merge_into) {
                 fields.insert("album_id".into(), SqlValue::Integer(album_id));
             }
             let mut attributes = LibraryFields::new();
@@ -394,7 +397,7 @@ fn write_album(
             }
             item_ids.push(writer.insert_item(&fields, &attributes)?);
         }
-        Ok((album_id, item_ids))
+        Ok((added, item_ids))
     })
 }
 
@@ -425,13 +428,14 @@ fn prepare(
     library: &Library,
     album: &AlbumPlan,
     candidate: Option<&PlannedCandidate>,
+    duplicates: &[Duplicate],
     duplicate: Option<DuplicateDecision>,
     options: &ApplyOptions,
     reserved: &mut BTreeSet<PathBuf>,
 ) -> Result<PreparedAlbum, ApplyError> {
     let compilation = is_compilation(album, candidate);
     let replace_ids = if duplicate == Some(DuplicateDecision::Replace) {
-        selected_replacements(library, album, candidate)?
+        selected_replacements(library, album, candidate, duplicates)?
     } else {
         Vec::new()
     };
@@ -447,12 +451,20 @@ fn prepare(
         .unwrap_or(0)
         .checked_add(1)
         .ok_or("album id space is exhausted")?;
+    let merge_into = if album.kind == ImportMode::Album && duplicates.is_empty() {
+        merge_target(library, album, candidate, compilation, &albums)?
+    } else {
+        None
+    };
+    let merged_fields = merge_into.map(|existing| album_text(&existing.fields));
     let mut known = known_albums(&albums);
     for (index, item) in album.items.iter().enumerate() {
-        let tags = item_tags(item, candidate, index, compilation);
-        let mut path_fields = path_fields(&tags);
-        path_fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
-        if index == 0 && album.kind == ImportMode::Album {
+        let (tags, path_fields) = item_fields_in(
+            item_tags(item, candidate, index, compilation),
+            compilation,
+            merged_fields.as_ref(),
+        );
+        if index == 0 && album.kind == ImportMode::Album && merge_into.is_none() {
             album_fields.extend(album_scalars(&path_fields));
             known.push(AlbumFields {
                 id: next_id,
@@ -463,7 +475,8 @@ fn prepare(
         let kind = path_kind(album.kind, compilation);
         let context = TemplateContext {
             fields: path_fields,
-            album_id: (album.kind == ImportMode::Album).then_some(next_id),
+            album_id: (album.kind == ImportMode::Album)
+                .then_some(merge_into.map_or(next_id, |existing| existing.id)),
             albums: &known,
             aunique_keys: &options.aunique_keys,
             aunique_disambiguators: &options.aunique_disambiguators,
@@ -488,7 +501,11 @@ fn prepare(
             source_id: item.source_id.clone(),
         });
     }
-    let cover = album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved)?;
+    let cover = if merge_into.is_some() {
+        None
+    } else {
+        album_cover(album, &prepared, &old_paths, &mut occupied_paths, reserved)?
+    };
     if let Some((_, destination)) = &cover {
         album_fields.insert("artpath".into(), path_to_sql(destination));
     }
@@ -503,11 +520,69 @@ fn prepare(
         kind: album.kind,
         items: prepared,
         album_fields,
+        merge_into: merge_into.map(|existing| existing.id),
         cover,
         replace_ids,
         old_paths,
         occupied_paths,
     })
+}
+
+fn item_fields_in(
+    mut tags: TagData,
+    compilation: bool,
+    merged: Option<&BTreeMap<String, String>>,
+) -> (TagData, BTreeMap<String, String>) {
+    let merged = merged.into_iter().flatten();
+    for (key, value) in merged
+        .clone()
+        .filter(|(key, _)| matches!(key.as_str(), "album" | "albumartist"))
+    {
+        tags.fields.insert(key.clone(), value.clone());
+    }
+    let mut fields = path_fields(&tags);
+    fields.insert("comp".into(), if compilation { "1" } else { "0" }.into());
+    fields.extend(
+        merged
+            .filter(|(key, _)| ALBUM_KEYS.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    (tags, fields)
+}
+
+fn merge_target<'a>(
+    library: &Library,
+    album: &AlbumPlan,
+    candidate: Option<&PlannedCandidate>,
+    compilation: bool,
+    albums: &'a [muzik_library::Album],
+) -> Result<Option<&'a muzik_library::Album>, ApplyError> {
+    let Some(first) = album.items.first() else {
+        return Ok(None);
+    };
+    let tags = item_tags(first, candidate, 0, compilation);
+    let field = |name| tags.fields.get(name).map_or("", String::as_str);
+    let artist = if field("albumartist").is_empty() {
+        field("artist")
+    } else {
+        field("albumartist")
+    };
+    let mut target = None;
+    for existing in albums
+        .iter()
+        .filter(|existing| plan::same_album_name(&existing.fields, artist, field("album")))
+    {
+        let items = library.items_for_album(existing.id)?;
+        let items: Vec<_> = items.iter().collect();
+        if items.is_empty() {
+            continue;
+        }
+        if plan::shares_a_track(&album.items, &items) {
+            return Ok(None);
+        }
+        target = target.or(Some(existing));
+    }
+    Ok(target)
 }
 
 fn is_compilation(album: &AlbumPlan, candidate: Option<&PlannedCandidate>) -> bool {
@@ -524,15 +599,18 @@ fn known_albums(albums: &[muzik_library::Album]) -> Vec<AlbumFields> {
         .iter()
         .map(|album| AlbumFields {
             id: album.id,
-            fields: album
-                .fields
-                .iter()
-                .filter_map(|(key, value)| match value {
-                    SqlValue::Text(value) => Some((key.clone(), value.clone())),
-                    SqlValue::Integer(value) => Some((key.clone(), value.to_string())),
-                    _ => None,
-                })
-                .collect(),
+            fields: album_text(&album.fields),
+        })
+        .collect()
+}
+
+fn album_text(fields: &LibraryFields) -> BTreeMap<String, String> {
+    fields
+        .iter()
+        .filter_map(|(key, value)| match value {
+            SqlValue::Text(value) => Some((key.clone(), value.clone())),
+            SqlValue::Integer(value) => Some((key.clone(), value.to_string())),
+            _ => None,
         })
         .collect()
 }
@@ -590,20 +668,21 @@ fn apply_candidate_tags(
         .insert("comp".into(), if compilation { "1" } else { "0" }.into());
 }
 
+const ALBUM_KEYS: [&str; 9] = [
+    "album",
+    "albumartist",
+    "mb_albumid",
+    "mb_releasegroupid",
+    "year",
+    "label",
+    "catalognum",
+    "country",
+    "albumdisambig",
+];
+
 fn album_scalars(path_fields: &BTreeMap<String, String>) -> LibraryFields {
     let mut fields = LibraryFields::new();
-    for key in [
-        "album",
-        "albumartist",
-        "mb_albumid",
-        "mb_releasegroupid",
-        "year",
-        "label",
-        "catalognum",
-        "country",
-        "albumdisambig",
-        "comp",
-    ] {
+    for key in ALBUM_KEYS.into_iter().chain(["comp"]) {
         if let Some(value) = path_fields.get(key) {
             fields.insert(key.into(), sql_scalar(key, value));
         }
@@ -700,6 +779,7 @@ fn selected_replacements(
     library: &Library,
     album: &AlbumPlan,
     candidate: Option<&PlannedCandidate>,
+    duplicates: &[Duplicate],
 ) -> Result<Vec<i64>, ApplyError> {
     let first = &album.items.first().ok_or(ApplyError::NoAudio)?.match_item;
     let selected_id = candidate
@@ -724,7 +804,7 @@ fn selected_replacements(
         .filter_map(|item| item.source_id.as_deref())
         .collect();
     let mut ids = BTreeSet::new();
-    for duplicate in &album.duplicates {
+    for duplicate in duplicates {
         let Some(existing) = library.album(duplicate.album_id)? else {
             continue;
         };
