@@ -26,13 +26,13 @@ use topcoat::{
 use crate::{
     activity::{settle, truncate},
     auth,
+    notice::Notice,
     state::{backend, events, hub, shared_hub},
 };
 
 const ROW_LIMIT: usize = 300;
 const TITLE_LIMIT: usize = 120;
 const ERROR_LIMIT: usize = 160;
-const NOTICE_LIMIT: usize = 200;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct Place {
@@ -621,10 +621,8 @@ struct PlaceQuery {
 struct Outcome {
     #[serde(flatten)]
     place: Place,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    notice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
+    #[serde(flatten)]
+    notice: Notice,
 }
 
 fn place_of(cx: &Cx) -> Result<Place> {
@@ -638,16 +636,11 @@ fn place_of(cx: &Cx) -> Result<Place> {
 }
 
 fn back(cx: &Cx, place: Place, outcome: Result<String, String>) -> SeeOther {
-    let (notice, error) = match outcome {
-        Ok(text) => (Some(truncate(&text, NOTICE_LIMIT)), None),
-        Err(text) => (None, Some(truncate(&text, NOTICE_LIMIT))),
-    };
     see_other(
         href!(page)
             .query(&Outcome {
                 place,
-                notice,
-                error,
+                notice: Notice::from(outcome),
             })
             .resolve(cx),
     )

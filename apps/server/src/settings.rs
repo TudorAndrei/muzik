@@ -9,7 +9,7 @@ use muzik_runner::{
     service::{Service, SoulseekForm, SpotifyStatus},
     setup::{ServiceStatus, SoulseekProfile},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use topcoat::{
     Result,
     context::Cx,
@@ -24,10 +24,9 @@ use topcoat::{
 use crate::{
     activity::truncate,
     auth,
+    notice::Notice,
     state::{backend, hub},
 };
-
-const NOTICE_LIMIT: usize = 200;
 
 const PATHS: [(&str, &str); 3] = [
     ("output", "Downloads"),
@@ -397,26 +396,8 @@ struct SettingsQuery {
     error: Option<String>,
 }
 
-#[derive(Serialize)]
-struct Outcome {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    notice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
 fn back(cx: &Cx, outcome: Result<String, String>) -> SeeOther {
-    let outcome = match outcome {
-        Ok(text) => Outcome {
-            notice: Some(truncate(&text, NOTICE_LIMIT)),
-            error: None,
-        },
-        Err(text) => Outcome {
-            notice: None,
-            error: Some(truncate(&text, NOTICE_LIMIT)),
-        },
-    };
-    see_other(href!(page).query(&outcome).resolve(cx))
+    see_other(href!(page).query(&Notice::from(outcome)).resolve(cx))
 }
 
 async fn screen(cx: &Cx) -> Result<Screen> {

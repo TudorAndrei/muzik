@@ -6,7 +6,7 @@ use muzik_runner::{
     service::Service,
 };
 use muzik_store::jobs::{Kind as JobKind, Status as JobStatus};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
 use topcoat::{
@@ -24,6 +24,7 @@ use topcoat::{
 use crate::{
     auth,
     hub::{Phase, Progress, Snapshot},
+    notice::{Notice, describe, done},
     state::{backend, events, hub},
 };
 
@@ -304,26 +305,8 @@ struct NoticeQuery {
     error: Option<String>,
 }
 
-#[derive(Serialize)]
-struct NoticeOut {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    notice: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
 fn back(cx: &Cx, outcome: Result<String, String>) -> SeeOther {
-    let notice = match outcome {
-        Ok(text) => NoticeOut {
-            notice: Some(truncate(&text, 200)),
-            error: None,
-        },
-        Err(text) => NoticeOut {
-            notice: None,
-            error: Some(truncate(&text, 200)),
-        },
-    };
-    see_other(href!(page).query(&notice).resolve(cx))
+    see_other(href!(page).query(&Notice::from(outcome)).resolve(cx))
 }
 
 #[page("/")]
@@ -569,12 +552,7 @@ pub async fn start_download(cx: &Cx, Form(form): Form<StartForm>) -> Result<SeeO
     let outcome = backend(cx)
         .run(move |service| service.start_workflow(&json!({"raw": raw})))
         .await?;
-    Ok(back(
-        cx,
-        outcome
-            .map(|id| format!("Queued {id}"))
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, describe(outcome, |id| format!("Queued {id}"))))
 }
 
 #[derive(Deserialize)]
@@ -594,9 +572,7 @@ pub async fn cancel(cx: &Cx, Form(form): Form<CancelForm>) -> Result<SeeOther> {
         .await?;
     Ok(back(
         cx,
-        outcome
-            .map(|()| format!("Stopping {target}"))
-            .map_err(|error| error.to_string()),
+        describe(outcome, |()| format!("Stopping {target}")),
     ))
 }
 
@@ -704,12 +680,7 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
                 .await?
         }
     };
-    Ok(back(
-        cx,
-        outcome
-            .map(|()| "Answer sent".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Answer sent")))
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ pub mod assets;
 pub mod auth;
 pub mod hub;
 pub mod library;
+pub mod notice;
 pub mod pages;
 pub mod settings;
 pub mod state;
