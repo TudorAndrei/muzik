@@ -4,3 +4,6 @@
 # Aphex Twin, "Selected Ambient Works ... Tha" — used in test fixtures.
 Tha = "Tha"
 ser = "ser"
+
+[files]
+extend-exclude = ["apps/server/assets/topcoat-runtime.js"]
