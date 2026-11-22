@@ -5,7 +5,7 @@ use crate::library_tasks::{self, AfterImport};
 use crate::settings::Settings;
 use crate::workflow_result::WorkflowResult;
 use muzik_core::{
-    ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, MatchAnswer, Step, Task,
+    ChapterAnswer, DecisionKind, DuplicateAnswer, JobEvent, MatchAnswer, Severity, Step, Task,
     chapters::Chapter,
 };
 use muzik_import::apply::{DuplicateDecision, MatchDecision};
@@ -38,6 +38,7 @@ pub fn run(
         cancelled,
         stage: &stage,
         after_import: settings.after_import,
+        agent_model: settings.agent_model.as_deref(),
     };
     let result = run_workflow_with_events(
         &settings.request,
@@ -55,9 +56,31 @@ pub struct LocalOperations<'a> {
     pub(crate) cancelled: &'a AtomicBool,
     pub(crate) stage: &'a Cell<Stage>,
     pub(crate) after_import: AfterImport,
+    pub(crate) agent_model: Option<&'a str>,
 }
 
 impl WorkflowOperations for LocalOperations<'_> {
+    fn read_comment_tracklist(
+        &mut self,
+        video_title: &str,
+        duration: Option<f64>,
+        comments: &[String],
+        _: &AtomicBool,
+    ) -> Result<Vec<Chapter>, String> {
+        self.stage.set(Stage::Parse);
+        self.agent_model.map_or_else(
+            || Ok(Vec::new()),
+            |model| crate::agent::comment_tracklist(model, video_title, duration, comments),
+        )
+    }
+
+    fn warn(&mut self, message: &str) {
+        (self.on_import_event)(JobEvent::Message {
+            message: message.to_owned(),
+            severity: Severity::Warning,
+        });
+    }
+
     fn review_chapters(
         &mut self,
         source: &Path,

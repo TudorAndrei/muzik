@@ -1,7 +1,7 @@
 //! Chapter lookup after local sidecars have no usable chapters.
 
-use crate::Result;
 use crate::ytdlp::YtDlp;
+use crate::{Result, WorkflowOperations};
 use muzik_core::MetadataSource;
 use muzik_core::chapters::{self, Chapter};
 use muzik_metadata::{MetadataClient, ReleaseSearch};
@@ -12,19 +12,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Apply the configured metadata source to one audio file.
 /// Local chapter sidecars are read by the caller before this function.
-pub(crate) fn discover(
+pub(crate) fn discover<O: WorkflowOperations + ?Sized>(
     source: &Path,
     selected: MetadataSource,
     cancelled: &AtomicBool,
+    operations: &mut O,
 ) -> Result<Vec<Chapter>> {
     if cancelled.load(Ordering::SeqCst) {
         return Err("cancelled".into());
     }
     if matches!(selected, MetadataSource::Youtube | MetadataSource::Auto) {
-        let chapters = match youtube(source, cancelled) {
+        let chapters = match youtube(source, cancelled, operations) {
             Ok(chapters) => chapters,
             Err(error) if selected == MetadataSource::Auto && !cancelled.load(Ordering::SeqCst) => {
-                let _ = error;
+                operations.warn(&format!("The YouTube chapter lookup failed: {error}"));
                 Vec::new()
             }
             Err(error) => return Err(error),
@@ -36,7 +37,8 @@ pub(crate) fn discover(
     if matches!(selected, MetadataSource::Musicbrainz | MetadataSource::Auto) {
         return match musicbrainz(source, cancelled) {
             Ok(chapters) => Ok(chapters),
-            Err(_) if selected == MetadataSource::Auto && !cancelled.load(Ordering::SeqCst) => {
+            Err(error) if selected == MetadataSource::Auto && !cancelled.load(Ordering::SeqCst) => {
+                operations.warn(&format!("The MusicBrainz chapter lookup failed: {error}"));
                 Ok(Vec::new())
             }
             Err(error) => Err(error),
@@ -45,7 +47,11 @@ pub(crate) fn discover(
     Ok(Vec::new())
 }
 
-fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
+fn youtube<O: WorkflowOperations + ?Sized>(
+    source: &Path,
+    cancelled: &AtomicBool,
+    operations: &mut O,
+) -> Result<Vec<Chapter>> {
     let path = chapters::Sidecar::Info.path(source);
     let Ok(text) = fs::read_to_string(&path) else {
         return Ok(Vec::new());
@@ -75,7 +81,38 @@ fn youtube(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
         return Ok(Vec::new());
     };
     let comments = YtDlp::default().video(url, true, cancelled)?;
-    Ok(chapters::best_comment_tracklist(&comments))
+    let found = chapters::best_comment_tracklist(&comments);
+    if !found.is_empty() {
+        return Ok(found);
+    }
+    Ok(read_top_comments(&comments, cancelled, operations))
+}
+
+fn read_top_comments<O: WorkflowOperations + ?Sized>(
+    metadata: &Value,
+    cancelled: &AtomicBool,
+    operations: &mut O,
+) -> Vec<Chapter> {
+    let comments = chapters::tracklist_comments(metadata);
+    if comments.is_empty() {
+        return Vec::new();
+    }
+    let title = metadata
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let duration = metadata.get("duration").and_then(Value::as_f64);
+    match operations.read_comment_tracklist(title, duration, &comments, cancelled) {
+        Ok(found) => found,
+        Err(error) => {
+            if !cancelled.load(Ordering::SeqCst) {
+                operations.warn(&format!(
+                    "The agent could not read the comment tracklist: {error}"
+                ));
+            }
+            Vec::new()
+        }
+    }
 }
 
 fn musicbrainz(source: &Path, cancelled: &AtomicBool) -> Result<Vec<Chapter>> {
@@ -209,6 +246,95 @@ fn whole_seconds(length: f64) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{SplitTask, WorkflowOptions};
+    use std::path::PathBuf;
+
+    #[derive(Default)]
+    struct Reader {
+        answer: Option<Result<Vec<Chapter>, String>>,
+        asked: Vec<String>,
+        warnings: Vec<String>,
+    }
+
+    impl WorkflowOperations for Reader {
+        fn download_youtube(&mut self, _: &str, _: &Path, _: bool) -> Result<Vec<PathBuf>, String> {
+            Err("no download in this test".into())
+        }
+
+        fn acquire_soulseek(&mut self, _: &str) -> Result<Vec<PathBuf>, String> {
+            Err("no Soulseek in this test".into())
+        }
+
+        fn organize(&mut self, _: &Path, _: &WorkflowOptions) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn split(&mut self, _: &SplitTask, _: &WorkflowOptions) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn read_comment_tracklist(
+            &mut self,
+            _: &str,
+            _: Option<f64>,
+            comments: &[String],
+            _: &AtomicBool,
+        ) -> Result<Vec<Chapter>, String> {
+            self.asked = comments.to_vec();
+            self.answer.take().unwrap_or_else(|| Ok(Vec::new()))
+        }
+
+        fn warn(&mut self, message: &str) {
+            self.warnings.push(message.to_owned());
+        }
+    }
+
+    fn top_comments() -> Value {
+        serde_json::json!({
+            "title":"Album upload",
+            "duration":300.0,
+            "comments":[
+                {"text":"great album","like_count":900},
+                {"text":"Tracks: Opening at 0:00, then Closing from 2:10 on","like_count":500},
+                {"text":"0:00 reply","parent":"c1","like_count":800}
+            ]
+        })
+    }
+
+    #[test]
+    fn the_agent_reads_the_top_comments_when_the_parser_finds_no_tracklist() {
+        let chapters = muzik_core::chapters::tracklist_chapters(
+            [(0, "Opening".into()), (130, "Closing".into())],
+            Some(300.0),
+        );
+        let mut reader = Reader {
+            answer: Some(Ok(chapters.clone())),
+            ..Reader::default()
+        };
+        let found = read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader);
+        assert_eq!(found, chapters);
+        assert_eq!(
+            reader.asked,
+            [
+                "great album",
+                "Tracks: Opening at 0:00, then Closing from 2:10 on"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agent_failure_is_reported_and_leaves_no_chapters() {
+        let mut reader = Reader {
+            answer: Some(Err("Codex is not installed.".into())),
+            ..Reader::default()
+        };
+        let found = read_top_comments(&top_comments(), &AtomicBool::new(false), &mut reader);
+        assert_eq!(found, Vec::<Chapter>::new());
+        assert_eq!(
+            reader.warnings,
+            ["The agent could not read the comment tracklist: Codex is not installed."]
+        );
+    }
 
     #[test]
     fn youtube_description_provides_chapters_when_embedded_chapters_are_missing() {
@@ -219,7 +345,13 @@ mod tests {
             r#"{"description":"0:00 First\n3:04 Second"}"#,
         )
         .unwrap();
-        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false)).unwrap();
+        let found = discover(
+            &source,
+            MetadataSource::Youtube,
+            &AtomicBool::new(false),
+            &mut Reader::default(),
+        )
+        .unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[1].start, 184);
     }
@@ -271,7 +403,13 @@ mod tests {
         }"#,
         )
         .unwrap();
-        let found = discover(&source, MetadataSource::Youtube, &AtomicBool::new(false)).unwrap();
+        let found = discover(
+            &source,
+            MetadataSource::Youtube,
+            &AtomicBool::new(false),
+            &mut Reader::default(),
+        )
+        .unwrap();
         assert_eq!(found[0].title, "First");
         assert_eq!(found[1].start, 120);
     }

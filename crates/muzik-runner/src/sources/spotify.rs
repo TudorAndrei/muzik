@@ -144,6 +144,7 @@ fn import_file(
         cancelled,
         stage: &stage,
         after_import: adapter.prepared.settings.after_import,
+        agent_model: adapter.prepared.settings.agent_model.as_deref(),
     };
     process_audio_plan_with_events(
         std::slice::from_ref(&file),

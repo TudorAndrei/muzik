@@ -155,6 +155,88 @@ pub fn best_comment_tracklist(metadata: &Value) -> Vec<Chapter> {
         .map_or_else(Vec::new, |(_, chapters)| chapters)
 }
 
+pub const TRACKLIST_COMMENTS: usize = 3;
+
+/// Return the top-level comments that an agent may read for a track list: pinned and uploader
+/// comments first, then the most liked. It is empty when none of them has two timestamps.
+#[must_use]
+pub fn tracklist_comments(metadata: &Value) -> Vec<String> {
+    static TIME: LazyLock<Regex> = LazyLock::new(|| fixed(r"\b\d{1,2}:\d{2}(?::\d{2})?\b"));
+    let mut comments: Vec<&Value> = metadata
+        .get("comments")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|comment| comment.get("parent").is_none_or(|parent| parent == "root"))
+        .collect();
+    comments.sort_by_key(|comment| {
+        std::cmp::Reverse((
+            comment.get("is_pinned") == Some(&Value::Bool(true)),
+            comment.get("author_is_uploader") == Some(&Value::Bool(true)),
+            comment
+                .get("like_count")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        ))
+    });
+    let texts: Vec<String> = comments
+        .into_iter()
+        .filter_map(|comment| comment.get("text").and_then(Value::as_str))
+        .take(TRACKLIST_COMMENTS)
+        .map(str::to_owned)
+        .collect();
+    if texts
+        .iter()
+        .any(|text| TIME.find_iter(text).nth(1).is_some())
+    {
+        texts
+    } else {
+        Vec::new()
+    }
+}
+
+/// Build chapters from start times and titles that an agent read. It is empty unless there are
+/// two tracks, the start times rise, and every start is inside the video.
+#[must_use]
+pub fn tracklist_chapters(
+    entries: impl IntoIterator<Item = (i64, String)>,
+    duration: Option<f64>,
+) -> Vec<Chapter> {
+    let entries: Vec<(i64, String)> = entries
+        .into_iter()
+        .map(|(start, title)| (start, title.trim().to_owned()))
+        .collect();
+    let rising = entries.windows(2).all(|pair| match pair {
+        [(first, _), (second, _)] => first < second,
+        _ => true,
+    });
+    let inside = |start: i64| {
+        start >= 0
+            && duration.is_none_or(|duration| {
+                i32::try_from(start).is_ok_and(|start| f64::from(start) < duration)
+            })
+    };
+    if entries.len() < 2
+        || !rising
+        || entries
+            .iter()
+            .any(|(start, title)| title.is_empty() || !inside(*start))
+    {
+        return Vec::new();
+    }
+    ordered(
+        entries
+            .into_iter()
+            .map(|(start, title)| Chapter {
+                index: 0,
+                start,
+                end: None,
+                title,
+            })
+            .collect(),
+    )
+}
+
 /// Parse the `chapters` array in yt-dlp metadata.
 ///
 /// # Errors
@@ -409,6 +491,54 @@ fn normalize(mut chapters: Vec<Chapter>) -> Vec<Chapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_agent_gets_the_pinned_comment_then_the_most_liked_top_level_comments() {
+        let metadata = serde_json::json!({"comments":[
+            {"text":"nice","like_count":40},
+            {"text":"0:00 a 1:00 b","like_count":50},
+            {"text":"reply 0:00 1:00","parent":"x","like_count":99},
+            {"text":"pinned","is_pinned":true,"like_count":0},
+            {"text":"most liked","like_count":70}
+        ]});
+        assert_eq!(
+            tracklist_comments(&metadata),
+            ["pinned", "most liked", "0:00 a 1:00 b"]
+        );
+    }
+
+    #[test]
+    fn the_agent_gets_no_comments_when_none_of_the_top_three_has_two_timestamps() {
+        let metadata = serde_json::json!({"comments":[
+            {"text":"listen at 1:30","like_count":3},
+            {"text":"great","like_count":2}
+        ]});
+        assert_eq!(tracklist_comments(&metadata), Vec::<String>::new());
+    }
+
+    #[test]
+    fn agent_start_times_become_chapters_only_when_they_rise_and_fit_the_video() {
+        let tracks = |starts: &[i64]| {
+            starts
+                .iter()
+                .map(|start| (*start, format!("Track {start}")))
+                .collect::<Vec<_>>()
+        };
+        let chapters = tracklist_chapters(tracks(&[0, 130]), Some(300.0));
+        assert_eq!(
+            chapters
+                .iter()
+                .map(|chapter| (chapter.start, chapter.end))
+                .collect::<Vec<_>>(),
+            [(0, Some(130)), (130, None)]
+        );
+        for starts in [&[0, 130, 90][..], &[0, 310], &[0]] {
+            assert_eq!(
+                tracklist_chapters(tracks(starts), Some(300.0)),
+                Vec::<Chapter>::new()
+            );
+        }
+    }
 
     fn assert_well_formed(chapters: &[Chapter]) {
         for (chapter, index) in chapters.iter().zip(1_u32..) {

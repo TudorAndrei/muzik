@@ -278,8 +278,24 @@ pub trait WorkflowOperations {
         selected: MetadataSource,
         cancelled: &AtomicBool,
     ) -> Result<Vec<Chapter>, String> {
-        discovery::discover(source, selected, cancelled).map_err(String::from)
+        discovery::discover(source, selected, cancelled, self).map_err(String::from)
     }
+    /// Read a track list from the top comments of a video when the comment parser finds none.
+    /// The default reads nothing.
+    ///
+    /// # Errors
+    /// Returns an error when the reader cannot run or gives no valid answer.
+    fn read_comment_tracklist(
+        &mut self,
+        _video_title: &str,
+        _duration: Option<f64>,
+        _comments: &[String],
+        _cancelled: &AtomicBool,
+    ) -> Result<Vec<Chapter>, String> {
+        Ok(Vec::new())
+    }
+    /// Report a problem that did not stop the workflow. The default ignores it.
+    fn warn(&mut self, _message: &str) {}
     /// Ask for a decision when `WorkflowOptions::review` is set.
     /// Returning `Reject` treats the source as one track.
     ///
