@@ -65,6 +65,60 @@ Feature: Duplicate albums
     When muzik imports the album with the best match and replaces duplicates
     Then that album is still in the library
 
+  Scenario: A song joins the album of the same name when that album does not have it
+    Given the beets config has the default path "$albumartist/$album/$title"
+    And the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album has the song "Other Song"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    Then the planned album has 0 duplicates
+    When muzik imports the album as it is
+    Then the import added no albums
+    And the import added 1 song
+    And that album has 2 songs
+    And every imported file is in "Mara Vale/Night Lines" in the library folder
+    And that album has a cover
+
+  Scenario: A song that joins a compilation album is filed as a compilation
+    Given the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album is a compilation
+    And that album has the song "Other Song"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    And muzik imports the album as it is
+    Then the import added no albums
+    And every imported file is in "Compilations/Night Lines" in the library folder
+    And the imported file has these tags:
+      | comp | 1 |
+
+  Scenario: A song that joins an album uses the cover file that is already in its folder
+    Given the beets config has the default path "$albumartist/$album/$title"
+    And the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album has the song "Other Song"
+    And the library folder "Mara Vale/Night Lines" has the file "cover.png"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    And muzik imports the album as it is
+    Then the import added 1 song
+    And that album has a cover
+
+  Scenario: An album of the same name that has the song is a duplicate
+    Given the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "other-release"
+    And that album has the song "Song"
+    When muzik plans the import of the songs
+    Then the planned album lists that album as a duplicate
+
+  Scenario: An album from a release that the user did not select is not a duplicate
+    Given the library has the album "Other Album" by "Someone Else" with the MusicBrainz id "new-release"
+    And muzik copies files into the library
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    Then the planned album lists that album as a duplicate
+    When muzik imports the album with the best match
+    Then the import asks for a duplicate decision
+    When muzik imports the album as it is
+    Then the import added 1 album
+
   Scenario Outline: An album title that differs only by a full album tag is a duplicate
     Given the library has the album "<title>" by "MARA VALE" with the MusicBrainz id "other-release"
     When muzik plans the import of the songs

@@ -91,6 +91,62 @@ fn album_song_missing(world: &mut ImportWorld) -> StepResult {
     Ok(())
 }
 
+#[given(expr = "that album has the song {string}")]
+fn album_song(world: &mut ImportWorld, title: String) -> StepResult {
+    let fields = Fields::from([
+        ("album_id".into(), SqlValue::Integer(old_album(world)?)),
+        ("title".into(), SqlValue::Text(title.clone())),
+        (
+            "path".into(),
+            path_value(&world.root.join(format!("{title}.flac"))),
+        ),
+    ]);
+    world.library()?.insert_item(&fields, &Fields::new())?;
+    Ok(())
+}
+
+#[given(expr = "the library folder {string} has the file {string}")]
+fn library_folder_file(world: &mut ImportWorld, folder: String, name: String) -> StepResult {
+    let folder = world.root.join(folder);
+    fs::create_dir_all(&folder)?;
+    fs::copy(
+        crate::support::fixture("muzik-tags/tests/fixtures/cover.png"),
+        folder.join(name),
+    )?;
+    Ok(())
+}
+
+#[given("that album is a compilation")]
+fn album_is_compilation(world: &mut ImportWorld) -> StepResult {
+    let id = old_album(world)?;
+    let fields = Fields::from([("comp".into(), SqlValue::Integer(1))]);
+    world.library()?.update_album(id, &fields, &Fields::new())?;
+    Ok(())
+}
+
+#[then("that album has a cover")]
+fn album_has_cover(world: &mut ImportWorld) -> StepResult {
+    let id = old_album(world)?;
+    let album = world
+        .library()?
+        .album(id)?
+        .ok_or_else(|| anyhow::anyhow!("album {id} is gone"))?;
+    let path = match album.fields.get("artpath") {
+        Some(SqlValue::Blob(bytes)) => std::path::PathBuf::from(String::from_utf8(bytes.clone())?),
+        other => anyhow::bail!("that album has the artpath {other:?}"),
+    };
+    anyhow::ensure!(path.exists(), "{} does not exist", path.display());
+    Ok(())
+}
+
+#[then(expr = "that album has {int} song(s)")]
+fn that_album_songs(world: &mut ImportWorld, count: usize) -> StepResult {
+    let id = old_album(world)?;
+    let songs = world.library()?.items_for_album(id)?.len();
+    anyhow::ensure!(songs == count, "that album has {songs} songs");
+    Ok(())
+}
+
 #[given("the missing song points at the planned destination")]
 fn missing_song_points_at_destination(world: &mut ImportWorld) -> StepResult {
     let id = world

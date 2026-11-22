@@ -116,6 +116,24 @@ fn import_album_with_duplicates(
     )
 }
 
+#[when(expr = "muzik imports the album with the release {string}")]
+fn import_album_with_release(world: &mut ImportWorld, id: String) -> StepResult {
+    let index = world
+        .current_plan()?
+        .albums
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("the plan has no albums"))?
+        .candidates
+        .iter()
+        .position(|candidate| candidate.release.id.0 == id)
+        .ok_or_else(|| anyhow::anyhow!("the plan has no candidate {id}"))?;
+    let choice = AlbumDecision {
+        choice: MatchDecision::Candidate(index),
+        duplicate: None,
+    };
+    import(world, &[choice], Cancel::Never)
+}
+
 #[when("muzik skips the album")]
 fn skip_album(world: &mut ImportWorld) -> StepResult {
     let skip = AlbumDecision {

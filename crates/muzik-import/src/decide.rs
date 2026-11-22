@@ -44,9 +44,10 @@ pub fn decide_album(
     } else {
         MatchDecision::AsIs
     };
+    let duplicates = album.duplicates_for(choice);
     let duplicate = if choice == MatchDecision::Skip {
         None
-    } else if album.duplicates.is_empty() {
+    } else if duplicates.is_empty() {
         (!policy.force
             && matches!(
                 policy.duplicates,
@@ -61,7 +62,10 @@ pub fn decide_album(
             DuplicatePolicy::KeepAll => DuplicateDecision::Keep,
             DuplicatePolicy::RemoveOld => DuplicateDecision::Replace,
             DuplicatePolicy::Ask if !policy.interactive => DuplicateDecision::Skip,
-            DuplicatePolicy::Ask => ask.choose_duplicate(album)?,
+            DuplicatePolicy::Ask => ask.choose_duplicate(&AlbumPlan {
+                duplicates,
+                ..album.clone()
+            })?,
         })
     };
     Ok(AlbumDecision { choice, duplicate })

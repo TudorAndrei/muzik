@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub use crate::Error as ImportError;
+use crate::apply::MatchDecision;
 use crate::history::IncrementalHistory;
 use muzik_core::{ReleaseCandidate, TrackCandidate};
 use muzik_library::{Library, SqlValue};
@@ -82,7 +83,8 @@ pub struct PlannedCandidate {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DuplicateReason {
-    ReleaseId,
+    ReleaseId(String),
+    ReleaseName(String),
     SourceId,
     ArtistAndAlbum,
 }
@@ -101,6 +103,44 @@ pub struct AlbumPlan {
     pub candidates: Vec<PlannedCandidate>,
     pub recommendation: Recommendation,
     pub duplicates: Vec<Duplicate>,
+}
+
+impl AlbumPlan {
+    #[must_use]
+    pub fn duplicates_for(&self, choice: MatchDecision) -> Vec<Duplicate> {
+        let candidate = match choice {
+            MatchDecision::Candidate(index) => self
+                .candidates
+                .get(index)
+                .map(|candidate| candidate.release.id.0.as_str()),
+            MatchDecision::AsIs | MatchDecision::Skip => None,
+        };
+        let selected: BTreeSet<&str> = match choice {
+            MatchDecision::Candidate(index) => self
+                .candidates
+                .get(index)
+                .map(|candidate| candidate.release.id.0.as_str())
+                .into_iter()
+                .collect(),
+            MatchDecision::AsIs | MatchDecision::Skip => self
+                .items
+                .iter()
+                .map(|item| item.match_item.album_id.as_str())
+                .filter(|id| !id.is_empty())
+                .collect(),
+        };
+        let mut albums = BTreeSet::new();
+        self.duplicates
+            .iter()
+            .filter(|duplicate| match &duplicate.reason {
+                DuplicateReason::ReleaseId(id) => selected.contains(id.as_str()),
+                DuplicateReason::ReleaseName(id) => candidate == Some(id.as_str()),
+                DuplicateReason::SourceId | DuplicateReason::ArtistAndAlbum => true,
+            })
+            .filter(|duplicate| albums.insert(duplicate.album_id))
+            .cloned()
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -217,7 +257,13 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             check_cancelled(cancelled)?;
             let (candidates, recommendation) = self.rank(&current, &releases)?;
             let duplicates = if mode == ImportMode::Album {
-                find_duplicates(&items, &releases, &library_albums, &library_items)
+                find_duplicates(
+                    &items,
+                    &releases,
+                    &candidates,
+                    &library_albums,
+                    &library_items,
+                )
             } else {
                 Vec::new()
             };
@@ -579,9 +625,53 @@ fn album_title_key(title: &str) -> String {
     key
 }
 
+pub(crate) fn same_album_name(fields: &muzik_library::Fields, artist: &str, album: &str) -> bool {
+    field_text(fields, "albumartist")
+        .or_else(|| field_text(fields, "artist"))
+        .is_some_and(|value| comparable(value) == comparable(artist))
+        && field_text(fields, "album")
+            .is_some_and(|value| album_title_key(value) == album_title_key(album))
+}
+
+pub(crate) fn shares_a_track<'t>(
+    titles: impl IntoIterator<Item = &'t str>,
+    existing: &[&muzik_library::Item],
+) -> bool {
+    let incoming: BTreeSet<String> = titles.into_iter().map(track_key).collect();
+    existing.iter().any(|item| {
+        incoming.contains(&track_key(
+            field_text(&item.fields, "title").unwrap_or_default(),
+        ))
+    })
+}
+
+fn has_candidate_songs(
+    candidate: &PlannedCandidate,
+    fields: &muzik_library::Fields,
+    existing: &[&muzik_library::Item],
+) -> bool {
+    let release = &candidate.release;
+    same_album_name(fields, &release.artist, &release.title)
+        && (existing.is_empty()
+            || shares_a_track(
+                candidate
+                    .assignment
+                    .pairs
+                    .iter()
+                    .filter_map(|(_, track)| release.tracks.get(*track))
+                    .map(|track| track.title.as_str()),
+                existing,
+            ))
+}
+
+fn track_key(title: &str) -> String {
+    comparable(&crate::ftclean::clean(title, "").0)
+}
+
 fn find_duplicates(
     items: &[PlanItem],
     releases: &[ReleaseCandidate],
+    candidates: &[PlannedCandidate],
     albums: &[muzik_library::Album],
     library_items: &[muzik_library::Item],
 ) -> Vec<Duplicate> {
@@ -599,43 +689,58 @@ fn find_duplicates(
         .iter()
         .filter_map(|item| item.source_id.as_deref())
         .collect();
+    let mut by_album = BTreeMap::<i64, Vec<&muzik_library::Item>>::new();
+    for item in library_items {
+        if let Some(id) = item.album_id() {
+            by_album.entry(id).or_default().push(item);
+        }
+    }
     let mut result = Vec::new();
     for album in albums {
-        let reason = if field_text(&album.fields, "mb_albumid").is_some_and(|id| ids.contains(id)) {
-            Some(DuplicateReason::ReleaseId)
-        } else if library_items.iter().any(|item| {
-            item.album_id() == Some(album.id)
-                && item
-                    .attribute("muzik_source_id")
-                    .is_some_and(|value| match value {
-                        SqlValue::Text(id) => sources.contains(id.as_str()),
-                        _ => false,
-                    })
-        }) {
-            Some(DuplicateReason::SourceId)
-        } else if let Some(first) = items.first() {
-            let artist = field_text(&album.fields, "albumartist")
-                .or_else(|| field_text(&album.fields, "artist"));
-            let title = field_text(&album.fields, "album");
+        let existing = by_album.get(&album.id).map_or(&[][..], Vec::as_slice);
+        let same_name = items.first().is_some_and(|first| {
             let local_artist = if first.match_item.album_artist.is_empty() {
                 &first.match_item.artist
             } else {
                 &first.match_item.album_artist
             };
-            (artist.is_some_and(|value| comparable(value) == comparable(local_artist))
-                && title.is_some_and(|value| {
-                    album_title_key(value) == album_title_key(&first.match_item.album)
-                }))
-            .then_some(DuplicateReason::ArtistAndAlbum)
+            same_album_name(&album.fields, local_artist, &first.match_item.album)
+        });
+        let reasons = if existing.iter().any(|item| {
+            item.attribute("muzik_source_id")
+                .is_some_and(|value| match value {
+                    SqlValue::Text(id) => sources.contains(id.as_str()),
+                    _ => false,
+                })
+        }) {
+            vec![DuplicateReason::SourceId]
+        } else if same_name
+            && (existing.is_empty()
+                || shares_a_track(
+                    items.iter().map(|item| item.match_item.title.as_str()),
+                    existing,
+                ))
+        {
+            vec![DuplicateReason::ArtistAndAlbum]
         } else {
-            None
+            field_text(&album.fields, "mb_albumid")
+                .filter(|id| ids.contains(id))
+                .map(|id| DuplicateReason::ReleaseId(id.to_owned()))
+                .into_iter()
+                .chain(
+                    candidates
+                        .iter()
+                        .filter(|candidate| has_candidate_songs(candidate, &album.fields, existing))
+                        .map(|candidate| {
+                            DuplicateReason::ReleaseName(candidate.release.id.0.clone())
+                        }),
+                )
+                .collect()
         };
-        if let Some(reason) = reason {
-            result.push(Duplicate {
-                album_id: album.id,
-                reason,
-            });
-        }
+        result.extend(reasons.into_iter().map(|reason| Duplicate {
+            album_id: album.id,
+            reason,
+        }));
     }
     result
 }
