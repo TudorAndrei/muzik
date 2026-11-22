@@ -40,7 +40,7 @@ Build the image from the repository root.
 mise run server-image
 ```
 
-The image has the server, `ffmpeg`, `yt-dlp`, and `deno`. It runs as a user without
+The image has the server, `ffmpeg`, `yt-dlp`, and `quickjs`. It runs as a user without
 root rights. It uses two volumes:
 
 - `/data` holds the state.
@@ -79,8 +79,13 @@ cargo build --locked --release -p muzik-server
 sudo install -m 0755 target/release/muzik-server /usr/local/bin/muzik-server
 ```
 
-Install `ffmpeg`, `yt-dlp`, and `deno` on the host. `yt-dlp` needs `deno` for
-full YouTube support.
+Install `ffmpeg`, `yt-dlp`, and `quickjs` on the host. `yt-dlp` needs a
+JavaScript runtime for full YouTube support. Add this line to the `yt-dlp`
+config of the service user, or to `/etc/yt-dlp.conf`:
+
+```text
+--js-runtimes quickjs
+```
 
 Make the user and the config folder.
 
