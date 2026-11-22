@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use muzik_core::{
     AudioFallback, AudioSource, DuplicatePolicy, MetadataSource, PlaylistFormat, PreferredAudio,
@@ -24,164 +27,359 @@ use topcoat::{
 use crate::{
     activity::truncate,
     auth,
-    notice::Notice,
+    notice::{Notice, describe, done},
     state::{backend, hub},
 };
 
-const PATHS: [(&str, &str); 3] = [
-    ("output", "Downloads"),
-    ("splits", "Splits"),
-    ("config", "Beets config"),
+const SOURCE_CHOICES: [Choice; 6] = [
+    Choice::AudioSource,
+    Choice::MetadataSource,
+    Choice::Prefer,
+    Choice::Fallback,
+    Choice::QualityPolicy,
+    Choice::Duplicates,
 ];
 
-const CHOICES: [(&str, &str); 7] = [
-    ("audio_source", "Audio source"),
-    ("metadata_source", "Metadata"),
-    ("prefer", "Prefer"),
-    ("fallback", "Fallback"),
-    ("quality_policy", "Quality policy"),
-    ("duplicates", "Album already in library"),
-    ("playlist_format", "Playlist format"),
+const PROCESSING_FLAGS: [Flag; 9] = [
+    Flag::Review,
+    Flag::NoSplit,
+    Flag::NoOrganize,
+    Flag::Import,
+    Flag::TagOnly,
+    Flag::DryRun,
+    Flag::KeepSource,
+    Flag::Force,
+    Flag::Interactive,
 ];
 
-const PROCESSING_FLAGS: [(&str, &str); 9] = [
-    ("review", "Review chapters"),
-    ("no_split", "No split"),
-    ("no_organize", "No organize"),
-    ("import", "Import"),
-    ("tag_only", "Tag only"),
-    ("dry_run", "Dry run"),
-    ("keep_source", "Keep source"),
-    ("force", "Force"),
-    ("interactive", "Interactive"),
-];
+const IMPORT_FLAGS: [Flag; 2] = [Flag::ReplayGainAfterImport, Flag::CoversAfterImport];
 
-const OTHER_FLAGS: [(&str, &str); 4] = [
-    ("auto_decide", "Choose automatically"),
-    ("replaygain_after_import", "Calculate ReplayGain"),
-    ("covers_after_import", "Add cover files"),
-    ("playlists", "Write playlist files"),
-];
+const JOBS: &str = "jobs";
+const MIN_BITRATE: &str = "min_bitrate";
+const AGENT_MODEL: &str = "agent_model";
 
 const BANDCAMP_HELP: &str = "Muzik uses your Bandcamp login to read your collection and download your purchases in FLAC. To get the login cookie: log in to bandcamp.com in your browser, open the developer tools, open Storage (Firefox, Zen) or Application (Chrome), select Cookies, then https://bandcamp.com, and copy the Value of the identity row. Paste it below and select Save Bandcamp login. Muzik finds your user name. A full Cookie header or a cookies.txt file also works. The cookie stays on the server. Do not share it.";
 
-const fn choice_options(name: &str) -> &'static [&'static str] {
-    match name.as_bytes() {
-        b"audio_source" => AudioSource::CHOICES,
-        b"metadata_source" => MetadataSource::CHOICES,
-        b"prefer" => PreferredAudio::CHOICES,
-        b"fallback" => AudioFallback::CHOICES,
-        b"quality_policy" => QualityPolicy::CHOICES,
-        b"duplicates" => DuplicatePolicy::CHOICES,
-        b"playlist_format" => PlaylistFormat::CHOICES,
-        _ => &[],
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PathField {
+    Output,
+    Splits,
+    Config,
+}
+
+impl PathField {
+    const ALL: [Self; 3] = [Self::Output, Self::Splits, Self::Config];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Output => "output",
+            Self::Splits => "splits",
+            Self::Config => "config",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Output => "Downloads",
+            Self::Splits => "Splits",
+            Self::Config => "Beets config",
+        }
+    }
+
+    const fn required(self) -> bool {
+        !matches!(self, Self::Config)
+    }
+
+    fn get(self, defaults: &GuiDefaults) -> &Path {
+        match self {
+            Self::Output => &defaults.output,
+            Self::Splits => &defaults.splits,
+            Self::Config => &defaults.config,
+        }
+    }
+
+    fn set(self, defaults: &mut GuiDefaults, value: &str) -> Result<(), String> {
+        let value = value.trim();
+        if value.contains('\0') || (self.required() && value.is_empty()) {
+            return Err(format!("{} is not valid.", self.label()));
+        }
+        let path = PathBuf::from(value);
+        match self {
+            Self::Output => defaults.output = path,
+            Self::Splits => defaults.splits = path,
+            Self::Config => defaults.config = path,
+        }
+        Ok(())
     }
 }
 
-fn choice_current(defaults: &GuiDefaults, name: &str) -> String {
-    match name {
-        "audio_source" => defaults.audio_source.to_string(),
-        "metadata_source" => defaults.metadata_source.to_string(),
-        "prefer" => defaults.prefer.to_string(),
-        "fallback" => defaults.fallback.to_string(),
-        "quality_policy" => defaults.quality_policy.to_string(),
-        "duplicates" => defaults.duplicates.to_string(),
-        "playlist_format" => defaults.playlist_format.to_string(),
-        _ => String::new(),
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Choice {
+    AudioSource,
+    MetadataSource,
+    Prefer,
+    Fallback,
+    QualityPolicy,
+    Duplicates,
+    PlaylistFormat,
+}
+
+impl Choice {
+    const ALL: [Self; 7] = [
+        Self::AudioSource,
+        Self::MetadataSource,
+        Self::Prefer,
+        Self::Fallback,
+        Self::QualityPolicy,
+        Self::Duplicates,
+        Self::PlaylistFormat,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::AudioSource => "audio_source",
+            Self::MetadataSource => "metadata_source",
+            Self::Prefer => "prefer",
+            Self::Fallback => "fallback",
+            Self::QualityPolicy => "quality_policy",
+            Self::Duplicates => "duplicates",
+            Self::PlaylistFormat => "playlist_format",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::AudioSource => "Audio source",
+            Self::MetadataSource => "Metadata",
+            Self::Prefer => "Prefer",
+            Self::Fallback => "Fallback",
+            Self::QualityPolicy => "Quality policy",
+            Self::Duplicates => "Album already in library",
+            Self::PlaylistFormat => "Playlist format",
+        }
+    }
+
+    const fn options(self) -> &'static [&'static str] {
+        match self {
+            Self::AudioSource => AudioSource::CHOICES,
+            Self::MetadataSource => MetadataSource::CHOICES,
+            Self::Prefer => PreferredAudio::CHOICES,
+            Self::Fallback => AudioFallback::CHOICES,
+            Self::QualityPolicy => QualityPolicy::CHOICES,
+            Self::Duplicates => DuplicatePolicy::CHOICES,
+            Self::PlaylistFormat => PlaylistFormat::CHOICES,
+        }
+    }
+
+    fn get(self, defaults: &GuiDefaults) -> String {
+        match self {
+            Self::AudioSource => defaults.audio_source.to_string(),
+            Self::MetadataSource => defaults.metadata_source.to_string(),
+            Self::Prefer => defaults.prefer.to_string(),
+            Self::Fallback => defaults.fallback.to_string(),
+            Self::QualityPolicy => defaults.quality_policy.to_string(),
+            Self::Duplicates => defaults.duplicates.to_string(),
+            Self::PlaylistFormat => defaults.playlist_format.to_string(),
+        }
+    }
+
+    fn set(self, defaults: &mut GuiDefaults, value: &str) -> Result<(), String> {
+        let invalid = || format!("{} is not valid.", self.label());
+        let value = value.trim();
+        match self {
+            Self::AudioSource => defaults.audio_source = value.parse().map_err(|_| invalid())?,
+            Self::MetadataSource => {
+                defaults.metadata_source = value.parse().map_err(|_| invalid())?;
+            }
+            Self::Prefer => defaults.prefer = value.parse().map_err(|_| invalid())?,
+            Self::Fallback => defaults.fallback = value.parse().map_err(|_| invalid())?,
+            Self::QualityPolicy => {
+                defaults.quality_policy = value.parse().map_err(|_| invalid())?;
+            }
+            Self::Duplicates => defaults.duplicates = value.parse().map_err(|_| invalid())?,
+            Self::PlaylistFormat => {
+                defaults.playlist_format = value.parse().map_err(|_| invalid())?;
+            }
+        }
+        Ok(())
     }
 }
 
-fn set_choice(defaults: &mut GuiDefaults, name: &str, value: &str) -> bool {
-    match name {
-        "audio_source" => value
-            .parse()
-            .map(|value| defaults.audio_source = value)
-            .is_ok(),
-        "metadata_source" => value
-            .parse()
-            .map(|value| defaults.metadata_source = value)
-            .is_ok(),
-        "prefer" => value.parse().map(|value| defaults.prefer = value).is_ok(),
-        "fallback" => value.parse().map(|value| defaults.fallback = value).is_ok(),
-        "quality_policy" => value
-            .parse()
-            .map(|value| defaults.quality_policy = value)
-            .is_ok(),
-        "duplicates" => value
-            .parse()
-            .map(|value| defaults.duplicates = value)
-            .is_ok(),
-        "playlist_format" => value
-            .parse()
-            .map(|value| defaults.playlist_format = value)
-            .is_ok(),
-        _ => false,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum Flag {
+    Review,
+    NoSplit,
+    NoOrganize,
+    Import,
+    TagOnly,
+    DryRun,
+    KeepSource,
+    Force,
+    Interactive,
+    AutoDecide,
+    ReplayGainAfterImport,
+    CoversAfterImport,
+    Playlists,
+}
+
+impl Flag {
+    const ALL: [Self; 13] = [
+        Self::Review,
+        Self::NoSplit,
+        Self::NoOrganize,
+        Self::Import,
+        Self::TagOnly,
+        Self::DryRun,
+        Self::KeepSource,
+        Self::Force,
+        Self::Interactive,
+        Self::AutoDecide,
+        Self::ReplayGainAfterImport,
+        Self::CoversAfterImport,
+        Self::Playlists,
+    ];
+
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Review => "review",
+            Self::NoSplit => "no_split",
+            Self::NoOrganize => "no_organize",
+            Self::Import => "import",
+            Self::TagOnly => "tag_only",
+            Self::DryRun => "dry_run",
+            Self::KeepSource => "keep_source",
+            Self::Force => "force",
+            Self::Interactive => "interactive",
+            Self::AutoDecide => "auto_decide",
+            Self::ReplayGainAfterImport => "replaygain_after_import",
+            Self::CoversAfterImport => "covers_after_import",
+            Self::Playlists => "playlists",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Review => "Review chapters",
+            Self::NoSplit => "No split",
+            Self::NoOrganize => "No organize",
+            Self::Import => "Import",
+            Self::TagOnly => "Tag only",
+            Self::DryRun => "Dry run",
+            Self::KeepSource => "Keep source",
+            Self::Force => "Force",
+            Self::Interactive => "Interactive",
+            Self::AutoDecide => "Choose automatically",
+            Self::ReplayGainAfterImport => "Calculate ReplayGain",
+            Self::CoversAfterImport => "Add cover files",
+            Self::Playlists => "Write playlist files",
+        }
+    }
+
+    const fn get(self, defaults: &GuiDefaults) -> bool {
+        match self {
+            Self::Review => defaults.review,
+            Self::NoSplit => defaults.no_split,
+            Self::NoOrganize => defaults.no_organize,
+            Self::Import => defaults.import,
+            Self::TagOnly => defaults.tag_only,
+            Self::DryRun => defaults.dry_run,
+            Self::KeepSource => defaults.keep_source,
+            Self::Force => defaults.force,
+            Self::Interactive => defaults.interactive,
+            Self::AutoDecide => defaults.auto_decide,
+            Self::ReplayGainAfterImport => defaults.replaygain_after_import,
+            Self::CoversAfterImport => defaults.covers_after_import,
+            Self::Playlists => defaults.playlists,
+        }
+    }
+
+    const fn set(self, defaults: &mut GuiDefaults, on: bool) {
+        match self {
+            Self::Review => defaults.review = on,
+            Self::NoSplit => defaults.no_split = on,
+            Self::NoOrganize => defaults.no_organize = on,
+            Self::Import => defaults.import = on,
+            Self::TagOnly => defaults.tag_only = on,
+            Self::DryRun => defaults.dry_run = on,
+            Self::KeepSource => defaults.keep_source = on,
+            Self::Force => defaults.force = on,
+            Self::Interactive => defaults.interactive = on,
+            Self::AutoDecide => defaults.auto_decide = on,
+            Self::ReplayGainAfterImport => defaults.replaygain_after_import = on,
+            Self::CoversAfterImport => defaults.covers_after_import = on,
+            Self::Playlists => defaults.playlists = on,
+        }
     }
 }
 
-fn flag<'a>(defaults: &'a mut GuiDefaults, name: &str) -> Option<&'a mut bool> {
-    Some(match name {
-        "review" => &mut defaults.review,
-        "no_split" => &mut defaults.no_split,
-        "no_organize" => &mut defaults.no_organize,
-        "import" => &mut defaults.import,
-        "tag_only" => &mut defaults.tag_only,
-        "dry_run" => &mut defaults.dry_run,
-        "keep_source" => &mut defaults.keep_source,
-        "force" => &mut defaults.force,
-        "interactive" => &mut defaults.interactive,
-        "auto_decide" => &mut defaults.auto_decide,
-        "replaygain_after_import" => &mut defaults.replaygain_after_import,
-        "covers_after_import" => &mut defaults.covers_after_import,
-        "playlists" => &mut defaults.playlists,
-        _ => return None,
-    })
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Setting {
+    Path(PathField),
+    Choice(Choice),
+    Flag(Flag),
+    Jobs,
+    MinBitrate,
+    AgentModel,
 }
 
-fn apply(defaults: &mut GuiDefaults, form: &HashMap<String, String>) -> Result<(), String> {
-    for (name, label) in PATHS {
-        let Some(value) = form.get(name) else {
-            continue;
-        };
-        let path = PathBuf::from(value.trim());
-        match name {
-            "output" => defaults.output = path,
-            "splits" => defaults.splits = path,
-            _ => defaults.config = path,
-        }
-        if value.contains('\0') {
-            return Err(format!("{label} is not valid."));
+impl Setting {
+    fn named(name: &str) -> Option<Self> {
+        PathField::ALL
+            .into_iter()
+            .find(|field| field.name() == name)
+            .map(Self::Path)
+            .or_else(|| {
+                Choice::ALL
+                    .into_iter()
+                    .find(|choice| choice.name() == name)
+                    .map(Self::Choice)
+            })
+            .or_else(|| {
+                Flag::ALL
+                    .into_iter()
+                    .find(|flag| flag.name() == name)
+                    .map(Self::Flag)
+            })
+            .or(match name {
+                JOBS => Some(Self::Jobs),
+                MIN_BITRATE => Some(Self::MinBitrate),
+                AGENT_MODEL => Some(Self::AgentModel),
+                _ => None,
+            })
+    }
+}
+
+fn apply(defaults: &mut GuiDefaults, form: &[(String, String)]) -> Result<(), String> {
+    let mut checked = HashSet::new();
+    for (name, value) in form {
+        let setting =
+            Setting::named(name).ok_or_else(|| format!("The setting {name} is not known."))?;
+        let value = value.trim();
+        match setting {
+            Setting::Path(field) => field.set(defaults, value)?,
+            Setting::Choice(choice) => choice.set(defaults, value)?,
+            Setting::Flag(flag) => {
+                checked.insert(flag);
+            }
+            Setting::Jobs => {
+                defaults.jobs = value
+                    .parse()
+                    .map_err(|_| "Jobs must be a whole number.".to_owned())?;
+            }
+            Setting::MinBitrate => {
+                defaults.min_bitrate = value
+                    .parse()
+                    .map_err(|_| "Min bitrate must be a whole number.".to_owned())?;
+            }
+            Setting::AgentModel => {
+                if !value.is_empty() {
+                    value.clone_into(&mut defaults.agent_model);
+                }
+            }
         }
     }
-    for (name, label) in CHOICES {
-        if let Some(value) = form.get(name)
-            && !set_choice(defaults, name, value.trim())
-        {
-            return Err(format!("{label} is not valid."));
-        }
-    }
-    if let Some(value) = form.get("jobs") {
-        defaults.jobs = value
-            .trim()
-            .parse()
-            .map_err(|_| "Jobs must be a whole number.".to_owned())?;
-    }
-    if let Some(value) = form.get("min_bitrate") {
-        defaults.min_bitrate = value
-            .trim()
-            .parse()
-            .map_err(|_| "Min bitrate must be a whole number.".to_owned())?;
-    }
-    if let Some(value) = form.get("agent_model") {
-        let model = value.trim();
-        if !model.is_empty() {
-            model.clone_into(&mut defaults.agent_model);
-        }
-    }
-    for (name, _) in PROCESSING_FLAGS.into_iter().chain(OTHER_FLAGS) {
-        if let Some(field) = flag(defaults, name) {
-            *field = form.contains_key(name);
-        }
+    for flag in Flag::ALL {
+        flag.set(defaults, checked.contains(&flag));
     }
     Ok(())
 }
@@ -208,9 +406,18 @@ struct Group {
     fields: Vec<Field>,
 }
 
-fn choice_field(defaults: &GuiDefaults, name: &'static str, label: &'static str) -> Field {
-    let value = choice_current(defaults, name);
-    let mut options: Vec<String> = choice_options(name)
+fn path_field(defaults: &GuiDefaults, field: PathField) -> Field {
+    Field {
+        name: field.name(),
+        label: field.label(),
+        control: Control::Text(field.get(defaults).display().to_string()),
+    }
+}
+
+fn choice_field(defaults: &GuiDefaults, choice: Choice) -> Field {
+    let value = choice.get(defaults);
+    let mut options: Vec<String> = choice
+        .options()
         .iter()
         .map(|option| (*option).to_owned())
         .collect();
@@ -218,62 +425,62 @@ fn choice_field(defaults: &GuiDefaults, name: &'static str, label: &'static str)
         options.push(value.clone());
     }
     Field {
-        name,
-        label,
+        name: choice.name(),
+        label: choice.label(),
         control: Control::Choice { value, options },
     }
 }
 
-fn flag_fields(defaults: &GuiDefaults, names: &[(&'static str, &'static str)]) -> Vec<Field> {
-    let mut copy = defaults.clone();
-    names
-        .iter()
-        .filter_map(|(name, label)| {
-            Some(Field {
-                name,
-                label,
-                control: Control::Flag(*flag(&mut copy, name)?),
-            })
-        })
-        .collect()
+const fn flag_field(defaults: &GuiDefaults, flag: Flag) -> Field {
+    Field {
+        name: flag.name(),
+        label: flag.label(),
+        control: Control::Flag(flag.get(defaults)),
+    }
 }
 
 fn groups(defaults: &GuiDefaults) -> Vec<Group> {
-    let paths = [&defaults.output, &defaults.splits, &defaults.config]
+    let paths = PathField::ALL
         .into_iter()
-        .zip(PATHS)
-        .map(|(value, (name, label))| Field {
-            name,
-            label,
-            control: Control::Text(value.display().to_string()),
-        })
+        .map(|field| path_field(defaults, field))
         .collect();
-    let sources = CHOICES
-        .iter()
-        .take(6)
-        .map(|(name, label)| choice_field(defaults, name, label))
+    let sources = SOURCE_CHOICES
+        .into_iter()
+        .map(|choice| choice_field(defaults, choice))
         .collect();
     let mut processing = vec![
         Field {
-            name: "jobs",
+            name: JOBS,
             label: "Jobs",
             control: Control::Number(defaults.jobs.to_string()),
         },
         Field {
-            name: "min_bitrate",
+            name: MIN_BITRATE,
             label: "Min bitrate",
             control: Control::Number(defaults.min_bitrate.to_string()),
         },
     ];
-    processing.extend(flag_fields(defaults, &PROCESSING_FLAGS));
-    let mut agent = vec![Field {
-        name: "agent_model",
-        label: "Model",
-        control: Control::Text(defaults.agent_model.clone()),
-    }];
-    agent.extend(flag_fields(defaults, &OTHER_FLAGS[..1]));
-    let mut playlists = flag_fields(defaults, &OTHER_FLAGS[3..]);
-    playlists.push(choice_field(defaults, "playlist_format", "Playlist format"));
+    processing.extend(
+        PROCESSING_FLAGS
+            .into_iter()
+            .map(|flag| flag_field(defaults, flag)),
+    );
+    let agent = vec![
+        Field {
+            name: AGENT_MODEL,
+            label: "Model",
+            control: Control::Text(defaults.agent_model.clone()),
+        },
+        flag_field(defaults, Flag::AutoDecide),
+    ];
+    let after_import = IMPORT_FLAGS
+        .into_iter()
+        .map(|flag| flag_field(defaults, flag))
+        .collect();
+    let playlists = vec![
+        flag_field(defaults, Flag::Playlists),
+        choice_field(defaults, Choice::PlaylistFormat),
+    ];
     vec![
         Group {
             title: "Destinations",
@@ -298,7 +505,7 @@ fn groups(defaults: &GuiDefaults) -> Vec<Group> {
         Group {
             title: "After each import",
             note: "Muzik does these tasks for each album that it imports.",
-            fields: flag_fields(defaults, &OTHER_FLAGS[1..3]),
+            fields: after_import,
         },
         Group {
             title: "Playlists",
@@ -335,8 +542,44 @@ struct Spotify {
 struct ServiceRow {
     name: String,
     detail: String,
-    word: &'static str,
-    tone: &'static str,
+    state: ServiceState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ServiceState {
+    Available,
+    Optional,
+    Unavailable,
+    NotSet,
+}
+
+impl ServiceState {
+    const fn of(service: &ServiceStatus) -> Self {
+        match service.available {
+            Some(true) => Self::Available,
+            Some(false) if service.optional => Self::Optional,
+            Some(false) => Self::Unavailable,
+            None => Self::NotSet,
+        }
+    }
+
+    const fn word(self) -> &'static str {
+        match self {
+            Self::Available => "Available",
+            Self::Optional => "Optional",
+            Self::Unavailable => "Unavailable",
+            Self::NotSet => "Not set up",
+        }
+    }
+
+    const fn tone(self) -> &'static str {
+        match self {
+            Self::Available => "tag ok",
+            Self::Optional => "tag warn",
+            Self::Unavailable => "tag bad",
+            Self::NotSet => "tag mute",
+        }
+    }
 }
 
 fn soulseek_of(profile: &SoulseekProfile) -> Soulseek {
@@ -364,19 +607,10 @@ fn spotify_of(status: &SpotifyStatus) -> Spotify {
 fn service_rows(checked: &[ServiceStatus]) -> Vec<ServiceRow> {
     checked
         .iter()
-        .map(|service| {
-            let (word, tone) = match service.available {
-                Some(true) => ("Available", "tag ok"),
-                Some(false) if service.optional => ("Optional", "tag warn"),
-                Some(false) => ("Unavailable", "tag bad"),
-                None => ("Not set up", "tag mute"),
-            };
-            ServiceRow {
-                name: truncate(service.name, 60),
-                detail: truncate(&service.detail, 200),
-                word,
-                tone,
-            }
+        .map(|service| ServiceRow {
+            name: truncate(service.name, 60),
+            detail: truncate(&service.detail, 200),
+            state: ServiceState::of(service),
         })
         .collect()
 }
@@ -649,7 +883,9 @@ async fn spotify_card(cx: &Cx, account: Option<Spotify>) -> Result<impl View> {
 async fn services_card(cx: &Cx, services: Option<Vec<ServiceRow>>) -> Result<impl View> {
     let action = href!(check_services).resolve(cx);
     let missing = services.as_ref().map_or(0, |rows| {
-        rows.iter().filter(|row| row.word == "Unavailable").count()
+        rows.iter()
+            .filter(|row| row.state == ServiceState::Unavailable)
+            .count()
     });
     let rows = services.clone().unwrap_or_default();
     let checked = services.is_some();
@@ -667,7 +903,7 @@ async fn services_card(cx: &Cx, services: Option<Vec<ServiceRow>>) -> Result<imp
                 <div class="frow service">
                     <span class="title">(row.name)</span>
                     <span class="meta">(row.detail)</span>
-                    <span class=(row.tone)>(row.word)</span>
+                    <span class=(row.state.tone())>(row.state.word())</span>
                 </div>
             }
             <form class="frow actions" method="post" action=(action)>
@@ -696,16 +932,13 @@ async fn library_card(cx: &Cx) -> Result<impl View> {
 }
 
 #[route(POST "/settings/defaults")]
-pub async fn save_defaults(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Result<SeeOther> {
+pub async fn save_defaults(cx: &Cx, Form(form): Form<Vec<(String, String)>>) -> Result<SeeOther> {
     auth::require(cx).await?;
     let outcome = backend(cx)
         .run(move |service| {
             let mut defaults = service.defaults();
             apply(&mut defaults, &form)?;
-            service
-                .save_defaults(&defaults)
-                .map(|_| "Config saved".to_owned())
-                .map_err(|error| error.to_string())
+            done(service.save_defaults(&defaults), "Config saved")
         })
         .await?;
     Ok(back(cx, outcome))
@@ -739,12 +972,7 @@ pub async fn save_soulseek(cx: &Cx, Form(form): Form<SoulseekFields>) -> Result<
         }
         Err(error) => Err(error),
     };
-    Ok(back(
-        cx,
-        outcome
-            .map(|_| "Soulseek account saved".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Soulseek account saved")))
 }
 
 #[derive(Deserialize)]
@@ -764,24 +992,14 @@ pub async fn save_bandcamp(cx: &Cx, Form(form): Form<BandcampFields>) -> Result<
     if outcome.is_ok() {
         crate::watchlist::reload(cx).await?;
     }
-    Ok(back(
-        cx,
-        outcome
-            .map(|_| "Bandcamp login saved".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Bandcamp login saved")))
 }
 
 #[route(POST "/settings/bandcamp/logout")]
 pub async fn logout_bandcamp(cx: &Cx) -> Result<SeeOther> {
     auth::require(cx).await?;
     let outcome = backend(cx).run(Service::logout_bandcamp).await?;
-    Ok(back(
-        cx,
-        outcome
-            .map(|_| "Bandcamp login removed".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Bandcamp login removed")))
 }
 
 #[derive(Deserialize)]
@@ -796,24 +1014,14 @@ pub async fn save_spotify_client(cx: &Cx, Form(form): Form<SpotifyFields>) -> Re
     let outcome = backend(cx)
         .run(move |service| service.set_spotify_client_id(&form.client_id))
         .await?;
-    Ok(back(
-        cx,
-        outcome
-            .map(|_| "Spotify client ID saved".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Spotify client ID saved")))
 }
 
 #[route(POST "/settings/spotify/logout")]
 pub async fn logout_spotify(cx: &Cx) -> Result<SeeOther> {
     auth::require(cx).await?;
     let outcome = backend(cx).run(Service::spotify_logout).await?;
-    Ok(back(
-        cx,
-        outcome
-            .map(|_| "Spotify disconnected".to_owned())
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, done(outcome, "Spotify disconnected")))
 }
 
 #[route(POST "/settings/services")]
@@ -838,21 +1046,15 @@ pub async fn start_task(cx: &Cx, Form(form): Form<TaskFields>) -> Result<SeeOthe
     let outcome = backend(cx)
         .run(move |service| service.start_library_task(task))
         .await?;
-    Ok(back(
-        cx,
-        outcome
-            .map(|id| format!("Queued {id}"))
-            .map_err(|error| error.to_string()),
-    ))
+    Ok(back(cx, describe(outcome, |id| format!("Queued {id}"))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::apply;
     use muzik_core::app_config::GuiDefaults;
-    use std::collections::HashMap;
 
-    fn form(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+    fn form(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
@@ -893,5 +1095,30 @@ mod tests {
             apply(&mut defaults, &form(&[("jobs", "many")])),
             Err("Jobs must be a whole number.".to_owned())
         );
+    }
+
+    #[test]
+    fn a_field_that_is_not_known_is_refused() {
+        let mut defaults = GuiDefaults::default();
+        assert_eq!(
+            apply(&mut defaults, &form(&[("audiosource", "soulseek")])),
+            Err("The setting audiosource is not known.".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_destination_must_be_a_real_path_but_the_beets_config_may_be_unset() {
+        let mut defaults = GuiDefaults::default();
+        for form_pairs in [
+            form(&[("output", "  ")]),
+            form(&[("splits", "")]),
+            form(&[("output", "a\0b")]),
+            form(&[("config", "a\0b")]),
+        ] {
+            assert!(apply(&mut defaults, &form_pairs).is_err());
+        }
+        assert_eq!(defaults, GuiDefaults::default());
+        apply(&mut defaults, &form(&[("config", " ")])).unwrap();
+        assert!(defaults.config.as_os_str().is_empty());
     }
 }

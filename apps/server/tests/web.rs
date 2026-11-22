@@ -816,7 +816,13 @@ async fn saved_defaults_come_back_on_the_settings_page() {
 async fn defaults_that_are_not_valid_are_refused_and_not_saved() {
     let app = app(Some(TOKEN));
     let cookie = sign_in(&app).await;
-    for form in ["fallback=nonsense", "jobs=many", "min_bitrate=-4"] {
+    for form in [
+        "fallback=nonsense",
+        "jobs=many",
+        "min_bitrate=-4",
+        "fallbak=flac",
+        "output=+",
+    ] {
         let response = app
             .router
             .handle(post("/settings/defaults", form, Some(&cookie)))
