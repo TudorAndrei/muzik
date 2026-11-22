@@ -43,6 +43,11 @@ pub fn events(cx: &Cx) -> &Events {
 }
 
 #[must_use]
+pub fn shared_hub(cx: &Cx) -> Arc<Hub> {
+    Arc::clone(&context::<Shared>(cx).0)
+}
+
+#[must_use]
 pub fn hub(cx: &Cx) -> &Hub {
     &context::<Shared>(cx).0
 }

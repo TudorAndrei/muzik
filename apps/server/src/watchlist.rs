@@ -26,7 +26,7 @@ use topcoat::{
 use crate::{
     activity::{settle, truncate},
     auth,
-    state::{backend, events, hub},
+    state::{backend, events, hub, shared_hub},
 };
 
 const ROW_LIMIT: usize = 300;
@@ -524,13 +524,14 @@ fn build_board(
 /// Returns an error when the blocking task fails to finish.
 pub async fn reload(cx: &Cx) -> Result<()> {
     let shared = hub(cx);
-    let _ = shared.take_watchlist_stale();
+    let sequence = shared.begin_reload();
     match backend(cx).run(Service::load_watchlist).await? {
         Ok((view, check)) => {
-            shared.store_watchlist(view);
-            drop(tokio::task::spawn_blocking(move || check.run()));
+            if shared.store_watchlist(sequence, view) {
+                drop(tokio::task::spawn_blocking(move || check.run()));
+            }
         }
-        Err(error) => shared.fail_watchlist(error.to_string()),
+        Err(error) => shared.fail_watchlist(sequence, error.to_string()),
     }
     let _ = events(cx).0.send(AppEvent::WatchlistSaved);
     Ok(())
@@ -565,8 +566,12 @@ async fn load(cx: &Cx, place: &Place) -> Result<Board> {
     if let Some(id) = board.wanted.clone().filter(|id| hub(cx).try_thumbnail(id)) {
         let sender = events(cx).0.clone();
         let service = Arc::clone(&backend(cx).0);
+        let shared = shared_hub(cx);
         drop(tokio::task::spawn_blocking(move || {
-            if service.cache_thumbnails(vec![id]).is_some() {
+            let fetched = service.cache_thumbnails(vec![id.clone()]).is_some();
+            let cached = thumbnails::cached_path(&id, &service.paths().cache).is_some();
+            shared.finish_thumbnail(&id, cached);
+            if fetched {
                 let _ = sender.send(AppEvent::WatchlistSaved);
             }
         }));

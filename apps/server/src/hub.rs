@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 
 const LOG_LIMIT: usize = 200;
 const FINISHED_LIMIT: usize = 200;
+const RELOAD_BACKOFF_SECONDS: u32 = 2;
+const RELOAD_BACKOFF_LIMIT: Duration = Duration::from_secs(60);
+const THUMBNAIL_COOLDOWN: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Progress {
@@ -57,7 +60,12 @@ struct State {
     watchlist: Option<Arc<WatchlistView>>,
     watchlist_error: Option<String>,
     watchlist_stale: bool,
+    watchlist_sequence: u64,
+    reload_sequence: u64,
+    reload_failures: u32,
+    reload_retry_at: Option<Instant>,
     thumbnails: HashSet<String>,
+    thumbnail_retry_at: HashMap<String, Instant>,
     library: Option<(Instant, Arc<LibraryInfo>)>,
     services: Option<Value>,
 }
@@ -89,14 +97,20 @@ impl Hub {
         self.state.lock().watchlist_error.clone()
     }
 
-    pub fn store_watchlist(&self, view: WatchlistView) {
+    #[must_use]
+    pub fn begin_reload(&self) -> u64 {
         let mut state = self.state.lock();
-        state.watchlist = Some(Arc::new(view));
-        state.watchlist_error = None;
+        state.reload_sequence = state.reload_sequence.saturating_add(1);
+        state.watchlist_stale = false;
+        state.reload_sequence
     }
 
-    pub fn fail_watchlist(&self, message: String) {
-        self.state.lock().watchlist_error = Some(message);
+    pub fn store_watchlist(&self, sequence: u64, view: WatchlistView) -> bool {
+        self.state.lock().store(sequence, view)
+    }
+
+    pub fn fail_watchlist(&self, sequence: u64, message: String) {
+        self.state.lock().fail(sequence, message, Instant::now());
     }
 
     #[must_use]
@@ -130,15 +144,18 @@ impl Hub {
 
     #[must_use]
     pub fn try_thumbnail(&self, id: &str) -> bool {
-        self.state.lock().thumbnails.insert(id.to_owned())
+        self.state.lock().try_thumbnail(id, Instant::now())
+    }
+
+    pub fn finish_thumbnail(&self, id: &str, cached: bool) {
+        self.state
+            .lock()
+            .finish_thumbnail(id, cached, Instant::now());
     }
 
     #[must_use]
     pub fn take_watchlist_stale(&self) -> bool {
-        let mut guard = self.state.lock();
-        let stale = guard.watchlist.is_none() || guard.watchlist_stale;
-        guard.watchlist_stale = false;
-        stale
+        self.state.lock().take_stale(Instant::now())
     }
 
     #[must_use]
@@ -170,11 +187,67 @@ impl Hub {
 }
 
 impl State {
+    fn store(&mut self, sequence: u64, view: WatchlistView) -> bool {
+        if sequence <= self.watchlist_sequence {
+            return false;
+        }
+        self.watchlist_sequence = sequence;
+        self.watchlist = Some(Arc::new(view));
+        self.watchlist_error = None;
+        self.reload_failures = 0;
+        self.reload_retry_at = None;
+        true
+    }
+
+    fn fail(&mut self, sequence: u64, message: String, now: Instant) {
+        if sequence < self.watchlist_sequence {
+            return;
+        }
+        self.watchlist_error = Some(message);
+        self.watchlist_stale = true;
+        self.reload_failures = self.reload_failures.saturating_add(1);
+        let wait = Duration::from_secs(
+            u64::from(RELOAD_BACKOFF_SECONDS).saturating_pow(self.reload_failures.min(16)),
+        )
+        .min(RELOAD_BACKOFF_LIMIT);
+        self.reload_retry_at = now.checked_add(wait);
+    }
+
+    fn take_stale(&mut self, now: Instant) -> bool {
+        let wanted = self.watchlist.is_none() || self.watchlist_stale;
+        let due = self.reload_retry_at.is_none_or(|at| now >= at);
+        let reload = wanted && due;
+        if reload {
+            self.watchlist_stale = false;
+        }
+        reload
+    }
+
+    fn try_thumbnail(&mut self, id: &str, now: Instant) -> bool {
+        if self
+            .thumbnail_retry_at
+            .get(id)
+            .is_some_and(|until| now < *until)
+        {
+            return false;
+        }
+        self.thumbnails.insert(id.to_owned())
+    }
+
+    fn finish_thumbnail(&mut self, id: &str, cached: bool, now: Instant) {
+        self.thumbnails.remove(id);
+        if cached {
+            self.thumbnail_retry_at.remove(id);
+        } else if let Some(until) = now.checked_add(THUMBNAIL_COOLDOWN) {
+            self.thumbnail_retry_at.insert(id.to_owned(), until);
+        }
+    }
+
     fn watch(&mut self, event: &AppEvent) {
         match event {
             AppEvent::WatchlistUpdated(view) => {
-                self.watchlist = Some(Arc::new(view.clone()));
-                self.watchlist_error = None;
+                self.reload_sequence = self.reload_sequence.saturating_add(1);
+                self.store(self.reload_sequence, view.clone());
             }
             AppEvent::WatchlistError(message) => self.watchlist_error = Some(message.clone()),
             AppEvent::WatchlistSaved
@@ -328,10 +401,12 @@ fn question(kind: DecisionKind, payload: &Value) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::Hub;
+    use super::{Hub, State};
     use muzik_core::{JobEvent, Task};
     use muzik_runner::{AppEvent, Source};
+    use muzik_store::watchlist::WatchlistView;
     use serde_json::json;
+    use std::time::{Duration, Instant};
 
     fn event(event: JobEvent) -> AppEvent {
         AppEvent::JobEvent {
@@ -368,6 +443,75 @@ mod tests {
         });
         hub.apply(&event(JobEvent::message("late")));
         assert!(hub.snapshot().progress.is_empty());
+    }
+
+    fn view(version: u64) -> WatchlistView {
+        WatchlistView {
+            version,
+            playlists: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_older_reload_does_not_replace_a_newer_view() {
+        let hub = Hub::new();
+        let older = hub.begin_reload();
+        let newer = hub.begin_reload();
+        assert!(hub.store_watchlist(newer, view(2)));
+        assert!(!hub.store_watchlist(older, view(1)));
+        assert_eq!(hub.watchlist().unwrap().version, 2);
+        hub.fail_watchlist(older, "late".into());
+        assert_eq!(hub.watchlist_error(), None);
+    }
+
+    fn after(start: Instant, seconds: u64) -> Instant {
+        start.checked_add(Duration::from_secs(seconds)).unwrap()
+    }
+
+    #[test]
+    fn a_failed_reload_keeps_the_view_and_waits_longer_after_each_failure() {
+        let start = Instant::now();
+        let mut state = State::default();
+        assert!(state.store(1, view(1)));
+        state.watchlist_stale = true;
+        state.fail(2, "down".into(), start);
+        assert_eq!(state.watchlist.as_ref().unwrap().version, 1);
+        assert_eq!(state.watchlist_error.as_deref(), Some("down"));
+        assert!(!state.take_stale(after(start, 1)));
+        assert!(state.take_stale(after(start, 3)));
+        state.fail(3, "down".into(), start);
+        assert!(!state.take_stale(after(start, 3)));
+        assert!(state.take_stale(after(start, 5)));
+        for _ in 0..20 {
+            state.fail(4, "down".into(), start);
+        }
+        assert!(!state.take_stale(after(start, 59)));
+        assert!(state.take_stale(after(start, 61)));
+    }
+
+    #[test]
+    fn a_failed_first_load_is_retried_only_after_the_wait() {
+        let start = Instant::now();
+        let mut state = State::default();
+        assert!(state.take_stale(start));
+        state.fail(1, "down".into(), start);
+        assert!(!state.take_stale(after(start, 1)));
+        assert!(state.take_stale(after(start, 3)));
+        assert!(state.store(2, view(1)));
+        assert!(!state.take_stale(after(start, 4)));
+    }
+
+    #[test]
+    fn a_thumbnail_is_tracked_only_while_it_loads_and_rests_after_a_failure() {
+        let start = Instant::now();
+        let mut state = State::default();
+        assert!(state.try_thumbnail("abcdefghijk", start));
+        assert!(!state.try_thumbnail("abcdefghijk", start));
+        state.finish_thumbnail("abcdefghijk", false, start);
+        assert!(!state.try_thumbnail("abcdefghijk", after(start, 30)));
+        assert!(state.try_thumbnail("abcdefghijk", after(start, 61)));
+        state.finish_thumbnail("abcdefghijk", true, after(start, 62));
+        assert!(state.try_thumbnail("abcdefghijk", after(start, 62)));
     }
 
     #[test]
