@@ -6,7 +6,8 @@ use std::fs::{File, OpenOptions, TryLockError};
 use std::path::Path;
 use strum_macros::{AsRefStr, Display, EnumString, IntoStaticStr};
 
-const COLUMNS: &str = "id, queue, kind, item_key, title, status, params, question, answer, error";
+const COLUMNS: &str =
+    "id, queue, kind, item_key, title, status, params, question, answer, error, question_version";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, AsRefStr, Display, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "snake_case")]
@@ -100,6 +101,7 @@ pub struct Job {
     pub question: Option<Value>,
     pub answer: Option<Value>,
     pub error: Option<String>,
+    pub question_version: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -354,6 +356,12 @@ impl Store {
         Ok(answer_on(&self.connection, id, answer)?)
     }
 
+    /// # Errors
+    /// Returns an error if the database query fails.
+    pub fn answer_version(&self, id: i64, version: i64, answer: &Value) -> Result<bool> {
+        Ok(answer_version_on(&self.connection, id, version, answer)?)
+    }
+
     pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
         &mut self.connection
     }
@@ -531,6 +539,23 @@ pub fn answer_on(connection: &Connection, id: i64, answer: &Value) -> rusqlite::
     Ok(changed == 1)
 }
 
+/// Queues a waiting job again with `answer` when it still holds the question of `version`.
+/// # Errors
+/// Returns an error if the database query fails.
+pub fn answer_version_on(
+    connection: &Connection,
+    id: i64,
+    version: i64,
+    answer: &Value,
+) -> rusqlite::Result<bool> {
+    let changed = connection.execute(
+        "UPDATE jobs SET status = 'queued', answer = ?1, updated_at = ?2
+             WHERE id = ?3 AND status = 'waiting' AND question_version = ?4",
+        params![answer, now(), id, version],
+    )?;
+    Ok(changed == 1)
+}
+
 /// Cancels the waiting job of an item, except the job `keep`.
 /// # Errors
 /// Returns an error if the database query fails.
@@ -566,7 +591,8 @@ pub fn cancel_duplicates_on(connection: &Connection) -> rusqlite::Result<usize> 
 pub fn park_on(connection: &Connection, job: &NewJob<'_>, question: &Value) -> Result<i64> {
     let updated = connection
         .query_row(
-            "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4
+            "UPDATE jobs SET question = ?1, params = ?2, title = ?3, answer = NULL, updated_at = ?4,
+                 question_version = question_version + 1
              WHERE kind = ?5 AND item_key = ?6 AND status = 'waiting' RETURNING id",
             params![
                 question,
@@ -621,6 +647,7 @@ fn job(row: &Row<'_>) -> rusqlite::Result<Job> {
         question: row.get(7)?,
         answer: row.get(8)?,
         error: row.get(9)?,
+        question_version: row.get(10)?,
     })
 }
 
@@ -794,6 +821,30 @@ mod tests {
             store.get(id).unwrap().map(|job| (job.status, job.error)),
             Some((Status::Done, None))
         );
+    }
+
+    #[test]
+    fn an_answer_is_saved_only_for_the_question_it_was_given_to() {
+        let store = memory();
+        let params = json!({});
+        let id = store
+            .park(
+                &job(Kind::Item, "PL1:3", &params),
+                &json!({"kind": "import_match"}),
+            )
+            .unwrap();
+        let seen = store.get(id).unwrap().unwrap().question_version;
+        store
+            .park(
+                &job(Kind::Item, "PL1:3", &params),
+                &json!({"kind": "import_duplicate"}),
+            )
+            .unwrap();
+        assert!(!store.answer_version(id, seen, &json!("as_is")).unwrap());
+        assert_eq!(store.list(Status::Waiting).unwrap().len(), 1);
+        let current = store.get(id).unwrap().unwrap().question_version;
+        assert!(store.answer_version(id, current, &json!("as_is")).unwrap());
+        assert!(!store.answer_version(id, current, &json!("skip")).unwrap());
     }
 
     #[test]

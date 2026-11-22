@@ -32,6 +32,13 @@ impl From<muzik_store::Error> for EnqueueError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answered {
+    Saved,
+    Changed,
+    Closed,
+}
+
 pub enum RunnerClaim {
     Unlocked,
     Locked(RunnerLock),
@@ -217,6 +224,33 @@ impl Jobs {
         Ok(store.answer(id, &json!({"kind":kind,"value":value}))?)
     }
 
+    /// # Errors
+    /// Returns an error when the job queue cannot be read or written.
+    pub fn answer_version(&self, id: i64, version: i64, value: &Value) -> crate::Result<Answered> {
+        let store = self.store();
+        let Some(job) = store.get(id)?.filter(|job| job.status == Status::Waiting) else {
+            return Ok(Answered::Closed);
+        };
+        if job.question_version != version {
+            return Ok(Answered::Changed);
+        }
+        let kind = job
+            .question
+            .and_then(|question| question.get("kind").cloned())
+            .unwrap_or(Value::Null);
+        if store.answer_version(id, version, &json!({"kind":kind,"value":value}))? {
+            return Ok(Answered::Saved);
+        }
+        let waiting = store
+            .get(id)?
+            .is_some_and(|job| job.status == Status::Waiting);
+        Ok(if waiting {
+            Answered::Changed
+        } else {
+            Answered::Closed
+        })
+    }
+
     pub(crate) fn repair(&self) -> crate::Result<usize> {
         let paths = &self.paths;
         let repaired = watchlist_jobs::repair(&mut self.store(), |params| {
@@ -266,7 +300,7 @@ fn snapshot(store: &Store) -> Value {
         .into_iter()
         .map(|job| {
             let question = job.question.unwrap_or(Value::Null);
-            json!({"id":job.id,"title":job.title,"kind":question.get("kind"),"payload":question.get("payload"),"item":job.item_key})
+            json!({"id":job.id,"title":job.title,"kind":question.get("kind"),"payload":question.get("payload"),"item":job.item_key,"version":job.question_version})
         })
         .collect();
     json!({"open":open,"waiting":waiting})
@@ -303,7 +337,7 @@ fn unique() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{EnqueueError, Jobs, parse_job_id};
+    use super::{Answered, EnqueueError, Jobs, parse_job_id};
     use crate::library_tasks::{LibraryRequest, LibraryTask};
     use muzik_core::paths::Paths;
     use muzik_store::jobs::{Kind, NewJob, Status};
@@ -313,6 +347,40 @@ mod tests {
     use std::path::Path;
 
     const KEY: &str = r#"["PL1","abcdefghijk"]"#;
+
+    #[test]
+    fn an_answer_is_refused_when_the_question_changed_after_it_was_shown() {
+        let jobs = Jobs::in_memory(&Paths::under(Path::new("unused"))).unwrap();
+        let params = json!({"playlist_id":"PL1","key":"abcdefghijk","action":"run"});
+        let new_job = NewJob {
+            kind: Kind::Item,
+            item_key: KEY,
+            title: "Song",
+            params: &params,
+        };
+        let id = jobs
+            .store()
+            .park(&new_job, &json!({"kind":"import_match","payload":{}}))
+            .unwrap();
+        let shown = jobs.get(id).unwrap().unwrap().question_version;
+        jobs.store()
+            .park(&new_job, &json!({"kind":"import_duplicate","payload":{}}))
+            .unwrap();
+        assert_eq!(
+            jobs.answer_version(id, shown, &json!("skip")).unwrap(),
+            Answered::Changed
+        );
+        assert_eq!(jobs.get(id).unwrap().unwrap().status, Status::Waiting);
+        let current = jobs.get(id).unwrap().unwrap().question_version;
+        assert_eq!(
+            jobs.answer_version(id, current, &json!("skip")).unwrap(),
+            Answered::Saved
+        );
+        assert_eq!(
+            jobs.answer_version(id, current, &json!("skip")).unwrap(),
+            Answered::Closed
+        );
+    }
 
     #[test]
     fn an_item_has_one_open_job_and_a_waiting_one_gives_way() {

@@ -230,6 +230,12 @@ impl Service {
     }
 
     /// # Errors
+    /// Returns an error when the answer cannot be saved.
+    pub fn answer_version(&self, id: i64, version: i64, value: &Value) -> Result<crate::Answered> {
+        self.app.answer_version(id, version, value)
+    }
+
+    /// # Errors
     /// Returns an error when the saved watchlist cannot be read.
     pub fn load_watchlist(&self) -> Result<(WatchlistView, WatchlistCheck)> {
         let login = Arc::clone(&self.login);

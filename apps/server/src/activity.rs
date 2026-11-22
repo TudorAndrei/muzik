@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use muzik_core::DecisionKind;
-use muzik_runner::{AppEvent, choices, job_id, service::Service};
+use muzik_runner::{Answered, AppEvent, choices, job_id, service::Service};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::{Receiver, error::RecvError};
@@ -27,6 +27,7 @@ const JOB_LIMIT: usize = 100;
 const DETAIL_LIMIT: usize = 6;
 const LOG_LIMIT: usize = 30;
 const CHAPTER_LIMIT: usize = 500;
+const QUESTION_CHANGED: &str = "The question changed. Review the new question.";
 const SETTLE: Duration = Duration::from_millis(150);
 const RESYNC: Duration = Duration::from_secs(5);
 
@@ -236,9 +237,10 @@ pub fn build_board(jobs: &Value, snapshot: &Snapshot) -> Board {
             .flatten()
             .filter_map(|waiting| {
                 let id = waiting["id"].as_i64()?;
+                let version = waiting["version"].as_i64()?;
                 let question = json!({"kind": waiting["kind"], "payload": waiting["payload"]});
                 Some(decision_card(
-                    format!("queue:{id}"),
+                    format!("queue:{id}:{version}"),
                     job_id(id),
                     waiting["title"].as_str().unwrap_or("Item"),
                     &question,
@@ -602,20 +604,24 @@ fn chapter_answer(form: &HashMap<String, String>) -> Option<Value> {
 #[derive(Debug, PartialEq, Eq)]
 enum Target {
     Live(String),
-    Queue(i64),
+    Queue { id: i64, version: i64 },
 }
 
 fn parse_target(text: &str) -> Option<Target> {
     if let Some(id) = text.strip_prefix("live:") {
         return Some(Target::Live(id.to_owned()));
     }
-    text.strip_prefix("queue:")?.parse().ok().map(Target::Queue)
+    let (id, version) = text.strip_prefix("queue:")?.split_once(':')?;
+    Some(Target::Queue {
+        id: id.parse().ok()?,
+        version: version.parse().ok()?,
+    })
 }
 
 async fn question_for(cx: &Cx, target: &Target) -> Result<Option<Value>> {
     match target {
         Target::Live(id) => Ok(hub(cx).decision(id).map(|decision| decision.question)),
-        Target::Queue(id) => {
+        Target::Queue { id, .. } => {
             let id = *id;
             let jobs = backend(cx).run(Service::jobs).await?;
             Ok(jobs
@@ -624,7 +630,13 @@ async fn question_for(cx: &Cx, target: &Target) -> Result<Option<Value>> {
                 .into_iter()
                 .flatten()
                 .find(|waiting| waiting["id"].as_i64() == Some(id))
-                .map(|waiting| json!({"kind": waiting["kind"], "payload": waiting["payload"]})))
+                .map(|waiting| {
+                    json!({
+                        "kind": waiting["kind"],
+                        "payload": waiting["payload"],
+                        "version": waiting["version"],
+                    })
+                }))
         }
     }
 }
@@ -639,6 +651,11 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
     let Some(question) = question_for(cx, &target).await? else {
         return Ok(back(cx, Err("This decision is no longer open.".into())));
     };
+    if let Target::Queue { version, .. } = target
+        && question.get("version").and_then(Value::as_i64) != Some(version)
+    {
+        return Ok(back(cx, Err(QUESTION_CHANGED.into())));
+    }
     let value = if form.contains_key("chapters") {
         chapter_answer(&form)
     } else {
@@ -661,16 +678,16 @@ pub async fn decide(cx: &Cx, Form(form): Form<HashMap<String, String>>) -> Resul
             }
             outcome
         }
-        Target::Queue(id) => {
+        Target::Queue { id, version } => {
             backend(cx)
                 .run(move |service| {
-                    service.answer(id, &value).and_then(|saved| {
-                        if saved {
-                            Ok(())
-                        } else {
-                            Err("This decision is no longer open.".into())
-                        }
-                    })
+                    service.answer_version(id, version, &value).and_then(
+                        |answered| match answered {
+                            Answered::Saved => Ok(()),
+                            Answered::Changed => Err(QUESTION_CHANGED.into()),
+                            Answered::Closed => Err("This decision is no longer open.".into()),
+                        },
+                    )
                 })
                 .await?
         }
@@ -699,8 +716,12 @@ mod tests {
     #[test]
     fn targets_name_a_live_or_a_saved_decision() {
         assert_eq!(parse_target("live:abc"), Some(Target::Live("abc".into())));
-        assert_eq!(parse_target("queue:7"), Some(Target::Queue(7)));
-        assert_eq!(parse_target("queue:x"), None);
+        assert_eq!(
+            parse_target("queue:7:3"),
+            Some(Target::Queue { id: 7, version: 3 })
+        );
+        assert_eq!(parse_target("queue:7"), None);
+        assert_eq!(parse_target("queue:x:1"), None);
         assert_eq!(parse_target("other:1"), None);
     }
 
@@ -748,7 +769,7 @@ mod board_tests {
                 {"job_id": "queue-1", "title": "Album", "kind": "workflow", "status": "running", "item": null},
             ],
             "waiting": [
-                {"id": 5, "title": "Song", "kind": "import_duplicate", "payload": {}, "item": null},
+                {"id": 5, "title": "Song", "kind": "import_duplicate", "payload": {}, "item": null, "version": 2},
             ],
             "runner": true,
         });
@@ -771,7 +792,7 @@ mod board_tests {
         assert_eq!(board.jobs[0].percent, Some(25));
         assert_eq!(board.jobs[1].status, "Queued");
         assert_eq!(board.decisions.len(), 1);
-        assert_eq!(board.decisions[0].target, "queue:5");
+        assert_eq!(board.decisions[0].target, "queue:5:2");
         assert_eq!(board.decisions[0].job_id, "queue-5");
         assert_eq!(board.decisions[0].choices.len(), 3);
     }

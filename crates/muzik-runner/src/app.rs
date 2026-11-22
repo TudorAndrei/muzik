@@ -151,6 +151,19 @@ impl App {
     }
 
     /// # Errors
+    /// Returns an error when the answer cannot be saved in the job queue.
+    pub fn answer_version(
+        &self,
+        id: i64,
+        version: i64,
+        value: &Value,
+    ) -> crate::Result<crate::Answered> {
+        let answered = self.jobs.answer_version(id, version, value)?;
+        self.changed();
+        Ok(answered)
+    }
+
+    /// # Errors
     /// Returns an error when the job queue cannot record the cancel request.
     pub fn cancel(&self, job: &str) -> crate::Result<bool> {
         let Some(number) = job
