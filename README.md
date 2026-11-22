@@ -157,12 +157,16 @@ inputs.muzik.url = "github:TudorAndrei/muzik";
 Then add the packages in a module that gets `inputs` as a special argument:
 
 ```nix
-{ inputs, pkgs, ... }:
+{ inputs, lib, pkgs, ... }:
+let
+  muzik = inputs.muzik.packages.${pkgs.stdenv.hostPlatform.system};
+in
 {
   environment.systemPackages = [
-    inputs.muzik.packages.${pkgs.stdenv.hostPlatform.system}.muzik
-    inputs.muzik.packages.${pkgs.stdenv.hostPlatform.system}.muzik-gpui
-  ];
+    muzik.muzik
+  ]
+  # The desktop app is built only for Linux.
+  ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux [ muzik.muzik-gpui ];
 }
 ```
 
