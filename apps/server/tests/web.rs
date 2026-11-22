@@ -290,6 +290,22 @@ async fn the_event_stream_sends_each_event_as_json() {
 
 const PLAYLIST_FORM: &str = "url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLabcdefgh12345";
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_event_stream_ends_when_the_session_ends() {
+    let app = app(Some(TOKEN));
+    let cookie = sign_in(&app).await;
+    let other = sign_in(&app).await;
+    let response = app.router.handle(get("/api/events", Some(&cookie))).await;
+    let mut stream = response.into_body().into_data_stream();
+    app.router.handle(post("/logout", "", Some(&cookie))).await;
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+        .await
+        .unwrap();
+    assert!(ended.is_none());
+    let response = app.router.handle(get("/api/events", Some(&other))).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 async fn page_text(app: &App, path: &str, cookie: &str) -> String {
     let response = app.router.handle(get(path, Some(cookie))).await;
     assert_eq!(response.status(), StatusCode::OK, "{path}");

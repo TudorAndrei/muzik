@@ -1,7 +1,9 @@
 use futures_util::{Stream, stream};
 use muzik_runner::service::Service;
 use serde_json::Value;
-use tokio::sync::broadcast::error::RecvError;
+use std::time::Duration;
+
+use tokio::{sync::broadcast::error::RecvError, time::MissedTickBehavior};
 use topcoat::{
     Result,
     context::Cx,
@@ -19,6 +21,8 @@ use crate::{
     state::{backend, events},
 };
 
+const SESSION_CHECK: Duration = Duration::from_secs(1);
+
 #[route(GET "/api/jobs")]
 pub async fn jobs(cx: &Cx) -> Result<Json<Value>> {
     auth::require(cx).await?;
@@ -28,17 +32,38 @@ pub async fn jobs(cx: &Cx) -> Result<Json<Value>> {
 #[route(GET "/api/events")]
 pub async fn events_stream(cx: &Cx) -> Result<Sse<impl Stream<Item = Result<Event>> + use<>>> {
     auth::require(cx).await?;
+    let watch = auth::watch(cx).await?;
     let receiver = events(cx).0.subscribe();
-    let stream = stream::unfold(receiver, |mut receiver| async move {
-        loop {
-            match receiver.recv().await {
-                Ok(event) => {
-                    return Some((Event::new().json_data(&event), receiver));
+    let mut check = tokio::time::interval(SESSION_CHECK);
+    check.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let stream = stream::unfold(
+        (receiver, watch, check),
+        |(mut receiver, watch, mut check)| async move {
+            loop {
+                tokio::select! {
+                    next = receiver.recv() => {
+                        if !watch.is_active() {
+                            return None;
+                        }
+                        match next {
+                            Ok(event) => {
+                                return Some((
+                                    Event::new().json_data(&event),
+                                    (receiver, watch, check),
+                                ));
+                            }
+                            Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Closed) => return None,
+                        }
+                    }
+                    _ = check.tick() => {
+                        if !watch.is_active() {
+                            return None;
+                        }
+                    }
                 }
-                Err(RecvError::Lagged(_)) => {}
-                Err(RecvError::Closed) => return None,
             }
-        }
-    });
+        },
+    );
     Ok(Sse::new(stream).keep_alive(KeepAlive::new()))
 }

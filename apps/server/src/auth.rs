@@ -2,6 +2,7 @@ use std::{
     borrow::Cow,
     collections::HashMap,
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -67,7 +68,26 @@ pub fn resolve_token(
 pub struct Auth {
     token: Option<String>,
     secure_cookie: bool,
-    sessions: Mutex<HashMap<TokenHash, SystemTime>>,
+    sessions: Arc<Mutex<Sessions>>,
+}
+
+type Sessions = HashMap<TokenHash, SystemTime>;
+
+pub struct SessionWatch {
+    sessions: Arc<Mutex<Sessions>>,
+    hash: Option<TokenHash>,
+}
+
+impl SessionWatch {
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.hash.as_ref().is_none_or(|hash| {
+            self.sessions
+                .lock()
+                .get(hash)
+                .is_some_and(|expires_at| *expires_at > SystemTime::now())
+        })
+    }
 }
 
 impl Auth {
@@ -76,7 +96,7 @@ impl Auth {
         Self {
             token,
             secure_cookie,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::default(),
         }
     }
 
@@ -196,6 +216,21 @@ pub async fn authenticated(cx: &Cx) -> Result<bool> {
         return Ok(false);
     };
     Ok(auth.knows(&hash))
+}
+
+/// # Errors
+/// Returns an error when the session token cannot be read.
+pub async fn watch(cx: &Cx) -> Result<SessionWatch> {
+    let auth = auth(cx);
+    let hash = if auth.required() {
+        Some(session::token_hash(cx).await?.ok_or_unauthorized()?)
+    } else {
+        None
+    };
+    Ok(SessionWatch {
+        sessions: Arc::clone(&auth.sessions),
+        hash,
+    })
 }
 
 /// # Errors
