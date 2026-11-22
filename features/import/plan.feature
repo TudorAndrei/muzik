@@ -36,6 +36,21 @@ Feature: Import plan
     Then the import added no albums
     And that album has 2 songs
 
+  Scenario: The song of a selected release is a duplicate when another release has the album id
+    Given MusicBrainz has the release "Night Lines" by "Mara Vale" from 2021 with the id "release-a":
+      | track | title | artist    | recording   | release track   |
+      | 2     | Tide  | Mara Vale | recording-1 | release-track-1 |
+    And MusicBrainz has the release "Night Lines" by "Mara Vale" from 2021 with the id "release-b":
+      | track | title        | artist    | recording   | release track   |
+      | 2     | Tide & Stone | Mara Vale | recording-2 | release-track-2 |
+    And the incoming song "02 Tide.flac" that muzik knows as "Tide" by "Mara Vale" on "Night Lines"
+    And the library has the album "Night Lines" by "Mara Vale" with the MusicBrainz id "release-a"
+    And that album has the song "Tide & Stone"
+    When muzik plans the import of the songs
+    And the plan keeps only that album as a duplicate
+    And muzik imports the album with the release "release-b"
+    Then the import asks for a duplicate decision
+
   Scenario: An album is planned as it is when MusicBrainz fails
     Given MusicBrainz is not reachable
     And the incoming song "Night Lines.flac" that muzik knows as "Song" by "Mara Vale" on "Night Lines"

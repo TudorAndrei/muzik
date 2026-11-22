@@ -129,6 +129,7 @@ impl AlbumPlan {
                 .filter(|id| !id.is_empty())
                 .collect(),
         };
+        let mut albums = BTreeSet::new();
         self.duplicates
             .iter()
             .filter(|duplicate| match &duplicate.reason {
@@ -136,6 +137,7 @@ impl AlbumPlan {
                 DuplicateReason::ReleaseName(id) => candidate == Some(id.as_str()),
                 DuplicateReason::SourceId | DuplicateReason::ArtistAndAlbum => true,
             })
+            .filter(|duplicate| albums.insert(duplicate.album_id))
             .cloned()
             .collect()
     }
@@ -704,14 +706,14 @@ fn find_duplicates(
             };
             same_album_name(&album.fields, local_artist, &first.match_item.album)
         });
-        let reason = if existing.iter().any(|item| {
+        let reasons = if existing.iter().any(|item| {
             item.attribute("muzik_source_id")
                 .is_some_and(|value| match value {
                     SqlValue::Text(id) => sources.contains(id.as_str()),
                     _ => false,
                 })
         }) {
-            Some(DuplicateReason::SourceId)
+            vec![DuplicateReason::SourceId]
         } else if same_name
             && (existing.is_empty()
                 || shares_a_track(
@@ -719,26 +721,26 @@ fn find_duplicates(
                     existing,
                 ))
         {
-            Some(DuplicateReason::ArtistAndAlbum)
+            vec![DuplicateReason::ArtistAndAlbum]
         } else {
             field_text(&album.fields, "mb_albumid")
                 .filter(|id| ids.contains(id))
                 .map(|id| DuplicateReason::ReleaseId(id.to_owned()))
-                .or_else(|| {
+                .into_iter()
+                .chain(
                     candidates
                         .iter()
-                        .find(|candidate| has_candidate_songs(candidate, &album.fields, existing))
+                        .filter(|candidate| has_candidate_songs(candidate, &album.fields, existing))
                         .map(|candidate| {
                             DuplicateReason::ReleaseName(candidate.release.id.0.clone())
-                        })
-                })
+                        }),
+                )
+                .collect()
         };
-        if let Some(reason) = reason {
-            result.push(Duplicate {
-                album_id: album.id,
-                reason,
-            });
-        }
+        result.extend(reasons.into_iter().map(|reason| Duplicate {
+            album_id: album.id,
+            reason,
+        }));
     }
     result
 }
