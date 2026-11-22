@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
-FROM h3nc4/yt-dlp-slim@sha256:34a07c5f2c4ccd7a11b21e8a934aad5444deae88a5b437e48debd3435ac9d21a AS yt-dlp
+FROM h3nc4/yt-dlp-slim:latest@sha256:34a07c5f2c4ccd7a11b21e8a934aad5444deae88a5b437e48debd3435ac9d21a AS yt-dlp
+
+FROM ghcr.io/jim60105/bgutil-pot:v0.8.1@sha256:289d82576a24bb68bac6f19f499facc74b494f04eb499ae6fa51b27c77c64d31 AS bgutil-pot
 
 FROM mwader/static-ffmpeg:9.1@sha256:dd09509d8c2152bfa601c8c20e3dd166bde906d37951b9f7e8bbd922267f5ac9 AS ffmpeg
 
@@ -20,6 +22,8 @@ RUN useradd --system --uid 10001 --create-home --home-dir /home/muzik muzik \
     && mkdir -p /data /music \
     && chown muzik:muzik /data /music
 COPY --from=yt-dlp /bin/yt-dlp /usr/local/bin/yt-dlp
+COPY --from=bgutil-pot /bgutil-pot /usr/local/bin/bgutil-pot
+COPY --from=bgutil-pot /client/yt_dlp_plugins /etc/yt-dlp/plugins/bgutil-ytdlp-pot-provider/yt_dlp_plugins
 COPY --from=ffmpeg /ffmpeg /ffprobe /usr/local/bin/
 COPY packaging/server/yt-dlp.conf /etc/yt-dlp.conf
 COPY --from=build /out/muzik-server /usr/local/bin/muzik-server
