@@ -42,6 +42,12 @@ pub struct Place {
     pub filter: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub item: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page: Option<usize>,
+}
+
+const fn at(number: usize) -> Option<usize> {
+    if number > 1 { Some(number) } else { None }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -121,7 +127,9 @@ struct Detail {
     playlist_file: bool,
     tabs: Vec<Tab>,
     rows: Vec<Row>,
-    hidden: usize,
+    page: usize,
+    pages: usize,
+    total: usize,
     empty: Option<String>,
     retry: usize,
     card: Option<Card>,
@@ -356,8 +364,11 @@ fn detail(
         .filter(|(_, item)| matches_filter(item, filter))
         .collect();
     let selected: Option<u64> = place.item.parse().ok();
+    let pages = shown.len().div_ceil(ROW_LIMIT).max(1);
+    let number = place.page.unwrap_or(1).clamp(1, pages);
     let rows: Vec<Row> = shown
         .iter()
+        .skip(number.saturating_sub(1).saturating_mul(ROW_LIMIT))
         .take(ROW_LIMIT)
         .map(|(id, item)| {
             let busy = queued.contains(*id);
@@ -431,7 +442,9 @@ fn detail(
                 .map(|error| truncate(error, 300)),
             playlist_file: playlist.playlist_file,
             tabs,
-            hidden: shown.len().saturating_sub(ROW_LIMIT),
+            page: number,
+            pages,
+            total: shown.len(),
             empty: shown.is_empty().then(|| empty_message(playlist, filter)),
             rows,
             retry,
@@ -466,7 +479,7 @@ fn build_board(
             selected: chosen == Some(index),
         })
         .collect();
-    let place = Place {
+    let mut place = Place {
         source: chosen
             .and_then(|index| playlists.get(index))
             .map(|playlist| playlist.playlist_id.clone())
@@ -475,11 +488,15 @@ fn build_board(
             .map(|summary| <&'static str>::from(summary).to_owned())
             .unwrap_or_default(),
         item: requested.item.clone(),
+        page: requested.page,
     };
     let (detail, wanted) = chosen
         .and_then(|index| playlists.get(index))
         .map(|playlist| detail(playlist, &place, filter, queued, cache))
         .unzip();
+    if let Some(detail) = &detail {
+        place.page = at(detail.page);
+    }
     Board {
         place,
         error: error.map(|message| truncate(&message, 300)),
@@ -562,6 +579,7 @@ struct WatchQuery {
     source: Option<String>,
     filter: Option<String>,
     item: Option<String>,
+    page: Option<usize>,
     notice: Option<String>,
     error: Option<String>,
 }
@@ -571,6 +589,7 @@ struct PlaceQuery {
     source: Option<String>,
     filter: Option<String>,
     item: Option<String>,
+    page: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -589,6 +608,7 @@ fn place_of(cx: &Cx) -> Result<Place> {
         source: query.source.clone().unwrap_or_default(),
         filter: query.filter.clone().unwrap_or_default(),
         item: query.item.clone().unwrap_or_default(),
+        page: query.page,
     })
 }
 
@@ -617,10 +637,12 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
     let source = query.source.clone().unwrap_or_default();
     let filter = query.filter.clone().unwrap_or_default();
     let item = query.item.clone().unwrap_or_default();
+    let number = query.page.unwrap_or_default();
     let place = Place {
         source: source.clone(),
         filter: filter.clone(),
         item: item.clone(),
+        page: query.page,
     };
     let to_add = href!(add).query(&place).resolve(cx);
     let refresh_all = href!(refresh).query(&place).resolve(cx);
@@ -639,7 +661,7 @@ pub async fn page(cx: &Cx) -> Result<impl View> {
             <button class="primary" type="submit">"Add playlist"</button>
             <button type="submit" formaction=(refresh_all) formnovalidate="true">"Refresh all"</button>
         </form>
-        live_board(source: source, filter: filter, item: item)
+        live_board(source: source, filter: filter, item: item, number: number)
     })
 }
 
@@ -649,12 +671,14 @@ pub async fn live_board(
     source: String,
     filter: String,
     item: String,
+    number: usize,
 ) -> Result<impl View> {
     auth::require(cx).await?;
     let place = Place {
         source,
         filter,
         item,
+        page: at(number),
     };
     Ok(live! {
         let mut changes = events(cx).0.subscribe();
@@ -687,56 +711,77 @@ pub async fn live_board(
     })
 }
 
+fn go(cx: &Cx, source: &str, filter: &str, item: &str, number: usize) -> String {
+    href!(page)
+        .query(&Place {
+            source: source.to_owned(),
+            filter: filter.to_owned(),
+            item: item.to_owned(),
+            page: at(number),
+        })
+        .resolve(cx)
+}
+
+type Linked = (
+    Detail,
+    Vec<(Tab, String)>,
+    Vec<(Row, String)>,
+    Option<String>,
+    Option<String>,
+);
+
+fn linked(cx: &Cx, detail: Detail, place: &Place) -> Linked {
+    let tabs = detail
+        .tabs
+        .iter()
+        .cloned()
+        .map(|tab| {
+            let link = go(cx, &detail.id, &tab.filter, "", 0);
+            (tab, link)
+        })
+        .collect();
+    let rows = detail
+        .rows
+        .iter()
+        .cloned()
+        .map(|row| {
+            let link = go(
+                cx,
+                &detail.id,
+                &place.filter,
+                &row.position.to_string(),
+                detail.page,
+            );
+            (row, link)
+        })
+        .collect();
+    let around = |number: usize| go(cx, &detail.id, &place.filter, &place.item, number);
+    let previous = (detail.page > 1).then(|| around(detail.page.saturating_sub(1)));
+    let following = (detail.page < detail.pages).then(|| around(detail.page.saturating_add(1)));
+    (detail, tabs, rows, previous, following)
+}
+
 #[component]
 async fn watch_board(cx: &Cx, data: Board) -> Result<impl View> {
     let place = data.place.clone();
-    let go = |source: &str, filter: &str, item: &str| {
-        href!(page)
-            .query(&Place {
-                source: source.to_owned(),
-                filter: filter.to_owned(),
-                item: item.to_owned(),
-            })
-            .resolve(cx)
-    };
     let sources: Vec<(SourceCard, String)> = data
         .sources
         .into_iter()
         .map(|source| {
-            let link = go(&source.id, "", "");
+            let link = go(cx, &source.id, "", "", 0);
             (source, link)
         })
         .collect();
     let loaded = data.loaded;
     let error = data.error.clone().unwrap_or_default();
     let run = href!(run_item).query(&place).resolve(cx);
-    let main = data.detail.map(|detail| {
-        let tabs: Vec<(Tab, String)> = detail
-            .tabs
-            .iter()
-            .cloned()
-            .map(|tab| {
-                let link = go(&detail.id, &tab.filter, "");
-                (tab, link)
-            })
-            .collect();
-        let rows: Vec<(Row, String)> = detail
-            .rows
-            .iter()
-            .cloned()
-            .map(|row| {
-                let link = go(&detail.id, &place.filter, &row.position.to_string());
-                (row, link)
-            })
-            .collect();
-        (detail, tabs, rows)
-    });
+    let main = data.detail.map(|detail| linked(cx, detail, &place));
     Ok(view! {
         <p class="notice error">(error)</p>
         <div class="watch">
             source_list(sources: sources, loaded: loaded)
             <section class="card">
-                if let Some((detail, tabs, rows)) = main {
+                if let Some((detail, tabs, rows, previous, following)) = main {
                     <div class="src-head">
                         <div class="title">(detail.title.clone())</div>
                         <div class="meta">(detail.facts.clone())</div>
@@ -758,7 +803,11 @@ async fn watch_board(cx: &Cx, data: Board) -> Result<impl View> {
                     item_list(
                         id: detail.id.clone(),
                         empty: detail.empty.clone().unwrap_or_default(),
-                        hidden: detail.hidden,
+                        number: detail.page,
+                        pages: detail.pages,
+                        total: detail.total,
+                        previous: previous,
+                        following: following,
                         rows: rows,
                         place: place.clone(),
                     )
@@ -886,12 +935,17 @@ async fn item_list(
     cx: &Cx,
     id: String,
     empty: String,
-    hidden: usize,
+    number: usize,
+    pages: usize,
+    total: usize,
+    previous: Option<String>,
+    following: Option<String>,
     rows: Vec<(Row, String)>,
     place: Place,
 ) -> Result<impl View> {
     let run = href!(run_item).query(&place).resolve(cx);
     let has_empty = !empty.is_empty();
+    let several = pages > 1;
     Ok(view! {
         <div class="scroll items">
             if has_empty {
@@ -922,8 +976,16 @@ async fn item_list(
                     </span>
                 </div>
             }
-            if hidden > 0 {
-                <div class="empty">(hidden) " more items. Choose a status to narrow the list."</div>
+            if several {
+                <div class="pager">
+                    <span class="meta">(total) " items · page " (number) " of " (pages)</span>
+                    if let Some(link) = previous {
+                        <a class="button small" href=(link)>"Previous"</a>
+                    }
+                    if let Some(link) = following {
+                        <a class="button small" href=(link)>"Next"</a>
+                    }
+                </div>
             }
         </div>
     })

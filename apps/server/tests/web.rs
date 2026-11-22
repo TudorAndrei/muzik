@@ -290,6 +290,33 @@ async fn the_event_stream_sends_each_event_as_json() {
 }
 
 const PLAYLIST_FORM: &str = "url=https%3A%2F%2Fwww.youtube.com%2Fplaylist%3Flist%3DPLabcdefgh12345";
+const SOURCE: &str = "PLabcdefgh12345";
+
+fn video(number: usize) -> String {
+    format!("v{number:010}")
+}
+
+fn seed(app: &App, titles: &[(usize, &str)]) {
+    use muzik_store::watchlist::{Repository, SourceKind, WatchItem, parse_source};
+    let repository = Repository::open(&Paths::under(app.home.path()));
+    repository
+        .update(|watchlist| {
+            let mut playlist =
+                parse_source(&format!("https://www.youtube.com/playlist?list={SOURCE}"))?;
+            playlist.items = titles
+                .iter()
+                .zip(1..)
+                .map(|((number, title), position)| {
+                    let mut item = WatchItem::new(position, title, SourceKind::Youtube);
+                    item.video_id = Some(video(*number));
+                    item
+                })
+                .collect();
+            watchlist.playlists = vec![playlist];
+            Ok(())
+        })
+        .unwrap();
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_slow_event_stream_is_told_to_reload_the_jobs() {
@@ -395,6 +422,32 @@ async fn a_source_is_added_renamed_and_removed() {
     let removed = page_text(&app, "/watchlist", &cookie).await;
     assert!(removed.contains("No playlists yet."));
     assert!(!removed.contains("Road trip"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_long_source_is_paged_so_every_item_can_be_reached() {
+    let app = app(Some(TOKEN));
+    let titles: Vec<String> = (1..=301)
+        .map(|number| format!("Track {number:03}"))
+        .collect();
+    let items: Vec<(usize, &str)> = (1..).zip(titles.iter().map(String::as_str)).collect();
+    seed(&app, &items);
+    let cookie = sign_in(&app).await;
+
+    let first = page_text(&app, &format!("/watchlist?source={SOURCE}"), &cookie).await;
+    assert!(first.contains("Track 001"));
+    assert!(first.contains("Track 300"));
+    assert!(!first.contains("Track 301"));
+    assert!(first.contains("page 1 of 2"));
+    assert!(first.contains("page=2"));
+
+    let second = page_text(&app, &format!("/watchlist?source={SOURCE}&page=2"), &cookie).await;
+    assert!(second.contains("Track 301"));
+    assert!(!second.contains("Track 001"));
+    assert!(second.contains("page 2 of 2"));
+
+    let beyond = page_text(&app, &format!("/watchlist?source={SOURCE}&page=9"), &cookie).await;
+    assert!(beyond.contains("Track 301"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
