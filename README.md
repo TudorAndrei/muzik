@@ -152,6 +152,12 @@ Set `MUZIK_HOME` to a folder to keep all state of a run in that folder. muzik
 then uses `data/`, `config/`, `cache/`, and `beets/config.yaml` under it, a
 separate keychain entry for the Soulseek password, and no folder migration.
 
+### Run as a server
+
+`muzik-server` is a web app. It runs from a container image or a systemd
+service. Build the image with `mise run server-image`. See
+[packaging/server/README.md](packaging/server/README.md).
+
 ## Development
 
 Install the project tools with `mise install`. Run all tests with:
