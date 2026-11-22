@@ -28,7 +28,20 @@ pub enum Queue {
     Library,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, AsRefStr, Display, EnumString, IntoStaticStr)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    AsRefStr,
+    Display,
+    EnumString,
+    IntoStaticStr,
+)]
+#[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum Kind {
     Refresh,
