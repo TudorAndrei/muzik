@@ -110,6 +110,7 @@ fn writes_tags_for_mediafile_to_read() {
             ),
         ]),
         custom: BTreeMap::from([("MUZIK_MOOD".into(), "calm".into())]),
+        ..TagData::default()
     };
     for suffix in SUFFIXES {
         let source = fixtures().join(format!("blank.{suffix}"));
@@ -126,6 +127,50 @@ fn writes_tags_for_mediafile_to_read() {
     if std::env::var_os("MUZIK_TAGS_WRITE_FIXTURES").is_none() {
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[test]
+fn removed_album_fields_are_gone_and_track_fields_stay() {
+    let root = std::env::temp_dir().join(format!("muzik-tags-remove-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let removed = [
+        "album",
+        "albumartist",
+        "albumartists",
+        "track",
+        "tracktotal",
+        "disc",
+        "disctotal",
+        "mb_albumid",
+        "mb_releasegroupid",
+        "mb_albumartistid",
+        "mb_releasetrackid",
+        "comp",
+        "albumdisambig",
+    ];
+    for suffix in SUFFIXES {
+        let dest = root.join(format!("remove.{suffix}"));
+        fs::copy(fixtures().join(format!("mediafile.{suffix}")), &dest).unwrap();
+        let data = TagData {
+            removed: removed.iter().map(|name| (*name).to_owned()).collect(),
+            ..TagData::default()
+        };
+        write(&dest, &data).unwrap();
+        let reread = read(&dest, &["MUZIK_MOOD"]).unwrap();
+        for name in removed {
+            assert_eq!(reread.fields.get(name), None, "{suffix}: {name}");
+        }
+        assert_eq!(reread.lists.get(&ListField::AlbumArtists), None, "{suffix}");
+        for name in ["title", "artist", "mb_trackid", "mb_artistid", "date"] {
+            assert!(reread.fields.contains_key(name), "{suffix}: {name}");
+        }
+        assert_eq!(
+            reread.custom.get("MUZIK_MOOD").map(String::as_str),
+            Some("calm"),
+            "{suffix}"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
