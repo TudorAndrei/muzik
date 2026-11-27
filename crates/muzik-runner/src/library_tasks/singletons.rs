@@ -111,21 +111,15 @@ mod tests {
         folder: &str,
         titles: &[&str],
         tracktotal: i64,
-        cover: bool,
     ) -> (i64, Vec<PathBuf>) {
         let dir = paths.directory.join(folder);
         fs::create_dir_all(&dir).unwrap();
         let mut library = Library::open_or_create(&paths.library).unwrap();
-        let mut album_fields = Fields::from([
+        let album_fields = Fields::from([
             ("album".to_owned(), text("Night Lines")),
             ("albumartist".to_owned(), text("Mara Vale")),
             ("mb_albumid".to_owned(), text("old-release")),
         ]);
-        if cover {
-            let art = dir.join("cover.png");
-            fs::copy(fixture("cover.png"), &art).unwrap();
-            album_fields.insert("artpath".into(), path_to_sql(&art));
-        }
         let album = library.insert_album(&album_fields, &Fields::new()).unwrap();
         let mut files = Vec::new();
         for (track, title) in (1_i64..).zip(titles) {
@@ -189,12 +183,12 @@ mod tests {
     }
 
     #[test]
-    fn a_one_song_album_becomes_a_singleton_with_the_album_cover() {
+    fn a_one_song_album_becomes_a_singleton() {
         let root = tempfile::tempdir().unwrap();
         let paths = paths(root.path());
-        let (lonely, files) = add_album(&paths, "Mara Vale/Night Lines", &["Song"], 12, true);
-        let (full, _) = add_album(&paths, "Mara Vale/Full", &["One", "Two"], 2, false);
-        let (single, _) = add_album(&paths, "Mara Vale/Single", &["Hit"], 1, false);
+        let (lonely, files) = add_album(&paths, "Mara Vale/Night Lines", &["Song"], 12);
+        let (full, _) = add_album(&paths, "Mara Vale/Full", &["One", "Two"], 2);
+        let (single, _) = add_album(&paths, "Mara Vale/Single", &["Hit"], 1);
         let source = files[0].clone();
         let before = fs::read(&source).unwrap();
 
@@ -216,7 +210,6 @@ mod tests {
         for name in ["album", "albumartist", "track", "tracktotal", "mb_albumid"] {
             assert_eq!(tags.fields.get(name), None, "{name}");
         }
-        assert!(muzik_tags::has_front_cover(&destination).unwrap());
 
         let library = Library::open_read_only(&paths.library).unwrap();
         assert!(library.album(lonely).unwrap().is_none());
@@ -252,7 +245,7 @@ mod tests {
     fn a_taken_singleton_path_leaves_the_album_unchanged() {
         let root = tempfile::tempdir().unwrap();
         let paths = paths(root.path());
-        let (album, files) = add_album(&paths, "Mara Vale/Night Lines", &["Song"], 0, false);
+        let (album, files) = add_album(&paths, "Mara Vale/Night Lines", &["Song"], 0);
         let taken = paths.directory.join("Non-Album/Mara Vale/Song.flac");
         fs::create_dir_all(taken.parent().unwrap()).unwrap();
         fs::write(&taken, b"other").unwrap();

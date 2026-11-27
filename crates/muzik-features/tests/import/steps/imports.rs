@@ -6,6 +6,7 @@ use cucumber::{then, when};
 use muzik_import::apply::{
     self, AlbumDecision, ApplyError, ApplyOptions, DuplicateDecision, MatchDecision,
 };
+use muzik_import::files::OldFiles;
 use std::fs;
 use std::path::Path;
 
@@ -52,6 +53,7 @@ fn import(world: &mut ImportWorld, decisions: &[AlbumDecision], cancel: Cancel) 
         options.placement = placement;
     }
     options.dry_run = world.dry_run;
+    options.old_files = OldFiles::Delete;
     if let Some(path) = &world.singleton_path {
         options.paths.singleton.clone_from(path);
     }

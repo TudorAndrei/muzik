@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::fields::{insert_dates, release_tags, sql_scalar};
-use crate::files::{self, Placement};
+use crate::files::{self, OldFiles, Placement};
 use crate::paths::{AlbumFields, PathFormats, PathKind, PathSanitizer, TemplateContext};
 use crate::plan::{self, AlbumPlan, Duplicate, ImportMode, ImportPlan, PlanItem, PlannedCandidate};
 use crate::{ftclean, singletons};
@@ -51,6 +51,7 @@ pub struct ApplyOptions {
     pub aunique_bracket: String,
     pub path_sep_replace: String,
     pub drive_sep_replace: String,
+    pub old_files: OldFiles,
 }
 
 impl ApplyOptions {
@@ -124,6 +125,7 @@ impl ApplyOptions {
             aunique_bracket: text(&["aunique", "bracket"], "[]"),
             path_sep_replace: text(&["path_sep_replace"], "_"),
             drive_sep_replace: text(&["drive_sep_replace"], "_"),
+            old_files: OldFiles::Trash,
         })
     }
 }
@@ -321,8 +323,12 @@ fn commit_album(
     }
     result
         .cleanup_failed
-        .extend(cleanup_replaced(&prepared.old_paths, files::move_to_trash));
-    result.cleanup_failed.extend(staged.cleanup());
+        .extend(cleanup_replaced(&prepared.old_paths, |path| {
+            options.old_files.discard(path)
+        }));
+    result
+        .cleanup_failed
+        .extend(staged.cleanup(options.old_files));
     if let Some(album_id) = album_id {
         result.album_ids.push(album_id);
     }
@@ -1118,10 +1124,10 @@ impl StagedReplacement {
         Ok(())
     }
 
-    fn cleanup(mut self) -> Vec<PathBuf> {
+    fn cleanup(mut self, old_files: OldFiles) -> Vec<PathBuf> {
         let mut failed = Vec::new();
         for (_, temporary) in &self.files {
-            if let Err(error) = files::move_to_trash(temporary) {
+            if let Err(error) = old_files.discard(temporary) {
                 tracing::warn!(path = %temporary.display(), %error, "old import file remains after replacement");
                 failed.push(temporary.clone());
             }

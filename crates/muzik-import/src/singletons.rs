@@ -263,7 +263,7 @@ impl Converter {
         })?;
         let mut cleanup_failed = Vec::new();
         if let Some(cover) = cover
-            && let Err(error) = files::move_to_trash(cover)
+            && let Err(error) = self.options.old_files.discard(cover)
         {
             tracing::warn!(path = %cover.display(), %error, "old album cover remains");
             cleanup_failed.push(cover.clone());
@@ -306,4 +306,74 @@ fn cleared_fields() -> Fields {
                 .map(|name| (name.to_owned(), SqlValue::Null)),
         )
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Converter, one_song_albums};
+    use crate::files::OldFiles;
+    use muzik_core::BeetsConfig;
+    use muzik_library::{Fields, Library, SqlValue, path_to_sql};
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn fixture(name: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../muzik-tags/tests/fixtures")
+            .join(name)
+    }
+
+    fn text(value: &str) -> SqlValue {
+        SqlValue::Text(value.to_owned())
+    }
+
+    #[test]
+    fn the_song_gets_the_album_cover_and_the_old_album_folder_goes_away() {
+        let root = tempfile::tempdir().unwrap();
+        let music = root.path().join("Music");
+        let folder = music.join("Mara Vale/Night Lines");
+        fs::create_dir_all(&folder).unwrap();
+        let song = folder.join("01 Song.flac");
+        fs::copy(fixture("blank.flac"), &song).unwrap();
+        let cover = folder.join("cover.png");
+        fs::copy(fixture("cover.png"), &cover).unwrap();
+        let mut library = Library::open_or_create(&root.path().join("library.db")).unwrap();
+        let album = library
+            .insert_album(
+                &Fields::from([
+                    ("album".to_owned(), text("Night Lines")),
+                    ("albumartist".to_owned(), text("Mara Vale")),
+                    ("artpath".to_owned(), path_to_sql(&cover)),
+                ]),
+                &Fields::new(),
+            )
+            .unwrap();
+        library
+            .insert_item(
+                &Fields::from([
+                    ("album_id".to_owned(), SqlValue::Integer(album)),
+                    ("path".to_owned(), path_to_sql(&song)),
+                    ("title".to_owned(), text("Song")),
+                    ("artist".to_owned(), text("Mara Vale")),
+                    ("album".to_owned(), text("Night Lines")),
+                ]),
+                &Fields::new(),
+            )
+            .unwrap();
+        let config = BeetsConfig::load(&root.path().join("config.yaml"), json!({})).unwrap();
+        let mut task = Converter::from_beets(&config, music.clone()).unwrap();
+        task.options.old_files = OldFiles::Delete;
+        let [found] = <[_; 1]>::try_from(one_song_albums(&library, &music).unwrap()).unwrap();
+
+        let done = task.convert(&mut library, &found).unwrap();
+
+        assert_eq!(
+            done.destination,
+            music.join("Non-Album/Mara Vale/Song.flac")
+        );
+        assert_eq!(done.cleanup_failed, Vec::<PathBuf>::new());
+        assert!(muzik_tags::has_front_cover(&done.destination).unwrap());
+        assert!(!music.join("Mara Vale").exists());
+    }
 }
