@@ -272,8 +272,8 @@ impl Service {
 
     /// # Errors
     /// Returns an error when the task cannot be queued.
-    pub fn start_library_task(&self, task: LibraryTask) -> Result<String> {
-        Ok(self.app.start_library_task(task)?)
+    pub fn start_library_task(&self, task: LibraryTask, dry_run: bool) -> Result<String> {
+        Ok(self.app.start_library_task(task, dry_run)?)
     }
 
     /// # Errors

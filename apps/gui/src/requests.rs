@@ -475,14 +475,24 @@ impl Muzik {
         });
     }
 
-    pub(crate) fn start_library_task(&mut self, task: LibraryTask, cx: &mut Context<Self>) {
+    pub(crate) fn start_library_task(
+        &mut self,
+        task: LibraryTask,
+        dry_run: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.error = None;
         self.call(
             Call::LibraryTask,
             cx,
-            move |backend| backend.start_library_task(task),
+            move |backend| backend.start_library_task(task, dry_run),
             move |view, _, _, _| {
-                view.status = format!("{} is in the queue", task.title());
+                let title = LibraryRequest {
+                    dry_run,
+                    ..LibraryRequest::new(task)
+                }
+                .title();
+                view.status = format!("{title} is in the queue");
                 view.config_status.borrow_mut().clone_from(&view.status);
             },
         );

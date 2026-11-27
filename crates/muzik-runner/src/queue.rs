@@ -183,7 +183,7 @@ impl Jobs {
             .enqueue(&NewJob {
                 kind: Kind::Library,
                 item_key: &request.item_key(),
-                title: request.task.title(),
+                title: &request.title(),
                 params: &params,
             })?
             .id())
@@ -539,6 +539,16 @@ mod tests {
             .library(&LibraryRequest::new(LibraryTask::ReplayGain))
             .unwrap();
         assert_ne!(real, dry_run);
+        let titles: Vec<_> = jobs
+            .snapshot()
+            .open
+            .into_iter()
+            .map(|job| job.title)
+            .collect();
+        assert_eq!(
+            titles,
+            ["Preview: Calculate ReplayGain", "Calculate ReplayGain"]
+        );
         assert_eq!(
             jobs.get(real).unwrap().map(|job| job.params),
             Some(json!({"task":"replaygain","dry_run":false}))

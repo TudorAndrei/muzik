@@ -48,7 +48,7 @@ use muzik_core::{
 use muzik_runner::AppEvent;
 use muzik_runner::choices::{self, Choice as DecisionChoice};
 use muzik_runner::gates::{Gate, GatesSnapshot};
-use muzik_runner::library_tasks::LibraryTask;
+use muzik_runner::library_tasks::{LibraryRequest, LibraryTask};
 use muzik_runner::setup::ServiceStatus;
 use muzik_runner::thumbnails;
 use muzik_store::watchlist::{
@@ -248,7 +248,7 @@ impl Muzik {
                     .update(cx, |state, cx| state.focus(window, cx));
             }
             AppCommand::Refresh => self.refresh_page(cx),
-            AppCommand::Library(task) => self.start_library_task(task, cx),
+            AppCommand::Library(task) => self.start_library_task(task, false, cx),
         }
     }
 

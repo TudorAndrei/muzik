@@ -118,6 +118,16 @@ impl LibraryRequest {
         }
     }
 
+    #[must_use]
+    pub fn title(&self) -> String {
+        let title = self.task.title();
+        if self.dry_run {
+            format!("Preview: {title}")
+        } else {
+            title.to_owned()
+        }
+    }
+
     /// # Errors
     /// Returns an error when the params have no valid task or a field has the wrong type.
     pub fn from_params(params: &Value) -> crate::Result<Self> {
