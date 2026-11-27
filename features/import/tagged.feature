@@ -2,24 +2,41 @@ Feature: Importing tagged albums
   muzik imports albums the way beets does: the same paths, the same library
   fields, and the MusicBrainz ids of the matched release.
 
-  Scenario: A tagged FLAC file imported as it is gets the beets path and fields
+  Scenario: A tagged FLAC file alone in its folder becomes a song without an album
     Given MusicBrainz has the release "Night Lines" by "Mara Vale" from 2021 with the id "new-release":
       | track | title              | artist    | recording   | release track   |
       | 2     | Song (feat. Guest) | Mara Vale | recording-1 | release-track-1 |
     And the tagged incoming song "02 Tide & Stone.flac"
     When muzik plans the import of the songs
-    And muzik imports the album as it is
-    Then the imported file is at "Mara Vale/Night Lines/02 Tide & Stone.flac" in the library folder
+    Then the planned album is a singleton
+    When muzik imports the album as it is
+    Then the import added no albums
+    And the imported file is at "Non-Album/Mara Vale/Tide & Stone.flac" in the library folder
+    And the imported song belongs to no album
     And the imported song has these fields:
       | comp          | 0     |
       | month         | 4     |
       | day           | 7     |
       | original_year | 2019  |
       | rg_track_gain | -5.25 |
-    And the imported album has these fields:
-      | comp | 0 |
+    And the imported song has these attributes:
+      | muzik_original_album      | Night Lines                          |
+      | muzik_original_mb_albumid | 33333333-3333-4333-8333-333333333333 |
     And the imported file has these tags:
-      | comp | 1 |
+      | title       | Tide & Stone                         |
+      | artist      | Mara Vale                            |
+      | mb_trackid  | 11111111-1111-4111-8111-111111111111 |
+      | mb_artistid | 55555555-5555-4555-8555-555555555555 |
+    And the imported file has none of these tags:
+      | album             |
+      | albumartist       |
+      | albumartists      |
+      | track             |
+      | tracktotal        |
+      | disc              |
+      | mb_albumid        |
+      | mb_releasegroupid |
+      | comp              |
 
   Scenario: An album matched to a recorded MusicBrainz release is imported
     Given MusicBrainz has the recorded release "Dummy" by "Portishead"

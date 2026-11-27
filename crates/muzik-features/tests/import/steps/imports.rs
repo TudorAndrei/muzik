@@ -1,4 +1,4 @@
-use super::tables::{check_fields, check_tags};
+use super::tables::{check_fields, check_no_tags, check_tags};
 use crate::support::StepResult;
 use crate::world::{Import, ImportWorld};
 use cucumber::gherkin::Step;
@@ -332,6 +332,13 @@ fn every_imported_file_in(world: &mut ImportWorld, folder: String) -> StepResult
     Ok(())
 }
 
+#[then(expr = "the library folder {string} has no cover file")]
+fn library_folder_without_cover(world: &mut ImportWorld, folder: String) -> StepResult {
+    let cover = muzik_tags::find_cover(world.root.join(folder));
+    anyhow::ensure!(cover.is_none(), "the folder has the cover {cover:?}");
+    Ok(())
+}
+
 #[then("the imported file exists")]
 fn imported_file_exists(world: &mut ImportWorld) -> StepResult {
     let destination = world.destination()?;
@@ -349,6 +356,17 @@ fn imported_file_does_not_exist(world: &mut ImportWorld) -> StepResult {
 #[then("the imported file has these tags:")]
 fn imported_file_tags(world: &mut ImportWorld, step: &Step) -> StepResult {
     check_tags(world.destination()?, step)
+}
+
+#[then("the imported file has none of these tags:")]
+fn imported_file_lacks_tags(world: &mut ImportWorld, step: &Step) -> StepResult {
+    check_no_tags(world.destination()?, step)
+}
+
+#[then("the imported song has these attributes:")]
+fn imported_song_attributes(world: &mut ImportWorld, step: &Step) -> StepResult {
+    let item = world.imported_item()?;
+    check_fields("the imported song", &item.attributes, step)
 }
 
 #[then("the imported file has a front cover")]

@@ -11,7 +11,7 @@ use muzik_core::{
 use muzik_import::apply::{DuplicateDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest};
 use muzik_import::decide::{Ask, ImportPolicy, decide_album};
-use muzik_import::plan::{AlbumPlan, PlannedCandidate};
+use muzik_import::plan::{AlbumPlan, ImportMode, PlannedCandidate};
 use muzik_library::{Library, SqlValue};
 use muzik_media::splitter;
 use muzik_store::watchlist::Stage;
@@ -346,7 +346,7 @@ fn album_task(index: usize, album: &AlbumPlan) -> Value {
     json!({
         "task_id":format!("native:{index}"),
         "paths":album.items.iter().map(|item| &item.source).collect::<Vec<_>>(),
-        "is_album":true,
+        "is_album":album.kind == ImportMode::Album,
         "item_count":album.items.len(),
         "current_artist":current.map(|item| item.artist.as_str()),
         "current_album":current.map(|item| item.album.as_str()),

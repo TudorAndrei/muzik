@@ -102,6 +102,7 @@ mod tests {
         AlbumPlan {
             kind: ImportMode::Album,
             source_dir: PathBuf::from("/incoming/album"),
+            history_key: vec![PathBuf::from("/incoming/album")],
             items: Vec::new(),
             candidates: Vec::new(),
             recommendation: Recommendation::None,

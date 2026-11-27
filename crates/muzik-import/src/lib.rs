@@ -93,6 +93,7 @@ pub mod history;
 pub mod mbid_fill;
 pub mod paths;
 pub mod plan;
+pub mod singletons;
 pub mod sync;
 
 mod backup;

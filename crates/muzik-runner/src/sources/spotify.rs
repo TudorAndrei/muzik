@@ -249,7 +249,7 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn organize_again_imports_saved_audio() {
+    fn organize_again_imports_saved_audio_as_a_song_without_an_album() {
         let directory = tempfile::tempdir().unwrap();
         let audio = directory.path().join("track.flac");
         fs::copy(fixture(), &audio).unwrap();
@@ -284,9 +284,13 @@ mod tests {
             Some(muzik_library::SqlValue::Text(text)) => text.clone(),
             other => format!("{other:?}"),
         };
-        assert_eq!(text("album"), "Warhaus");
+        assert_eq!(imported[0].album_id(), None);
         assert_eq!(text("title"), "Love's a Stranger");
-        assert_eq!(text("albumartist"), "Warhaus");
+        assert_eq!(text("artist"), "Warhaus");
+        assert_eq!(
+            imported[0].attribute("muzik_original_album"),
+            Some(&muzik_library::SqlValue::Text("Warhaus".into()))
+        );
     }
 
     #[test]

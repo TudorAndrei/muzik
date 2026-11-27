@@ -9,6 +9,7 @@ use muzik_core::{JobEvent, Severity};
 use muzik_import::apply::{AlbumDecision, MatchDecision};
 use muzik_import::beets::{self, ImportRequest, Placement, SyncOutcome};
 use muzik_import::decide::{ImportPolicy, NeverAsk, decide_album};
+use muzik_import::plan::ImportMode;
 use muzik_runner::Settings;
 use muzik_runner::library_tasks::{self, AfterImport};
 use serde_json::json;
@@ -68,7 +69,14 @@ pub fn run(args: &Import) -> anyhow::Result<()> {
                 .items
                 .first()
                 .map_or("", |item| item.match_item.album.as_str());
-            println!("Album: {} ({title})", album.source_dir.display());
+            if album.kind == ImportMode::Singleton {
+                println!(
+                    "Song without an album: {} ({title})",
+                    album.source_dir.display()
+                );
+            } else {
+                println!("Album: {} ({title})", album.source_dir.display());
+            }
             if args.quiet {
                 Ok(AlbumDecision {
                     choice: MatchDecision::Skip,

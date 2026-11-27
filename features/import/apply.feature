@@ -13,6 +13,7 @@ Feature: Applying an import
   Scenario: The best match gives the song clean tags, a cover, and its source
     When muzik plans the import of the songs
     Then the planned album has 1 candidate
+    And the planned album is an album
     When muzik imports the album with the best match and keeps duplicates
     Then the import added 1 song
     And the incoming songs are still there
