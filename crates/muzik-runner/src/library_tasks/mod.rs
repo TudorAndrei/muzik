@@ -3,6 +3,7 @@
 mod covers;
 mod mbids;
 mod replaygain;
+mod singletons;
 
 use crate::gates::{self, Gate};
 use muzik_core::{DecisionKind, JobEvent, Severity, Task};
@@ -39,10 +40,18 @@ pub enum LibraryTask {
     #[strum(serialize = "mbids")]
     #[serde(rename = "mbids")]
     Mbids,
+    #[strum(serialize = "singletons")]
+    #[serde(rename = "singletons")]
+    Singletons,
 }
 
 impl LibraryTask {
-    pub const ALL: [Self; 3] = [Self::ReplayGain, Self::Covers, Self::Mbids];
+    pub const ALL: [Self; 4] = [
+        Self::ReplayGain,
+        Self::Covers,
+        Self::Mbids,
+        Self::Singletons,
+    ];
     pub const AFTER_IMPORT: [Self; 2] = [Self::ReplayGain, Self::Covers];
 
     #[must_use]
@@ -51,6 +60,7 @@ impl LibraryTask {
             Self::ReplayGain => "replaygain",
             Self::Covers => "covers",
             Self::Mbids => "mbids",
+            Self::Singletons => "singletons",
         }
     }
 
@@ -65,6 +75,7 @@ impl LibraryTask {
             Self::ReplayGain => "Calculate ReplayGain",
             Self::Covers => "Add cover files",
             Self::Mbids => "Fill MusicBrainz IDs",
+            Self::Singletons => "Make one-song albums singletons",
         }
     }
 
@@ -73,7 +84,7 @@ impl LibraryTask {
         match self {
             Self::ReplayGain => Gate::Process,
             Self::Covers => Gate::Download,
-            Self::Mbids => Gate::Import,
+            Self::Mbids | Self::Singletons => Gate::Import,
         }
     }
 }
@@ -132,7 +143,7 @@ impl AfterImport {
         match task {
             LibraryTask::ReplayGain => self.replaygain,
             LibraryTask::Covers => self.covers,
-            LibraryTask::Mbids => false,
+            LibraryTask::Mbids | LibraryTask::Singletons => false,
         }
     }
 
@@ -284,6 +295,7 @@ pub fn run(task: LibraryTask, context: &TaskContext<'_>) -> crate::Result<TaskRe
         LibraryTask::ReplayGain => replaygain::run(context),
         LibraryTask::Covers => covers::run(context),
         LibraryTask::Mbids => mbids::run(context),
+        LibraryTask::Singletons => singletons::run(context),
     }
 }
 
@@ -297,6 +309,20 @@ pub fn album_dirs(destinations: &[PathBuf]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn singleton_paths(paths: &BeetsPaths) -> BTreeSet<PathBuf> {
+    let Ok(library) = muzik_library::Library::open_read_only(&paths.library) else {
+        return BTreeSet::new();
+    };
+    library
+        .items()
+        .unwrap_or_default()
+        .iter()
+        .filter(|item| item.album_id().is_none())
+        .filter_map(|item| item.field("path").and_then(muzik_library::path_from_sql))
+        .map(|path| paths.directory.join(path))
+        .collect()
+}
+
 pub fn after_import(
     enabled: AfterImport,
     paths: &BeetsPaths,
@@ -304,11 +330,16 @@ pub fn after_import(
     cancelled: &AtomicBool,
     on_event: &mut Events<'_>,
 ) -> TaskReport {
-    let dirs = album_dirs(destinations);
     let mut report = TaskReport::default();
-    if !enabled.any() || dirs.is_empty() {
+    if !enabled.any() || destinations.is_empty() {
         return report;
     }
+    let singletons = singleton_paths(paths);
+    let (songs, in_albums): (Vec<PathBuf>, Vec<PathBuf>) = destinations
+        .iter()
+        .cloned()
+        .partition(|path| singletons.contains(path));
+    let dirs = album_dirs(&in_albums);
     let mut refuse = |_: DecisionKind, _: Value| {
         Err("A task after an import does not ask for choices.".to_owned())
     };
@@ -317,15 +348,24 @@ pub fn after_import(
         if !enabled.enabled(task) || context.is_cancelled() {
             continue;
         }
+        let songs = if task == LibraryTask::ReplayGain {
+            songs.as_slice()
+        } else {
+            &[]
+        };
+        if dirs.is_empty() && songs.is_empty() {
+            continue;
+        }
         context.message(format!(
-            "{} for {} album folder(s).",
+            "{} for {} album folder(s) and {} song(s) without an album.",
             task.title(),
-            dirs.len()
+            dirs.len(),
+            songs.len()
         ));
         let outcome = gates::enter(task.gate(), cancelled).and_then(|_permit| match task {
-            LibraryTask::ReplayGain => replaygain::after_import(&context, &dirs),
+            LibraryTask::ReplayGain => replaygain::after_import(&context, &dirs, songs),
             LibraryTask::Covers => covers::after_import(&context, &dirs),
-            LibraryTask::Mbids => Ok(TaskReport::default()),
+            LibraryTask::Mbids | LibraryTask::Singletons => Ok(TaskReport::default()),
         });
         match outcome {
             Ok(done) => report.merge(done),
@@ -434,5 +474,46 @@ mod tests {
             &mut |event| events.push(event),
         );
         assert_eq!(events, []);
+    }
+
+    #[test]
+    fn the_hook_adds_no_cover_file_next_to_a_song_without_an_album() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = paths(dir.path());
+        let song = paths.directory.join("Non-Album/A/Song.flac");
+        std::fs::create_dir_all(song.parent().unwrap()).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../muzik-tags/tests/fixtures/blank.flac"),
+            &song,
+        )
+        .unwrap();
+        let png = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../muzik-tags/tests/fixtures/cover.png"),
+        )
+        .unwrap();
+        muzik_tags::embed_cover(&song, &png, &muzik_tags::MimeType::Png).unwrap();
+        muzik_library::Library::open_or_create(&paths.library)
+            .unwrap()
+            .insert_item(
+                &muzik_library::Fields::from([(
+                    "path".to_owned(),
+                    muzik_library::path_to_sql(&song),
+                )]),
+                &muzik_library::Fields::new(),
+            )
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let report = after_import(
+            AfterImport {
+                replaygain: false,
+                covers: true,
+            },
+            &paths,
+            std::slice::from_ref(&song),
+            &cancelled,
+            &mut |_| {},
+        );
+        assert_eq!(report, TaskReport::default());
+        assert_eq!(muzik_tags::find_cover(song.parent().unwrap()), None);
     }
 }

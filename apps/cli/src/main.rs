@@ -345,6 +345,8 @@ enum LibraryCommand {
     Covers(LibraryTaskArgs),
     #[usage(help = "Find MusicBrainz IDs for albums that have none.")]
     Mbids(LibraryTaskArgs),
+    #[usage(help = "Make each album with one song a song without an album.")]
+    Singletons(LibraryTaskArgs),
 }
 
 #[derive(Args)]
@@ -818,6 +820,7 @@ fn run(command: Command) -> anyhow::Result<()> {
             LibraryCommand::Replaygain(args) => library::run(LibraryTask::ReplayGain, &args),
             LibraryCommand::Covers(args) => library::run(LibraryTask::Covers, &args),
             LibraryCommand::Mbids(args) => library::run(LibraryTask::Mbids, &args),
+            LibraryCommand::Singletons(args) => library::run(LibraryTask::Singletons, &args),
         },
         Command::Organize(args) => organize::run(&args),
         Command::Spotify(args) => match args.command {
