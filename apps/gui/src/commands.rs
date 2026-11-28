@@ -49,7 +49,7 @@ pub enum AppCommand {
     Library(LibraryTask),
 }
 
-const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 6] = [
+const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 7] = [
     (
         AppCommand::RunWorkflow,
         "Run workflow",
@@ -85,6 +85,12 @@ const ACTIONS: [(AppCommand, &str, IconName, &[&str]); 6] = [
         LibraryTask::Mbids.title(),
         IconName::Search,
         &["musicbrainz", "match", "library"],
+    ),
+    (
+        AppCommand::Library(LibraryTask::Singletons),
+        LibraryTask::Singletons.title(),
+        IconName::File,
+        &["single", "song", "non-album", "library"],
     ),
 ];
 

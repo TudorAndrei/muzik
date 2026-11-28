@@ -919,11 +919,12 @@ async fn library_card(cx: &Cx) -> Result<impl View> {
     Ok(view! {
         <section class="card setting">
             <h2>"Library maintenance"</h2>
-            <p class="meta note">"Each task runs over the full library. Activity shows its progress."</p>
+            <p class="meta note">"Each task runs over the full library. Preview shows in Activity what the task would change and changes nothing."</p>
             for task in LibraryTask::ALL {
                 <form class="frow" method="post" action=(action.clone())>
                     <span>(task.title())</span>
                     <input type="hidden" name="task" value=(task.as_str())>
+                    <button type="submit" name="dry_run" value="true">"Preview"</button>
                     <button type="submit">"Start"</button>
                 </form>
             }
@@ -1035,6 +1036,8 @@ pub async fn check_services(cx: &Cx) -> Result<SeeOther> {
 #[derive(Deserialize)]
 struct TaskFields {
     task: String,
+    #[serde(default)]
+    dry_run: bool,
 }
 
 #[route(POST "/settings/library-task")]
@@ -1044,7 +1047,7 @@ pub async fn start_task(cx: &Cx, Form(form): Form<TaskFields>) -> Result<SeeOthe
         return Ok(back(cx, Err("The task is not valid.".into())));
     };
     let outcome = backend(cx)
-        .run(move |service| service.start_library_task(task))
+        .run(move |service| service.start_library_task(task, form.dry_run))
         .await?;
     Ok(back(cx, describe(outcome, |id| format!("Queued {id}"))))
 }

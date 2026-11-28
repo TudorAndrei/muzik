@@ -22,6 +22,16 @@ pub fn pairs(step: &Step) -> anyhow::Result<Vec<(&str, &str)>> {
         .collect()
 }
 
+pub fn names(step: &Step) -> anyhow::Result<Vec<&str>> {
+    rows(step)?
+        .iter()
+        .map(|row| match row.as_slice() {
+            [name] => Ok(name.as_str()),
+            _ => anyhow::bail!("each row needs one name"),
+        })
+        .collect()
+}
+
 pub fn records(step: &Step) -> anyhow::Result<Vec<BTreeMap<&str, &str>>> {
     let Some((header, body)) = rows(step)?.split_first() else {
         anyhow::bail!("the table has no header");
@@ -64,6 +74,25 @@ pub fn check_fields(what: &str, fields: &Fields, step: &Step) -> StepResult {
         anyhow::ensure!(
             actual == Some(&expected(value)),
             "{what} has {name} = {actual:?}, not {value:?}"
+        );
+    }
+    Ok(())
+}
+
+pub fn check_no_tags(path: &Path, step: &Step) -> StepResult {
+    let tags = muzik_tags::read(path, &[])?;
+    for name in names(step)? {
+        let actual = tags.fields.get(name).cloned().or_else(|| {
+            muzik_tags::ListField::ALL
+                .into_iter()
+                .find(|list| list.name() == name)
+                .and_then(|list| tags.lists.get(&list))
+                .map(|values| values.join("; "))
+        });
+        anyhow::ensure!(
+            actual.is_none(),
+            "{} has the tag {name} = {actual:?}",
+            path.display()
         );
     }
     Ok(())

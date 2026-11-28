@@ -99,6 +99,8 @@ pub struct Duplicate {
 pub struct AlbumPlan {
     pub kind: ImportMode,
     pub source_dir: PathBuf,
+    /// The paths incremental history records for this plan.
+    pub history_key: Vec<PathBuf>,
     pub items: Vec<PlanItem>,
     pub candidates: Vec<PlannedCandidate>,
     pub recommendation: Recommendation,
@@ -267,10 +269,19 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
             } else {
                 Vec::new()
             };
-            tracing::debug!(path = %source_dir.display(), tracks = items.len(), candidates = releases.len(), duplicates = duplicates.len(), "planned album import");
+            let kind = if mode == ImportMode::Album
+                && duplicates.is_empty()
+                && is_loose_song(&items, &candidates, recommendation, &library_albums)
+            {
+                ImportMode::Singleton
+            } else {
+                mode
+            };
+            tracing::debug!(path = %source_dir.display(), tracks = items.len(), candidates = releases.len(), duplicates = duplicates.len(), ?kind, "planned import");
             albums.push(AlbumPlan {
-                kind: mode,
+                kind,
                 source_dir,
+                history_key,
                 items,
                 candidates,
                 recommendation,
@@ -370,6 +381,43 @@ impl<P: ReleaseProvider> ImportPlanner<'_, P> {
         }
         Ok(releases)
     }
+}
+
+fn is_loose_song(
+    items: &[PlanItem],
+    candidates: &[PlannedCandidate],
+    recommendation: Recommendation,
+    library_albums: &[muzik_library::Album],
+) -> bool {
+    let [item] = items else {
+        return false;
+    };
+    let song = &item.match_item;
+    let local_single = item
+        .tags
+        .fields
+        .get("tracktotal")
+        .is_some_and(|total| number(Some(total)) == 1);
+    let best = candidates
+        .first()
+        .filter(|_| recommendation >= Recommendation::Medium);
+    let matched_single = best.is_some_and(|candidate| candidate.release.tracks.len() == 1);
+    let artist = if song.album_artist.is_empty() {
+        &song.artist
+    } else {
+        &song.album_artist
+    };
+    let joins_an_album = library_albums.iter().any(|album| {
+        same_album_name(&album.fields, artist, &song.album)
+            || best.is_some_and(|candidate| {
+                same_album_name(
+                    &album.fields,
+                    &candidate.release.artist,
+                    &candidate.release.title,
+                )
+            })
+    });
+    !(local_single || matched_single || joins_an_album)
 }
 
 fn plan_items(

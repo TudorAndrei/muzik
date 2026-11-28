@@ -76,6 +76,7 @@ fn tag_data() -> impl Strategy<Value = TagData> {
             fields: fields.into_iter().flatten().collect::<BTreeMap<_, _>>(),
             lists,
             custom,
+            ..TagData::default()
         })
 }
 

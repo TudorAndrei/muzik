@@ -79,10 +79,24 @@ fn symlink_file(source: &Path, destination: &Path) -> io::Result<()> {
     std::os::windows::fs::symlink_file(source.canonicalize()?, destination)
 }
 
-/// Move a file to the operating system trash.
-pub(crate) fn move_to_trash(path: &Path) -> Result<(), FileError> {
-    trash::delete(path)?;
-    Ok(())
+/// What happens to the old files that an import or a library task replaces.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OldFiles {
+    /// Move them to the operating system trash.
+    #[default]
+    Trash,
+    /// Delete them.
+    Delete,
+}
+
+impl OldFiles {
+    pub(crate) fn discard(self, path: &Path) -> Result<(), FileError> {
+        match self {
+            Self::Trash => trash::delete(path)?,
+            Self::Delete => fs::remove_file(path)?,
+        }
+        Ok(())
+    }
 }
 
 /// Remove empty parent directories up to, but not including, `root`.

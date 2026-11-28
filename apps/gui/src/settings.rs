@@ -514,7 +514,7 @@ impl ConfigView {
                 SettingGroup::new()
                     .title("Library maintenance")
                     .description(
-                        "Each task runs over the full library. Activity shows its progress.",
+                        "Each task runs over the full library. Preview shows in Activity what the task would change and changes nothing.",
                     )
                     .items(
                         LibraryTask::ALL
@@ -525,16 +525,26 @@ impl ConfigView {
                                 SettingItem::new(
                                     task.title(),
                                     SettingField::render(move |_, _, _| {
-                                        let main = main.clone();
-                                        Button::new(("library-task", index))
-                                            .label("Start")
-                                            .on_click(move |_, _, cx| {
-                                                if let Some(main) = main.upgrade() {
-                                                    main.update(cx, |main, cx| {
-                                                        main.start_library_task(task, cx);
-                                                    });
-                                                }
-                                            })
+                                        let button = |id: &'static str, label, dry_run| {
+                                            let main = main.clone();
+                                            Button::new((id, index)).label(label).on_click(
+                                                move |_, _, cx| {
+                                                    if let Some(main) = main.upgrade() {
+                                                        main.update(cx, |main, cx| {
+                                                            main.start_library_task(
+                                                                task, dry_run, cx,
+                                                            );
+                                                        });
+                                                    }
+                                                },
+                                            )
+                                        };
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(button("library-preview", "Preview", true))
+                                            .child(button("library-task", "Start", false))
                                     }),
                                 )
                             }),

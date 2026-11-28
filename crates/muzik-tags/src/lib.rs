@@ -9,7 +9,7 @@ pub use cover::{
 pub use lofty::picture::MimeType;
 pub use probe::{AudioProperties, probe};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
 use std::path::Path;
 
@@ -159,6 +159,14 @@ impl ListField {
             Self::AlbumArtists => ItemKey::AlbumArtists,
         }
     }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Artists => "artists",
+            Self::AlbumArtists => "albumartists",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -168,6 +176,8 @@ pub struct TagData {
     pub lists: BTreeMap<ListField, Vec<String>>,
     /// User text fields use TXXX, MP4 freeform atoms, or Vorbis comments.
     pub custom: BTreeMap<String, String>,
+    /// Field, list, and `albumdisambig` names that a write removes from the file.
+    pub removed: BTreeSet<String>,
 }
 
 #[derive(Debug, Error)]
@@ -277,9 +287,14 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
             tag.push(TagItem::new(key, ItemValue::Text(value.clone())));
         }
     }
+    let (removed_keys, removed_custom) = removed(kind, &data.removed)?;
+    for key in &removed_keys {
+        tag.remove_key(*key);
+    }
     match tag_type {
         TagType::Id3v2 => {
             let recording_id = match data.fields.get("mb_trackid") {
+                _ if data.removed.contains("mb_trackid") => None,
                 Some(value) => Some(value.as_bytes().to_vec()),
                 None => existing_recording_id(path)?,
             };
@@ -291,6 +306,9 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
                     identifier,
                 )));
             }
+            for key in removed_custom {
+                native.remove_user_text(key);
+            }
             for (key, value) in &custom {
                 native.insert_user_text(key.clone(), value.clone());
             }
@@ -298,6 +316,13 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
         }
         TagType::Mp4Ilst => {
             let mut native = Ilst::from(tag);
+            for key in removed_custom {
+                let ident = AtomIdent::Freeform {
+                    mean: "com.apple.iTunes".into(),
+                    name: key.into(),
+                };
+                native.remove(&ident).for_each(drop);
+            }
             for (key, value) in &custom {
                 let ident = AtomIdent::Freeform {
                     mean: "com.apple.iTunes".into(),
@@ -310,6 +335,7 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
         TagType::VorbisComments => {
             let mut native = VorbisComments::from(tag);
             merge_vorbis_existing(path, kind, &mut native)?;
+            remove_vorbis(&mut native, &removed_keys, &removed_custom);
             for (key, value) in &custom {
                 native.insert(key.clone(), value.clone());
             }
@@ -319,6 +345,43 @@ pub fn write(path: impl AsRef<Path>, data: &TagData) -> Result<(), TagsError> {
     }
     debug!(path = %path.display(), count = data.fields.len(), "wrote audio tags");
     Ok(())
+}
+
+fn removed(
+    kind: FileType,
+    names: &BTreeSet<String>,
+) -> Result<(Vec<ItemKey>, Vec<&'static str>), TagsError> {
+    let mut keys = Vec::new();
+    let mut custom = Vec::new();
+    for name in names {
+        if name == "albumdisambig" {
+            custom.extend(album_disambig_key(kind));
+        } else if let Some(list) = ListField::ALL.into_iter().find(|list| list.name() == name) {
+            keys.push(list.key());
+        } else {
+            let field = FIELDS
+                .iter()
+                .find(|field| field.name == name)
+                .ok_or_else(|| TagsError::UnknownField(name.clone()))?;
+            keys.push(field.key);
+        }
+    }
+    Ok((keys, custom))
+}
+
+fn remove_vorbis(native: &mut VorbisComments, keys: &[ItemKey], custom: &[&str]) {
+    let stale: BTreeSet<String> = native
+        .items()
+        .map(|(key, _)| key)
+        .filter(|key| {
+            ItemKey::from_key(TagType::VorbisComments, key).is_some_and(|key| keys.contains(&key))
+        })
+        .chain(custom.iter().copied())
+        .map(str::to_owned)
+        .collect();
+    for key in &stale {
+        native.remove(key).for_each(drop);
+    }
 }
 
 const MUSICBRAINZ_UFID_OWNER: &str = "http://musicbrainz.org";

@@ -144,8 +144,15 @@ impl App {
 
     /// # Errors
     /// Returns an error when the job cannot be added to the queue.
-    pub fn start_library_task(&self, task: LibraryTask) -> Result<String, EnqueueError> {
-        self.queued(self.jobs.library(&LibraryRequest::new(task)))
+    pub fn start_library_task(
+        &self,
+        task: LibraryTask,
+        dry_run: bool,
+    ) -> Result<String, EnqueueError> {
+        self.queued(self.jobs.library(&LibraryRequest {
+            dry_run,
+            ..LibraryRequest::new(task)
+        }))
     }
 
     /// # Errors

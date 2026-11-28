@@ -23,6 +23,7 @@ struct Album {
     id: Option<i64>,
     name: String,
     tracks: Vec<Track>,
+    singleton: bool,
 }
 
 pub fn run(context: &TaskContext<'_>) -> crate::Result<TaskReport> {
@@ -35,12 +36,20 @@ pub fn run(context: &TaskContext<'_>) -> crate::Result<TaskReport> {
     for album in library.albums()? {
         albums.push(load(&library, &album)?);
     }
+    albums.extend(
+        library
+            .items()?
+            .iter()
+            .filter(|item| item.album_id().is_none())
+            .filter_map(singleton),
+    );
     process(context, Some(&mut library), &albums)
 }
 
 pub fn after_import(
     context: &TaskContext<'_>,
     album_dirs: &[PathBuf],
+    songs: &[PathBuf],
 ) -> crate::Result<TaskReport> {
     let dirs: BTreeSet<&Path> = album_dirs.iter().map(PathBuf::as_path).collect();
     let mut library = if context.library().exists() {
@@ -65,6 +74,14 @@ pub fn after_import(
                 albums.push(load(library, &album)?);
             }
         }
+        albums.extend(
+            library
+                .items()?
+                .iter()
+                .filter(|item| item.album_id().is_none())
+                .filter_map(singleton)
+                .filter(|song| song.tracks.iter().any(|track| songs.contains(&track.path))),
+        );
     }
     let covered: BTreeSet<&Path> = albums
         .iter()
@@ -108,6 +125,21 @@ fn load(library: &Library, album: &muzik_library::Album) -> crate::Result<Album>
         id: Some(album.id),
         name: format!("{} - {}", text("albumartist"), text("album")),
         tracks,
+        singleton: false,
+    })
+}
+
+fn singleton(item: &muzik_library::Item) -> Option<Album> {
+    let path = item.field("path").and_then(path_from_sql)?;
+    let text = |name: &str| item.field(name).and_then(scalar_text).unwrap_or_default();
+    Some(Album {
+        id: None,
+        name: format!("{} - {}", text("artist"), text("title")),
+        tracks: vec![Track {
+            id: Some(item.id),
+            path,
+        }],
+        singleton: true,
     })
 }
 
@@ -137,6 +169,7 @@ fn folder_album(dir: &Path) -> crate::Result<Option<Album>> {
             .into_iter()
             .map(|path| Track { id: None, path })
             .collect(),
+        singleton: false,
     }))
 }
 
@@ -167,7 +200,12 @@ fn process_album(
     album: &Album,
     report: &mut TaskReport,
 ) {
-    if album.tracks.is_empty() || album.tracks.iter().all(|track| tagged(&track.path)) {
+    if album.tracks.is_empty()
+        || album
+            .tracks
+            .iter()
+            .all(|track| tagged(&track.path, album.singleton))
+    {
         report.skipped = report.skipped.saturating_add(1);
         return;
     }
@@ -205,36 +243,39 @@ fn process_album(
         report.skipped = report.skipped.saturating_add(1);
         return;
     }
-    let album_gain = match loudness::album(&measured) {
-        Ok(gain) => gain,
-        Err(error) => {
-            warn(
-                context,
-                report,
-                format!("Cannot measure {}: {error}", album.name),
-            );
-            report.failed = report.failed.saturating_add(1);
-            return;
+    let album_gain = if album.singleton {
+        None
+    } else {
+        match loudness::album(&measured) {
+            Ok(gain) => Some(gain),
+            Err(error) => {
+                warn(
+                    context,
+                    report,
+                    format!("Cannot measure {}: {error}", album.name),
+                );
+                report.failed = report.failed.saturating_add(1);
+                return;
+            }
         }
     };
+    let summary = match (album_gain, measured.first()) {
+        (Some(gain), _) => format!("album gain {}, peak {}", gain.gain_text(), gain.peak_text()),
+        (None, Some(measurement)) => format!(
+            "track gain {}, peak {}",
+            measurement.track().gain_text(),
+            measurement.track().peak_text()
+        ),
+        (None, None) => String::new(),
+    };
     if context.dry_run {
-        context.message(format!(
-            "{}: album gain {}, peak {} (not written).",
-            album.name,
-            album_gain.gain_text(),
-            album_gain.peak_text()
-        ));
+        context.message(format!("{}: {summary} (not written).", album.name));
         report.changed = report.changed.saturating_add(1);
         return;
     }
     match write(library, album, &measured, album_gain) {
         Ok(()) => {
-            context.message(format!(
-                "{}: album gain {}, peak {}.",
-                album.name,
-                album_gain.gain_text(),
-                album_gain.peak_text()
-            ));
+            context.message(format!("{}: {summary}.", album.name));
             report.changed = report.changed.saturating_add(1);
         }
         Err(error) => {
@@ -253,16 +294,17 @@ fn warn(context: &TaskContext<'_>, report: &mut TaskReport, message: String) {
     report.messages.push(message);
 }
 
-fn tagged(path: &Path) -> bool {
+fn tagged(path: &Path, singleton: bool) -> bool {
+    let names = if singleton { &TAGS[..2] } else { &TAGS[..] };
     muzik_tags::read(path, &[])
-        .is_ok_and(|tags| TAGS.iter().all(|name| tags.fields.contains_key(*name)))
+        .is_ok_and(|tags| names.iter().all(|name| tags.fields.contains_key(*name)))
 }
 
 fn write(
     library: Option<&mut Library>,
     album: &Album,
     measured: &[Measurement],
-    album_gain: Gain,
+    album_gain: Option<Gain>,
 ) -> Result<(), String> {
     let backup = tempfile::tempdir().map_err(|error| error.to_string())?;
     for (index, track) in album.tracks.iter().enumerate() {
@@ -284,7 +326,7 @@ fn apply(
     library: Option<&mut Library>,
     album: &Album,
     measured: &[Measurement],
-    album_gain: Gain,
+    album_gain: Option<Gain>,
 ) -> Result<(), String> {
     for (track, measurement) in album.tracks.iter().zip(measured) {
         muzik_tags::write(&track.path, &tags(measurement.track(), album_gain))
@@ -293,23 +335,24 @@ fn apply(
     let Some(library) = library else {
         return Ok(());
     };
+    let album_fields = album_gain.map(|gain| {
+        Fields::from([
+            ("rg_album_gain".into(), gain_value(gain)),
+            ("rg_album_peak".into(), peak_value(gain)),
+        ])
+    });
     library
         .transaction(|writer| {
-            if let Some(id) = album.id {
-                let fields = Fields::from([
-                    ("rg_album_gain".into(), gain_value(album_gain)),
-                    ("rg_album_peak".into(), peak_value(album_gain)),
-                ]);
-                writer.update_album(id, &fields, &Fields::new())?;
+            if let (Some(id), Some(fields)) = (album.id, &album_fields) {
+                writer.update_album(id, fields, &Fields::new())?;
             }
             for (track, measurement) in album.tracks.iter().zip(measured) {
                 if let Some(id) = track.id {
-                    let fields = Fields::from([
+                    let mut fields = Fields::from([
                         ("rg_track_gain".into(), gain_value(measurement.track())),
                         ("rg_track_peak".into(), peak_value(measurement.track())),
-                        ("rg_album_gain".into(), gain_value(album_gain)),
-                        ("rg_album_peak".into(), peak_value(album_gain)),
                     ]);
+                    fields.extend(album_fields.clone().unwrap_or_default());
                     writer.update_item(id, &fields, &Fields::new())?;
                 }
             }
@@ -318,14 +361,18 @@ fn apply(
         .map_err(|error| error.to_string())
 }
 
-fn tags(track: Gain, album: Gain) -> TagData {
+fn tags(track: Gain, album: Option<Gain>) -> TagData {
     let mut data = TagData::default();
     data.fields.extend([
         ("rg_track_gain".into(), track.gain_text()),
         ("rg_track_peak".into(), track.peak_text()),
-        ("rg_album_gain".into(), album.gain_text()),
-        ("rg_album_peak".into(), album.peak_text()),
     ]);
+    if let Some(album) = album {
+        data.fields.extend([
+            ("rg_album_gain".into(), album.gain_text()),
+            ("rg_album_peak".into(), album.peak_text()),
+        ]);
+    }
     data
 }
 
@@ -512,7 +559,7 @@ mod tests {
             broken.parent().unwrap().to_path_buf(),
         ];
         let (report, events) = with_context(dir.path(), false, |context| {
-            after_import(context, &dirs).unwrap()
+            after_import(context, &dirs, &[]).unwrap()
         });
         assert_eq!(
             (
@@ -530,6 +577,49 @@ mod tests {
     }
 
     #[test]
+    fn an_imported_song_without_an_album_gets_only_track_gain() {
+        let dir = tempfile::tempdir().unwrap();
+        let song = dir.path().join("Music/Non-Album/Artist/Song.flac");
+        let other = dir.path().join("Music/Non-Album/Artist/Other.flac");
+        sine_flac(&song, 1.0);
+        sine_flac(&other, 0.5);
+        let mut library = Library::open_or_create(&paths(dir.path()).library).unwrap();
+        let id = library
+            .insert_item(
+                &Fields::from([("path".into(), path_to_sql(&song))]),
+                &Fields::new(),
+            )
+            .unwrap();
+        library
+            .insert_item(
+                &Fields::from([("path".into(), path_to_sql(&other))]),
+                &Fields::new(),
+            )
+            .unwrap();
+        drop(library);
+        let (report, _) = with_context(dir.path(), false, |context| {
+            after_import(context, &[], std::slice::from_ref(&song)).unwrap()
+        });
+        assert_eq!((report.processed, report.changed), (1, 1));
+        close(gain(&song, "rg_track_gain"), 3.07);
+        let tags = muzik_tags::read(&song, &[]).unwrap();
+        assert!(!tags.fields.contains_key("rg_album_gain"));
+        assert!(
+            !muzik_tags::read(&other, &[])
+                .unwrap()
+                .fields
+                .contains_key("rg_track_gain")
+        );
+        let library = Library::open_read_only(&paths(dir.path()).library).unwrap();
+        let item = library.item(id).unwrap().unwrap();
+        assert_eq!(
+            item.field("rg_track_gain"),
+            Some(&SqlValue::Real(gain(&song, "rg_track_gain")))
+        );
+        assert_eq!(item.field("rg_album_gain"), Some(&SqlValue::Null));
+    }
+
+    #[test]
     fn short_fixture_tracks_are_skipped_without_changes() {
         let dir = tempfile::tempdir().unwrap();
         let track = dir.path().join("Music/A/One/01.flac");
@@ -538,7 +628,7 @@ mod tests {
         library_album(dir.path(), std::slice::from_ref(&track));
         let before = fs::read(&track).unwrap();
         let (report, events) = with_context(dir.path(), false, |context| {
-            after_import(context, &[track.parent().unwrap().to_path_buf()]).unwrap()
+            after_import(context, &[track.parent().unwrap().to_path_buf()], &[]).unwrap()
         });
         assert_eq!(
             report,
